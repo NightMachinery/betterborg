@@ -41,7 +41,7 @@ async def get_music(name='Halsey Control',
             child.sendline('0')
     child.expect(['Download*', '\(y/n\)*'])
     child.sendline('y')
-    child.expect(['Fixed*', 'couldnt get album art*'], timeout=240)
+    child.expect(['Fixed*', 'couldnt get album art*'], timeout=540)
     return cwd + str(
         pexpect.run('bash -c "ls -a | grep mp3"', cwd=cwd), 'utf-8').strip()
 
