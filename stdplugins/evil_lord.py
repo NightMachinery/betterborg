@@ -1,4 +1,5 @@
 from __future__ import unicode_literals
+from aioify import aioify
 
 import re
 
@@ -17,13 +18,14 @@ import types
 
 is_interactive = True
 
+pexpect_ai = aioifiy(pexpect)
 
 ######################
 async def get_music(name='Halsey Control',
                     cwd="./dls/" + str(uuid.uuid4()) + "/",
                     tg_event=None):
-    pexpect.run('mkdir -p ' + cwd)
-    child = pexpect.spawn('instantmusic', cwd=cwd)
+    await pexpect_ai.run('mkdir -p ' + cwd)
+    child = await pexpect_ai.spawn('instantmusic', cwd=cwd)
     child.logfile = open('/tmp/mylog', 'wb')
     child.expect('Enter*')
     child.sendline(name)
@@ -41,9 +43,9 @@ async def get_music(name='Halsey Control',
             child.sendline('0')
     child.expect(['Download*', '\(y/n\)*'])
     child.sendline('y')
-    child.expect(['Fixed*', 'couldnt get album art*'], timeout=540)
+    await (aioify(child.expect)(['Fixed*', 'couldnt get album art*'], timeout=3000))
     return cwd + str(
-        pexpect.run('bash -c "ls -a | grep mp3"', cwd=cwd), 'utf-8').strip()
+        await pexpect_ai.run('bash -c "ls -a | grep mp3"', cwd=cwd), 'utf-8').strip()
 
 
 ######################
