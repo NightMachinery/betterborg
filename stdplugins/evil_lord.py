@@ -1,4 +1,16 @@
 from __future__ import unicode_literals
+#TODO aioify blocking calls
+#TODO Use /uuid/file for yt and free extension
+#TODO irs music dler
+#TODO torrent
+#TODO aria2 dler
+#TODO Auto Spotify to mp3
+#TODO repeat n-times module
+#TODO self_only eval
+#TODO Tumblr? :D
+#TODO Google?
+#TODO adapt other modules
+
 from aioify import aioify
 
 import re
