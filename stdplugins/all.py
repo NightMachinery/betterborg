@@ -4,12 +4,37 @@
 
 from telethon import events
 
+
 @borg.on(events.NewMessage(pattern=r"\.all", outgoing=True))
 async def _(event):
     if event.forward:
         return
     await event.delete()
-    mentions = "@all"
-    async for x in borg.iter_participants(await event.input_chat, 5000):
-        mentions += f"[\u2063](tg://user?id={x.id})"
-    await event.respond(mentions)
+    mention_limit = 30
+    current_mentions = 0
+    mentions = "@all\n"
+
+    def reset_mentions():
+        nonlocal current_mentions
+        nonlocal mentions
+        current_mentions = 0
+        mentions = "@all\n"
+
+    async def send_current_mentions():
+        nonlocal mentions
+        nonlocal event
+        await event.respond(mentions)
+        reset_mentions()
+
+    reset_mentions()
+    async for x in borg.iter_participants(await event.input_chat, 9000):
+        if current_mentions < mention_limit:
+            current_mentions += 1
+            mentions += f"[\u2063](tg://user?id={x.id})"
+            # mentions += f"[@{x.username}](tg://user?id={x.id})"
+            # mentions += f"@{x.username} "
+            # await event.respond(f"[Hey, {x.first_name}!](tg://user?id={x.id})")
+        else:
+            await send_current_mentions()
+    if current_mentions > 0:
+        await send_current_mentions()
