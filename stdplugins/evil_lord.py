@@ -34,10 +34,12 @@ is_interactive = True
 
 pexpect_ai = aioify(pexpect)
 
+
 ######################
 async def get_music(name='Halsey Control',
                     cwd="./dls/" + str(uuid.uuid4()) + "/",
                     tg_event=None):
+    #Be sure to set cwd again. It seems it is only set once.
     await pexpect_ai.run('mkdir -p ' + cwd)
     child = await pexpect_ai.spawn('instantmusic', cwd=cwd)
     child.logfile = open('/tmp/mylog', 'wb')
@@ -57,9 +59,11 @@ async def get_music(name='Halsey Control',
             child.sendline('0')
     child.expect(['Download*', '\(y/n\)*'])
     child.sendline('y')
-    await (aioify(child.expect)(['Fixed*', 'couldnt get album art*'], timeout=3000))
+    await (aioify(child.expect)(
+        ['Fixed*', 'couldnt get album art*'], timeout=3000))
     return cwd + str(
-        await pexpect_ai.run('bash -c "ls -a | grep mp3"', cwd=cwd), 'utf-8').strip()
+        await pexpect_ai.run('bash -c "ls -a | grep mp3"', cwd=cwd),
+        'utf-8').strip()
 
 
 ######################
@@ -95,9 +99,8 @@ async def _(event):
             (await event.sender).username == "Orphicality"):
             if any(s in first_line for s in ('laugh', 'بخند')):
                 await event.reply('😆')
-            if any(s in first_line for s in ('you okay?','خوبی')):
+            if any(s in first_line for s in ('you okay?', 'خوبی')):
                 await event.reply('I know of no light. :p')
-
 
             if any(
                     s in first_line for s in ('nice work', 'thanks', 'merci',
@@ -233,9 +236,7 @@ async def _(event):
                                       traceback.format_exc())
                 finally:
                     await remove_potential_file(file_name_with_ext)
-        if any(
-                s in first_line
-                for s in ('music', 'موسیقی', 'اهنگ', 'آهنگ')):
+        if any(s in first_line for s in ('music', 'موسیقی', 'اهنگ', 'آهنگ')):
             # print(first_line)
             urls = event.raw_text.splitlines()
             urls.pop(0)
@@ -249,10 +250,9 @@ async def _(event):
                     "\".\nPlease wait ...",
                     link_preview=False)
                 try:
-                    if any(
-                            s in first_line
-                            for s in ('automatic', 'اتوماتیک')):
-                        file_name_with_ext = await get_music(url)
+                    if any(s in first_line for s in ('automatic', 'اتوماتیک')):
+                        file_name_with_ext = await get_music(
+                            url, cwd="./dls/" + str(uuid.uuid4()) + "/")
                     else:
                         file_name_with_ext = await get_music(
                             url, tg_event=event)
@@ -269,9 +269,8 @@ async def _(event):
                         reply_to=trying_to_upload_msg,
                         caption=base_name)
                 except:
-                    await event.reply(
-                        "Julia encountered an exception. :(\n" +
-                        traceback.format_exc())
+                    await event.reply("Julia encountered an exception. :(\n" +
+                                      traceback.format_exc())
                 finally:
                     await remove_potential_file(file_name_with_ext, event)
 
@@ -285,7 +284,8 @@ async def remove_potential_file(file, event=None):
             await event.reply("Julia encountered an exception. :(\n" +
                               traceback.format_exc())
 
-async def discreet_send(event,message,reply_to,quiet):
+
+async def discreet_send(event, message, reply_to, quiet):
     if quiet:
         return reply_to
     else:
