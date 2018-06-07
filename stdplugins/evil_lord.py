@@ -36,11 +36,9 @@ pexpect_ai = aioify(pexpect)
 
 
 ######################
-async def get_music(name='Halsey Control',
-                    cwd="./dls/" + str(uuid.uuid4()) + "/",
-                    tg_event=None):
+async def get_music(name='Halsey Control', cwd="./dls/BAD/", tg_event=None):
     #Be sure to set cwd again. It seems it is only set once.
-    print(name+" cwd0: \n"+cwd)
+    print(name + " cwd0: \n" + cwd)
     await pexpect_ai.run('mkdir -p ' + cwd)
     child = await pexpect_ai.spawn('instantmusic', cwd=cwd)
     child.logfile = open('/tmp/mylog', 'wb')
@@ -60,10 +58,10 @@ async def get_music(name='Halsey Control',
             child.sendline('0')
     child.expect(['Download*', '\(y/n\)*'])
     child.sendline('y')
-    print(name+" cwd1: \n"+cwd)
+    print(name + " cwd1: \n" + cwd)
     await (aioify(child.expect)(
         ['Fixed*', 'couldnt get album art*'], timeout=3000))
-    print(name+" cwd2: \n"+cwd)
+    print(name + " cwd2: \n" + cwd)
     return cwd + str(
         await pexpect_ai.run('bash -c "ls -a | grep mp3"', cwd=cwd),
         'utf-8').strip()
@@ -258,7 +256,9 @@ async def _(event):
                             url, cwd="./dls/" + str(uuid.uuid4()) + "/")
                     else:
                         file_name_with_ext = await get_music(
-                            url, tg_event=event)
+                            url,
+                            tg_event=event,
+                            cwd="./dls/" + str(uuid.uuid4()) + "/")
                     base_name = str(os.path.basename(file_name_with_ext))
                     trying_to_upload_msg = await borg.send_message(
                         await event.chat,
