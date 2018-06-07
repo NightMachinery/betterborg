@@ -1,4 +1,6 @@
 from __future__ import unicode_literals
+#TODO Implement quiet mode (no unnecessary messages)
+#TODO Send try_dl of music after getting number of track if not automatic
 #TODO aioify blocking calls
 #TODO Use /uuid/file for yt and free extension
 #TODO irs music dler
@@ -30,7 +32,7 @@ import types
 
 is_interactive = True
 
-pexpect_ai = aioifiy(pexpect)
+pexpect_ai = aioify(pexpect)
 
 ######################
 async def get_music(name='Halsey Control',
