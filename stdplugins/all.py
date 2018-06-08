@@ -30,10 +30,12 @@ async def _(event):
     async for x in borg.iter_participants(await event.input_chat, 9000):
         if current_mentions < mention_limit:
             current_mentions += 1
-            mentions += f"[\u2063](tg://user?id={x.id})"
-            # mentions += f"{x.id}\n"
             if event.raw_text == '.allIDs':
-                mentions += f"[@{x.username}](tg://user?id={x.id})\n"
+                # current_mentions = 1 #Effectively disables the chunking scheme and sends all output in a huge text. It might actually be undesirable since there is a limit on message size. So let's not use it.
+                mentions += f"{x.first_name} {x.last_name} ({x.username}): id={x.id}\n"
+            else:
+                mentions += f"[\u2063](tg://user?id={x.id})"
+                # mentions += f"[@{x.username}](tg://user?id={x.id})\n"
             # mentions += f"@{x.username} "
             # await event.respond(f"[Hey, {x.first_name}!](tg://user?id={x.id})")
         else:
