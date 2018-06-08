@@ -22,9 +22,9 @@ async def on_pat(event):
     if event.forward:
         return
 
-    user = borg.me.username
-
-    if not user or not re.match(fr"(?i)/headpat@{user}", event.raw_text):
+    # user = borg.me.username
+    m = re.match(fr"(?i)^\.headpat@?(.*)", event.raw_text)
+    if not m:
         return
 
     global pats
@@ -41,4 +41,11 @@ async def on_pat(event):
             return
 
     choice = urllib.parse.quote(random.choice(pats))
-    await event.reply(f"[Pat!](https://headp.at/pats/{choice})")
+    borg.iter_participants(await event.input_chat, 9000) #To have users' entities. Possibly redundant.
+    try:
+        await borg.send_message(await event.chat,f"[Pat!](https://headp.at/pats/{choice})", reply_to=(await borg.get_entity(m.group(1))))
+    except Exception as e:
+        print(e)
+        await event.reply(oops)
+        return
+

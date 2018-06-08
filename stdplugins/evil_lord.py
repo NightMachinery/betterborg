@@ -313,6 +313,7 @@ async def remove_potential_file(file, event=None):
 
 
 async def discreet_send(event, message, reply_to, quiet):
+    #TODO
     if quiet:
         return reply_to
     else:
