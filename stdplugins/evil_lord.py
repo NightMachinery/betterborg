@@ -6,7 +6,7 @@ from __future__ import unicode_literals
 #TODO irs music dler
 #TODO torrent
 #TODO aria2 dler
-#TODO Auto Spotify to mp3
+#TODO Go through WG-TE and add the spotify songs based on today's date: 8 Jun 2018
 #TODO repeat n-times module
 #TODO self_only eval
 #TODO Tumblr? :D
@@ -102,7 +102,7 @@ async def _(event):
             (await event.sender).username == "Orphicality"):
             if any(s in first_line for s in ('laugh', 'بخند')):
                 await event.reply('😆')
-            if any(s in first_line for s in ('you okay?', 'خوبی')):
+            if any(s in first_line for s in ('you okay', 'خوبی')):
                 await event.reply('I know of no light. :p')
 
             if any(
@@ -283,7 +283,7 @@ async def _(event):
     if m is not None:
         file_name_with_ext = ''
         try:
-            print(m.group(3)+" "+m.group(2)) #DBG
+            # print(m.group(3)+" "+m.group(2)) #DBG
             file_name_with_ext = await get_music(
                 m.group(3)+" "+m.group(2),
                 cwd="./dls/" + str(uuid.uuid4()) + "/")

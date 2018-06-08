@@ -11,7 +11,7 @@ from uniborg import util
 
 
 async def get_target_message(event):
-    if event.is_reply and (await event.reply_message).from_id == borg.uid:
+    if event.is_reply: #and (await event.reply_message).from_id == borg.uid:
         return await event.reply_message
     async for message in borg.iter_messages(await event.input_chat, limit=20):
         if message.out:
@@ -46,7 +46,7 @@ async def delete(event):
     if target:
         chat = await event.input_chat
         await await_read(chat, target)
-        # await asyncio.sleep(.5)
+        await asyncio.sleep(.5)
         if command == 'edit':
             await borg.edit_message(chat, target, text)
         else:
