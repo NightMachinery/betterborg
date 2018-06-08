@@ -48,7 +48,7 @@ async def on_pat(event):
         target = m.group(1)
         if target == '':
             target == borg.me.username
-        await borg.send_message(await event.chat,f"[Pat!](https://headp.at/pats/{choice})", reply_to=(await borg.get_entity(target)))
+        await borg.send_message(await event.chat,f"[Pat!](https://headp.at/pats/{choice})[\u2063](tg://user?id={(await borg.get_entity(target)).id})")
     except Exception as e:
         print(e)
         print(traceback.format_exc())
