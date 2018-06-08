@@ -5,6 +5,7 @@ from telethon import events, utils
 from telethon.tl import types, functions
 
 import re
+import traceback
 import asyncio
 import random
 import json
@@ -37,15 +38,20 @@ async def on_pat(event):
             )).read().decode("utf-8"))
         except Exception as e:
             print(e)
+            print(traceback.format_exc())
             await event.reply(oops)
             return
 
     choice = urllib.parse.quote(random.choice(pats))
     borg.iter_participants(await event.input_chat, 9000) #To have users' entities. Possibly redundant.
     try:
-        await borg.send_message(await event.chat,f"[Pat!](https://headp.at/pats/{choice})", reply_to=(await borg.get_entity(m.group(1))))
+        target = m.group(1)
+        if target == '':
+            target == borg.me.username
+        await borg.send_message(await event.chat,f"[Pat!](https://headp.at/pats/{choice})", reply_to=(await borg.get_entity(target)))
     except Exception as e:
         print(e)
+        print(traceback.format_exc())
         await event.reply(oops)
         return
 
