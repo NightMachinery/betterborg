@@ -278,26 +278,26 @@ async def _(event):
                                       traceback.format_exc())
                 finally:
                     await remove_potential_file(file_name_with_ext, event)
-        p = re.compile(r'^Added to (.*) on Spotify: "(.*)" by (.*) https:.*$')
-        m = p.match(first_line)
-        if m is not None:
-            file_name_with_ext = ''
-            try:
-                print(m.group(3)+" "+m.group(2)) #DBG
-                file_name_with_ext = await get_music(
-                    m.group(3)+" "+m.group(2),
-                    cwd="./dls/" + str(uuid.uuid4()) + "/")
-                base_name = str(os.path.basename(file_name_with_ext))
-                sent_music = await borg.send_file(
-                    await event.chat,
-                    file_name_with_ext,
-                    reply_to=event.message,
-                    caption=base_name)
-            except:
-                await event.reply("Julia encountered an exception. :(\n" +
-                                  traceback.format_exc())
-            finally:
-                await remove_potential_file(file_name_with_ext, event)
+    p = re.compile(r'^Added to (.*) on Spotify: "(.*)" by (.*) https:.*$')
+    m = p.match(first_line)
+    if m is not None:
+        file_name_with_ext = ''
+        try:
+            print(m.group(3)+" "+m.group(2)) #DBG
+            file_name_with_ext = await get_music(
+                m.group(3)+" "+m.group(2),
+                cwd="./dls/" + str(uuid.uuid4()) + "/")
+            base_name = str(os.path.basename(file_name_with_ext))
+            sent_music = await borg.send_file(
+                await event.chat,
+                file_name_with_ext,
+                reply_to=event.message,
+                caption=base_name)
+        except:
+            await event.reply("Julia encountered an exception. :(\n" +
+                              traceback.format_exc())
+        finally:
+            await remove_potential_file(file_name_with_ext, event)
 
 
 
