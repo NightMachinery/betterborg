@@ -279,7 +279,7 @@ async def _(event):
                 finally:
                     await remove_potential_file(file_name_with_ext, event)
     p = re.compile(r'^Added to (.*) on Spotify: "(.*)" by (.*) https:.*$')
-    m = p.match(first_line)
+    m = p.match(event.raw_text)
     if m is not None:
         file_name_with_ext = ''
         try:
