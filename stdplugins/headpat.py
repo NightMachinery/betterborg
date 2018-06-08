@@ -46,9 +46,11 @@ async def on_pat(event):
     borg.iter_participants(await event.input_chat, 9000) #To have users' entities. Possibly redundant.
     try:
         target = m.group(1)
-        if target == '':
-            target == borg.me.username
-        target_entity = await borg.get_entity(target)
+        target_entity = None
+        try:
+            target_entity = await borg.get_entity(target)
+        except:
+            target_entity = borg.me
         await borg.send_message(await event.chat,f"[Pat!](https://headp.at/pats/{choice})[\u2063](tg://user?id={target_entity.id})")
     except Exception as e:
         print(e)

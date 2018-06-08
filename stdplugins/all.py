@@ -30,7 +30,8 @@ async def _(event):
     async for x in borg.iter_participants(await event.input_chat, 9000):
         if current_mentions < mention_limit:
             current_mentions += 1
-            mentions += f"[\u2063](tg://user?id={x.id})"
+            # mentions += f"[\u2063](tg://user?id={x.id})"
+            mentions += f"{x.id}\n"
             # mentions += f"[@{x.username}](tg://user?id={x.id})"
             # mentions += f"@{x.username} "
             # await event.respond(f"[Hey, {x.first_name}!](tg://user?id={x.id})")
