@@ -5,5 +5,6 @@ from telethon import events
 async def _(event):
     if event.forward:
         return
-    event.reply(event.chat.id)
+    # print(help(await event.chat))
+    await event.reply(str((await event.chat).id))
  
