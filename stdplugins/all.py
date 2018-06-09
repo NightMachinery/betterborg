@@ -19,7 +19,10 @@ async def _(event):
         nonlocal current_mentions
         nonlocal mentions
         current_mentions = 0
-        mentions = "@all\n"
+        if event.raw_text.lower() == '.allids':
+            mentions = "Users in chat:\n"
+        else:
+            mentions = "@all\n"
 
     async def send_current_mentions():
         nonlocal mentions

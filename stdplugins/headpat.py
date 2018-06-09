@@ -43,7 +43,7 @@ async def on_pat(event):
             return
 
     choice = urllib.parse.quote(random.choice(pats))
-    borg.iter_participants(await event.input_chat, 9000) #To have users' entities. Possibly redundant.
+    borg.iter_participants(await event.input_chat, 9000) #To have users' entities. Possibly redundant. TODO Only invoke once per chat per day?
     try:
         target = m.group(1)
         target_entity = None
