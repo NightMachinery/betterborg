@@ -3,9 +3,10 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from telethon import events
+#TODO Support specifying the message content. The subsequent mentions should just reply to this message and have a ☝🏻 emoji.
 
 
-@borg.on(events.NewMessage(pattern=r"\.all", outgoing=True))
+@borg.on(events.NewMessage(pattern=r"(?i)^\.all(IDs)?$", outgoing=True))
 async def _(event):
     if event.forward:
         return
