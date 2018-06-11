@@ -14,13 +14,15 @@ async def _(event):
     mention_limit = 30
     current_mentions = 0
     mentions = "@all\n"
-
+    input_chat = await event.chat
     def reset_mentions():
         nonlocal current_mentions
         nonlocal mentions
+        nonlocal mention_limit
         current_mentions = 0
         if event.raw_text.lower() == '.allids':
-            mentions = "Users in chat:\n"
+            mention_limit = 50
+            mentions = f"Users in chat number {input_chat.id}:\n"
         else:
             mentions = "@all\n"
 
@@ -31,7 +33,7 @@ async def _(event):
         reset_mentions()
 
     reset_mentions()
-    async for x in borg.iter_participants(await event.input_chat, 9000):
+    async for x in borg.iter_participants(input_chat, 9000):
         if current_mentions < mention_limit:
             current_mentions += 1
             if event.raw_text.lower() == '.allids':
