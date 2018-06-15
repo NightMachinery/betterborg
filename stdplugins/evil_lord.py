@@ -196,28 +196,30 @@ async def _(event):
                             file_name_with_ext,
                             reply_to=trying_to_upload_msg,
                             caption=str(d2['title']))
+                        try:
                         full_caption = "Title: " + str(
-                            d2['title']
-                        ) + "\nFormat: " + str(
-                            d2['format']
-                        ) + "\nWidth: " + str(d2['width']) + "\nHeight: " + str(
-                            d2['height']
-                        ) + "\nFPS: " + str(d2['fps']) + "\nPlaylist: " + str(
-                            d2['playlist']) + "\nLikes: " + str(
-                                d2['like_count']) + "\nDislikes: " + str(
-                                    d2['dislike_count']
-                                ) + "\nView Count: " + str(
-                                    d2['view_count']) + "\nUploader: " + str(
-                                        d2['uploader'] + "\nWebpage Url: " +
-                                        str(d2['webpage_url']) +
-                                        "\nDescription:\n" +
-                                        str(d2['description']))
-                        await borg.send_message(
-                            await event.chat,
-                            full_caption,
-                            sent_video.id,
-                            link_preview=False)
-
+                                d2['title']
+                            ) + "\nFormat: " + str(
+                                d2['format']
+                            ) + "\nWidth: " + str(d2['width']) + "\nHeight: " + str(
+                                d2['height']
+                            ) + "\nFPS: " + str(d2['fps']) + "\nPlaylist: " + str(
+                                d2['playlist']) + "\nLikes: " + str(
+                                    d2['like_count']) + "\nDislikes: " + str(
+                                        d2['dislike_count']
+                                    ) + "\nView Count: " + str(
+                                        d2['view_count']) + "\nUploader: " + str(
+                                            d2['uploader'] + "\nWebpage Url: " +
+                                            str(d2['webpage_url']) +
+                                            "\nDescription:\n" +
+                                            str(d2['description']))
+                            await borg.send_message(
+                                await event.chat,
+                                full_caption,
+                                sent_video.id,
+                                link_preview=False)
+                        except:
+                                pass
                 except:
                     await event.reply("Julia encountered an exception. :(\n" +
                                       traceback.format_exc())
