@@ -167,40 +167,24 @@ async def _(event):
                 if url == '':
                     continue
                 try:
-                    # def my_hook(d):
-                    #     if not hasattr(my_hook, 'some_static_var'):
-                    #         my_hook.some_static_var = False
-                    #     if d['status'] == 'finished' and not my_hook.some_static_var:
-                    #         # my_hook.some_static_var = True
-                    #         d1 = d['filename']
-                    #         try:
-                    #             await event.reply("Julia is trying to upload " + d1 +
-                    #                         ".\nPlease wait ...")
-                    #             await borg.send_file(
-                    #                 await event.chat,
-                    #                 d1,
-                    #                 reply_to=await event.message,
-                    #                 caption=(d1))
-                    #         except:
-                    #             await event.reply("Julia encountered an exception. :(\n" +
-                    #                         traceback.format_exc())
-
                     trying_to_dl = await event.reply(
                         "Julia is trying to download \"" + url +
                         "\".\nPlease wait ...",
                         link_preview=False)
-                    file_name = 'dls/' + str(uuid.uuid4())
+                    file_name = 'dls/' + str(uuid.uuid4()) + '/'
                     ydl_opts = {
                         # 'progress_hooks': [my_hook],
-                        'format':
-                        'bestvideo[ext=mp4]+bestaudio[ext=m4a]',  # workaround to always get .mp4
+                        # 'format':
+                        # 'bestvideo[ext=mp4]+bestaudio[ext=m4a]',  # workaround to always get .mp4
                         'quiet': True,
                         'outtmpl':
-                        file_name  # 'dls/%(playlist_title)s_%(title)s_%(format)s_%(autonumber)s.%(ext)s'
+                        file_name +'%(playlist_title)s_%(title)s_%(format)s.%(ext)s'  # 'dls/%(playlist_title)s_%(title)s_%(format)s_%(autonumber)s.%(ext)s'
                     }
                     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                         d2 = ydl.extract_info(url)
-                        file_name_with_ext = file_name + "." + "mp4"  # + d2['ext']
+                        file_name_with_ext = file_name + str(
+                            await pexpect_ai.run('ls', cwd=file_name), 'utf-8').strip()
+                        #file_name + "." + "mp4"  # + d2['ext']
                         trying_to_upload_msg = await borg.send_message(
                             await event.chat,
                             "Julia is trying to upload \"" + d2['title'] +
