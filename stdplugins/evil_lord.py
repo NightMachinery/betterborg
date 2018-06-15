@@ -183,7 +183,7 @@ async def _(event):
                     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                         d2 = ydl.extract_info(url)
                         file_name_with_ext = file_name + str(
-                            await pexpect_ai.run('ls', cwd=file_name), 'utf-8').strip()
+                            await pexpect_ai.run('ls', cwd=file_name), 'utf-8').strip().strip("'")
                         #file_name + "." + "mp4"  # + d2['ext']
                         trying_to_upload_msg = await borg.send_message(
                             await event.chat,
