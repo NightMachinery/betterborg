@@ -219,7 +219,7 @@ async def _(event):
                                 sent_video.id,
                                 link_preview=False)
                         except:
-                                pass
+                            pass
                 except:
                     await event.reply("Julia encountered an exception. :(\n" +
                                       traceback.format_exc())
