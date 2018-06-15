@@ -197,7 +197,7 @@ async def _(event):
                             reply_to=trying_to_upload_msg,
                             caption=str(d2['title']))
                         try:
-                        full_caption = "Title: " + str(
+                            full_caption = "Title: " + str(
                                 d2['title']
                             ) + "\nFormat: " + str(
                                 d2['format']
