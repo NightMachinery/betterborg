@@ -89,11 +89,11 @@ async def _(event):
     try:
         first_line = event.raw_text.lower().splitlines().pop(0)
     except:
-        # print(traceback.format_exc())
-        first_line = "k"
-    if await event.sender is not None:
-        sender_full = await borg(GetFullUserRequest(await event.sender))
+        pass
+    # if await event.sender is not None:
+        # sender_full = await borg(GetFullUserRequest(await event.sender))
     # print(first_line)
+    quiet = any(s in first_line for s in ('quiet','ساکت','آروم','اروم'))
     if ('ژاله' in first_line or 'زاله' in first_line or 'julia' in first_line):
         # print("Julia")
         global my_event
@@ -135,16 +135,13 @@ async def _(event):
                     if url == '':
                         continue
                     url_name = wget.detect_filename(url)
-                    trying_to_dl_msg = await event.reply(
-                        "Julia is trying to download \"" + url_name +
-                        "\" from \"" + url + "\".\nPlease wait ...",
-                        link_preview=False)
+                    trying_to_dl_msg = await discreet_send(event, "Julia is trying to download \"" + url_name + "\" from \"" + url + "\".\nPlease wait ...", event.message, quiet)
                     d1 = wget.download(url, out="dls/", bar=None)
                     try:
-                        trying_to_upload_msg = await borg.send_message(
-                            await event.chat, "Julia is trying to upload \"" +
+                        trying_to_upload_msg = await discreet_send(
+                            event, "Julia is trying to upload \"" +
                             url_name + "\".\nPlease wait ...",
-                            trying_to_dl_msg)
+                            trying_to_dl_msg, quiet)
                         await borg.send_file(
                             await event.chat,
                             d1,
@@ -168,15 +165,11 @@ async def _(event):
                 if url == '':
                     continue
                 try:
-                    trying_to_dl = await event.reply(
-                        "Julia is trying to download \"" + url +
-                        "\".\nPlease wait ...",
-                        link_preview=False)
+                    trying_to_dl = discreet_send(event,
+                                                 "Julia is trying to download \"" + url +
+                                                 "\".\nPlease wait ...", event.message, quiet)
                     file_name = 'dls/' + str(uuid.uuid4()) + '/'
                     ydl_opts = {
-                        # 'progress_hooks': [my_hook],
-                        # 'format':
-                        # 'bestvideo[ext=mp4]+bestaudio[ext=m4a]',  # workaround to always get .mp4
                         'quiet': True,
                         'outtmpl':
                         file_name +'%(playlist_title)s_%(title)s_%(format)s.%(ext)s'  # 'dls/%(playlist_title)s_%(title)s_%(format)s_%(autonumber)s.%(ext)s'
@@ -184,15 +177,12 @@ async def _(event):
                     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                         d2 = ydl.extract_info(url)
                         file_name_with_ext = file_name + (await os_aio.listdir(file_name))[0]
-                        # str(
-                            # await pexpect_ai.run('ls', cwd=file_name), 'utf-8').strip().strip("'")
-                        #file_name + "." + "mp4"  # + d2['ext']
-                        trying_to_upload_msg = await borg.send_message(
-                            await event.chat,
+                        trying_to_upload_msg = await discreet_send(
+                            event,
                             "Julia is trying to upload \"" + d2['title'] +
                             "\".\nPlease wait ...",
                             trying_to_dl.id,
-                            link_preview=False)
+                            quiet)
                         sent_video = await borg.send_file(
                             await event.chat,
                             file_name_with_ext,
@@ -236,10 +226,8 @@ async def _(event):
                 if url == '':
                     continue
                 file_name_with_ext = ''
-                trying_to_dl = await event.reply(
-                    "Julia is trying to download \"" + url +
-                    "\".\nPlease wait ...",
-                    link_preview=False)
+                trying_to_dl = await discreet_send(event, "Julia is trying to download \"" + url + "\".\nPlease wait ...",
+                                                   event.message, quiet)
                 try:
                     if any(s in first_line for s in ('automatic', 'اتوماتیک')):
                         file_name_with_ext = await get_music(
@@ -250,12 +238,12 @@ async def _(event):
                             tg_event=event,
                             cwd="./dls/" + str(uuid.uuid4()) + "/")
                     base_name = str(await os_aio.path.basename(file_name_with_ext))
-                    trying_to_upload_msg = await borg.send_message(
-                        await event.chat,
+                    trying_to_upload_msg = await discreet_send(
+                        event,
                         "Julia is trying to upload \"" + base_name +
                         "\".\nPlease wait ...",
                         trying_to_dl,
-                        link_preview=False)
+                        quiet)
                     sent_music = await borg.send_file(
                         await event.chat,
                         file_name_with_ext,
@@ -300,9 +288,8 @@ async def remove_potential_file(file, event=None):
                               traceback.format_exc())
 
 
-async def discreet_send(event, message, reply_to, quiet):
-    #TODO
+async def discreet_send(event, message, reply_to, quiet, link_preview=False):
     if quiet:
         return reply_to
     else:
-        return await borg.send_message(await event.chat)
+        return await borg.send_message(await event.chat, message, link_preview=link_preview, reply_to=reply_to)
