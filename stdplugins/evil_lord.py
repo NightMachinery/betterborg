@@ -33,6 +33,7 @@ import types
 is_interactive = True
 
 pexpect_ai = aioify(pexpect)
+os_aio = aioify(os)
 
 
 ######################
@@ -182,8 +183,9 @@ async def _(event):
                     }
                     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                         d2 = ydl.extract_info(url)
-                        file_name_with_ext = file_name + str(
-                            await pexpect_ai.run('ls', cwd=file_name), 'utf-8').strip().strip("'")
+                        file_name_with_ext = file_name + (await os_aio.listdir(file_name))[0]
+                        # str(
+                            # await pexpect_ai.run('ls', cwd=file_name), 'utf-8').strip().strip("'")
                         #file_name + "." + "mp4"  # + d2['ext']
                         trying_to_upload_msg = await borg.send_message(
                             await event.chat,
@@ -247,7 +249,7 @@ async def _(event):
                             url,
                             tg_event=event,
                             cwd="./dls/" + str(uuid.uuid4()) + "/")
-                    base_name = str(os.path.basename(file_name_with_ext))
+                    base_name = str(await os_aio.path.basename(file_name_with_ext))
                     trying_to_upload_msg = await borg.send_message(
                         await event.chat,
                         "Julia is trying to upload \"" + base_name +
@@ -273,7 +275,7 @@ async def _(event):
             file_name_with_ext = await get_music(
                 m.group(3)+" "+m.group(2),
                 cwd="./dls/" + str(uuid.uuid4()) + "/")
-            base_name = str(os.path.basename(file_name_with_ext))
+            base_name = str(await os_aio.path.basename(file_name_with_ext))
             sent_music = await borg.send_file(
                 await event.chat,
                 file_name_with_ext,
@@ -290,8 +292,8 @@ async def _(event):
 
 async def remove_potential_file(file, event=None):
     try:
-        if os.path.exists(file) and os.path.isfile(file):
-            os.remove(file)
+        if await os_aio.path.exists(file) and await os_aio.path.isfile(file):
+            await os_aio.remove(file)
     except:
         if event is not None:
             await event.reply("Julia encountered an exception. :(\n" +
@@ -303,4 +305,4 @@ async def discreet_send(event, message, reply_to, quiet):
     if quiet:
         return reply_to
     else:
-        await borg.send_message(await event.chat)
+        return await borg.send_message(await event.chat)
