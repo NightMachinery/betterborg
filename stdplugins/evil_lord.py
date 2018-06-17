@@ -290,6 +290,6 @@ async def remove_potential_file(file, event=None):
 
 async def discreet_send(event, message, reply_to, quiet, link_preview=False):
     if quiet:
-        return reply_to
+        return await reply_to
     else:
         return await borg.send_message(await event.chat, message, link_preview=link_preview, reply_to=reply_to)
