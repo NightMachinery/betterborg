@@ -165,7 +165,7 @@ async def _(event):
                 if url == '':
                     continue
                 try:
-                    trying_to_dl = discreet_send(event,
+                    trying_to_dl = await discreet_send(event,
                                                  "Julia is trying to download \"" + url +
                                                  "\".\nPlease wait ...", event.message, quiet)
                     file_name = 'dls/' + str(uuid.uuid4()) + '/'
@@ -290,6 +290,6 @@ async def remove_potential_file(file, event=None):
 
 async def discreet_send(event, message, reply_to, quiet, link_preview=False):
     if quiet:
-        return await reply_to
+        return reply_to
     else:
         return await borg.send_message(await event.chat, message, link_preview=link_preview, reply_to=reply_to)
