@@ -135,7 +135,7 @@ async def _(event):
                     if url == '':
                         continue
                     url_name = wget.detect_filename(url)
-                    trying_to_dl_msg = await discreet_send(event, "Julia is trying to download \"" + url_name + "\" from \"" + url + "\".\nPlease wait ...", await event.message, quiet)
+                    trying_to_dl_msg = await discreet_send(event, "Julia is trying to download \"" + url_name + "\" from \"" + url + "\".\nPlease wait ...", event.message, quiet)
                     d1 = wget.download(url, out="dls/", bar=None)
                     try:
                         trying_to_upload_msg = await discreet_send(
@@ -167,7 +167,7 @@ async def _(event):
                 try:
                     trying_to_dl = discreet_send(event,
                                                  "Julia is trying to download \"" + url +
-                                                 "\".\nPlease wait ...", await event.message, quiet)
+                                                 "\".\nPlease wait ...", event.message, quiet)
                     file_name = 'dls/' + str(uuid.uuid4()) + '/'
                     ydl_opts = {
                         'quiet': True,
@@ -227,7 +227,7 @@ async def _(event):
                     continue
                 file_name_with_ext = ''
                 trying_to_dl = await discreet_send(event, "Julia is trying to download \"" + url + "\".\nPlease wait ...",
-                                                   await event.message, quiet)
+                                                   event.message, quiet)
                 try:
                     if any(s in first_line for s in ('automatic', 'اتوماتیک')):
                         file_name_with_ext = await get_music(
@@ -267,7 +267,7 @@ async def _(event):
             sent_music = await borg.send_file(
                 await event.chat,
                 file_name_with_ext,
-                reply_to=await event.message,
+                reply_to=event.message,
                 caption=base_name)
         except:
             await event.reply("Julia encountered an exception. :(\n" +
