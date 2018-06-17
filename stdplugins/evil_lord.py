@@ -181,7 +181,7 @@ async def _(event):
                             event,
                             "Julia is trying to upload \"" + d2['title'] +
                             "\".\nPlease wait ...",
-                            trying_to_dl.id,
+                            trying_to_dl,
                             quiet)
                         sent_video = await borg.send_file(
                             await event.chat,
@@ -208,7 +208,7 @@ async def _(event):
                             await borg.send_message(
                                 await event.chat,
                                 full_caption,
-                                sent_video.id,
+                                sent_video,
                                 link_preview=False)
                         except:
                             pass
