@@ -175,8 +175,8 @@ async def _(event):
                         'outtmpl':
                         file_name +'%(playlist_title)s_%(title)s_%(format)s.%(ext)s'  # 'dls/%(playlist_title)s_%(title)s_%(format)s_%(autonumber)s.%(ext)s'
                     }
-                    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                        d2 = ydl.extract_info(url)
+                    with aioify(youtube_dl.YoutubeDL(ydl_opts)) as ydl:
+                        d2 = await ydl.extract_info(url)
                         file_name_with_ext = file_name + (await os_aio.listdir(file_name))[0]
                         trying_to_upload_msg = await discreet_send(
                             event,
