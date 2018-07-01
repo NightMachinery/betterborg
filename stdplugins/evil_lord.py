@@ -164,6 +164,7 @@ async def _(event):
             for url in urls:
                 if url == '':
                     continue
+                file_name_with_ext = ""
                 try:
                     trying_to_dl = await discreet_send(event,
                                                  "Julia is trying to download \"" + url +
