@@ -6,6 +6,7 @@ from __future__ import unicode_literals
 #TODO irs music dler
 #TODO torrent
 #TODO aria2 dler
+#TODO Run any command on server (on unique cwd) and upload its result. ADMIN_ONLY.
 #TODO Go through WG-TE and add the spotify songs based on today's date: 8 Jun 2018
 #TODO repeat n-times module
 #TODO self_only eval
@@ -35,8 +36,6 @@ is_interactive = True
 
 pexpect_ai = aioify(pexpect)
 os_aio = aioify(os)
-yt_aio = aioify(youtube_dl)
-
 
 ######################
 async def get_music(name='Halsey Control', cwd="./dls/BAD/", tg_event=None):
@@ -177,8 +176,9 @@ async def _(event):
                         'outtmpl':
                         file_name +'%(playlist_title)s_%(title)s_%(format)s.%(ext)s'  # 'dls/%(playlist_title)s_%(title)s_%(format)s_%(autonumber)s.%(ext)s'
                     }
-                    with await youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                        d2 = await ydl.extract_info(url)
+                    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                        extract_info_aio = aioify(ydl.extract_info)
+                        d2 = await extract_info_aio(url)
                         file_name_with_ext = file_name + (await os_aio.listdir(file_name))[0]
                         trying_to_upload_msg = await discreet_send(
                             event,
