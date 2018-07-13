@@ -5,7 +5,7 @@ import regex
 from telethon import events, utils
 from telethon.tl import types, functions
 
-HEADER = "[[regex]]\n"
+HEADER = "[[sed]]\n"
 KNOWN_RE_BOTS = re.compile(
     r'(regex|moku|BananaButler_|rgx|l4mR)bot',
     flags=re.IGNORECASE
@@ -62,7 +62,7 @@ def doit(chat_id, match, original):
     return None, None
 
 
-async def group_has_regex(group):
+async def group_has_sedbot(group):
     if isinstance(group, types.InputPeerChannel):
         full = await borg(functions.channels.GetFullChannelRequest(group))
     elif isinstance(group, types.InputPeerChat):
@@ -77,22 +77,31 @@ async def group_has_regex(group):
 async def on_message(event):
     last_msgs[event.chat_id].appendleft(event.message)
 
+@borg.on(events.MessageEdited)
+async def on_edit(event):
+    for m in last_msgs[event.chat_id]:
+        if m.id == event.id:
+            m.raw_text = event.raw_text
+            break
 
 @borg.on(events.NewMessage(
     pattern=re.compile(r"^s/((?:\\/|[^/])+)/((?:\\/|[^/])*)(/.*)?")))
 async def on_regex(event):
-    if event.forward:
+    if event.fwd_from:
         return
-    if not event.is_private and await group_has_regex(await event.input_chat):
+    if not event.is_private and\
+            await group_has_sedbot(await event.get_input_chat()):
         return
 
-    chat_id = utils.get_peer_id(await event.input_chat)
+    chat_id = utils.get_peer_id(await event.get_input_chat())
 
-    m, s = doit(chat_id, event.pattern_match, await event.reply_message)
+    m, s = doit(chat_id, event.pattern_match, await event.get_reply_message())
 
     if m is not None:
         s = f"{HEADER}{s}"
-        out = await borg.send_message(await event.input_chat, s, reply_to=m.id)
+        out = await borg.send_message(
+            await event.get_input_chat(), s, reply_to=m.id
+        )
         last_msgs[chat_id].appendleft(out)
     elif s is not None:
         await event.reply(s)

@@ -29,8 +29,8 @@ class Uniborg(TelegramClient):
         self._plugin_path = plugin_path
 
         kwargs = {
-                "api_id": 6, "api_hash": "eb06d4abfb49dc3eeb1aeb98ae0f581e",
-                **kwargs}
+            "api_id": 6, "api_hash": "eb06d4abfb49dc3eeb1aeb98ae0f581e",
+            **kwargs}
         super().__init__(session, **kwargs)
 
         # This is a hack, please avert your eyes
@@ -38,7 +38,7 @@ class Uniborg(TelegramClient):
         # precedence
         self._event_builders = hacks.ReverseList()
 
-        self._loop.run_until_complete(self._async_init(bot_token=bot_token))
+        self.loop.run_until_complete(self._async_init(bot_token=bot_token))
 
         core_plugin = Path(__file__).parent / "_core.py"
         self.load_plugin_from_file(core_plugin)
@@ -51,9 +51,6 @@ class Uniborg(TelegramClient):
 
         self.me = await self.get_me()
         self.uid = telethon.utils.get_peer_id(self.me)
-
-    def run(self):
-        self._loop.run_forever()
 
     def load_plugin(self, shortname):
         self.load_plugin_from_file(f"{self._plugin_path}/{shortname}.py")
@@ -98,6 +95,6 @@ class Uniborg(TelegramClient):
                 raise
 
         fut.add_done_callback(
-                lambda _: self.remove_event_handler(cb, event_matcher))
+            lambda _: self.remove_event_handler(cb, event_matcher))
 
         return fut

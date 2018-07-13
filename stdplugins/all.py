@@ -8,7 +8,7 @@ from telethon import events
 
 @borg.on(events.NewMessage(pattern=r"(?i)^\.all(IDs)?$", outgoing=True))
 async def _(event):
-    if event.forward:
+    if event.fwd_from:
         return
     await event.delete()
     mention_limit = 30
