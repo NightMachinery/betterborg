@@ -8,8 +8,17 @@ from telethon import events
 from telethon.tl.functions.messages import GetPeerDialogsRequest
 
 
-def admin_cmd(pattern):
-    return events.NewMessage(outgoing=True, pattern=re.compile(pattern))
+def admin_cmd(pattern, chats=("Orphicality","Untethered","whitegloved")):
+    # return events.NewMessage(outgoing=True, pattern=re.compile(pattern))
+    return events.NewMessage(chats=chats, pattern=re.compile(pattern))
+
+
+
+async def isAdmin(event, admins=("Orphicality", )):
+    # event.reply(help(await event.get_input_chat()))
+    return (await event.sender is not None and (
+        (await event.sender).is_self or
+        (await event.sender).username in admins)) or (await event.get_input_chat())
 
 
 async def is_read(borg, entity, message, is_out=None):
@@ -20,7 +29,7 @@ async def is_read(borg, entity, message, is_out=None):
     is_out = getattr(message, "out", is_out)
     if not isinstance(is_out, bool):
         raise ValueError(
-                "Message was id but is_out not provided or not a bool")
+            "Message was id but is_out not provided or not a bool")
     message_id = getattr(message, "id", message)
     if not isinstance(message_id, int):
         raise ValueError("Failed to extract id from message")

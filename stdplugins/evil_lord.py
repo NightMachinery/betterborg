@@ -1,4 +1,5 @@
 from __future__ import unicode_literals
+#Useless line.
 #TODO Implement quiet mode (no unnecessary messages)
 #TODO Send try_dl of music after getting number of track if not automatic
 #TODO aioify blocking calls
@@ -15,7 +16,7 @@ from __future__ import unicode_literals
 #TODO adapt other modules
 
 from aioify import aioify
-
+import eyed3
 import re
 
 import asyncio
@@ -36,6 +37,7 @@ is_interactive = True
 
 pexpect_ai = aioify(pexpect)
 os_aio = aioify(os)
+eyed3_aio = aioify(eyed3)
 
 ######################
 async def get_music(name='Halsey Control', cwd="./dls/BAD/", tg_event=None):
@@ -66,9 +68,13 @@ async def get_music(name='Halsey Control', cwd="./dls/BAD/", tg_event=None):
     await (aioify(child.expect)(
         ['Fixed*', 'couldnt get album art*'], timeout=3000))
     # print(name + " cwd2: \n" + cwd)
-    return cwd + str(
+    mp3_file_add = cwd + str(
         await pexpect_ai.run('bash -c "ls -a | grep mp3"', cwd=cwd),
         'utf-8').strip()
+    mp3_file = await eyed3_aio.load(mp3_file_add)
+    mp3_file.tag.title = str(await os_aio.path.basename(mp3_file_add))[:-4]
+    await (aioify(mp3_file.tag.save))()
+    return mp3_file_add
 
 
 ######################
