@@ -21,7 +21,7 @@ async def load_reload(event):
         borg.load_plugin(shortname)
 
         msg = await event.respond(
-                f"Successfully (re)loaded plugin {shortname}")
+            f"Successfully (re)loaded plugin {shortname}")
         await asyncio.sleep(DELETE_TIMEOUT)
         await borg.delete_messages(msg.to_id, msg)
 
@@ -36,7 +36,9 @@ async def remove(event):
     await event.delete()
     shortname = event.pattern_match["shortname"]
 
-    if shortname in borg._plugins:
+    if shortname == "_core":
+        msg = await event.respond(f"Not removing {shortname}")
+    elif shortname in borg._plugins:
         borg.remove_plugin(shortname)
         msg = await event.respond(f"Removed plugin {shortname}")
     else:
