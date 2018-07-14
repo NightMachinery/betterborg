@@ -66,7 +66,7 @@ async def run_and_get(event, to_await, cwd=None):
     await to_await(cwd=cwd, event=event)
     # util.interact(locals())
     return cwd + str(
-        await pexpect_ai.run('bash -c "ls -p | grep -v /"', cwd=cwd),
+        await pexpect_ai.run('bash -c "ls -p | grep -E -v \'/|\.aria2$\'"', cwd=cwd),
         'utf-8').strip()
 
 
