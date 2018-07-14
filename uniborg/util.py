@@ -2,23 +2,42 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from aioify import aioify
+import uuid
+import traceback
+import os
+import pexpect
 import re
-
-from telethon import events
+from uniborg import util
+from telethon import TelegramClient, events
 from telethon.tl.functions.messages import GetPeerDialogsRequest
 
+dl_base = 'dls/'
+pexpect_ai = aioify(pexpect)
+os_aio = aioify(os)
+borg = None
 
-def admin_cmd(pattern, chats=("Orphicality","Untethered","whitegloved")):
-    # return events.NewMessage(outgoing=True, pattern=re.compile(pattern))
-    return events.NewMessage(chats=chats, pattern=re.compile(pattern))
+
+def admin_cmd(pattern):
+    return events.NewMessage(outgoing=True, pattern=re.compile(pattern))
+    # return events.NewMessage(chats=admins, pattern=re.compile(pattern))
 
 
+def interact(local=None):
+    if local is None:
+        local = locals()
+    import code
+    code.interact(local=local)
 
-async def isAdmin(event, admins=("Orphicality", )):
-    # event.reply(help(await event.get_input_chat()))
-    return (await event.sender is not None and (
-        (await event.sender).is_self or
-        (await event.sender).username in admins)) or (await event.get_input_chat())
+
+async def isAdmin(event,
+                  admins=("Orphicality", ),
+                  adminChats=("whitegloved", )):
+    chat = await event.get_chat()
+    # import code; code.interact(local=locals())
+    return (event.sender is not None and
+            ((event.sender).is_self or (event.sender).username in admins)) or (
+                chat.username is not None and chat.username in adminChats)
 
 
 async def is_read(borg, entity, message, is_out=None):
@@ -37,3 +56,63 @@ async def is_read(borg, entity, message, is_out=None):
     dialog = (await borg(GetPeerDialogsRequest([entity]))).dialogs[0]
     max_id = dialog.read_outbox_max_id if is_out else dialog.read_inbox_max_id
     return message_id <= max_id
+
+
+async def run_and_get(event, to_await, cwd=None):
+    if cwd is None:
+        cwd = dl_base + str(uuid.uuid4()) + '/'
+    await pexpect_ai.run('bash -c "mkdir -p ' + cwd + '"')
+    # util.interact(locals())
+    await to_await(cwd=cwd, event=event)
+    # util.interact(locals())
+    return cwd + str(
+        await pexpect_ai.run('bash -c "ls -p | grep -v /"', cwd=cwd),
+        'utf-8').strip()
+
+
+async def run_and_upload(event, to_await, quiet=True):
+    file_add = ''
+    # util.interact(locals())
+    try:
+        trying_to_dl = await util.discreet_send(
+            event, "Julia is processing your request ...", event.message,
+            quiet)
+        file_add = await run_and_get(event=event, to_await=to_await)
+        # util.interact(locals())
+        base_name = str(await os_aio.path.basename(file_add))
+        trying_to_upload_msg = await util.discreet_send(
+            event, "Julia is trying to upload \"" + base_name +
+            "\".\nPlease wait ...", trying_to_dl, quiet)
+        sent_file = await borg.send_file(
+            event.chat,
+            file_add,
+            reply_to=trying_to_upload_msg,
+            caption=base_name)
+    except:
+        await event.reply("Julia encountered an exception. :(\n" +
+                          traceback.format_exc())
+    finally:
+        await remove_potential_file(file_add, event)
+
+
+async def simple_run(event, cwd, command):
+    ## await event.reply('bash -c "' + command + '"' + '\n' + cwd)
+    await pexpect_ai.run('bash -c "' + command + '"', cwd=cwd)
+
+
+async def remove_potential_file(file, event=None):
+    try:
+        if await os_aio.path.exists(file) and await os_aio.path.isfile(file):
+            await os_aio.remove(file)
+    except:
+        if event is not None:
+            await event.reply("Julia encountered an exception. :(\n" +
+                              traceback.format_exc())
+
+
+async def discreet_send(event, message, reply_to, quiet, link_preview=False):
+    if quiet:
+        return reply_to
+    else:
+        return await borg.send_message(
+            event.chat, message, link_preview=link_preview, reply_to=reply_to)

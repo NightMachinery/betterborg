@@ -1,19 +1,16 @@
 from __future__ import unicode_literals
-#Useless line.
-#TODO Implement quiet mode (no unnecessary messages)
 #TODO Send try_dl of music after getting number of track if not automatic
 #TODO aioify blocking calls
-#TODO Use /uuid/file for yt and free extension
 #TODO irs music dler
 #TODO torrent
 #TODO aria2 dler
-#TODO Run any command on server (on unique cwd) and upload its result. ADMIN_ONLY.
 #TODO Go through WG-TE and add the spotify songs based on today's date: 8 Jun 2018
 #TODO repeat n-times module
 #TODO self_only eval
 #TODO Tumblr? :D
 #TODO Google?
 #TODO adapt other modules
+#TODO borg injection into util
 
 from aioify import aioify
 import eyed3
@@ -24,6 +21,7 @@ import pexpect
 from telethon import TelegramClient, events
 from telethon.tl.functions.users import GetFullUserRequest
 import logging
+from uniborg import util
 from requests import get  # to make GET request
 import wget
 import os
@@ -92,22 +90,20 @@ async def await_reply(chat, message):
 
 @borg.on(events.NewMessage())
 async def _(event):
+    util.borg = borg
     first_line = "l"
     try:
         first_line = event.raw_text.lower().splitlines().pop(0)
     except:
         pass
-    # if await event.sender is not None:
-        # sender_full = await borg(GetFullUserRequest(await event.sender))
-    # print(first_line)
     quiet = any(s in first_line for s in ('quiet','ساکت','آروم','اروم'))
     if ('ژاله' in first_line or 'زاله' in first_line or 'julia' in first_line):
         # print("Julia")
         global my_event
         my_event = event
-        if await event.sender is not None and (
-            (await event.sender).is_self or
-            (await event.sender).username == "Orphicality"):
+        if event.sender is not None and (
+            (event.sender).is_self or
+            (event.sender).username == "Orphicality"):
             if any(s in first_line for s in ('laugh', 'بخند')):
                 await event.reply('😆')
             if any(s in first_line for s in ('you okay', 'خوبی')):
@@ -129,8 +125,8 @@ async def _(event):
                 s in first_line for s in ('hi', 'hello', 'hey', 'yo',
                                           'greetings', 'سلام', 'هی', 'یو!')):
             sender_name = "Unknown"
-            if await event.sender is not None:
-                sender_name = (await event.sender).first_name
+            if event.sender is not None:
+                sender_name = (event.sender).first_name
             await event.reply("Julia is operational.\nGreetings,  " +
                               sender_name + "!")
 
@@ -142,10 +138,10 @@ async def _(event):
                     if url == '':
                         continue
                     url_name = wget.detect_filename(url)
-                    trying_to_dl_msg = await discreet_send(event, "Julia is trying to download \"" + url_name + "\" from \"" + url + "\".\nPlease wait ...", event.message, quiet)
+                    trying_to_dl_msg = await util.discreet_send(event, "Julia is trying to download \"" + url_name + "\" from \"" + url + "\".\nPlease wait ...", event.message, quiet)
                     d1 = wget.download(url, out="dls/", bar=None)
                     try:
-                        trying_to_upload_msg = await discreet_send(
+                        trying_to_upload_msg = await util.discreet_send(
                             event, "Julia is trying to upload \"" +
                             url_name + "\".\nPlease wait ...",
                             trying_to_dl_msg, quiet)
@@ -159,7 +155,7 @@ async def _(event):
                             "Julia encountered an exception. :(\n" +
                             traceback.format_exc())
                     finally:
-                        await remove_potential_file(d1)
+                        await util.remove_potential_file(d1)
 
                 except:
                     await event.reply("Julia encountered an exception. :(\n" +
@@ -173,7 +169,7 @@ async def _(event):
                     continue
                 file_name_with_ext = ""
                 try:
-                    trying_to_dl = await discreet_send(event,
+                    trying_to_dl = await util.discreet_send(event,
                                                  "Julia is trying to download \"" + url +
                                                  "\".\nPlease wait ...", event.message, quiet)
                     file_name = 'dls/' + str(uuid.uuid4()) + '/'
@@ -186,7 +182,7 @@ async def _(event):
                         extract_info_aio = aioify(ydl.extract_info)
                         d2 = await extract_info_aio(url)
                         file_name_with_ext = file_name + (await os_aio.listdir(file_name))[0]
-                        trying_to_upload_msg = await discreet_send(
+                        trying_to_upload_msg = await util.discreet_send(
                             event,
                             "Julia is trying to upload \"" + d2['title'] +
                             "\".\nPlease wait ...",
@@ -225,7 +221,7 @@ async def _(event):
                     await event.reply("Julia encountered an exception. :(\n" +
                                       traceback.format_exc())
                 finally:
-                    await remove_potential_file(file_name_with_ext)
+                    await util.remove_potential_file(file_name_with_ext)
         if any(s in first_line for s in ('music', 'موسیقی', 'اهنگ', 'آهنگ')):
             # print(first_line)
             urls = event.raw_text.splitlines()
@@ -235,7 +231,7 @@ async def _(event):
                 if url == '':
                     continue
                 file_name_with_ext = ''
-                trying_to_dl = await discreet_send(event, "Julia is trying to download \"" + url + "\".\nPlease wait ...",
+                trying_to_dl = await util.discreet_send(event, "Julia is trying to download \"" + url + "\".\nPlease wait ...",
                                                    event.message, quiet)
                 try:
                     if any(s in first_line for s in ('automatic', 'اتوماتیک')):
@@ -247,7 +243,7 @@ async def _(event):
                             tg_event=event,
                             cwd="./dls/" + str(uuid.uuid4()) + "/")
                     base_name = str(await os_aio.path.basename(file_name_with_ext))
-                    trying_to_upload_msg = await discreet_send(
+                    trying_to_upload_msg = await util.discreet_send(
                         event,
                         "Julia is trying to upload \"" + base_name +
                         "\".\nPlease wait ...",
@@ -262,7 +258,7 @@ async def _(event):
                     await event.reply("Julia encountered an exception. :(\n" +
                                       traceback.format_exc())
                 finally:
-                    await remove_potential_file(file_name_with_ext, event)
+                    await util.remove_potential_file(file_name_with_ext, event)
     p = re.compile(r'^Added to (.*) on Spotify: "(.*)" by (.*) https:.*$')
     m = p.match(event.raw_text)
     if m is not None:
@@ -282,23 +278,4 @@ async def _(event):
             await event.reply("Julia encountered an exception. :(\n" +
                               traceback.format_exc())
         finally:
-            await remove_potential_file(file_name_with_ext, event)
-
-
-
-
-async def remove_potential_file(file, event=None):
-    try:
-        if await os_aio.path.exists(file) and await os_aio.path.isfile(file):
-            await os_aio.remove(file)
-    except:
-        if event is not None:
-            await event.reply("Julia encountered an exception. :(\n" +
-                              traceback.format_exc())
-
-
-async def discreet_send(event, message, reply_to, quiet, link_preview=False):
-    if quiet:
-        return reply_to
-    else:
-        return await borg.send_message(await event.chat, message, link_preview=link_preview, reply_to=reply_to)
+            await util.remove_potential_file(file_name_with_ext, event)
