@@ -85,12 +85,8 @@ async def await_reply(chat, message):
 
 
 ######################
-# orphic = await borg.get_entity('Orphicality')
-
-
 @borg.on(events.NewMessage())
 async def _(event):
-    util.borg = borg
     first_line = "l"
     try:
         first_line = event.raw_text.lower().splitlines().pop(0)

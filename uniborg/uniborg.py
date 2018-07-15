@@ -10,6 +10,7 @@ from telethon import TelegramClient
 import telethon.utils
 import telethon.events
 
+from uniborg import util
 from .storage import Storage
 from . import hacks
 
@@ -51,6 +52,7 @@ class Uniborg(TelegramClient):
 
         self.me = await self.get_me()
         self.uid = telethon.utils.get_peer_id(self.me)
+        util.borg = self
 
     def load_plugin(self, shortname):
         self.load_plugin_from_file(f"{self._plugin_path}/{shortname}.py")
