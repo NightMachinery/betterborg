@@ -7,6 +7,7 @@ import uuid
 import traceback
 import os
 import pexpect
+import shlex
 import re
 from uniborg import util
 from telethon import TelegramClient, events
@@ -66,7 +67,7 @@ async def run_and_get(event, to_await, cwd=None):
     await to_await(cwd=cwd, event=event)
     # util.interact(locals())
     return cwd + str(
-        await pexpect_ai.run('bash -c "ls -p | grep -E -v \'/|\.aria2$\'"', cwd=cwd),
+        await pexpect_ai.run('bash -c "ls -p | grep -E -v \'/|\.aria2.*|\.torrent$\'"', cwd=cwd),
         'utf-8').strip()
 
 
@@ -95,9 +96,13 @@ async def run_and_upload(event, to_await, quiet=True):
         await remove_potential_file(file_add, event)
 
 
+async def safe_run(event, cwd, command):
+    ## await event.reply('bash -c "' + command + '"' + '\n' + cwd)
+    await pexpect_ai.run(command, cwd=cwd)
+
 async def simple_run(event, cwd, command):
     ## await event.reply('bash -c "' + command + '"' + '\n' + cwd)
-    await pexpect_ai.run('bash -c "' + command + '"', cwd=cwd)
+    await pexpect_ai.run('bash -c ' + shlex.quote(command) + '', cwd=cwd)
 
 
 async def remove_potential_file(file, event=None):
