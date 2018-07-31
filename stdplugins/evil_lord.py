@@ -54,7 +54,7 @@ async def get_music(name='Halsey Control', cwd="./dls/BAD/", tg_event=None):
     else:
         choose_msg = await tg_event.reply(child.match.group().decode('utf-8') +
                                           ".")
-        choose_reply_msg = await await_reply(await tg_event.chat, choose_msg)
+        choose_reply_msg = await await_reply(tg_event.chat, choose_msg)
         choice_text = choose_reply_msg.raw_text
         if choice_text.isnumeric():
             child.sendline(choice_text)
