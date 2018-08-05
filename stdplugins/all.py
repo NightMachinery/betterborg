@@ -14,7 +14,7 @@ async def _(event):
     mention_limit = 30
     current_mentions = 0
     mentions = "@all\n"
-    input_chat = await event.chat
+    input_chat = event.chat
     def reset_mentions():
         nonlocal current_mentions
         nonlocal mentions
