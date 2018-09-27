@@ -85,7 +85,7 @@ async def run_and_upload(event, to_await, quiet=True):
             event, "Julia is trying to upload \"" + base_name +
             "\".\nPlease wait ...", trying_to_dl, quiet)
         sent_file = await borg.send_file(
-            event.chat,
+            await event.get_chat(),
             file_add,
             reply_to=trying_to_upload_msg,
             caption=base_name)
@@ -119,5 +119,8 @@ async def discreet_send(event, message, reply_to, quiet, link_preview=False):
     if quiet:
         return reply_to
     else:
-        return await borg.send_message(
-            event.chat, message, link_preview=link_preview, reply_to=reply_to)
+
+        return await event.respond(
+            message, link_preview=link_preview, reply_to=reply_to)
+        # return await borg.send_message(
+        #     await event.get_chat(), message, link_preview=link_preview, reply_to=reply_to)

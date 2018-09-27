@@ -54,7 +54,7 @@ async def get_music(name='Halsey Control', cwd="./dls/BAD/", tg_event=None):
     else:
         choose_msg = await tg_event.reply(child.match.group().decode('utf-8') +
                                           ".")
-        choose_reply_msg = await await_reply(tg_event.chat, choose_msg)
+        choose_reply_msg = await await_reply(await tg_event.get_chat(), choose_msg)
         choice_text = choose_reply_msg.raw_text
         if choice_text.isnumeric():
             child.sendline(choice_text)
@@ -114,7 +114,7 @@ async def _(event):
 
         if any(s in first_line for s in ('debug', 'دیباگ')):
             db_msg = await event.reply('DEBUG')
-            db_reply = await await_reply(event.chat, db_msg)
+            db_reply = await await_reply(await event.get_chat(), db_msg)
             print("YDebug: " + db_reply.raw_text)
 
         if any(
@@ -142,7 +142,7 @@ async def _(event):
                             url_name + "\".\nPlease wait ...",
                             trying_to_dl_msg, quiet)
                         await borg.send_file(
-                            event.chat,
+                            await event.get_chat(),
                             d1,
                             reply_to=trying_to_upload_msg,
                             caption=(url_name))
@@ -185,7 +185,7 @@ async def _(event):
                             trying_to_dl,
                             quiet)
                         sent_video = await borg.send_file(
-                            event.chat,
+                            await event.get_chat(),
                             file_name_with_ext,
                             reply_to=trying_to_upload_msg,
                             caption=str(d2['title']))
@@ -207,7 +207,7 @@ async def _(event):
                                             "\nDescription:\n" +
                                             str(d2['description']))
                             await borg.send_message(
-                                event.chat,
+                                await event.get_chat(),
                                 full_caption,
                                 sent_video,
                                 link_preview=False)
@@ -246,7 +246,7 @@ async def _(event):
                         trying_to_dl,
                         quiet)
                     sent_music = await borg.send_file(
-                        event.chat,
+                        await event.get_chat(),
                         file_name_with_ext,
                         reply_to=trying_to_upload_msg,
                         caption=base_name)
@@ -266,7 +266,7 @@ async def _(event):
                 cwd="./dls/" + str(uuid.uuid4()) + "/")
             base_name = str(await os_aio.path.basename(file_name_with_ext))
             sent_music = await borg.send_file(
-                event.chat,
+                await event.get_chat(),
                 file_name_with_ext,
                 reply_to=event.message,
                 caption=base_name)
