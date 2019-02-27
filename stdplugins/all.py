@@ -14,7 +14,7 @@ async def _(event):
     mention_limit = 30
     current_mentions = 0
     mentions = "@all\n"
-    input_chat = event.chat
+    input_chat = await event.get_input_chat()
     def reset_mentions():
         nonlocal current_mentions
         nonlocal mentions
@@ -29,7 +29,7 @@ async def _(event):
     async def send_current_mentions():
         nonlocal mentions
         nonlocal event
-        await event.respond(mentions)
+        await event.respond(mentions,reply_to=event.message.reply_to_msg_id)
         reset_mentions()
 
     reset_mentions()

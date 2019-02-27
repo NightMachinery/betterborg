@@ -69,6 +69,7 @@ async def get_music(name='Halsey Control', cwd="./dls/BAD/", tg_event=None):
     mp3_file_add = cwd + str(
         await pexpect_ai.run('bash -c "exa -a --color=never"', cwd=cwd),
         'utf-8').strip() # exa --all doesn't include . and ..
+    # util.interact()
     mp3_file = await eyed3_aio.load(mp3_file_add)
     mp3_file.tag.title = str(await os_aio.path.basename(mp3_file_add))[:-4]
     await (aioify(mp3_file.tag.save))()
