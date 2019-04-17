@@ -100,9 +100,9 @@ async def _(event):
         # print("Julia")
         global my_event
         my_event = event
-        if event.sender is not None and (
-            (event.sender).is_self or
-            (event.sender).username == "Orphicality"):
+        sender = await event.message.get_sender();
+        if sender is not None and (
+            event.sender.username == un for un in ("Orphicality", "Untethered")):
             if any(s in first_line for s in ('laugh', 'بخند')):
                 await event.reply('😆')
             if any(s in first_line for s in ('you okay', 'خوبی')):
