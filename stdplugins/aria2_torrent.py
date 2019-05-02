@@ -16,4 +16,4 @@ async def _(event):
             + shlex.quote(event.pattern_match.group(1)))
         # + '"')
         ,
-        quiet=false)
+        quiet=False)
