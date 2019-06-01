@@ -1,5 +1,0 @@
-aioify
-instantmusic
-telethon-aio
-youtube-dl
-eyed3

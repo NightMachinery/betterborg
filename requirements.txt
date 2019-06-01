@@ -2,3 +2,8 @@ telethon
 youtube-dl
 nest_asyncio
 ipython
+aioify
+instantmusic
+eyed3
+regex
+wget
