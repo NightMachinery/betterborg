@@ -1,2 +1,4 @@
 telethon
 youtube-dl
+nest_asyncio
+ipython
