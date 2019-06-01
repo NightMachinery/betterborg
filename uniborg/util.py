@@ -12,6 +12,7 @@ import re
 from uniborg import util
 from telethon import TelegramClient, events
 from telethon.tl.functions.messages import GetPeerDialogsRequest
+from IPython import embed
 
 dl_base = 'dls/'
 pexpect_ai = aioify(pexpect)
@@ -30,14 +31,19 @@ def interact(local=None):
     import code
     code.interact(local=local)
 
+def ii():
+    import nest_asyncio
+    nest_asyncio.apply()
 
 async def isAdmin(event,
                   admins=("Orphicality", ),
                   adminChats=("whitegloved", )):
     chat = await event.get_chat()
-    # import code; code.interact(local=locals())
-    return (event.sender is not None and
-            ((event.sender).is_self or (event.sender).username in admins)) or (
+    await event.message.get_sender()
+    #ii()
+    #embed(using='asyncio')
+    return (event.message.sender is not None and
+            ((event.message.sender).is_self or (event.message.sender).username in admins)) or (
                 chat.username is not None and chat.username in adminChats)
 
 
