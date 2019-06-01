@@ -2,7 +2,7 @@ telethon
 youtube-dl
 nest_asyncio
 ipython
-aioify
+aioify==0.1.3
 instantmusic
 eyed3
 regex
