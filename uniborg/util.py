@@ -126,7 +126,7 @@ async def simple_run(event, cwd, command):
     #print(cm3)
     #await pexpect_ai.run(cm2, cwd=cwd)
     bashCommand = cm
-    output = (await subprocess_aio.run(bashCommand, shell=True, cwd=cwd, text=True, executable='/bin/bash', stderr=subprocess.STDOUT, stdout=subprocess.PIPE)).stdout
+    output = (await subprocess_aio.run(bashCommand, shell=True, cwd=cwd, text=True, executable='/bin/zsh', stderr=subprocess.STDOUT, stdout=subprocess.PIPE)).stdout
     await event.reply("out: " + output)
 
 
