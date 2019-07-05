@@ -11,5 +11,4 @@ async def _(event):
         await util.run_and_upload(
             event=event,
             to_await=partial(
-                util.simple_run, command=event.pattern_match.group(1).replace("‘","'").replace('“','"'),
-            quiet=False)
+                util.simple_run, command=event.pattern_match.group(1).replace("‘","'").replace('“','"').replace("’","'").replace('”','"')), quiet=False)
