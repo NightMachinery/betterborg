@@ -1,4 +1,5 @@
 from __future__ import unicode_literals
+from IPython import embed
 #TODO Send try_dl of music after getting number of track if not automatic
 #TODO aioify blocking calls
 #TODO irs music dler
@@ -62,14 +63,15 @@ async def get_music(name='Halsey Control', cwd="./dls/BAD/", tg_event=None):
             child.sendline('0')
     child.expect(['Download*', '\(y/n\)*'])
     child.sendline('y')
-    # print(name + " cwd1: \n" + cwd)
+    #print(name + " cwd1: \n" + cwd)
     await (aioify(child.expect)(
-        ['Fixed*', 'couldnt get album art*'], timeout=3000))
-    # print(name + " cwd2: \n" + cwd)
+        #['Fixed*', 'couldnt get album art*'], timeout=3000))
+        ['Deleting*(pass -k to keep)*', pexpect.EOF], timeout=3000))
+    #print(name + " cwd2: \n" + cwd)
     mp3_file_add = cwd + str(
         await pexpect_ai.run('bash -c "exa -a --color=never"', cwd=cwd),
         'utf-8').strip() # exa --all doesn't include . and ..
-    # util.interact()
+    #embed()
     mp3_file = await eyed3_aio.load(mp3_file_add)
     mp3_file.tag.title = str(await os_aio.path.basename(mp3_file_add))[:-4]
     await (aioify(mp3_file.tag.save))()
@@ -98,9 +100,9 @@ async def _(event):
         # print("Julia")
         global my_event
         my_event = event
-        if event.sender is not None and (
-            (event.sender).is_self or
-            (event.sender).username == "Orphicality"):
+        sender = await event.message.get_sender();
+        if sender is not None and (
+            event.sender.username == un for un in ("Orphicality", "Untethered")):
             if any(s in first_line for s in ('laugh', 'بخند')):
                 await event.reply('😆')
             if any(s in first_line for s in ('you okay', 'خوبی')):

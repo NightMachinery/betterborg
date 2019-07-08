@@ -3,6 +3,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from aioify import aioify
+import subprocess
 import uuid
 import traceback
 import os
@@ -12,10 +13,15 @@ import re
 from uniborg import util
 from telethon import TelegramClient, events
 from telethon.tl.functions.messages import GetPeerDialogsRequest
+from IPython import embed
 
 dl_base = 'dls/'
+#pexpect_ai = aioify(obj=pexpect, name='pexpect_ai')
 pexpect_ai = aioify(pexpect)
+#os_aio = aioify(obj=os, name='os_aio')
 os_aio = aioify(os)
+#subprocess_aio = aioify(obj=subprocess, name='subprocess_aio')
+subprocess_aio = aioify(subprocess)
 borg = None
 
 
@@ -30,16 +36,21 @@ def interact(local=None):
     import code
     code.interact(local=local)
 
+def ii():
+    import nest_asyncio
+    nest_asyncio.apply()
 
 async def isAdmin(event,
                   admins=("Orphicality", ),
-                  adminChats=("whitegloved", )):
+                  adminChats=("https://t.me/joinchat/AAAAAERV9wGWQKOF5hgQSA", )):
     chat = await event.get_chat()
-    # import code; code.interact(local=locals())
-    return (event.sender is not None and
-            ((event.sender).is_self or (event.sender).username in admins)) or (
-                chat.username is not None and chat.username in adminChats)
-
+    await event.message.get_sender()
+    #ii()
+    #embed(using='asyncio')
+    #Doesnt work with private channels
+    return (
+                chat.username is not None and chat.username in adminChats) or (event.message.sender is not None and
+            ((event.message.sender).is_self or (event.message.sender).username in admins))
 
 async def is_read(borg, entity, message, is_out=None):
     """
@@ -81,6 +92,8 @@ async def run_and_upload(event, to_await, quiet=True):
         file_add = await run_and_get(event=event, to_await=to_await)
         # util.interact(locals())
         base_name = str(await os_aio.path.basename(file_add))
+        if base_name == "":
+            return
         trying_to_upload_msg = await util.discreet_send(
             event, "Julia is trying to upload \"" + base_name +
             "\".\nPlease wait ...", trying_to_dl, quiet)
@@ -98,11 +111,23 @@ async def run_and_upload(event, to_await, quiet=True):
 
 async def safe_run(event, cwd, command):
     ## await event.reply('bash -c "' + command + '"' + '\n' + cwd)
-    await pexpect_ai.run(command, cwd=cwd)
+    #await pexpect_ai.run(command, cwd=cwd)
+    await subprocess_aio.run(command, cwd=cwd)
 
 async def simple_run(event, cwd, command):
     ## await event.reply('bash -c "' + command + '"' + '\n' + cwd)
-    await pexpect_ai.run('bash -c ' + shlex.quote(command) + '', cwd=cwd)
+    #await pexpect_ai.run('bash -c ' + shlex.quote(command) + '', cwd=cwd)
+    #await pexpect_ai.run('bash -c "' + command + '"', cwd=cwd)
+    cm = command
+    #print(cm)
+    #cm2 = 'bash -c ' + shlex.quote(command)
+    #print(cm2)
+    #cm3 = 'bash -c "' + command + '"'
+    #print(cm3)
+    #await pexpect_ai.run(cm2, cwd=cwd)
+    bashCommand = cm
+    output = (await subprocess_aio.run(bashCommand, shell=True, cwd=cwd, text=True, executable='/bin/zsh', stderr=subprocess.STDOUT, stdout=subprocess.PIPE)).stdout
+    await event.reply("out: " + output)
 
 
 async def remove_potential_file(file, event=None):
