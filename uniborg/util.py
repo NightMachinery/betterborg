@@ -148,7 +148,7 @@ async def simple_run(event, cwd, command):
     bashCommand = cm
     output = (await subprocess_aio.run(bashCommand, shell=True, cwd=cwd, text=True, executable='/bin/zsh', stderr=subprocess.STDOUT, stdout=subprocess.PIPE)).stdout
     output = "out: " + output
-    output = output[:4000] if len(output) > 4000 else output
+    output = output[:4000] + ' TRUNCATED' if len(output) > 4000 else output
     await event.reply(output)
 
 
