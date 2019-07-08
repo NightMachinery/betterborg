@@ -120,6 +120,7 @@ async def run_and_upload(event, to_await, quiet=True):
             await event.get_chat(),
             file_add,
             reply_to=trying_to_upload_msg,
+	    allow_cache=False,
             caption=base_name)
     except:
         await event.reply("Julia encountered an exception. :(\n" +
