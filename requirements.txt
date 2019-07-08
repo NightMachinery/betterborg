@@ -1,2 +1,3 @@
 telethon
 youtube-dl
+aioconsole
