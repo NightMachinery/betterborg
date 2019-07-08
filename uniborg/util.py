@@ -14,6 +14,7 @@ from uniborg import util
 from telethon import TelegramClient, events
 from telethon.tl.functions.messages import GetPeerDialogsRequest
 from IPython import embed
+from pathlib import Path
 
 dl_base = 'dls/'
 #pexpect_ai = aioify(obj=pexpect, name='pexpect_ai')
@@ -36,7 +37,7 @@ def interact(local=None):
     import code
     code.interact(local=local)
 
-def ii():
+def ix():
     import nest_asyncio
     nest_asyncio.apply()
 
@@ -45,7 +46,7 @@ async def isAdmin(event,
                   adminChats=("https://t.me/joinchat/AAAAAERV9wGWQKOF5hgQSA", )):
     chat = await event.get_chat()
     await event.message.get_sender()
-    #ii()
+    #ix()
     #embed(using='asyncio')
     #Doesnt work with private channels
     return (
@@ -75,11 +76,29 @@ async def run_and_get(event, to_await, cwd=None):
         cwd = dl_base + str(uuid.uuid4()) + '/'
     await pexpect_ai.run('bash -c "mkdir -p ' + cwd + '"')
     # util.interact(locals())
+    a = borg
+    rep_id = event.message.reply_to_msg_id
+    dled_file_name = 'never-alice-never-alice-ohh2339'
+    dled_path = ''
+    if rep_id != None:
+        z = await a.get_messages(event.chat,ids=rep_id)
+        # await z.download_media()
+        # ix()
+        # embed(using='asyncio')
+        if z.file != None:
+            dled_file_name = z.file.name
+            # if fileName != '':
+            dled_path = cwd+dled_file_name
+            dled_path = await a.download_media(message=z, file=dled_path)
     await to_await(cwd=cwd, event=event)
-    # util.interact(locals())
-    return cwd + str(
-        await pexpect_ai.run('bash -c "ls -p | grep -E -v \'/|\.aria2.*|\.torrent$\'"', cwd=cwd),
-        'utf-8').strip()
+    await remove_potential_file(dled_path, event)
+    for p in Path(cwd).glob('*'):
+        if not any(s in p.name for s in ('.torrent', '.aria2', dled_file_name)):
+            return p.absolute()
+    # return cwd + str(
+    # await pexpect_ai.run('bash -c "ls -p | grep -E -v \'/|\.aria2.*|\.torrent$\'"', cwd=cwd),
+    # 'utf-8').strip()
+    return cwd
 
 
 async def run_and_upload(event, to_await, quiet=True):
@@ -127,7 +146,9 @@ async def simple_run(event, cwd, command):
     #await pexpect_ai.run(cm2, cwd=cwd)
     bashCommand = cm
     output = (await subprocess_aio.run(bashCommand, shell=True, cwd=cwd, text=True, executable='/bin/zsh', stderr=subprocess.STDOUT, stdout=subprocess.PIPE)).stdout
-    await event.reply("out: " + output)
+    output = "out: " + output
+    output = output[:4000] if len(output) > 4000 else output
+    await event.reply(output)
 
 
 async def remove_potential_file(file, event=None):
