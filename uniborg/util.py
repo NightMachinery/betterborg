@@ -119,6 +119,7 @@ async def run_and_upload(event, to_await, quiet=True):
         sent_file = await borg.send_file(
             await event.get_chat(),
             file_add,
+            force_document=True,
             reply_to=trying_to_upload_msg,
 	    allow_cache=False,
             caption=base_name)
