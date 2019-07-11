@@ -3,7 +3,7 @@ from functools import partial
 from uniborg import util
 from IPython import embed
 
-@borg.on(events.NewMessage(pattern=r"(?i)^\.aget (.*)$"))
+@borg.on(events.NewMessage(pattern=r"(?i)^\.a (.*)$"))
 async def _(event):
     #print("aget received")
     if await util.isAdmin(event):
