@@ -93,7 +93,7 @@ async def run_and_get(event, to_await, cwd=None):
     await to_await(cwd=cwd, event=event)
     await remove_potential_file(dled_path, event)
     for p in Path(cwd).glob('*'):
-        if not any(s in p.name for s in ('.torrent', '.aria2', dled_file_name)):
+        if not p.is_dir() and not any(s in p.name for s in ('.torrent', '.aria2', dled_file_name)):
             return p.absolute()
     # return cwd + str(
     # await pexpect_ai.run('bash -c "ls -p | grep -E -v \'/|\.aria2.*|\.torrent$\'"', cwd=cwd),
