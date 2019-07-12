@@ -10,6 +10,7 @@ import os
 import pexpect
 import shlex
 import re
+import shutil
 from uniborg import util
 from telethon import TelegramClient, events
 from telethon.tl.functions.messages import GetPeerDialogsRequest
@@ -37,21 +38,26 @@ def interact(local=None):
     import code
     code.interact(local=local)
 
+
 def ix():
     import nest_asyncio
     nest_asyncio.apply()
 
-async def isAdmin(event,
-                  admins=("Orphicality", ),
-                  adminChats=("https://t.me/joinchat/AAAAAERV9wGWQKOF5hgQSA", )):
+
+async def isAdmin(
+        event,
+        admins=("Orphicality", ),
+        adminChats=("https://t.me/joinchat/AAAAAERV9wGWQKOF5hgQSA", )):
     chat = await event.get_chat()
     await event.message.get_sender()
     #ix()
     #embed(using='asyncio')
     #Doesnt work with private channels
-    return (
-                chat.username is not None and chat.username in adminChats) or (event.message.sender is not None and
-            ((event.message.sender).is_self or (event.message.sender).username in admins))
+    return (chat.username is not None and chat.username in adminChats) or (
+        event.message.sender is not None and
+        ((event.message.sender).is_self or
+         (event.message.sender).username in admins))
+
 
 async def is_read(borg, entity, message, is_out=None):
     """
@@ -81,20 +87,17 @@ async def run_and_get(event, to_await, cwd=None):
     dled_file_name = 'never-alice-never-alice-ohh2339'
     dled_path = ''
     if rep_id != None:
-        z = await a.get_messages(event.chat,ids=rep_id)
+        z = await a.get_messages(event.chat, ids=rep_id)
         # await z.download_media()
         # ix()
         # embed(using='asyncio')
         if z.file != None:
             dled_file_name = z.file.name
             # if fileName != '':
-            dled_path = cwd+dled_file_name
+            dled_path = cwd + dled_file_name
             dled_path = await a.download_media(message=z, file=dled_path)
     await to_await(cwd=cwd, event=event)
     await remove_potential_file(dled_path, event)
-    for p in Path(cwd).glob('*'):
-        if not p.is_dir() and not any(s in p.name for s in ('.torrent', '.aria2', dled_file_name)):
-            return p.absolute()
     # return cwd + str(
     # await pexpect_ai.run('bash -c "ls -p | grep -E -v \'/|\.aria2.*|\.torrent$\'"', cwd=cwd),
     # 'utf-8').strip()
@@ -108,32 +111,33 @@ async def run_and_upload(event, to_await, quiet=True):
         trying_to_dl = await util.discreet_send(
             event, "Julia is processing your request ...", event.message,
             quiet)
-        file_add = await run_and_get(event=event, to_await=to_await)
-        # util.interact(locals())
-        base_name = str(await os_aio.path.basename(file_add))
-        if base_name == "":
-            return
-        trying_to_upload_msg = await util.discreet_send(
-            event, "Julia is trying to upload \"" + base_name +
-            "\".\nPlease wait ...", trying_to_dl, quiet)
-        sent_file = await borg.send_file(
-            await event.get_chat(),
-            file_add,
-            force_document=True,
-            reply_to=trying_to_upload_msg,
-	    allow_cache=False,
-            caption=base_name)
+        cwd = await run_and_get(event=event, to_await=to_await)
+        for p in Path(cwd).glob('*'):
+            if not p.is_dir(
+            ):  # and not any(s in p.name for s in ('.torrent', '.aria2')):
+                file_add = p.absolute()
+                # base_name = str(await os_aio.path.basename(file_add))
+                # trying_to_upload_msg = await util.discreet_send(
+                # event, "Julia is trying to upload \"" + base_name +
+                # "\".\nPlease wait ...", trying_to_dl, quiet)
+                sent_file = await borg.send_file(await event.get_chat(),
+                                                 file_add,
+                                                 force_document=True,
+                                                 reply_to=event.message,
+                                                 allow_cache=False)
+                # caption=base_name)
     except:
         await event.reply("Julia encountered an exception. :(\n" +
                           traceback.format_exc())
     finally:
-        await remove_potential_file(file_add, event)
+        await remove_potential_file(cwd, event)
 
 
 async def safe_run(event, cwd, command):
     ## await event.reply('bash -c "' + command + '"' + '\n' + cwd)
     #await pexpect_ai.run(command, cwd=cwd)
     await subprocess_aio.run(command, cwd=cwd)
+
 
 async def simple_run(event, cwd, command):
     ## await event.reply('bash -c "' + command + '"' + '\n' + cwd)
@@ -147,28 +151,41 @@ async def simple_run(event, cwd, command):
     #print(cm3)
     #await pexpect_ai.run(cm2, cwd=cwd)
     bashCommand = cm
-    output = (await subprocess_aio.run(bashCommand, shell=True, cwd=cwd, text=True, executable='/bin/zsh', stderr=subprocess.STDOUT, stdout=subprocess.PIPE)).stdout
-    output = "out: " + output
-    output = output[:4000] + ' TRUNCATED' if len(output) > 4000 else output
-    await event.reply(output)
+    sp = (await subprocess_aio.run(bashCommand,
+                                       shell=True,
+                                       cwd=cwd,
+                                       text=True,
+                                       executable='/bin/zsh',
+                                       stderr=subprocess.STDOUT,
+                                       stdout=subprocess.PIPE))
+    output = sp.stdout
+    output = f"The process exited {sp.returncode}." if output == '' else output
+    await discreet_send(event, output, event.message)
 
 
 async def remove_potential_file(file, event=None):
     try:
-        if await os_aio.path.exists(file) and await os_aio.path.isfile(file):
-            await os_aio.remove(file)
+        if await os_aio.path.exists(file):
+            if await os_aio.path.isfile(file):
+                await os_aio.remove(file)
+            else:
+                shutil.rmtree(file)  #awaitable
     except:
         if event is not None:
             await event.reply("Julia encountered an exception. :(\n" +
                               traceback.format_exc())
 
 
-async def discreet_send(event, message, reply_to, quiet, link_preview=False):
+async def discreet_send(event, message, reply_to, quiet=False, link_preview=False):
     if quiet:
         return reply_to
     else:
-
-        return await event.respond(
-            message, link_preview=link_preview, reply_to=reply_to)
-        # return await borg.send_message(
-        #     await event.get_chat(), message, link_preview=link_preview, reply_to=reply_to)
+        s = 0
+        e = 4000
+        while (len(message) > s):
+            last_msg = await event.respond(message[s:e],
+                                           link_preview=link_preview,
+                                           reply_to=reply_to)
+            s = e
+            e = s + 4000
+        return last_msg
