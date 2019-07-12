@@ -185,7 +185,7 @@ async def discreet_send(event, message, reply_to, quiet=False, link_preview=Fals
         while (len(message) > s):
             last_msg = await event.respond(message[s:e],
                                            link_preview=link_preview,
-                                           reply_to=reply_to)
+                                           reply_to=(reply_to if s == 0 else last_msg))
             s = e
             e = s + 4000
         return last_msg
