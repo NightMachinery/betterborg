@@ -1,3 +1,7 @@
+# betterborg
+The crust of this bot is now the advanced_get plugin, which is an extremely flexible plugin, giving you your unix shell in the Telegram, with the ability to exchange files, too. I'll update the README when I have the time to document it.
+Needs Python 3.7.2+.
+
 # uniborg
 
 Pluggable [``asyncio``](https://docs.python.org/3/library/asyncio.html)
