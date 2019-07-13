@@ -3,6 +3,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from aioify import aioify
+import asyncio
 import subprocess
 import uuid
 import traceback
@@ -112,6 +113,8 @@ async def run_and_upload(event, to_await, quiet=True):
             event, "Julia is processing your request ...", event.message,
             quiet)
         cwd = await run_and_get(event=event, to_await=to_await)
+        chat = await event.get_chat()
+        #client = borg
         for p in Path(cwd).glob('*'):
             if not p.is_dir(
             ):  # and not any(s in p.name for s in ('.torrent', '.aria2')):
@@ -120,11 +123,13 @@ async def run_and_upload(event, to_await, quiet=True):
                 # trying_to_upload_msg = await util.discreet_send(
                 # event, "Julia is trying to upload \"" + base_name +
                 # "\".\nPlease wait ...", trying_to_dl, quiet)
-                sent_file = await borg.send_file(await event.get_chat(),
-                                                 file_add,
-                                                 force_document=True,
-                                                 reply_to=event.message,
-                                                 allow_cache=False)
+                async with borg.action(chat,'document') as action:
+                    await borg.send_file(chat,
+                                                     file_add,
+                                                     force_document=True,
+                                                     reply_to=event.message,
+                                                     allow_cache=False)
+                         #                            progress_callback=action.progress)
                 # caption=base_name)
     except:
         await event.reply("Julia encountered an exception. :(\n" +
