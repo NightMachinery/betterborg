@@ -109,11 +109,12 @@ async def run_and_upload(event, to_await, quiet=True):
     file_add = ''
     # util.interact(locals())
     try:
+        chat = await event.get_chat()
+        await borg.send_read_acknowledge(chat, event.message)
         trying_to_dl = await util.discreet_send(
             event, "Julia is processing your request ...", event.message,
             quiet)
         cwd = await run_and_get(event=event, to_await=to_await)
-        chat = await event.get_chat()
         #client = borg
         for p in Path(cwd).glob('*'):
             if not p.is_dir(
