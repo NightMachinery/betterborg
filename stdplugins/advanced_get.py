@@ -6,7 +6,7 @@ from IPython import embed
 @borg.on(events.NewMessage(pattern=r"(?i)^\.a (.*)$"))
 async def _(event):
     #print("aget received")
-    if await util.isAdmin(event):
+    if await util.isAdmin(event) and event.message.forward == None:
         #print("aget by admin")
         # util.ix()
         # embed(using='asyncio')
