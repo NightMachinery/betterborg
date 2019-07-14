@@ -56,7 +56,7 @@ async def isAdmin(
     #Doesnt work with private channels
     return (chat.username is not None and chat.username in adminChats) or (
         event.message.sender is not None and
-        ((event.message.sender).is_self or
+        (getattr(event.message.sender, 'is_self', False) or
          (event.message.sender).username in admins))
 
 
