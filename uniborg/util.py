@@ -85,7 +85,7 @@ async def run_and_get(event, to_await, cwd=None):
     # util.interact(locals())
     a = borg
     rep_id = event.message.reply_to_msg_id
-    dled_file_name = 'never-alice-never-alice-ohh2339'
+    dled_file_name = ''
     dled_path = ''
     if rep_id != None:
         z = await a.get_messages(event.chat, ids=rep_id)
@@ -93,8 +93,8 @@ async def run_and_get(event, to_await, cwd=None):
         # ix()
         # embed(using='asyncio')
         if z.file != None:
-            dled_file_name = z.file.name
-            # if fileName != '':
+            dled_file_name = getattr(z.file, 'name', 'some_file')
+            dled_file_name = 'some_file' if dled_file_name == '' or dled_file_name == None else dled_file_name
             dled_path = cwd + dled_file_name
             dled_path = await a.download_media(message=z, file=dled_path)
     await to_await(cwd=cwd, event=event)
