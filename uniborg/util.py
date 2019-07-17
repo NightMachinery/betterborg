@@ -120,14 +120,17 @@ async def run_and_upload(event, to_await, quiet=True):
             if not p.is_dir(
             ):  # and not any(s in p.name for s in ('.torrent', '.aria2')):
                 file_add = p.absolute()
-                # base_name = str(await os_aio.path.basename(file_add))
+                base_name = str(await os_aio.path.basename(file_add))
                 # trying_to_upload_msg = await util.discreet_send(
                 # event, "Julia is trying to upload \"" + base_name +
                 # "\".\nPlease wait ...", trying_to_dl, quiet)
+                voice_note = base_name.startswith('voicenote-')
+                video_note = base_name.startswith('videonote-')
+                force_doc = base_name.startswith('fdoc-')
+                supports_streaming = base_name.startswith('streaming-')
                 async with borg.action(chat,'document') as action:
-                    await borg.send_file(chat,
-                                                     file_add,
-                                                     force_document=True,
+                    await borg.send_file(chat, file_add, voice_note=voice_note, video_note=video_note, supports_streaming=supports_streaming, 
+                                                     force_document=force_doc,
                                                      reply_to=event.message,
                                                      allow_cache=False)
                          #                            progress_callback=action.progress)
@@ -195,3 +198,11 @@ async def discreet_send(event, message, reply_to, quiet=False, link_preview=Fals
             s = e
             e = s + 4000
         return last_msg
+async def saexec(code, **kwargs):
+    # Don't clutter locals
+    locs = {}
+    args = ", ".join(list(kwargs.keys()))
+    exec(f"async def func({args}):\n    " + code.replace("\n", "\n    "), {}, locs)
+    # Don't expect it to return from the coro.
+    result = await locs["func"](**kwargs)
+    return result
