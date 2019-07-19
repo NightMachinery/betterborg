@@ -125,7 +125,7 @@ async def _(event):
                                           'greetings', 'سلام', 'هی', 'یو!')):
             sender_name = "Unknown"
             if event.sender is not None:
-                sender_name = (event.sender).first_name
+                sender_name = getattr(event.sender, 'first_name', 'X')
             await event.reply("Julia is operational.\nGreetings,  " +
                               sender_name + "!")
 

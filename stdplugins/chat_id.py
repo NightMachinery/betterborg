@@ -6,5 +6,5 @@ async def _(event):
     if event.forward:
         return
     # print(help(await event.chat))
-    await event.reply(str((await event.chat).id))
+    await event.reply(str((event.chat).id))
  

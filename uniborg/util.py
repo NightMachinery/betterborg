@@ -3,6 +3,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from aioify import aioify
+from functools import partial
 import asyncio
 import subprocess
 import uuid
@@ -53,8 +54,9 @@ async def isAdmin(
     await event.message.get_sender()
     #ix()
     #embed(using='asyncio')
-    #Doesnt work with private channels
-    return (chat.username is not None and chat.username in adminChats) or (
+    #Doesnt work with private channels' links
+    #(getattr(chat,'creator', False) and not getattr(chat, 'megagroup', True))
+    return (chat.id in adminChats)  or (chat.username is not None and chat.username in adminChats) or (
         event.message.sender is not None and
         (getattr(event.message.sender, 'is_self', False) or
          (event.message.sender).username in admins))
@@ -206,3 +208,8 @@ async def saexec(code, **kwargs):
     # Don't expect it to return from the coro.
     result = await locs["func"](**kwargs)
     return result
+async def aget(event):
+       await util.run_and_upload(
+               event=event,
+               to_await=partial(
+                   util.simple_run, command=event.pattern_match.group(1).replace("‘","'").replace('“','"').replace("’","'").replace('”','"').replace('—','--')))
