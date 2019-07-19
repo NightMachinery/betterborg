@@ -155,11 +155,17 @@ async def simple_run(event, cwd, command, shell=True):
                                        shell=shell,
                                        cwd=cwd,
                                        text=True,
-                                       executable='zsh',
+                                       executable='zsh' if shell else None,
                                        stderr=subprocess.STDOUT,
                                        stdout=subprocess.PIPE))
     output = sp.stdout
     output = f"The process exited {sp.returncode}." if output == '' else output
+    if not shell:
+        if sp.returncode != 0:
+            output="Something went wrong."
+        else:
+            output=''
+        print(output)
     await discreet_send(event, output, event.message)
 
 
@@ -177,7 +183,7 @@ async def remove_potential_file(file, event=None):
 
 
 async def discreet_send(event, message, reply_to, quiet=False, link_preview=False):
-    if quiet:
+    if quiet or len(message) == 0:
         return reply_to
     else:
         s = 0
