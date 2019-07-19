@@ -56,7 +56,7 @@ async def isAdmin(
     #embed(using='asyncio')
     #Doesnt work with private channels' links
     #(getattr(chat,'creator', False) and not getattr(chat, 'megagroup', True))
-    return (chat.id in adminChats)  or (chat.username is not None and chat.username in adminChats) or (
+    return (getattr(event.message, 'out', False)) or (chat.id in adminChats)  or (chat.username is not None and chat.username in adminChats) or (
         event.message.sender is not None and
         (getattr(event.message.sender, 'is_self', False) or
          (event.message.sender).username in admins))
@@ -150,23 +150,12 @@ async def safe_run(event, cwd, command):
     await subprocess_aio.run(command, cwd=cwd)
 
 
-async def simple_run(event, cwd, command):
-    ## await event.reply('bash -c "' + command + '"' + '\n' + cwd)
-    #await pexpect_ai.run('bash -c ' + shlex.quote(command) + '', cwd=cwd)
-    #await pexpect_ai.run('bash -c "' + command + '"', cwd=cwd)
-    cm = command
-    #print(cm)
-    #cm2 = 'bash -c ' + shlex.quote(command)
-    #print(cm2)
-    #cm3 = 'bash -c "' + command + '"'
-    #print(cm3)
-    #await pexpect_ai.run(cm2, cwd=cwd)
-    bashCommand = cm
-    sp = (await subprocess_aio.run(bashCommand,
-                                       shell=True,
+async def simple_run(event, cwd, command, shell=True):
+    sp = (await subprocess_aio.run(command,
+                                       shell=shell,
                                        cwd=cwd,
                                        text=True,
-                                       executable='/bin/zsh',
+                                       executable='zsh',
                                        stderr=subprocess.STDOUT,
                                        stdout=subprocess.PIPE))
     output = sp.stdout
@@ -208,8 +197,9 @@ async def saexec(code, **kwargs):
     # Don't expect it to return from the coro.
     result = await locs["func"](**kwargs)
     return result
-async def aget(event):
-       await util.run_and_upload(
-               event=event,
-               to_await=partial(
-                   util.simple_run, command=event.pattern_match.group(1).replace("‘","'").replace('“','"').replace("’","'").replace('”','"').replace('—','--')))
+async def aget(event, command='', shell=True):
+    if command == '':
+        command = event.pattern_match.group(1).replace("‘","'").replace('“','"').replace("’","'").replace('”','"').replace('—','--')
+    await util.run_and_upload(
+        event=event,
+        to_await=partial(util.simple_run, command=command, shell=shell))

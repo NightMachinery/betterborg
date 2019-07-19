@@ -1,5 +1,4 @@
 from telethon import TelegramClient, events
-from functools import partial
 from uniborg import util
 from IPython import embed
 
@@ -9,8 +8,8 @@ async def _(event):
     if await util.isAdmin(event) and event.message.forward == None:
         await util.aget(event)
 
-@borg.on(events.NewMessage(pattern=r"(?i)^\.ac (.*)$", outgoing=True))
-async def _(event):
-    if event.message.forward == None:
-        await util.aget(event)
+# @borg.on(events.NewMessage(pattern=r"(?i)^\.ac (.*)$", outgoing=True))
+# async def _(event):
+#     if event.message.forward == None:
+#         await util.aget(event)
 
