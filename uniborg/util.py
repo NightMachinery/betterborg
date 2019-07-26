@@ -161,11 +161,11 @@ async def simple_run(event, cwd, command, shell=True):
     output = sp.stdout
     output = f"The process exited {sp.returncode}." if output == '' else output
     if not shell:
+        print(output)
         if sp.returncode != 0:
             output="Something went wrong."
         else:
             output=''
-        print(output)
     await discreet_send(event, output, event.message)
 
 
