@@ -8,3 +8,4 @@ eyed3
 regex
 wget
 cryptg
+PySocks
