@@ -4,6 +4,7 @@
 
 import logging
 import os
+import socks
 from uniborg import Uniborg
 
 logging.basicConfig(level=logging.INFO)
