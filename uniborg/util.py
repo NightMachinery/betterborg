@@ -52,14 +52,14 @@ async def isAdmin(
         adminChats=("https://t.me/joinchat/AAAAAERV9wGWQKOF5hgQSA", )):
     chat = await event.get_chat()
     await event.message.get_sender()
-    #ix()
-    #embed(using='asyncio')
     #Doesnt work with private channels' links
-    #(getattr(chat,'creator', False) and not getattr(chat, 'megagroup', True))
-    return (getattr(event.message, 'out', False)) or (chat.id in adminChats)  or (chat.username is not None and chat.username in adminChats) or (
+    res = (getattr(event.message, 'out', False)) or (chat.id in adminChats)  or (chat.username is not None and chat.username in adminChats) or (
         event.message.sender is not None and
         (getattr(event.message.sender, 'is_self', False) or
          (event.message.sender).username in admins))
+    # ix()
+    # embed(using='asyncio')
+    return res
 
 
 async def is_read(borg, entity, message, is_out=None):
@@ -112,7 +112,10 @@ async def run_and_upload(event, to_await, quiet=True):
     # util.interact(locals())
     try:
         chat = await event.get_chat()
-        await borg.send_read_acknowledge(chat, event.message)
+        try:
+            await borg.send_read_acknowledge(chat, event.message)
+        except:
+            pass
         trying_to_dl = await util.discreet_send(
             event, "Julia is processing your request ...", event.message,
             quiet)
@@ -205,7 +208,9 @@ async def saexec(code, **kwargs):
     return result
 async def aget(event, command='', shell=True):
     if command == '':
-        command = event.pattern_match.group(1).replace("‘","'").replace('“','"').replace("’","'").replace('”','"').replace('—','--')
+        command = event.pattern_match.group(2).replace("‘","'").replace('“','"').replace("’","'").replace('”','"').replace('—','--')
+        if event.pattern_match.group(1) == 'n':
+            command = 'noglob ' + command
     await util.run_and_upload(
         event=event,
         to_await=partial(util.simple_run, command=command, shell=shell))
