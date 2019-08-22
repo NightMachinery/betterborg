@@ -51,12 +51,16 @@ async def isAdmin(
         admins=("Orphicality", ),
         adminChats=("https://t.me/joinchat/AAAAAERV9wGWQKOF5hgQSA", )):
     chat = await event.get_chat()
-    await event.message.get_sender()
     #Doesnt work with private channels' links
-    res = (getattr(event.message, 'out', False)) or (chat.id in adminChats)  or (chat.username is not None and chat.username in adminChats) or (
-        event.message.sender is not None and
-        (getattr(event.message.sender, 'is_self', False) or
-         (event.message.sender).username in admins))
+    res = (chat.id in adminChats)  or (chat.username is not None and chat.username in adminChats)
+    sender = getattr(event,'_sender', None)
+    if getattr(event, 'message', None):
+        await event.message.get_sender()
+        res = res or (getattr(event.message, 'out', False))
+        if not sender:
+            sender = getattr(event.message, 'sender', None)
+    if sender:
+        res = res or (getattr(sender, 'is_self', False) or sender.username in admins)
     # ix()
     # embed(using='asyncio')
     return res
@@ -206,10 +210,12 @@ async def saexec(code, **kwargs):
     # Don't expect it to return from the coro.
     result = await locs["func"](**kwargs)
     return result
-async def aget(event, command='', shell=True):
+async def aget(event, command='', shell=True, match=None):
+    if match == None:
+        match = event.pattern_match
     if command == '':
-        command = event.pattern_match.group(2).replace("‘","'").replace('“','"').replace("’","'").replace('”','"').replace('—','--')
-        if event.pattern_match.group(1) == 'n':
+        command = match.group(2).replace("‘","'").replace('“','"').replace("’","'").replace('”','"').replace('—','--')
+        if match.group(1) == 'n':
             command = 'noglob ' + command
     await util.run_and_upload(
         event=event,
