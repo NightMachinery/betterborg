@@ -53,7 +53,7 @@ async def isAdmin(
     chat = await event.get_chat()
     await event.message.get_sender()
     #Doesnt work with private channels' links
-    res = (getattr(event.message, 'out', False)) or (chat.id in adminChats)  or (chat.username is not None and chat.username in adminChats) or (
+    res = (getattr(event.message, 'out', False)) or (chat.id in adminChats)  or (getattr(chat, 'username', 'NA') in adminChats) or (
         event.message.sender is not None and
         (getattr(event.message.sender, 'is_self', False) or
          (event.message.sender).username in admins))
