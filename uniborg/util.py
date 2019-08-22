@@ -52,15 +52,10 @@ async def isAdmin(
         adminChats=("https://t.me/joinchat/AAAAAERV9wGWQKOF5hgQSA", )):
     chat = await event.get_chat()
     #Doesnt work with private channels' links
-    res = (chat.id in adminChats)  or (chat.username is not None and chat.username in adminChats)
-    sender = getattr(event,'_sender', None)
-    if getattr(event, 'message', None):
-        await event.message.get_sender()
-        res = res or (getattr(event.message, 'out', False))
-        if not sender:
-            sender = getattr(event.message, 'sender', None)
-    if sender:
-        res = res or (getattr(sender, 'is_self', False) or sender.username in admins)
+    res = (getattr(event.message, 'out', False)) or (chat.id in adminChats)  or (getattr(chat, 'username', 'NA') in adminChats) or (
+        event.message.sender is not None and
+        (getattr(event.message.sender, 'is_self', False) or
+         (event.message.sender).username in admins))
     # ix()
     # embed(using='asyncio')
     return res
