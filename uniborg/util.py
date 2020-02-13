@@ -121,7 +121,9 @@ async def run_and_upload(event, to_await, quiet=True):
             quiet)
         cwd = await run_and_get(event=event, to_await=to_await)
         #client = borg
-        for p in Path(cwd).glob('*'):
+        files = list(Path(cwd).glob('*'))
+        files.sort()
+        for p in files:
             if not p.is_dir(
             ):  # and not any(s in p.name for s in ('.torrent', '.aria2')):
                 file_add = p.absolute()
