@@ -2,7 +2,7 @@ from telethon import TelegramClient, events
 from uniborg import util
 from IPython import embed
 
-@borg.on(events.NewMessage(pattern=r"(?im)^\.a(n?) ((?:.|\n)*)$"))
+@borg.on(events.NewMessage(pattern=r"(?im)^\.a(n?)\s+((?:.|\n)*)$"))
 async def _(event):
     #print("aget received")
     if await util.isAdmin(event) and event.message.forward == None:
