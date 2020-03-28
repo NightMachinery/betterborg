@@ -6,12 +6,15 @@ import asyncio
 import traceback
 
 from uniborg import util
+from telethon import events
 
 DELETE_TIMEOUT = 2
 
 
-@borg.on(util.admin_cmd(r"^\.load (?P<shortname>\w+)$"))
+@borg.on(events.NewMessage(pattern=r"^\.load (?P<shortname>\w+)$"))
 async def load_reload(event):
+    if not (await util.isAdmin(event) and event.message.forward == None):
+        return
     await event.delete()
     shortname = event.pattern_match["shortname"]
 
