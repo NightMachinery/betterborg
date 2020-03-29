@@ -103,7 +103,7 @@ async def run_and_get(event, to_await, cwd=None):
             dled_exists = True
     mdate = os.path.getmtime(dled_path) if dled_exists else ""
     await to_await(cwd=cwd, event=event)
-    if dled_exists and mdate == os.path.getmtime(dled_path):
+    if dled_exists and os.path.exists(dled_path) and mdate == os.path.getmtime(dled_path):
         await remove_potential_file(dled_path, event)
     # return cwd + str(
     # await pexpect_ai.run('bash -c "ls -p | grep -E -v \'/|\.aria2.*|\.torrent$\'"', cwd=cwd),
