@@ -88,6 +88,7 @@ async def run_and_get(event, to_await, cwd=None):
     rep_id = event.message.reply_to_msg_id
     dled_file_name = ''
     dled_path = ''
+    dled_exists = False
     if rep_id != None:
         z = await a.get_messages(event.chat, ids=rep_id)
         # await z.download_media()
@@ -98,8 +99,11 @@ async def run_and_get(event, to_await, cwd=None):
             dled_file_name = 'some_file' if dled_file_name == '' or dled_file_name == None else dled_file_name
             dled_path = cwd + dled_file_name
             dled_path = await a.download_media(message=z, file=dled_path)
+            dled_exists = True
+    mdate = os.path.getmtime(dled_path) if dled_exists else ""
     await to_await(cwd=cwd, event=event)
-    await remove_potential_file(dled_path, event)
+    if dled_exists and os.path.exists(dled_path) and mdate == os.path.getmtime(dled_path):
+        await remove_potential_file(dled_path, event)
     # return cwd + str(
     # await pexpect_ai.run('bash -c "ls -p | grep -E -v \'/|\.aria2.*|\.torrent$\'"', cwd=cwd),
     # 'utf-8').strip()
@@ -120,7 +124,9 @@ async def run_and_upload(event, to_await, quiet=True):
             quiet)
         cwd = await run_and_get(event=event, to_await=to_await)
         #client = borg
-        for p in Path(cwd).glob('*'):
+        files = list(Path(cwd).glob('*'))
+        files.sort()
+        for p in files:
             if not p.is_dir(
             ):  # and not any(s in p.name for s in ('.torrent', '.aria2')):
                 file_add = p.absolute()
