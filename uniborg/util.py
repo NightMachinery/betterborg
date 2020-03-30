@@ -51,11 +51,13 @@ async def isAdmin(
         admins=("Orphicality", ),
         adminChats=("https://t.me/joinchat/AAAAAERV9wGWQKOF5hgQSA", )):
     chat = await event.get_chat()
+    msg = getattr(event, 'message', None)
+    sender = getattr(msg, 'sender', getattr(event, 'sender', None))
     #Doesnt work with private channels' links
-    res = (getattr(event.message, 'out', False)) or (chat.id in adminChats)  or (getattr(chat, 'username', 'NA') in adminChats) or (
-        event.message.sender is not None and
-        (getattr(event.message.sender, 'is_self', False) or
-         (event.message.sender).username in admins))
+    res = (getattr(msg, 'out', False)) or (chat.id in adminChats)  or (getattr(chat, 'username', 'NA') in adminChats) or (
+        sender is not None and
+        (getattr(sender, 'is_self', False) or
+         (sender).username in admins))
     # ix()
     # embed(using='asyncio')
     return res
@@ -82,7 +84,8 @@ async def is_read(borg, entity, message, is_out=None):
 async def run_and_get(event, to_await, cwd=None):
     if cwd is None:
         cwd = dl_base + str(uuid.uuid4()) + '/'
-    await pexpect_ai.run('bash -c "mkdir -p ' + cwd + '"')
+    # await pexpect_ai.run('bash -c "mkdir -p ' + cwd + '"')
+    Path(cwd).mkdir(parents=True, exist_ok=True)
     # util.interact(locals())
     a = borg
     rep_id = event.message.reply_to_msg_id
