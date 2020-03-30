@@ -1,4 +1,5 @@
 from telethon import TelegramClient, events
+import os
 from pathlib import Path
 import uuid
 import subprocess
@@ -16,7 +17,7 @@ async def _(event):
 
 @borg.on(events.InlineQuery)
 async def handler(event):
-    query = event.text.lower()
+    query = event.text #.lower()
     m = p.match(query)
     if (not await util.isAdmin(event)) or m == None:
         #print("inline rejected: " + query)
@@ -40,12 +41,19 @@ async def handler(event):
     output = sp.stdout
     output = f"The process exited {sp.returncode}." if output == '' else output
 
-    result = builder.article('aget', text=output, link_preview=False)
+    rtext = builder.article('Text', text=output, link_preview=False)
+    rfiles = [rtext]
+    files = list(Path(cwd).glob('*'))
+    files.sort()
+    for f in files:
+        if not f.is_dir():  # and not any(s in p.name for s in ('.torrent', '.aria2')):
+            file_add = f.absolute()
+            base_name = str(os.path.basename(file_add))
+            # rfiles.append(builder.document(file_add, type='document', text='hi 8')) #, title=base_name, description='test 36'))
 
     # NOTE: You should always answer, but we want plugins to be able to answer
     #       too (and we can only answer once), so we don't always answer here.
-    if result:
-        await event.answer([result]) #returns true
-        # util.ix()
-        # embed(using='asyncio')
+    await event.answer([rtext]) #returns true
+    # util.ix()
+    # embed(using='asyncio')
 
