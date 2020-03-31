@@ -53,6 +53,7 @@ async def handler(event):
 
     # NOTE: You should always answer, but we want plugins to be able to answer
     #       too (and we can only answer once), so we don't always answer here.
+    await util.remove_potential_file(cwd, None)
     await event.answer([rtext]) #returns true
     # util.ix()
     # embed(using='asyncio')

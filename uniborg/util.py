@@ -182,11 +182,11 @@ async def simple_run(event, cwd, command, shell=True):
 
 async def remove_potential_file(file, event=None):
     try:
-        if await os_aio.path.exists(file):
-            if await os_aio.path.isfile(file):
-                await os_aio.remove(file)
+        if os.path.exists(file):
+            if os.path.isfile(file):
+                os.remove(file)
             else:
-                shutil.rmtree(file)  #awaitable
+                shutil.rmtree(file)
     except:
         if event is not None:
             await event.reply("Julia encountered an exception. :(\n" +
