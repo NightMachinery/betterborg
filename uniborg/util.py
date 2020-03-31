@@ -48,7 +48,7 @@ def ix():
 
 async def isAdmin(
         event,
-        admins=("Orphicality", ),
+        admins=("Arstar", ),
         adminChats=("https://t.me/joinchat/AAAAAERV9wGWQKOF5hgQSA", )):
     chat = await event.get_chat()
     msg = getattr(event, 'message', None)
