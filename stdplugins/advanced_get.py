@@ -1,4 +1,5 @@
 from telethon import TelegramClient, events
+import itertools
 import os
 from pathlib import Path
 import uuid
@@ -49,12 +50,17 @@ async def handler(event):
         if not f.is_dir():  # and not any(s in p.name for s in ('.torrent', '.aria2')):
             file_add = f.absolute()
             base_name = str(os.path.basename(file_add))
+            ext = f.suffix
+            #embed()
+            #if ext == '.mp3' or ext == '.m4a' or ext == '.m4b':
+                #file_add = 'http://82.102.11.148:8080//tmp/Pharrell%20Williams%20-%20Despicable%20Me.c.c.mp3'
+                #rfiles.append(builder.document(file_add, type='audio'))
             # rfiles.append(builder.document(file_add, type='document', text='hi 8')) #, title=base_name, description='test 36'))
 
     # NOTE: You should always answer, but we want plugins to be able to answer
     #       too (and we can only answer once), so we don't always answer here.
     await util.remove_potential_file(cwd, None)
-    await event.answer([rtext]) #returns true
+    await event.answer(rfiles, cache_time=0, private=True) #returns true
     # util.ix()
     # embed(using='asyncio')
 
