@@ -1,7 +1,7 @@
 from telethon import events
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^\.chatID$", outgoing=True))
+@borg.on(events.NewMessage(pattern=r"(?i)^\.chatID$"))
 async def _(event):
     if event.forward:
         return
