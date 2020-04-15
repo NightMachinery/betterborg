@@ -17,6 +17,8 @@ from uniborg import util
 from telethon import TelegramClient, events
 from telethon.tl.functions.messages import GetPeerDialogsRequest
 from IPython import embed
+import IPython
+import sys
 from pathlib import Path
 
 dl_base = 'dls/'
@@ -28,7 +30,7 @@ os_aio = aioify(os)
 subprocess_aio = aioify(subprocess)
 borg = None # is set by init
 admins=["Arstar", ]
-adminChats=['https://t.me/tldrnewsletter', ] # Use chatids instead. Might need to prepend -100.
+adminChats=['1353500128', ] # Use chatids instead. Might need to prepend -100.
 
 
 def admin_cmd(pattern, outgoing='Ignored', additional_admins=[]):
@@ -45,10 +47,91 @@ def interact(local=None):
     import code
     code.interact(local=local)
 
+from IPython.terminal.embed import InteractiveShellEmbed, InteractiveShell
+from IPython.terminal.ipapp import load_default_config
+def embed2(**kwargs):
+    """Call this to embed IPython at the current point in your program.
 
+    The first invocation of this will create an :class:`InteractiveShellEmbed`
+    instance and then call it.  Consecutive calls just call the already
+    created instance.
+
+    If you don't want the kernel to initialize the namespace
+    from the scope of the surrounding function,
+    and/or you want to load full IPython configuration,
+    you probably want `IPython.start_ipython()` instead.
+
+    Here is a simple example::
+
+        from IPython import embed
+        a = 10
+        b = 20
+        embed(header='First time')
+        c = 30
+        d = 40
+        embed()
+
+    Full customization can be done by passing a :class:`Config` in as the
+    config argument.
+    """
+    ix() ## MYCHANGE
+    config = kwargs.get('config')
+    header = kwargs.pop('header', u'')
+    compile_flags = kwargs.pop('compile_flags', None)
+    if config is None:
+        config = load_default_config()
+        config.InteractiveShellEmbed = config.TerminalInteractiveShell
+        kwargs['config'] = config
+    using = kwargs.get('using', 'asyncio') ## MYCHANGE
+    if using :
+        kwargs['config'].update({'TerminalInteractiveShell':{'loop_runner':using, 'colors':'NoColor', 'autoawait': using!='sync'}})
+    #save ps1/ps2 if defined
+    ps1 = None
+    ps2 = None
+    try:
+        ps1 = sys.ps1
+        ps2 = sys.ps2
+    except AttributeError:
+        pass
+    #save previous instance
+    saved_shell_instance = InteractiveShell._instance
+    if saved_shell_instance is not None:
+        cls = type(saved_shell_instance)
+        cls.clear_instance()
+    frame = sys._getframe(1)
+    shell = InteractiveShellEmbed.instance(_init_location_id='%s:%s' % (
+        frame.f_code.co_filename, frame.f_lineno), **kwargs)
+    shell(header=header, stack_depth=2, compile_flags=compile_flags,
+        _call_location_id='%s:%s' % (frame.f_code.co_filename, frame.f_lineno))
+    InteractiveShellEmbed.clear_instance()
+    #restore previous instance
+    if saved_shell_instance is not None:
+        cls = type(saved_shell_instance)
+        cls.clear_instance()
+        for subclass in cls._walk_mro():
+            subclass._instance = saved_shell_instance
+    if ps1 is not None:
+        sys.ps1 = ps1
+        sys.ps2 = ps2
+
+ix_flag = False
 def ix():
-    import nest_asyncio
-    nest_asyncio.apply()
+    global ix_flag
+    if not ix_flag:
+        import nest_asyncio
+        nest_asyncio.apply()
+        ix_flag = True
+
+
+def embeda(locals_=None):
+    # Doesn't work
+    ix()
+    if locals_ is None:
+        previous_frame = sys._getframe(1)
+        previous_frame_locals = previous_frame.f_locals
+        locals_ = previous_frame_locals
+        IPython.start_ipython(user_ns=locals_)
+
 
 async def isAdmin(
         event,
@@ -58,7 +141,7 @@ async def isAdmin(
     msg = getattr(event, 'message', None)
     sender = getattr(msg, 'sender', getattr(event, 'sender', None))
     #Doesnt work with private channels' links
-    res = (getattr(msg, 'out', False)) or (chat.id in adminChats)  or (getattr(chat, 'username', 'NA') in adminChats) or (
+    res = (getattr(msg, 'out', False)) or (str(chat.id) in adminChats)  or (getattr(chat, 'username', 'NA') in adminChats) or (
         sender is not None and
         (getattr(sender, 'is_self', False) or
          (sender).username in admins))

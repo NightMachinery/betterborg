@@ -1,8 +1,9 @@
 import cfscrape  # https://github.com/Anorov/cloudflare-scrape
+from brish import z, zq, zs
 import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
-from uniborg.util import admin_cmd, humanbytes, ix
+from uniborg.util import admin_cmd, humanbytes, embeda, embed2, ix
 from IPython import embed
 
 @borg.on(admin_cmd(  # pylint:disable=E0602
@@ -13,27 +14,32 @@ async def _(event):
         return
     start = datetime.now()
     # await event.edit("Processing ...")
-    input_type = event.pattern_match.group(1) or "idop.se"
+    input_type = event.pattern_match.group(1) or 'torrentz2.eu' #or "idop.se"
     input_str = event.pattern_match.group(2)
-    logger.info(input_str)  # pylint:disable=E0602
+    logger.info(f"{input_type}: {input_str}")  # pylint:disable=E0602
     search_results = []
     # ix() ; embed(using='asyncio')
     if input_type == "torrentz2.eu":
         search_results = search_torrentz_eu(input_str)
     elif input_type == "idop.se":
         search_results = search_idop_se(input_str)
-    logger.info(search_results)  # pylint:disable=E0602
+    # logger.info(search_results)  # pylint:disable=E0602
     output_str = ""
     i = 0
     for result in search_results:
         if i > 10:
             break
+        magnet = z('hash2magnet {result["hash"]}').outrs
         message_text = "👉 <a href=https://t.me/TorrentSearchRoBot?start=" + result["hash"] +  ">" + result["title"] + ": " + "</a>" + " \r\n"
-        message_text += " FILE SIZE: " + result["size"] + "\r\n"
+        # message_text += "<a href=https://t.me/spiritwellbot?start=" + z('base64', cmd_stdin=zs('magnet2torrent {magnet}')).outrs +  ">" +'Get hash torrent!'  + ": " + "</a>" + " \r\n"
+
+        # Telegram's HTML doesn't support magnet hrefs.
+        message_text += " Hash Magnet: " + magnet + "\r\n"
+        message_text += " Size: " + result["size"] + "\r\n"
         # message_text += " Uploaded " + result["date"] + "\r\n"
-        message_text += " SEEDS: " + \
-            result["seeds"] + " PEERS: " + result["peers"] + " \r\n"
-        message_text += "===\r\n"
+        message_text += " Seeds: " + \
+            result["seeds"] + "\r\n Peers: " + result["peers"] + " \r\n"
+        message_text += "\r\n"
         output_str += message_text
         i = i + 1
     end = datetime.now()
@@ -72,16 +78,18 @@ def search_idop_se(search_query):
 
 def search_torrentz_eu(search_query):
     r = []
-    url = "https://torrentz2.eu/searchA?safe=1&f=" + search_query + ""
-    scraper = cfscrape.create_scraper()  # returns a CloudflareScraper instance
-    raw_html = scraper.get(url).content
-    print(f"tz2 html: {raw_html}")
+    url = "https://torrentz2.eu/search?safe=1&f=" + search_query + ""
+    # scraper = cfscrape.create_scraper()  # returns a CloudflareScraper instance
+    # raw_html = scraper.get(url).content
+    raw_html = z('curlfull.js {url}').out
+    # print(f"tz2 html: {raw_html}")
     soup = BeautifulSoup(raw_html, "html.parser")
     results = soup.find_all("div", {"class": "results"})
     # print(results)
     if len(results) > 0:
         results = results[0]
-        for item in results.find_all("dl"):
+        items = results.find_all("dl")
+        for item in items:
             # print(item)
             """The content scrapped on 23.06.2018 15:40:35
             """
@@ -108,4 +116,5 @@ def search_torrentz_eu(search_query):
                 })
             except:
                 pass
+            
     return r
