@@ -1,7 +1,10 @@
 venv
 __pycache__
+*.pyc
 
 *.session
+*.session.orig
+*.session.bak
 *.session-journal
 data/
 **/dls/

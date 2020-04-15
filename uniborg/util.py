@@ -26,12 +26,17 @@ pexpect_ai = aioify(pexpect)
 os_aio = aioify(os)
 #subprocess_aio = aioify(obj=subprocess, name='subprocess_aio')
 subprocess_aio = aioify(subprocess)
-borg = None
+borg = None # is set by init
+admins=["Arstar", ]
+adminChats=['https://t.me/tldrnewsletter', ] # Use chatids instead. Might need to prepend -100.
 
 
-def admin_cmd(pattern):
-    return events.NewMessage(outgoing=True, pattern=re.compile(pattern))
-    # return events.NewMessage(chats=admins, pattern=re.compile(pattern))
+def admin_cmd(pattern, outgoing='Ignored', additional_admins=[]):
+    # return events.NewMessage(outgoing=True, pattern=re.compile(pattern))
+
+    # chats doesn't work with this.
+    # return events.NewMessage(chats=adminChats, from_users=admins, forwards=False, pattern=re.compile(pattern))
+    return events.NewMessage(from_users=([borg.me] + admins + additional_admins), forwards=False, pattern=re.compile(pattern))
 
 
 def interact(local=None):
@@ -45,11 +50,10 @@ def ix():
     import nest_asyncio
     nest_asyncio.apply()
 
-
 async def isAdmin(
         event,
-        admins=("Arstar", ),
-        adminChats=("https://t.me/joinchat/AAAAAERV9wGWQKOF5hgQSA", )):
+        admins=admins,
+        adminChats=adminChats):
     chat = await event.get_chat()
     msg = getattr(event, 'message', None)
     sender = getattr(msg, 'sender', getattr(event, 'sender', None))
@@ -224,3 +228,24 @@ async def aget(event, command='', shell=True, match=None):
     await util.run_and_upload(
         event=event,
         to_await=partial(util.simple_run, command=command, shell=shell))
+
+def humanbytes(size):
+    """Input size in bytes,
+    outputs in a human readable format"""
+    # https://stackoverflow.com/a/49361727/4723940
+    if not size:
+        return ""
+    # 2 ** 10 = 1024
+    power = 2 ** 10
+    raised_to_pow = 0
+    dict_power_n = {
+        0: "",
+        1: "Ki",
+        2: "Mi",
+        3: "Gi",
+        4: "Ti"
+    }
+    while size > power:
+        size /= power
+        raised_to_pow += 1
+    return str(round(size, 2)) + " " + dict_power_n[raised_to_pow] + "B"
