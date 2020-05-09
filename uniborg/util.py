@@ -2,11 +2,13 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from IPython.terminal.embed import InteractiveShellEmbed, InteractiveShell
+from IPython.terminal.ipapp import load_default_config
 from aioify import aioify
 from functools import partial
+import uuid
 import asyncio
 import subprocess
-import uuid
 import traceback
 import os
 import pexpect
@@ -28,9 +30,10 @@ pexpect_ai = aioify(pexpect)
 os_aio = aioify(os)
 #subprocess_aio = aioify(obj=subprocess, name='subprocess_aio')
 subprocess_aio = aioify(subprocess)
-borg = None # is set by init
-admins=["Arstar", ]
-adminChats=['1353500128', ] # Use chatids instead. Might need to prepend -100.
+borg = None  # is set by init
+admins = ["Arstar", ]
+# Use chatids instead. Might need to prepend -100.
+adminChats = ['1353500128', ]
 
 
 def admin_cmd(pattern, outgoing='Ignored', additional_admins=[]):
@@ -47,8 +50,7 @@ def interact(local=None):
     import code
     code.interact(local=local)
 
-from IPython.terminal.embed import InteractiveShellEmbed, InteractiveShell
-from IPython.terminal.ipapp import load_default_config
+
 def embed2(**kwargs):
     """Call this to embed IPython at the current point in your program.
 
@@ -74,7 +76,7 @@ def embed2(**kwargs):
     Full customization can be done by passing a :class:`Config` in as the
     config argument.
     """
-    ix() ## MYCHANGE
+    ix()  # MYCHANGE
     config = kwargs.get('config')
     header = kwargs.pop('header', u'')
     compile_flags = kwargs.pop('compile_flags', None)
@@ -82,10 +84,11 @@ def embed2(**kwargs):
         config = load_default_config()
         config.InteractiveShellEmbed = config.TerminalInteractiveShell
         kwargs['config'] = config
-    using = kwargs.get('using', 'asyncio') ## MYCHANGE
-    if using :
-        kwargs['config'].update({'TerminalInteractiveShell':{'loop_runner':using, 'colors':'NoColor', 'autoawait': using!='sync'}})
-    #save ps1/ps2 if defined
+    using = kwargs.get('using', 'asyncio')  # MYCHANGE
+    if using:
+        kwargs['config'].update({'TerminalInteractiveShell': {
+                                'loop_runner': using, 'colors': 'NoColor', 'autoawait': using != 'sync'}})
+    # save ps1/ps2 if defined
     ps1 = None
     ps2 = None
     try:
@@ -93,7 +96,7 @@ def embed2(**kwargs):
         ps2 = sys.ps2
     except AttributeError:
         pass
-    #save previous instance
+    # save previous instance
     saved_shell_instance = InteractiveShell._instance
     if saved_shell_instance is not None:
         cls = type(saved_shell_instance)
@@ -102,9 +105,9 @@ def embed2(**kwargs):
     shell = InteractiveShellEmbed.instance(_init_location_id='%s:%s' % (
         frame.f_code.co_filename, frame.f_lineno), **kwargs)
     shell(header=header, stack_depth=2, compile_flags=compile_flags,
-        _call_location_id='%s:%s' % (frame.f_code.co_filename, frame.f_lineno))
+          _call_location_id='%s:%s' % (frame.f_code.co_filename, frame.f_lineno))
     InteractiveShellEmbed.clear_instance()
-    #restore previous instance
+    # restore previous instance
     if saved_shell_instance is not None:
         cls = type(saved_shell_instance)
         cls.clear_instance()
@@ -114,7 +117,10 @@ def embed2(**kwargs):
         sys.ps1 = ps1
         sys.ps2 = ps2
 
+
 ix_flag = False
+
+
 def ix():
     global ix_flag
     if not ix_flag:
@@ -140,8 +146,8 @@ async def isAdmin(
     chat = await event.get_chat()
     msg = getattr(event, 'message', None)
     sender = getattr(msg, 'sender', getattr(event, 'sender', None))
-    #Doesnt work with private channels' links
-    res = (getattr(msg, 'out', False)) or (str(chat.id) in adminChats)  or (getattr(chat, 'username', 'NA') in adminChats) or (
+    # Doesnt work with private channels' links
+    res = (getattr(msg, 'out', False)) or (str(chat.id) in adminChats) or (getattr(chat, 'username', 'NA') in adminChats) or (
         sender is not None and
         (getattr(sender, 'is_self', False) or
          (sender).username in admins))
@@ -171,32 +177,30 @@ async def is_read(borg, entity, message, is_out=None):
 async def run_and_get(event, to_await, cwd=None):
     if cwd is None:
         cwd = dl_base + str(uuid.uuid4()) + '/'
-    # await pexpect_ai.run('bash -c "mkdir -p ' + cwd + '"')
     Path(cwd).mkdir(parents=True, exist_ok=True)
-    # util.interact(locals())
     a = borg
-    rep_id = event.message.reply_to_msg_id
-    dled_file_name = ''
-    dled_path = ''
-    dled_exists = False
-    if rep_id != None:
-        z = await a.get_messages(event.chat, ids=rep_id)
-        # await z.download_media()
-        # ix()
-        # embed(using='asyncio')
-        if z.file != None:
-            dled_file_name = getattr(z.file, 'name', 'some_file')
-            dled_file_name = 'some_file' if dled_file_name == '' or dled_file_name == None else dled_file_name
+    todl = [event.message]
+    dled_files = []
+
+    async def dl(z):
+        if z is not None and getattr(z, 'file', None) is not None:
+            dled_file_name = getattr(z.file, 'name', '')
+            dled_file_name = dled_file_name or f'some_file_{uuid.uuid4().hex}'
             dled_path = cwd + dled_file_name
             dled_path = await a.download_media(message=z, file=dled_path)
-            dled_exists = True
-    mdate = os.path.getmtime(dled_path) if dled_exists else ""
+            mdate = os.path.getmtime(dled_path)
+            dled_files.append((dled_path, mdate, dled_file_name))
+
+    rep_id = event.message.reply_to_msg_id
+    if rep_id != None:
+        z = await a.get_messages(event.chat, ids=rep_id)
+        todl.append(z)
+    for msg in todl:
+        await dl(msg)
     await to_await(cwd=cwd, event=event)
-    if dled_exists and os.path.exists(dled_path) and mdate == os.path.getmtime(dled_path):
-        await remove_potential_file(dled_path, event)
-    # return cwd + str(
-    # await pexpect_ai.run('bash -c "ls -p | grep -E -v \'/|\.aria2.*|\.torrent$\'"', cwd=cwd),
-    # 'utf-8').strip()
+    for dled_path, mdate, _ in dled_files:
+        if os.path.exists(dled_path) and mdate == os.path.getmtime(dled_path):
+            await remove_potential_file(dled_path, event)
     return cwd
 
 
@@ -228,12 +232,12 @@ async def run_and_upload(event, to_await, quiet=True):
                 video_note = base_name.startswith('videonote-')
                 force_doc = base_name.startswith('fdoc-')
                 supports_streaming = base_name.startswith('streaming-')
-                async with borg.action(chat,'document') as action:
-                    await borg.send_file(chat, file_add, voice_note=voice_note, video_note=video_note, supports_streaming=supports_streaming, 
-                                                     force_document=force_doc,
-                                                     reply_to=event.message,
-                                                     allow_cache=False)
-                         #                            progress_callback=action.progress)
+                async with borg.action(chat, 'document') as action:
+                    await borg.send_file(chat, file_add, voice_note=voice_note, video_note=video_note, supports_streaming=supports_streaming,
+                                         force_document=force_doc,
+                                         reply_to=event.message,
+                                         allow_cache=False)
+                    #                            progress_callback=action.progress)
                 # caption=base_name)
     except:
         await event.reply("Julia encountered an exception. :(\n" +
@@ -243,27 +247,27 @@ async def run_and_upload(event, to_await, quiet=True):
 
 
 async def safe_run(event, cwd, command):
-    ## await event.reply('bash -c "' + command + '"' + '\n' + cwd)
-    #await pexpect_ai.run(command, cwd=cwd)
+    # await event.reply('bash -c "' + command + '"' + '\n' + cwd)
+    # await pexpect_ai.run(command, cwd=cwd)
     await subprocess_aio.run(command, cwd=cwd)
 
 
 async def simple_run(event, cwd, command, shell=True):
     sp = (await subprocess_aio.run(command,
-                                       shell=shell,
-                                       cwd=cwd,
-                                       text=True,
-                                       executable='zsh' if shell else None,
-                                       stderr=subprocess.STDOUT,
-                                       stdout=subprocess.PIPE))
+                                   shell=shell,
+                                   cwd=cwd,
+                                   text=True,
+                                   executable='zsh' if shell else None,
+                                   stderr=subprocess.STDOUT,
+                                   stdout=subprocess.PIPE))
     output = sp.stdout
     output = f"The process exited {sp.returncode}." if output == '' else output
     if not shell:
         print(output)
         if sp.returncode != 0:
-            output="Something went wrong."
+            output = "Something went wrong."
         else:
-            output=''
+            output = ''
     await discreet_send(event, output, event.message)
 
 
@@ -293,24 +297,31 @@ async def discreet_send(event, message, reply_to, quiet=False, link_preview=Fals
             s = e
             e = s + 4000
         return last_msg
+
+
 async def saexec(code, **kwargs):
     # Don't clutter locals
     locs = {}
     args = ", ".join(list(kwargs.keys()))
-    exec(f"async def func({args}):\n    " + code.replace("\n", "\n    "), {}, locs)
+    exec(f"async def func({args}):\n    " +
+         code.replace("\n", "\n    "), {}, locs)
     # Don't expect it to return from the coro.
     result = await locs["func"](**kwargs)
     return result
+
+
 async def aget(event, command='', shell=True, match=None):
     if match == None:
         match = event.pattern_match
     if command == '':
-        command = match.group(2).replace("‘","'").replace('“','"').replace("’","'").replace('”','"').replace('—','--')
+        command = match.group(2).replace("‘", "'").replace(
+            '“', '"').replace("’", "'").replace('”', '"').replace('—', '--')
         if match.group(1) == 'n':
             command = 'noglob ' + command
     await util.run_and_upload(
         event=event,
         to_await=partial(util.simple_run, command=command, shell=shell))
+
 
 def humanbytes(size):
     """Input size in bytes,
