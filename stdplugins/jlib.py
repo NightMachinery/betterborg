@@ -13,6 +13,7 @@ async def _(event):
         md5 = event.pattern_match.group(1)
         await event.reply(f"Downloading {md5} ...")
 
+        ##
         # allowing automatic send to kindle
         # msg = getattr(event, 'message', None)
         # sender = getattr(msg, 'sender', getattr(event, 'sender', None))
