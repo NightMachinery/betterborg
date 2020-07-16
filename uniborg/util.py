@@ -41,6 +41,8 @@ def admin_cmd(pattern, outgoing='Ignored', additional_admins=[]):
 
     # chats doesn't work with this.
     # return events.NewMessage(chats=adminChats, from_users=admins, forwards=False, pattern=re.compile(pattern))
+
+    # IDs should be an integer (not a string) or Telegram will assume they are phone numbers
     return events.NewMessage(from_users=([borg.me] + admins + additional_admins), forwards=False, pattern=re.compile(pattern))
 
 
