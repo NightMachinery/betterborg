@@ -3,7 +3,7 @@ from uniborg import util
 from IPython import embed
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^\.ie ((?:.|\n)*)$"))
+@borg.on(events.NewMessage(pattern=r"(?i)^\.ie\s+((?:.|\n)*)$"))
 async def _(event):
     if await util.isAdmin(event) and event.message.forward == None:
         await util.saexec(event.pattern_match.group(1), borg=borg, event=event)
