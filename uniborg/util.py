@@ -2,6 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from brish import z, zp
 from IPython.terminal.embed import InteractiveShellEmbed, InteractiveShell
 from IPython.terminal.ipapp import load_default_config
 from aioify import aioify
@@ -149,12 +150,13 @@ async def isAdmin(
     msg = getattr(event, 'message', None)
     sender = getattr(msg, 'sender', getattr(event, 'sender', None))
     # Doesnt work with private channels' links
-    res = (getattr(msg, 'out', False)) or (str(chat.id) in adminChats) or (getattr(chat, 'username', 'NA') in adminChats) or (
+    res = (getattr(msg, 'out', False)) or (str(chat.id) in adminChats) or (getattr(chat, 'username', 'NA') in admins) or (
         sender is not None and
         (getattr(sender, 'is_self', False) or
          (sender).username in admins))
     # ix()
     # embed(using='asyncio')
+    # embed2()
     return res
 
 
@@ -208,6 +210,7 @@ async def run_and_get(event, to_await, cwd=None):
 
 async def run_and_upload(event, to_await, quiet=True):
     file_add = ''
+    cwd = ''
     # util.interact(locals())
     try:
         chat = await event.get_chat()
@@ -262,7 +265,7 @@ async def simple_run(event, cwd, command, shell=True):
                                    executable='zsh' if shell else None,
                                    stderr=subprocess.STDOUT,
                                    stdout=subprocess.PIPE))
-    output = sp.stdout
+    output = sp.stdout.strip()
     output = f"The process exited {sp.returncode}." if output == '' else output
     if not shell:
         print(output)
@@ -287,17 +290,31 @@ async def remove_potential_file(file, event=None):
 
 
 async def discreet_send(event, message, reply_to, quiet=False, link_preview=False):
+    message = message.strip()
     if quiet or len(message) == 0:
         return reply_to
     else:
-        s = 0
-        e = 4000
-        while (len(message) > s):
-            last_msg = await event.respond(message[s:e],
-                                           link_preview=link_preview,
-                                           reply_to=(reply_to if s == 0 else last_msg))
-            s = e
-            e = s + 4000
+        length = len(message)
+        last_msg = reply_to
+        if length <= 12000:
+            s = 0
+            e = 4000
+            while (length > s):
+                last_msg = await event.respond(message[s:e],
+                                            link_preview=link_preview,
+                                            reply_to=(reply_to if s == 0 else last_msg))
+                s = e
+                e = s + 4000
+        else:
+            chat = await event.get_chat()
+            f = z('''
+            local f="$(gmktemp --suffix .txt)"
+            ec {message} > "$f"
+            ec "$f"
+            ''').outrs
+            async with borg.action(chat, 'document') as action:
+                last_msg = await borg.send_file(chat, f, reply_to=reply_to, allow_cache=False, caption='This message was too long, so it has been sent as a text file.')
+            z('command rm {f}')
         return last_msg
 
 
