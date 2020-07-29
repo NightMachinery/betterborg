@@ -2,10 +2,11 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from brish import z, zp
+from brish import z, zp, Brish
 from IPython.terminal.embed import InteractiveShellEmbed, InteractiveShell
 from IPython.terminal.ipapp import load_default_config
 from aioify import aioify
+import functools
 from functools import partial
 import uuid
 import asyncio
@@ -24,7 +25,7 @@ import IPython
 import sys
 from pathlib import Path
 
-dl_base = 'dls/'
+dl_base = os.getcwd() + '/dls/'
 #pexpect_ai = aioify(obj=pexpect, name='pexpect_ai')
 pexpect_ai = aioify(pexpect)
 #os_aio = aioify(obj=os, name='os_aio')
@@ -35,6 +36,19 @@ borg = None  # is set by init
 admins = ["Arstar", ]
 # Use chatids instead. Might need to prepend -100.
 adminChats = ['1353500128', ]
+persistent_brish = Brish()
+brishes = [Brish() for i in range(5)]
+for b in brishes + [persistent_brish]:
+    b.z('export JBRISH=y')
+
+
+def force_async(f):
+    @functools.wraps(f)
+    def inner(*args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return loop.run_in_executor(None, lambda: f(*args, **kwargs))
+
+    return inner
 
 
 def admin_cmd(pattern, outgoing='Ignored', additional_admins=[]):
@@ -265,11 +279,16 @@ async def simple_run(event, cwd, command, shell=True):
                                    executable='zsh' if shell else None,
                                    stderr=subprocess.STDOUT,
                                    stdout=subprocess.PIPE))
-    output = sp.stdout.strip()
-    output = f"The process exited {sp.returncode}." if output == '' else output
+    output = sp.stdout
+    await send_output(event, output, retcode=sp.returncode, shell=shell)
+
+
+async def send_output(event, output: str, retcode=-1, shell=True):
+    output = output.strip()
+    output = f"The process exited {retcode}." if output == '' else output
     if not shell:
         print(output)
-        if sp.returncode != 0:
+        if retcode != 0:
             output = "Something went wrong."
         else:
             output = ''
@@ -301,8 +320,8 @@ async def discreet_send(event, message, reply_to, quiet=False, link_preview=Fals
             e = 4000
             while (length > s):
                 last_msg = await event.respond(message[s:e],
-                                            link_preview=link_preview,
-                                            reply_to=(reply_to if s == 0 else last_msg))
+                                               link_preview=link_preview,
+                                               reply_to=(reply_to if s == 0 else last_msg))
                 s = e
                 e = s + 4000
         else:
@@ -313,7 +332,7 @@ async def discreet_send(event, message, reply_to, quiet=False, link_preview=Fals
             ec "$f"
             ''').outrs
             async with borg.action(chat, 'document') as action:
-                last_msg = await borg.send_file(chat, f, reply_to=reply_to, allow_cache=False, caption='This message was too long, so it has been sent as a text file.')
+                last_msg = await borg.send_file(chat, f, reply_to=reply_to, allow_cache=False, caption='This message is too long, so it has been sent as a text file.')
             z('command rm {f}')
         return last_msg
 
@@ -329,17 +348,51 @@ async def saexec(code, **kwargs):
     return result
 
 
+async def clean_cmd(cmd: str):
+    return cmd.replace("‘", "'").replace('“', '"').replace("’", "'").replace('”', '"').replace('—', '--')
+
+
 async def aget(event, command='', shell=True, match=None):
     if match == None:
         match = event.pattern_match
     if command == '':
-        command = match.group(2).replace("‘", "'").replace(
-            '“', '"').replace("’", "'").replace('”', '"').replace('—', '--')
+        command = await clean_cmd(match.group(2))
         if match.group(1) == 'n':
             command = 'noglob ' + command
     await util.run_and_upload(
         event=event,
         to_await=partial(util.simple_run, command=command, shell=shell))
+
+
+@force_async
+def brishz_helper(myBrish, cwd, cmd, fork=True):
+    myBrish.z('typeset -g jd={cwd}')
+    myBrish.send_cmd('''
+    cd "$jd"
+    ! ((${+functions[jinit]})) || jinit
+    ''')
+    res = myBrish.send_cmd(cmd, fork=fork, cmd_stdin='')
+    # embed2()
+    myBrish.z('cd /tmp')
+    return res
+
+
+async def brishz(event, cwd, cmd, fork=True, **kwargs):
+    # print(f"entering brishz with cwd: '{cwd}', cmd: '{cmd}'")
+    res = None
+    if fork == False:
+        res = await brishz_helper(persistent_brish, cwd, cmd, fork=False)
+    else:
+        while len(brishes) <= 0:
+            await asyncio.sleep(1)
+        # print(f"Running '{cmd}'")
+        myBrish = brishes.pop()
+        res = await brishz_helper(myBrish, cwd, cmd, fork=True)
+        brishes.append(myBrish)
+
+    await send_output(event, res.outerr, retcode=res.retcode)
+
+    # print("exiting brishz")
 
 
 def humanbytes(size):
