@@ -36,10 +36,6 @@ borg = None  # is set by init
 admins = ["Arstar", ]
 # Use chatids instead. Might need to prepend -100.
 adminChats = ['1353500128', ]
-persistent_brish = Brish()
-brishes = [Brish() for i in range(5)]
-for b in brishes + [persistent_brish]:
-    b.z('export JBRISH=y')
 
 
 def force_async(f):
@@ -50,11 +46,26 @@ def force_async(f):
 
     return inner
 
+# @force_async
+
+
+def init_brishes():
+    print("Initializing brishes ...")
+    global persistent_brish
+    global brishes
+    persistent_brish = Brish()
+    brishes = [Brish() for i in range(5)]
+    for b in brishes + [persistent_brish]:
+        b.z('export JBRISH=y')
+
+
+init_brishes()
+
 
 def admin_cmd(pattern, outgoing='Ignored', additional_admins=[]):
     # return events.NewMessage(outgoing=True, pattern=re.compile(pattern))
 
-    # chats doesn't work with this.
+    # chats doesn't work with this. (What if we prepend with -100?)
     # return events.NewMessage(chats=adminChats, from_users=admins, forwards=False, pattern=re.compile(pattern))
 
     # IDs should be an integer (not a string) or Telegram will assume they are phone numbers
