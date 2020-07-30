@@ -5,9 +5,10 @@ from IPython import embed
 
 # 300815638 is the fairy, sagacious clownfish
 clownfish = 300815638
+blackmama = 285378707
 
 
-@borg.on(events.NewMessage(from_users=['Arstar', clownfish], pattern=r"^.jlib\s+.*(\w{32})\W*$"))
+@borg.on(events.NewMessage(from_users=['Arstar', clownfish, blackmama], pattern=r"^.jlib\s+.*(\w{32})\W*$"))
 async def _(event):
     if event.message.forward == None:
         md5 = event.pattern_match.group(1)
