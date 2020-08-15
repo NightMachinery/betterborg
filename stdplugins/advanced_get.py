@@ -89,7 +89,12 @@ async def handler(event):
     # embed(using='asyncio')
 
 
-@borg.on(util.admin_cmd(pattern=".sbb"))
+@borg.on(util.admin_cmd(pattern=".xf"))
 async def _(event):
     util.init_brishes()
+    await event.reply("Reinitialized brishes. Note that old running instances can still rejoin.")
+
+@borg.on(util.admin_cmd(pattern=".(x|sbb)"))
+async def _(event):
+    util.restart_brishes()
     await event.reply("Restarted brishes.")

@@ -61,6 +61,11 @@ def init_brishes():
 
 init_brishes()
 
+def restart_brishes():
+    persistent_brish.restart()
+    for b in brishes:
+        b.restart()
+
 
 def admin_cmd(pattern, outgoing='Ignored', additional_admins=[]):
     # return events.NewMessage(outgoing=True, pattern=re.compile(pattern))
