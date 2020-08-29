@@ -15,7 +15,7 @@ import os
 from os import makedirs
 from pathlib import Path
 from IPython import embed
-from brish import z, zp
+from brish import z, zp, bsh
 from uuid import uuid4
 import re
 
@@ -31,7 +31,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 logger = logging.getLogger(__name__)
 ##
-PAF = re.compile(r"(?im)^\.a(n?)\s+((?:.|\n)*)\s+fin$")
+PAF = re.compile(r"(?im)^(?:.a(n?)\s+)?((?:.|\n)*)\s+fin$")
 WHITESPACE = re.compile(r"^\s*$")
 dl_base = os.getcwd() + '/dls/'
 tmp_chat = -1001496131468
@@ -64,7 +64,16 @@ def inlinequery(update, context):
     ##
     if (not isAdmin(update)):
         return
+
     query = update.inline_query.query
+    if query == "x":
+        bsh.restart()
+        update.inline_query.answer([InlineQueryResultArticle(
+            id=uuid4(),
+            title="Restarted",
+            input_message_content=InputTextMessageContent("Restarted.", disable_web_page_preview=False))], cache_time=0, is_personal=True)
+        return
+
     m = PAF.match(query)
     if m == None:
         return
@@ -76,11 +85,12 @@ def inlinequery(update, context):
     cwd = dl_base + "Inline " + str(uuid4()) + '/'
     Path(cwd).mkdir(parents=True, exist_ok=True)
     res = z("""
-    cd {cwd} && {{
-    {command:e}
-    cd /tmp
-    }} || echo cd failed >&2
-    """)
+    if cd {cwd} ; then
+        {command:e}
+    else
+        echo Inline Query: cd failed >&2
+    fi
+    """, fork=True)  # @design We might want to add a timeout here. We also need a file cacher ...
     out = res.outerr
     if WHITESPACE.match(out):
         out = f"The process exited {res.retcode}."
@@ -107,7 +117,9 @@ def inlinequery(update, context):
                     document_file_id=uploaded_file.document.file_id)
             )
     z("command rm -r {cwd}")
-    update.inline_query.answer(results)
+
+    # The cache helps for music, I think
+    update.inline_query.answer(results, cache_time=300, is_personal=True)
 
 
 def main():
