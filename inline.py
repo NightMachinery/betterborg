@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 PAF = re.compile(r"(?im)^\.a(n?)\s+((?:.|\n)*)\s+fin$")
 WHITESPACE = re.compile(r"^\s*$")
 dl_base = os.getcwd() + '/dls/'
-tmp_chat = 195391705
+tmp_chat = -1001496131468
 ##
 
 
@@ -59,6 +59,9 @@ def isAdmin(update):
 
 def inlinequery(update, context):
     """Handle the inline query."""
+    ##
+    # There is pretty much no info except the sender in update. context is also useless. So we can't get the replied-to file.
+    ##
     if (not isAdmin(update)):
         return
     query = update.inline_query.query
@@ -67,6 +70,7 @@ def inlinequery(update, context):
         return
     command = m.group(2)
     if m.group(1) == 'n':
+        # embed()
         command = 'noglob ' + command
     print(f"Inline command accepted: {command}")
     cwd = dl_base + "Inline " + str(uuid4()) + '/'
@@ -126,6 +130,7 @@ def main():
     updater.start_polling()
     # updater.start_webhook # convert to this?
 
+    print("Ready!")
     # Block until the user presses Ctrl-C or the process receives SIGINT,
     # SIGTERM or SIGABRT. This should be used most of the time, since
     # start_polling() is non-blocking and will stop the bot gracefully.
