@@ -14,7 +14,6 @@ import subprocess
 import traceback
 import os
 import pexpect
-import shlex
 import re
 import shutil
 from uniborg import util
