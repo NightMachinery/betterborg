@@ -90,7 +90,7 @@ def inlinequery(update, context):
     else
         echo Inline Query: cd failed >&2
     fi
-    """, fork=True)  # @design We might want to add a timeout here. We also need a file cacher ...
+    """, fork=True)  # @design We might want to add a timeout here. We also need a file cacher ... Easier yet, just cache the results array and reset it using our 'x' command
     out = res.outerr
     if WHITESPACE.match(out):
         out = f"The process exited {res.retcode}."
