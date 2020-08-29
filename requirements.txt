@@ -9,3 +9,4 @@ regex
 wget
 cryptg
 PySocks
+cachetools
