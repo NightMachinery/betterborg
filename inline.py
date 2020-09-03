@@ -43,6 +43,7 @@ MEDIA_MAX_LENGTH = 1000
 PAF = re.compile(r"(?im)^(?:\.a(n?)\s+)?((?:.|\n)*)\s+fin$")
 PDI = re.compile(r"(?im)^\.di\s+(\S+)(?:\s+(\S*))?\s+fin$")
 PC_KITSU = re.compile(r"(?im)^\.ki\s+(.+)$")
+PC_GOO = re.compile(r"(?im)^\.g\s+(.+)$")
 WHITESPACE = re.compile(r"^\s*$")
 dl_base = os.getcwd() + '/dls/'
 tmp_chat = -1001496131468
@@ -140,11 +141,13 @@ Show an affirming flame.
             else:
                 ans_text(f"Invalid kind: {c_kind}")
             return
-        m = PC_KITSU.match(query)
         command = ''
         cache_time = 1
         is_personal = True
+        no_match = True
+        m = PC_KITSU.match(query)
         if m:
+            no_match = False
             arg = zq(str(m.group(1)))
             if not arg:
                 ans_text()
@@ -152,7 +155,16 @@ Show an affirming flame.
             command = f"kitsu-getall {arg}"
             cache_time = 86400
             is_personal = False
-        else:
+        m = PC_GOO.match(query)
+        if m:
+            no_match = False
+            arg = zq(str(m.group(1)))
+            if not arg:
+                ans_text()
+                return
+            command = f"jigoo {arg}"
+            is_personal = False
+        if no_match:
             if (not isAdmin(update)):
                 ans_text("""The enlightenment driven away,
 The habit-forming pain,
@@ -200,14 +212,16 @@ def get_results(command: str, json_mode: bool = True):
     results = []
     if json_mode:
         try:
-            out_j = json.loads(out)
+            out_j = json.loads(res.out)
         except:
             pass
     if out_j:
+        print(res.err)
         if not isinstance(out_j, str) and isinstance(out_j, Iterable):
             for item in out_j:
                 if isinstance(item, dict):
                     tlg_title = item.get("tlg_title", "")
+                    tlg_preview = bool(item.get("tlg_preview", "y"))
                     tlg_video = item.get("tlg_video", "")
                     # Mime type of the content of video url, “text/html” or “video/mp4”.
                     tlg_video_mime = item.get("tlg_video_mime", "video/mp4")
@@ -222,7 +236,7 @@ def get_results(command: str, json_mode: bool = True):
                         pm = ParseMode.MARKDOWN
                     elif tlg_parsemode == "html":
                         pm = ParseMode.HTML
-                    print(f"Parse mode: {pm}")
+                    print(f"Parse mode: {pm}, preview: {tlg_preview}")
                     if tlg_img:
                         # There is a bug that makes, e.g., `@spiritwellbot kitsu-getall moon 2 fin` show only two returned results, even though we return 10 results. Idk what's the cause.
                         print(
@@ -257,8 +271,9 @@ def get_results(command: str, json_mode: bool = True):
                                 id=uuid4(),
                                 title=tlg_title,
                                 thumb_url=tlg_img_thumb,
-                                input_message_content=InputTextMessageContent(tlg_content[:MAX_LENGTH], disable_web_page_preview=False, parse_mode=pm))
+                                input_message_content=InputTextMessageContent(tlg_content[:MAX_LENGTH], disable_web_page_preview=(not tlg_preview), parse_mode=pm))
                         )
+                    # @design We can add an else clause and go to the normal (json-less) mode below
     else:
         results = [
             InlineQueryResultArticle(
