@@ -10,3 +10,4 @@ wget
 cryptg
 PySocks
 cachetools
+hachoir

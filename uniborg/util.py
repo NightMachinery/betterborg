@@ -18,7 +18,9 @@ import re
 import shutil
 from uniborg import util
 from telethon import TelegramClient, events
+import telethon.utils
 from telethon.tl.functions.messages import GetPeerDialogsRequest
+from telethon.tl.types import DocumentAttributeAudio
 from IPython import embed
 import IPython
 import sys
@@ -31,7 +33,7 @@ pexpect_ai = aioify(pexpect)
 os_aio = aioify(os)
 #subprocess_aio = aioify(obj=subprocess, name='subprocess_aio')
 subprocess_aio = aioify(subprocess)
-borg = None  # is set by init
+borg: TelegramClient = None  # is set by init
 admins = ["Arstar", ]
 # Use chatids instead. Might need to prepend -100.
 adminChats = ['1353500128', ]
@@ -59,6 +61,7 @@ def init_brishes():
 
 
 init_brishes()
+
 
 def restart_brishes():
     persistent_brish.restart()
@@ -265,7 +268,11 @@ async def run_and_upload(event, to_await, quiet=True):
                 voice_note = base_name.startswith('voicenote-')
                 video_note = base_name.startswith('videonote-')
                 force_doc = base_name.startswith('fdoc-')
-                supports_streaming = base_name.startswith('streaming-')
+                supports_streaming = base_name.startswith(
+                    'streaming-')
+                if False:
+                    att, mime = telethon.utils.get_attributes(file_add)
+                    print(f"File attributes: {att.__dict__}")
                 async with borg.action(chat, 'document') as action:
                     await borg.send_file(chat, file_add, voice_note=voice_note, video_note=video_note, supports_streaming=supports_streaming,
                                          force_document=force_doc,
@@ -352,12 +359,14 @@ async def discreet_send(event, message, reply_to, quiet=False, link_preview=Fals
         return last_msg
 
 
-async def saexec(code, **kwargs):
+async def saexec(code: str, **kwargs):
     # Don't clutter locals
     locs = {}
     args = ", ".join(list(kwargs.keys()))
+    code_lines = code.split("\n")
+    code_lines[-1] = f"return {code_lines[-1]}"
     exec(f"async def func({args}):\n    " +
-         code.replace("\n", "\n    "), {}, locs)
+         "\n    ".join(code_lines), {}, locs)
     # Don't expect it to return from the coro.
     result = await locs["func"](**kwargs)
     return result

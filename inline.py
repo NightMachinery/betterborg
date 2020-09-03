@@ -25,9 +25,10 @@ from threading import RLock
 import traceback
 
 from telegram import InlineQueryResultArticle, ParseMode, \
-    InputTextMessageContent, InlineQueryResultCachedDocument, InlineQueryResultCachedVideo, InlineQueryResultCachedGif, InlineQueryResultCachedMpeg4Gif, InlineQueryResultCachedPhoto, InlineQueryResultCachedVoice
+    InputTextMessageContent, InlineQueryResultCachedDocument, InlineQueryResultCachedVideo, InlineQueryResultCachedGif, InlineQueryResultCachedMpeg4Gif, InlineQueryResultCachedPhoto, InlineQueryResultCachedVoice, InlineQueryResultPhoto, InlineQueryResultVideo
+from telegram import parsemode
 from telegram.ext import Updater, InlineQueryHandler, CommandHandler
-from telegram.utils.helpers import escape_markdown
+from telegram.utils.helpers import DEFAULT_NONE, escape_markdown
 
 ##
 # Enable logging
@@ -36,6 +37,9 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 logger = logging.getLogger(__name__)
 ##
+MAX_LENGTH = 4050
+# https://stackoverflow.com/questions/46011661/how-to-send-large-size-of-the-caption-on-telegram-bot-using-c
+MEDIA_MAX_LENGTH = 1000
 PAF = re.compile(r"(?im)^(?:\.a(n?)\s+)?((?:.|\n)*)\s+fin$")
 PDI = re.compile(r"(?im)^\.di\s+(\S+)(?:\s+(\S*))?\s+fin$")
 PC_KITSU = re.compile(r"(?im)^\.ki\s+(.+)$")
@@ -194,22 +198,66 @@ def get_results(command: str, json_mode: bool = True):
         out = f"The process exited {res.retcode}."
     out_j = None
     results = []
-    try:
-        out_j = json.loads(out)
-    except:
-        pass
+    if json_mode:
+        try:
+            out_j = json.loads(out)
+        except:
+            pass
     if out_j:
         if not isinstance(out_j, str) and isinstance(out_j, Iterable):
             for item in out_j:
                 if isinstance(item, dict):
                     tlg_title = item.get("tlg_title", "")
+                    tlg_video = item.get("tlg_video", "")
+                    # Mime type of the content of video url, “text/html” or “video/mp4”.
+                    tlg_video_mime = item.get("tlg_video_mime", "video/mp4")
+                    tlg_img = item.get("tlg_img", "")
+                    tlg_img_thumb = item.get("tlg_img_thumb", "") or tlg_img
                     tlg_content = item.get("tlg_content", "")
-                    if tlg_title:
+                    tlg_parsemode = item.get("tlg_parsemode", "").lower()
+                    pm = DEFAULT_NONE
+                    if tlg_parsemode == "md2":
+                        pm = ParseMode.MARKDOWN_V2
+                    elif tlg_parsemode == "md":
+                        pm = ParseMode.MARKDOWN
+                    elif tlg_parsemode == "html":
+                        pm = ParseMode.HTML
+                    print(f"Parse mode: {pm}")
+                    if tlg_img:
+                        # There is a bug that makes, e.g., `@spiritwellbot kitsu-getall moon 2 fin` show only two returned results, even though we return 10 results. Idk what's the cause.
+                        print(
+                            f"tlg_img found: {tlg_title}: {tlg_img} , {tlg_img_thumb}")
+                        results.append(
+                            InlineQueryResultPhoto(
+                                id=uuid4(),
+                                photo_url=tlg_img,
+                                thumb_url=tlg_img_thumb,
+                                title=f"{tlg_title}",
+                                caption=tlg_content[:MEDIA_MAX_LENGTH],
+                                parse_mode=pm)
+                        )
+                    elif tlg_video:
+                        # test @spiritwellbot ec '[{"tlg_title":"f","tlg_video":"https://files.lilf.ir/tmp/Tokyo%20Ghoul%20AMV%20-%20Run-rVed44_uz8s.mp4"}]' fin
+                        print(f"tlg_video found: {tlg_title}: {tlg_video}")
+                        results.append(
+                            InlineQueryResultVideo(
+                                id=uuid4(),
+                                video_url=tlg_video,
+                                mime_type=tlg_video_mime,
+                                # To bypass telegram.error.BadRequest: Video_thumb_url_empty
+                                thumb_url=(
+                                    tlg_img_thumb or "https://media.kitsu.io/anime/cover_images/3936/original.jpg?1597696323"),
+                                title=f"{tlg_title}",
+                                caption=tlg_content[:MEDIA_MAX_LENGTH],
+                                parse_mode=pm))
+                    elif tlg_title:
+                        print(f"tlg_title found: {tlg_title}")
                         results.append(
                             InlineQueryResultArticle(
                                 id=uuid4(),
                                 title=tlg_title,
-                                input_message_content=InputTextMessageContent(tlg_content, disable_web_page_preview=False))
+                                thumb_url=tlg_img_thumb,
+                                input_message_content=InputTextMessageContent(tlg_content[:MAX_LENGTH], disable_web_page_preview=False, parse_mode=pm))
                         )
     else:
         results = [
@@ -217,7 +265,7 @@ def get_results(command: str, json_mode: bool = True):
                 id=uuid4(),
                 # Telegram truncates itself, so this is redundant.
                 title=out[:150],
-                input_message_content=InputTextMessageContent(out[:4000], disable_web_page_preview=False))
+                input_message_content=InputTextMessageContent(out[:MAX_LENGTH], disable_web_page_preview=False))
         ]
         files = list(Path(cwd).glob('*'))
         files.sort()
@@ -229,15 +277,19 @@ def get_results(command: str, json_mode: bool = True):
                 file = open(file_add, "rb")
                 uploaded_file = updater.bot.send_document(tmp_chat, file)
                 file.close()
-                # print(f"File ID: {uploaded_file.document.file_id}")
-                results.append(
-                    InlineQueryResultCachedDocument(
-                        id=uuid4(),
-                        title=base_name,
-                        document_file_id=uploaded_file.document.file_id)
-                )
+                if uploaded_file.document:
+                    # print(f"File ID: {uploaded_file.document.file_id}")
+                    results.append(
+                        InlineQueryResultCachedDocument(
+                            id=uuid4(),
+                            title=base_name,
+                            document_file_id=uploaded_file.document.file_id)
+                    )
+                else:
+                    print("BUG?: Uploaded file had no document!")
 
     z("command rm -r {cwd}")
+    print(f"len(results): {len(results)}")
     return results
 
 
