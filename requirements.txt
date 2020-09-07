@@ -1,4 +1,5 @@
 telethon
+brish
 youtube-dl
 nest_asyncio
 ipython
