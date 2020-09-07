@@ -11,3 +11,4 @@ cryptg
 PySocks
 cachetools
 hachoir
+cfscrape
