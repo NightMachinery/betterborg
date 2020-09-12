@@ -282,7 +282,7 @@ async def run_and_upload(event, to_await, quiet=True, reply_exc=True):
                 # caption=base_name)
     except:
         exc = "Julia encountered an exception. :(\n" + traceback.format_exc()
-        send_output(event, exc, shell=(reply_exc), retcode=1)
+        await send_output(event, exc, shell=(reply_exc), retcode=1)
     finally:
         await remove_potential_file(cwd, event)
 
