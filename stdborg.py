@@ -10,9 +10,12 @@ from uniborg import Uniborg
 logging.basicConfig(level=logging.INFO)
 proxy = None
 proxy_port = os.environ.get('borgp')
+plugin_path = os.environ.get('borg_plugin_path', "stdplugins")
+session = os.environ.get('borg_session', "stdborg")
 if proxy_port != None:
     proxy = (socks.SOCKS5, '127.0.0.1', int(proxy_port))
 
-borg = Uniborg("stdborg", plugin_path="stdplugins", connection_retries=None, proxy=proxy)
+borg = Uniborg(session, plugin_path=plugin_path,
+               connection_retries=None, proxy=proxy)
 
 borg.run_until_disconnected()

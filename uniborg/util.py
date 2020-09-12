@@ -51,13 +51,13 @@ def force_async(f):
 
 
 def init_brishes():
-    print("Initializing brishes ...")
+    brish_count = int(os.environ.get('borg_brish_count', '4'))
+    print(f"Initializing {brish_count} brishes ...")
     global persistent_brish
     global brishes
-    persistent_brish = Brish()
-    brishes = [Brish() for i in range(5)]
-    for b in brishes + [persistent_brish]:
-        b.z('export JBRISH=y')
+    boot_cmd = 'export JBRISH=y'
+    persistent_brish = Brish(boot_cmd=boot_cmd)
+    brishes = [Brish(boot_cmd=boot_cmd) for i in range(brish_count + 1)]
 
 
 init_brishes()
@@ -240,7 +240,7 @@ async def run_and_get(event, to_await, cwd=None):
     return cwd
 
 
-async def run_and_upload(event, to_await, quiet=True):
+async def run_and_upload(event, to_await, quiet=True, reply_exc=True):
     file_add = ''
     cwd = ''
     # util.interact(locals())
@@ -281,8 +281,8 @@ async def run_and_upload(event, to_await, quiet=True):
                     #                            progress_callback=action.progress)
                 # caption=base_name)
     except:
-        await event.reply("Julia encountered an exception. :(\n" +
-                          traceback.format_exc())
+        exc = "Julia encountered an exception. :(\n" + traceback.format_exc()
+        send_output(event, exc, shell=(reply_exc), retcode=1)
     finally:
         await remove_potential_file(cwd, event)
 
@@ -311,7 +311,7 @@ async def send_output(event, output: str, retcode=-1, shell=True):
     if not shell:
         print(output)
         if retcode != 0:
-            output = "Something went wrong."
+            output = 'Something went wrong. Try again tomorrow. If the issue persists, file an issue on https://github.com/NightMachinary/betterborg and include the input that caused the bug.'
         else:
             output = ''
     await discreet_send(event, output, event.message)
@@ -401,7 +401,7 @@ def brishz_helper(myBrish, cwd, cmd, fork=True):
     return res
 
 
-async def brishz(event, cwd, cmd, fork=True, **kwargs):
+async def brishz(event, cwd, cmd, fork=True, shell=True, **kwargs):
     # print(f"entering brishz with cwd: '{cwd}', cmd: '{cmd}'")
     res = None
     if fork == False:
@@ -414,7 +414,7 @@ async def brishz(event, cwd, cmd, fork=True, **kwargs):
         res = await brishz_helper(myBrish, cwd, cmd, fork=True)
         brishes.append(myBrish)
 
-    await send_output(event, res.outerr, retcode=res.retcode)
+    await send_output(event, res.outerr, retcode=res.retcode, shell=shell)
 
     # print("exiting brishz")
 

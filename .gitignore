@@ -10,3 +10,4 @@ data/
 **/dls/
 .idea
 .vscode
+session_jlib.session
