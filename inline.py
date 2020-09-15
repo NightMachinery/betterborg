@@ -13,7 +13,6 @@ bot.
 import logging
 import os
 import json
-from os import makedirs
 from pathlib import Path
 from typing import Dict, Iterable
 from IPython import embed
@@ -194,6 +193,8 @@ We must suffer them all again. - Auden""")
 
 
 cache = TTLCache(maxsize=256, ttl=3600)
+
+
 @cached(cache)
 def get_results(command: str, json_mode: bool = True):
     cwd = dl_base + "Inline " + str(uuid4()) + '/'
@@ -215,9 +216,9 @@ def get_results(command: str, json_mode: bool = True):
             out_j = json.loads(res.out)
         except:
             pass
-    if out_j:
+    if out_j and not isinstance(out_j, str) and isinstance(out_j, Iterable):
         print(res.err)
-        if not isinstance(out_j, str) and isinstance(out_j, Iterable):
+        if True:
             for item in out_j:
                 if isinstance(item, dict):
                     tlg_title = item.get("tlg_title", "")
@@ -227,7 +228,7 @@ def get_results(command: str, json_mode: bool = True):
                     tlg_video_mime = item.get("tlg_video_mime", "video/mp4")
                     tlg_img = item.get("tlg_img", "")
                     tlg_img_thumb = item.get("tlg_img_thumb", "") or tlg_img
-                    tlg_content = item.get("tlg_content", "")
+                    tlg_content = item.get("tlg_content", item.get("caption", ""))
                     tlg_parsemode = item.get("tlg_parsemode", "").lower()
                     pm = DEFAULT_NONE
                     if tlg_parsemode == "md2":
