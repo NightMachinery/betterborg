@@ -330,7 +330,7 @@ async def remove_potential_file(file, event=None):
                               traceback.format_exc())
 
 
-async def discreet_send(event, message, reply_to, quiet=False, link_preview=False):
+async def discreet_send(event, message, reply_to=None, quiet=False, link_preview=False):
     message = message.strip()
     if quiet or len(message) == 0:
         return reply_to
