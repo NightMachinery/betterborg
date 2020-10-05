@@ -395,7 +395,9 @@ def brishz_helper(myBrish, cwd, cmd, fork=True):
     cd "$jd"
     ! ((${+functions[jinit]})) || jinit
     ''')
-    res = myBrish.send_cmd(cmd, fork=fork, cmd_stdin='')
+    # res = myBrish.send_cmd(cmd, fork=fork, cmd_stdin='')
+    # res = myBrish.z("{{ eval {cmd} }} 2>&1", fork=fork, cmd_stdin='')
+    res = myBrish.send_cmd('{ eval "$(< /dev/stdin)" } 2>&1', fork=fork, cmd_stdin=cmd)
     # embed2()
     myBrish.z('cd /tmp')
     return res
