@@ -64,10 +64,15 @@ graylist = [467602588, 195391705, 92863048,
             90821188, 915098299, 665261327, 91294899]
 
 
-def isAdmin(update, admins=[195391705]):
+admins = [195391705, ]
+if z('test -n "$borg_admins"'):
+    admins = admins + list(z("arr0 ${{(s.,.)borg_admins}}"))
+
+def isAdmin(update, admins=[]):
     res = False
     try:
-        res = update.effective_user.id in admins
+        # embed()
+        res = (update.effective_user.id in admins) or (getattr(update.effective_user, 'username', None) in admins)
     except:
         res = False
     return res
