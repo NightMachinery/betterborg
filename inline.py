@@ -60,15 +60,19 @@ def help_command(update, context):
     update.message.reply_text('Help!')
 
 
-graylist = [467602588, 195391705, 92863048,
-            90821188, 915098299, 665261327, 91294899]
-
 
 admins = [195391705, ]
 if z('test -n "$borg_admins"'):
     admins = admins + list(z("arr0 ${{(s.,.)borg_admins}}"))
+graylist = [467602588, 92863048,
+            90821188, 915098299, 665261327, 91294899]
+graylist = admins + graylist
 
-def isAdmin(update, admins=[]):
+def isAdmin(update, admins=admins):
+    # print(f"id: {update.effective_user.id}")
+    # print(f"u: {update.effective_user.username}")
+    # print(f"admins: {admins}")
+
     res = False
     try:
         # embed()
