@@ -45,7 +45,11 @@ PC_KITSU = re.compile(r"(?im)^\.ki\s+(.+)$")
 PC_GOO = re.compile(r"(?im)^\.g\s+(.+)$")
 WHITESPACE = re.compile(r"^\s*$")
 dl_base = os.getcwd() + '/dls/'
-tmp_chat = -1001496131468
+##
+# @todoc A throwaway group/channel for storing files. (I use TMPC.)
+tmp_chat = int(z('ecn "${{borg_tmpc:--1001215308649}}"').outrs)
+#-1001496131468 (old TMPC)
+##
 lock_inline = RLock()
 ##
 
