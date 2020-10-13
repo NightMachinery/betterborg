@@ -69,7 +69,7 @@ admins = [195391705, ]
 if z('test -n "$borg_admins"'):
     admins = admins + list(z("arr0 ${{(s.,.)borg_admins}}"))
 graylist = [467602588, 92863048,
-            90821188, 915098299, 665261327, 91294899]
+            90821188, 915098299, 665261327, 91294899, 1111288832]
 graylist = admins + graylist
 
 def isAdmin(update, admins=admins):
