@@ -42,7 +42,7 @@ MEDIA_MAX_LENGTH = 1000
 PAF = re.compile(r"(?im)^(?:\.a(n?)\s+)?((?:.|\n)*)\s+fin$")
 PDI = re.compile(r"(?im)^\.di\s+(\S+)(?:\s+(\S*))?\s+fin$")
 PC_KITSU = re.compile(r"(?im)^\.ki\s+(.+)$")
-PC_GOO = re.compile(r"(?im)^\.g\s+(.+)$")
+PC_GOO = re.compile(r"(?im)^\.(g|d)\s+(.+)$")
 WHITESPACE = re.compile(r"^\s*$")
 dl_base = os.getcwd() + '/dls/'
 ##
@@ -170,11 +170,15 @@ Show an affirming flame.
         m = PC_GOO.match(query)
         if m:
             no_match = False
-            arg = zq(str(m.group(1)))
+            mode = str(m.group(1))
+            arg = zq(str(m.group(2)))
             if not arg:
                 ans_text()
                 return
-            command = f"jigoo {arg}"
+            if mode == 'g':
+                command = f"jigoo {arg}"
+            else: # 'd'
+                command = f"search_json_ddg=y jigoo {arg}"
             is_personal = False
         if no_match:
             if (not isAdmin(update)):
