@@ -42,7 +42,7 @@ MEDIA_MAX_LENGTH = 1000
 PAF = re.compile(r"(?im)^(?:\.a(n?)\s+)?((?:.|\n)*)\s+fin$")
 PDI = re.compile(r"(?im)^\.di\s+(\S+)(?:\s+(\S*))?\s+fin$")
 PC_KITSU = re.compile(r"(?im)^\.ki\s+(.+)$")
-PC_GOO = re.compile(r"(?im)^\.(g|d)\s+(.+)$")
+PC_GOO = re.compile(r"(?im)^\.(g|d|as)\s+(.+)$")
 WHITESPACE = re.compile(r"^\s*$")
 dl_base = os.getcwd() + '/dls/'
 ##
@@ -177,6 +177,8 @@ Show an affirming flame.
                 return
             if mode == 'g':
                 command = f"jigoo {arg}"
+            elif mode == 'as':
+                command = f"jias {arg}"
             else: # 'd'
                 command = f"search_json_ddg=y jigoo {arg}"
             is_personal = False
