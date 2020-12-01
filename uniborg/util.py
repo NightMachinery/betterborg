@@ -36,7 +36,7 @@ subprocess_aio = aioify(subprocess)
 borg: TelegramClient = None  # is set by init
 admins = ["Arstar", ]
 if z('test -n "$borg_admins"'):
-    admins = admins + list(z("arr0 ${{(s.,.)borg_admins}}"))
+    admins = admins + list(z("arr0 ${{(s.,.)borg_admins}}").iter0())
 # Use chatids instead. Might need to prepend -100.
 adminChats = ['1353500128', ]
 
