@@ -13,3 +13,5 @@ PySocks
 cachetools
 hachoir
 cfscrape
+jsonpickle
+peewee
