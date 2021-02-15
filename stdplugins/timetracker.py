@@ -46,17 +46,33 @@ subs = {
     "🧫": "?",
     "💻": "sa",
     "🍽": "eat",
+    "ea": "eat",
     "🦷": "brush",
     "br": "brush",
     "🛁": "bath",
+    "b": "bath",
     "👥": "social",
     "soc": "social",
+    "tlg": "social_online",
+    "fam": "family",
     "🎪": "entertainment",
     "fun": "entertainment",
     "🌐": "web",
     "😡": "wasted",
-    "wt": "wasted"
+    "wt": "wasted",
+    "r": "rest",
+    "nf": "nonfiction",
+    "nft": "nonfiction_technical",
+    "fi": "fiction",
+    "med": "meditation",
+    "th": "thinking",
+    "go": "going out",
+    "🐑": "chores",
+    "ch": "chores",
+    "expl": "exploration",
+    "gath": "exploration_gathering"
     }
+
 del_pat = re.compile(r"^\.\.del\s*(\d*\.?\d*)")
 out_pat = re.compile(r"^(?:\.\.)?out\s*(\d*\.?\d*)")
 back_pat = re.compile(r"^(?:\.\.)?back\s*(\-?\d*\.?\d*)")
@@ -72,7 +88,7 @@ async def _(event):
 
     if m0_text.startswith('#'): # comments :D
         return
-    
+
     now = datetime.datetime.today()
     last_act_query = Activity.select().order_by(Activity.end.desc())
 
