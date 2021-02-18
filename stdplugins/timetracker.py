@@ -1,5 +1,10 @@
+from __future__ import annotations
+import textwrap
+from dataclasses import dataclass
+from functools import total_ordering
+from typing import Dict, List
 from telethon import events
-from uniborg.util import embed2
+from uniborg.util import embed2, is_read
 import datetime
 from dateutil.relativedelta import relativedelta
 import json, yaml
@@ -26,7 +31,7 @@ class Activity(BaseModel):
 
     def __str__(self):
         dur = relativedelta(self.end, self.start)
-        return f"""{self.name} {dur.hours}:{dur.minutes}"""
+        return f"""{self.name} {relativedelta_str(dur)}"""
 
 db.connect() # @todo? db.close()
 db.create_tables([Activity])
@@ -50,7 +55,7 @@ subs = {
     "🦷": "brush",
     "br": "brush",
     "🛁": "bath",
-    "b": "bath",
+    "ba": "bath",
     "👥": "social",
     "soc": "social",
     "tlg": "social_online",
@@ -74,18 +79,22 @@ subs = {
     }
 
 del_pat = re.compile(r"^\.\.del\s*(\d*\.?\d*)")
-out_pat = re.compile(r"^(?:\.\.)?out\s*(\d*\.?\d*)")
-back_pat = re.compile(r"^(?:\.\.)?back\s*(\-?\d*\.?\d*)")
+rename_pat = re.compile(r"^\.\.re(?:name)?\s+(.+)")
+out_pat = re.compile(r"^(?:\.\.)?o(?:ut)?\s*(\d*\.?\d*)")
+back_pat = re.compile(r"^(?:\.\.)?b(?:ack)\s*(\-?\d*\.?\d*)")
 
 @borg.on(events.NewMessage(chats=[timetracker_chat], forwards=False)) # incoming=True causes us to miss stuff that tsend sends by 'ourselves'.
 async def _(event):
     global starting_anchor
 
-    m0 = event.message
-    m0_text = m0.text.lower() # iOS capitalizes the first letter
-    if m0_text in subs:
-        m0_text = subs[m0_text]
+    def text_sub(text):
+        text = text.lower() # iOS capitalizes the first letter
+        if text in subs:
+            text = subs[text]
+        return text
 
+    m0 = event.message
+    m0_text = text_sub(m0.text)
     if m0_text.startswith('#'): # comments :D
         return
 
@@ -133,7 +142,18 @@ async def _(event):
             mins = float(m.group(1) or 20)
             last_act.end -= datetime.timedelta(minutes=mins) # supports negative numbers, too ;D
             last_act.save()
-            await borg.edit_message(m0, f"{m0_text} (Pushed last_act.end back by {mins} minutes)")
+            await borg.edit_message(m0, f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)")
+            return
+        else:
+            await event.reply("Empty database has no last act.")
+            return
+
+    m = rename_pat.match(m0_text)
+    if m:
+        if last_act != None:
+            last_act.name = text_sub(m.group(1))
+            last_act.save()
+            await borg.edit_message(m0, f"{str(last_act)} (Renamed)")
             return
         else:
             await event.reply("Empty database has no last act.")
@@ -158,21 +178,94 @@ async def _(event):
     act.save()
 
 def activity_list_to_str(delta=datetime.timedelta(hours=24)):
-    low = datetime.datetime.today() - delta
+    now = datetime.datetime.today()
+    low = now - delta
     res = f"```\nLast {str(delta)}:" # we need a monospace font to justify the columns
     acts = Activity.select().where(Activity.start > low) # @alt .between(low, high)
     acts_agg = {}
+    total_dur = relativedelta()
     for act in acts:
         act_name = act.name
         act_start = act.start
         act_end = act.end
         dur = relativedelta(act_end, act_start)
+        total_dur += dur
         if not act_name in acts_agg:
             acts_agg[act_name] = dur
         else:
             acts_agg[act_name] += dur
 
-    for name, dur in acts_agg.items():
+    # ("TOTAL", total_dur), 
+    for name, dur in ([("UNACCOUNTED", relativedelta(now, low + total_dur))] + sorted(acts_agg.items(), key=(lambda x: relativedelta_total_seconds(x[1])), reverse=True)):
         # @bug emojis break the text justification because they are inherently not monospace
-        res += f"""\n    {name + " " * max(0, 20 - len(name))} {dur.hours}:{dur.minutes}"""
+        res += f"""\n    {name + " " * max(0, 20 - len(name))} {relativedelta_str(dur)}"""
     return res + "\n```"
+
+def relativedelta_total_seconds(rd: relativedelta):
+    # Used Google to convert the years and months, they are slightly more than 365 and 30 days respectively.
+    return rd.years * 31540000 + rd.months * 2628000 + rd.days * 86400 + rd.hours * 3600 + rd.minutes * 60 + rd.seconds
+
+def gen_s(num):
+    if num != 1:
+        return "s"
+    return ""
+
+def relativedelta_str(rd: relativedelta):
+    res = ""
+    rd = rd.normalized()
+    # rd.weeks seems to just convert rd.days into weeks
+    if rd.years:
+        res += f"{rd.years} year{gen_s(rd.years)}, "
+    if rd.months:
+        res += f"{rd.months} month{gen_s(rd.months)}, "
+    if rd.days:
+        res += f"{rd.days} day{gen_s(rd.days)}, "
+    if rd.hours:
+        res += f"{rd.hours}:"
+    res += f"{rd.minutes}"
+    return res
+
+@dataclass()
+@total_ordering
+class ActivityDuration:
+    name: str
+    duration: relativedelta = relativedelta()
+    sub_acts: Dict[str, ActivityDuration] = {}
+
+    total_duration: relativedelta = relativedelta()
+    # @property
+    # def total_duration(self):
+    #     res = self.duration
+    #     for act in self.sub_acts:
+    #         res += act.total_duration
+    #     return res
+    
+    def __lt__(self, other):
+        if type(other) is ActivityDuration:
+            return relativedelta_total_seconds(self.total_duration) < relativedelta_total_seconds(other.total_duration)
+        elif type(other) is relativedelta:
+            return relativedelta_total_seconds(self.total_duration) < relativedelta_total_seconds(other)
+        else:
+            return NotImplemented
+
+    def add(self, dur: relativedelta, act_chain: List[str]):
+        parent = act_chain.pop() # act_chain's last item should be the parent for possible perf reasons
+        if parent != self.name:
+            raise  ValueError(f"The ancestor of act_chain should be named the same as the ActivityDuration adding the chain: {self.name} != {parent}")
+        self.total_duration += dur
+        if len(act_chain) == 0:
+            self.duration += dur
+        else:
+            child = act_chain[0]
+            child_act = self.sub_acts.setdefault(child, ActivityDuration(name=child))
+            child_act.add(act_chain)
+    
+    def __str__(self):
+        res = ""
+        name = self.name
+        dur = self.total_duration
+        res += f"""{name + " " * max(4, 20 - len(name))} {relativedelta_str(dur)}"""
+        for act in sorted(self.sub_acts.items, key=(lambda x: x[1]), reverse=True):
+            res += textwrap.indent(str(act), "    ")
+
+
