@@ -1,20 +1,14 @@
-from __future__ import annotations
-import textwrap
-from dataclasses import dataclass
-from functools import total_ordering
-from typing import Dict, List
 from telethon import events
-from uniborg.util import embed2, is_read
 import datetime
 from dateutil.relativedelta import relativedelta
-import json, yaml
 from pathlib import Path
 from brish import z
 import os
 import re
-import peewee
-
 from peewee import *
+from uniborg.util import embed2
+from uniborg.timetracker_util import *
+import json, yaml
 
 db_path = Path(z('print -r -- "${{attic_private_dir:-$HOME/tmp}}/timetracker.db"').outrs) # Path.home().joinpath(Path("cellar"))
 os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -43,49 +37,91 @@ subs = {
     "👀": "w",
     "res": "..out",
     # "out": "..out",
+    "unt": "consciously untracked",
     "📖": "study",
     "s": "study",
+    "sc": "chores_self_study", # study chores: e.g., choosing courses
     "sv": "study_video",
-    "🏃🏽‍♀️": "exercise",
-    "e": "exercise",
+    "sp": "study_peripheral", # prerequisites, etc
+    ## uni10
+    "p2": "study_physics_physics 2",
+    "p2v": "study_physics_physics 2_video",
+    "p4": "study_physics_physics 4",
+    "p4v": "study_physics_physics 4_video",
+    "feyn": "study_physics_feynman",
+    "feynman": "study_physics_feynman",
+    "st": "study_math_probability and statistics",
+    "stv": "study_math_probability and statistics_video",
+    "em": "study_math_engineering math",
+    "rizmo": "study_math_engineering math",
+    "emv": "study_math_engineering math_video",
+    "rizmov": "study_math_engineering math_video",
+    "his": "study_history_history of mathematics",
+    "hisv": "study_history_history of mathematics_video",
+    "ai": "study_cs_ai",
+    "aiv": "study_cs_ai_video",
+    ##
+    "🏃🏽‍♀️": "chores_self_health_exercise",
+    "e": "chores_self_health_exercise",
     "🧫": "?",
-    "💻": "sa",
-    "🍽": "eat",
-    "ea": "eat",
-    "🦷": "brush",
-    "br": "brush",
-    "🛁": "bath",
-    "ba": "bath",
+    "💻": "sa", # System Administration
+    "this": "sa_quantified self_timetracker",
+    "r": "chores_self_rest",
+    "🍽": "chores_self_rest_eat",
+    "ea": "chores_self_rest_eat",
+    "🦷": "chores_self_health_brush",
+    "br": "chores_self_health_brush",
+    "🛁": "chores_self_hygiene_bath",
+    "ba": "chores_self_hygiene_bath",
+    "sl": "sleep", # putting this under chores will just make using the data harder, no?
+    "💤": "sleep",
     "👥": "social",
     "soc": "social",
     "tlg": "social_online",
-    "fam": "family",
+    "fam": "social_family",
+    "famo": "social_family_others",
     "🎪": "entertainment",
     "fun": "entertainment",
-    "🌐": "web",
+    "game": "entertainment_video games",
+    "vg": "entertainment_video games",
+    "coop": "entertainment_video games_coop",
+    "wa": "entertainment_watch",
+    "movies": "entertainment_watch_movies",
+    "anime": "entertainment_watch_anime",
+    "anime movies": "entertainment_watch_anime_movies",
+    "series": "entertainment_watch_series",
     "😡": "wasted",
     "wt": "wasted",
-    "r": "rest",
     "nf": "nonfiction",
     "nft": "nonfiction_technical",
-    "fi": "fiction",
-    "med": "meditation",
-    "th": "thinking",
+    "fi": "entertainment_fiction",
+    "classics": "entertainment_fiction_classics",
+    "fanfic": "entertainment_fiction_fanfiction",
+    "fanfiction": "entertainment_fiction_fanfiction",
+    "fic": "entertainment_fiction_fanfiction",
+    "med": "meditation_serene",
+    "th": "meditation_thinking",
     "go": "going out",
     "🐑": "chores",
     "ch": "chores",
+    "cho": "chores_others",
     "expl": "exploration",
+    "🌐": "exploration_targetedLearning",
+    "tl": "exploration_targetedLearning",
     "gath": "exploration_gathering"
     }
 
 del_pat = re.compile(r"^\.\.del\s*(\d*\.?\d*)")
 rename_pat = re.compile(r"^\.\.re(?:name)?\s+(.+)")
 out_pat = re.compile(r"^(?:\.\.)?o(?:ut)?\s*(\d*\.?\d*)")
-back_pat = re.compile(r"^(?:\.\.)?b(?:ack)\s*(\-?\d*\.?\d*)")
+back_pat = re.compile(r"^(?:\.\.)?b(?:ack)?\s*(\-?\d*\.?\d*)")
 
 @borg.on(events.NewMessage(chats=[timetracker_chat], forwards=False)) # incoming=True causes us to miss stuff that tsend sends by 'ourselves'.
 async def _(event):
     global starting_anchor
+
+    async def edit(text: str):
+        await borg.edit_message(m0, text)
 
     def text_sub(text):
         text = text.lower() # iOS capitalizes the first letter
@@ -96,6 +132,10 @@ async def _(event):
     m0 = event.message
     m0_text = text_sub(m0.text)
     if m0_text.startswith('#'): # comments :D
+        return
+    elif m0_text == 'man':
+        # await edit(json.dumps(subs))
+        await edit(yaml.dump(subs))
         return
 
     now = datetime.datetime.today()
@@ -180,92 +220,17 @@ async def _(event):
 def activity_list_to_str(delta=datetime.timedelta(hours=24)):
     now = datetime.datetime.today()
     low = now - delta
-    res = f"```\nLast {str(delta)}:" # we need a monospace font to justify the columns
     acts = Activity.select().where(Activity.start > low) # @alt .between(low, high)
-    acts_agg = {}
-    total_dur = relativedelta()
+    acts_agg = ActivityDuration("Total")
     for act in acts:
         act_name = act.name
         act_start = act.start
         act_end = act.end
         dur = relativedelta(act_end, act_start)
-        total_dur += dur
-        if not act_name in acts_agg:
-            acts_agg[act_name] = dur
-        else:
-            acts_agg[act_name] += dur
-
+        acts_agg.add(dur, list(reversed(act_name.split('_'))))
     # ("TOTAL", total_dur), 
-    for name, dur in ([("UNACCOUNTED", relativedelta(now, low + total_dur))] + sorted(acts_agg.items(), key=(lambda x: relativedelta_total_seconds(x[1])), reverse=True)):
-        # @bug emojis break the text justification because they are inherently not monospace
-        res += f"""\n    {name + " " * max(0, 20 - len(name))} {relativedelta_str(dur)}"""
+    res = f"```\nLast {str(delta)}; UNACCOUNTED {relativedelta_str(relativedelta(now, low + acts_agg.total_duration))}\n" # we need a monospace font to justify the columns
+    res += str(acts_agg)
     return res + "\n```"
-
-def relativedelta_total_seconds(rd: relativedelta):
-    # Used Google to convert the years and months, they are slightly more than 365 and 30 days respectively.
-    return rd.years * 31540000 + rd.months * 2628000 + rd.days * 86400 + rd.hours * 3600 + rd.minutes * 60 + rd.seconds
-
-def gen_s(num):
-    if num != 1:
-        return "s"
-    return ""
-
-def relativedelta_str(rd: relativedelta):
-    res = ""
-    rd = rd.normalized()
-    # rd.weeks seems to just convert rd.days into weeks
-    if rd.years:
-        res += f"{rd.years} year{gen_s(rd.years)}, "
-    if rd.months:
-        res += f"{rd.months} month{gen_s(rd.months)}, "
-    if rd.days:
-        res += f"{rd.days} day{gen_s(rd.days)}, "
-    if rd.hours:
-        res += f"{rd.hours}:"
-    res += f"{rd.minutes}"
-    return res
-
-@dataclass()
-@total_ordering
-class ActivityDuration:
-    name: str
-    duration: relativedelta = relativedelta()
-    sub_acts: Dict[str, ActivityDuration] = {}
-
-    total_duration: relativedelta = relativedelta()
-    # @property
-    # def total_duration(self):
-    #     res = self.duration
-    #     for act in self.sub_acts:
-    #         res += act.total_duration
-    #     return res
-    
-    def __lt__(self, other):
-        if type(other) is ActivityDuration:
-            return relativedelta_total_seconds(self.total_duration) < relativedelta_total_seconds(other.total_duration)
-        elif type(other) is relativedelta:
-            return relativedelta_total_seconds(self.total_duration) < relativedelta_total_seconds(other)
-        else:
-            return NotImplemented
-
-    def add(self, dur: relativedelta, act_chain: List[str]):
-        parent = act_chain.pop() # act_chain's last item should be the parent for possible perf reasons
-        if parent != self.name:
-            raise  ValueError(f"The ancestor of act_chain should be named the same as the ActivityDuration adding the chain: {self.name} != {parent}")
-        self.total_duration += dur
-        if len(act_chain) == 0:
-            self.duration += dur
-        else:
-            child = act_chain[0]
-            child_act = self.sub_acts.setdefault(child, ActivityDuration(name=child))
-            child_act.add(act_chain)
-    
-    def __str__(self):
-        res = ""
-        name = self.name
-        dur = self.total_duration
-        res += f"""{name + " " * max(4, 20 - len(name))} {relativedelta_str(dur)}"""
-        for act in sorted(self.sub_acts.items, key=(lambda x: x[1]), reverse=True):
-            res += textwrap.indent(str(act), "    ")
 
 
