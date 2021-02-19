@@ -168,8 +168,11 @@ back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(\-?\d*\.?\d*)$")
 
 @borg.on(events.NewMessage(chats=[timetracker_chat], forwards=False)) # incoming=True causes us to miss stuff that tsend sends by 'ourselves'.
 async def process(event):
-    global starting_anchor
     m0 = event.message
+    await process_msg(m0)
+
+async def process_msg(m0):
+    global starting_anchor
 
     async def edit(text: str, **kwargs):
         await borg.edit_message(m0, text, **kwargs)
@@ -178,7 +181,6 @@ async def process(event):
         await m0.reply("The empty database has no last act.")
 
     choiceConfirmed = False
-    await warn_empty()
     def text_sub(text):
         nonlocal choiceConfirmed
         text = text.lower() # iOS capitalizes the first letter
@@ -189,11 +191,11 @@ async def process(event):
 
     m0_text = text_sub(m0.text)
     if m0_text.startswith('#'): # comments :D
-        return
+        return "comment"
     elif m0_text == 'man':
-        # await edit(json.dumps(subs))
-        await edit(yaml.dump(subs))
-        return
+        out = yaml.dump(subs)
+        await edit(out)
+        return out
 
     now = datetime.datetime.today()
     last_act_query = Activity.select().order_by(Activity.end.desc())
@@ -205,18 +207,21 @@ async def process(event):
             del_count = Activity.delete().where(Activity.end > (now - datetime.timedelta(minutes=float(m.group(1) or 5)))).execute()
         elif last_act_query.exists():
             del_count = last_act_query.get().delete_instance()
-        await edit(f"Deleted the last {del_count} activities")
-        return
+        out = f"Deleted the last {del_count} activities"
+        await edit(out)
+        return out
 
     if m0_text.lower() == "w":
         starting_anchor = now
-        await edit("Anchored")
-        return
+        out = "Anchored"
+        await edit(out)
+        return out
 
     m = out_pat.match(m0_text)
     if m:
-        await edit(f"{activity_list_to_str(delta=datetime.timedelta(hours=float(m.group(1) or 24)))}", parse_mode="markdown")
-        return
+        out = f"{activity_list_to_str(delta=datetime.timedelta(hours=float(m.group(1) or 24)))}"
+        await edit(f"{out}", parse_mode="markdown")
+        return out
 
     last_act = None
     if last_act_query.exists():
@@ -228,8 +233,9 @@ async def process(event):
             mins = float(m.group(1) or 20)
             last_act.end -= datetime.timedelta(minutes=mins) # supports negative numbers, too ;D
             last_act.save()
-            await edit(f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)")
-            return
+            out = f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)"
+            await edit(out)
+            return out
         else:
             await warn_empty()
             return
@@ -239,8 +245,9 @@ async def process(event):
         if last_act != None:
             last_act.name = text_sub(m.group(1))
             last_act.save()
-            await edit(f"{str(last_act)} (Renamed)")
-            return
+            out = f"{str(last_act)} (Renamed)"
+            await edit(out)
+            return out
         else:
             await warn_empty()
             return
@@ -249,9 +256,10 @@ async def process(event):
         if last_act != None:
             ## this design doesn't work too well with deleting records
             last_act.end = now
-            await edit(f"{str(last_act)} (Updated)")
+            out = f"{str(last_act)} (Updated)"
+            await edit(out)
             last_act.save()
-            return
+            return out
             ## @alt:
             # m0_text = last_act.name
             # choiceConfirmed = True
@@ -277,8 +285,10 @@ async def process(event):
         starting_anchor = None
 
     act = Activity(name=m0_text, start=start, end=now)
-    await edit(str(act))
+    out = str(act)
+    await edit(out)
     act.save()
+    return out
 
 def activity_list_to_str(delta=datetime.timedelta(hours=24)):
     now = datetime.datetime.today()

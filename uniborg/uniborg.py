@@ -16,9 +16,14 @@ from . import hacks
 
 
 class Uniborg(TelegramClient):
-    def __init__(
-            self, session, *, plugin_path="plugins", storage=None,
+    @classmethod
+    async def create(
+            cls, session, *, plugin_path="plugins", storage=None,
             bot_token=None, **kwargs):
+        kwargs = {
+            "api_id": 6, "api_hash": "eb06d4abfb49dc3eeb1aeb98ae0f581e",
+            **kwargs}
+        self = Uniborg(session, **kwargs)
         # TODO: handle non-string session
         #
         # storage should be a callable accepting plugin name -> Storage object.
@@ -29,29 +34,19 @@ class Uniborg(TelegramClient):
         self._plugins = {}
         self._plugin_path = plugin_path
 
-        kwargs = {
-            "api_id": 6, "api_hash": "eb06d4abfb49dc3eeb1aeb98ae0f581e",
-            **kwargs}
-        super().__init__(session, **kwargs)
-
         # This is a hack, please avert your eyes
         # We want this in order for the most recently added handler to take
         # precedence
         self._event_builders = hacks.ReverseList()
 
-        task = self._async_init(bot_token=bot_token)
-        if self.loop.is_running():
-            print("running _async_init in already running loop ...")
-            asyncio.run_coroutine_threadsafe(task, self.loop).result()
-            print("_async_init done")
-        else:
-            self.loop.run_until_complete(task)
+        await self._async_init(bot_token=bot_token)
 
         core_plugin = Path(__file__).parent / "_core.py"
         self.load_plugin_from_file(core_plugin)
 
         for p in Path().glob(f"{self._plugin_path}/*.py"):
             self.load_plugin_from_file(p)
+        return self
 
     async def _async_init(self, **kwargs):
         await self.start(**kwargs)

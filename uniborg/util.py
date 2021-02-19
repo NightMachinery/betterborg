@@ -59,7 +59,7 @@ def init_brishes():
     global brishes
     boot_cmd = 'export JBRISH=y'
     persistent_brish = Brish(boot_cmd=boot_cmd)
-    brishes = [Brish(boot_cmd=boot_cmd) for i in range(brish_count + 1)]
+    brishes = [Brish(boot_cmd=boot_cmd) for i in range(brish_count)] # range includes 0
 
 
 init_brishes()
