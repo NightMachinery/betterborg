@@ -42,7 +42,7 @@ starting_anchor = None
 subs = {
     "👀": "w",
     "dot": ".",
-    "res": "..out",
+    # "res": "..out",
     # "out": "..out",
     "untracked": "consciously untracked",
     "unt": "consciously untracked",
@@ -136,16 +136,23 @@ subs = {
 ##
 # levenshtein is a two-edged sword for our purposes, but I think it's ultimately more intuitive. One huge problem with levenshtein is that it punishes longer strings.
 fuzzy_choices = list(subs.values()) + list(subs.keys())
+fuzzy_choices_str = '\n'.join(subs.values())
 subs_fuzzy = FuzzySet(fuzzy_choices, use_levenshtein=True)
 def chooseAct(fuzzyChoice: str):
     ##
     # https://github.com/seatgeek/fuzzywuzzy/issues/251 : the token versions are somewhat broken
     # https://github.com/maxbachmann/RapidFuzz/issues/76
-    res = process.extractOne(fuzzyChoice, fuzzy_choices, scorer=fuzz.WRatio, processor=(lambda x: x.replace('_',' ')))[0] # fuzz.partial_ratio
+    # res = process.extractOne(fuzzyChoice, fuzzy_choices, scorer=fuzz.WRatio, processor=(lambda x: x.replace('_',' ')))[0] # fuzz.partial_ratio
     ##
     # res = subs_fuzzy.get(fuzzyChoice)
     # if res:
     #     res = res[0][1]
+    ##
+    res = z("fzf --filter {fuzzyChoice} | ghead -n1", cmd_stdin=fuzzy_choices_str).outrs
+    if not res:
+        res = subs_fuzzy.get(fuzzyChoice)
+        if res:
+            res = res[0][1]
     ##
     if res:
         if res in subs:
@@ -154,10 +161,10 @@ def chooseAct(fuzzyChoice: str):
     return fuzzyChoice
     ##
 ##
-del_pat = re.compile(r"^\.\.?del\s*(\d*\.?\d*)")
-rename_pat = re.compile(r"^\.\.?re(?:name)?\s+(.+)")
-out_pat = re.compile(r"^(?:\.\.?)?o(?:ut)?\s*(\d*\.?\d*)")
-back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(\-?\d*\.?\d*)")
+del_pat = re.compile(r"^\.\.?del\s*(\d*\.?\d*)$")
+rename_pat = re.compile(r"^\.\.?re(?:name)?\s+(.+)$")
+out_pat = re.compile(r"^(?:\.\.?)?o(?:ut)?\s*(\d*\.?\d*)$")
+back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(\-?\d*\.?\d*)$")
 
 @borg.on(events.NewMessage(chats=[timetracker_chat], forwards=False)) # incoming=True causes us to miss stuff that tsend sends by 'ourselves'.
 async def _(event):
