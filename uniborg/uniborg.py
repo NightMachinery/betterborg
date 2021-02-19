@@ -39,7 +39,13 @@ class Uniborg(TelegramClient):
         # precedence
         self._event_builders = hacks.ReverseList()
 
-        self.loop.run_until_complete(self._async_init(bot_token=bot_token))
+        task = self._async_init(bot_token=bot_token)
+        if self.loop.is_running():
+            print("running _async_init in already running loop ...")
+            asyncio.run_coroutine_threadsafe(task, self.loop).result()
+            print("_async_init done")
+        else:
+            self.loop.run_until_complete(task)
 
         core_plugin = Path(__file__).parent / "_core.py"
         self.load_plugin_from_file(core_plugin)

@@ -1,4 +1,9 @@
 telethon
+aiohttp[speedups]
+cryptg
+hachoir
+Pillow
+python-socks[asyncio]
 brish
 youtube-dl
 nest_asyncio
@@ -8,10 +13,8 @@ instantmusic
 eyed3
 regex
 wget
-cryptg
 PySocks
 cachetools
-hachoir
 cfscrape
 jsonpickle
 peewee

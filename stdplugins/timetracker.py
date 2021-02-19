@@ -167,13 +167,18 @@ out_pat = re.compile(r"^(?:\.\.?)?o(?:ut)?\s*(\d*\.?\d*)$")
 back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(\-?\d*\.?\d*)$")
 
 @borg.on(events.NewMessage(chats=[timetracker_chat], forwards=False)) # incoming=True causes us to miss stuff that tsend sends by 'ourselves'.
-async def _(event):
+async def process(event):
     global starting_anchor
+    m0 = event.message
 
-    async def edit(text: str):
-        await borg.edit_message(m0, text)
+    async def edit(text: str, **kwargs):
+        await borg.edit_message(m0, text, **kwargs)
+
+    async def warn_empty():
+        await m0.reply("The empty database has no last act.")
 
     choiceConfirmed = False
+    await warn_empty()
     def text_sub(text):
         nonlocal choiceConfirmed
         text = text.lower() # iOS capitalizes the first letter
@@ -182,7 +187,6 @@ async def _(event):
             text = subs[text]
         return text
 
-    m0 = event.message
     m0_text = text_sub(m0.text)
     if m0_text.startswith('#'): # comments :D
         return
@@ -201,19 +205,17 @@ async def _(event):
             del_count = Activity.delete().where(Activity.end > (now - datetime.timedelta(minutes=float(m.group(1) or 5)))).execute()
         elif last_act_query.exists():
             del_count = last_act_query.get().delete_instance()
-        # starting_anchor = None
-        # await event.reply(f"Deleted the last {del_count} activities, and reseted the starting anchor.")
-        await borg.edit_message(m0, f"Deleted the last {del_count} activities")
+        await edit(f"Deleted the last {del_count} activities")
         return
 
     if m0_text.lower() == "w":
         starting_anchor = now
-        await borg.edit_message(m0, "Anchored")
+        await edit("Anchored")
         return
 
     m = out_pat.match(m0_text)
     if m:
-        await borg.edit_message(m0, f"{activity_list_to_str(delta=datetime.timedelta(hours=float(m.group(1) or 24)))}", parse_mode="markdown")
+        await edit(f"{activity_list_to_str(delta=datetime.timedelta(hours=float(m.group(1) or 24)))}", parse_mode="markdown")
         return
 
     last_act = None
@@ -226,10 +228,10 @@ async def _(event):
             mins = float(m.group(1) or 20)
             last_act.end -= datetime.timedelta(minutes=mins) # supports negative numbers, too ;D
             last_act.save()
-            await borg.edit_message(m0, f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)")
+            await edit(f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)")
             return
         else:
-            await event.reply("Empty database has no last act.")
+            await warn_empty()
             return
 
     m = rename_pat.match(m0_text)
@@ -237,17 +239,17 @@ async def _(event):
         if last_act != None:
             last_act.name = text_sub(m.group(1))
             last_act.save()
-            await borg.edit_message(m0, f"{str(last_act)} (Renamed)")
+            await edit(f"{str(last_act)} (Renamed)")
             return
         else:
-            await event.reply("Empty database has no last act.")
+            await warn_empty()
             return
 
     if m0_text == '.':
         if last_act != None:
             ## this design doesn't work too well with deleting records
             last_act.end = now
-            await borg.edit_message(m0, f"{str(last_act)} (Updated)")
+            await edit(f"{str(last_act)} (Updated)")
             last_act.save()
             return
             ## @alt:
@@ -255,7 +257,7 @@ async def _(event):
             # choiceConfirmed = True
             ##
         else:
-            await event.reply("Empty database has no last act.")
+            await warn_empty()
             return
 
     if m0_text.startswith("."):
@@ -266,7 +268,7 @@ async def _(event):
     start: datetime.datetime
     if starting_anchor == None:
         if last_act == None:
-            await event.reply("The database is empty and also has no starting anchor. Create an anchor by sending 'w'.")
+            await m0.reply("The database is empty and also has no starting anchor. Create an anchor by sending 'w'.")
             return
         else:
             start = last_act.end
@@ -275,7 +277,6 @@ async def _(event):
         starting_anchor = None
 
     act = Activity(name=m0_text, start=start, end=now)
-    # await borg.edit_message(m0, f"{str(act)} ({choiceConfirmed})")
     await edit(str(act))
     act.save()
 

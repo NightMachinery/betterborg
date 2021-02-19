@@ -1,3 +1,6 @@
 libav
 exa
+coreutils (ghead, etc)
+fzf
+zsh
 

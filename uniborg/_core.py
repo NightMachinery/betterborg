@@ -15,7 +15,7 @@ DELETE_TIMEOUT = 2
 async def load_reload(event):
     if not (await util.isAdmin(event) and event.message.forward == None):
         return
-    await event.delete()
+    # await event.delete()
     shortname = event.pattern_match["shortname"]
 
     try:
@@ -25,8 +25,8 @@ async def load_reload(event):
 
         msg = await event.respond(
             f"Successfully (re)loaded plugin {shortname}")
-        await asyncio.sleep(DELETE_TIMEOUT)
-        await borg.delete_messages(msg.to_id, msg)
+        # await asyncio.sleep(DELETE_TIMEOUT)
+        # await borg.delete_messages(msg.to_id, msg)
 
     except Exception as e:
         tb = traceback.format_exc()
@@ -36,7 +36,7 @@ async def load_reload(event):
 
 @borg.on(util.admin_cmd(r"^\.(?:unload|remove) (?P<shortname>\w+)$"))
 async def remove(event):
-    await event.delete()
+    # await event.delete()
     shortname = event.pattern_match["shortname"]
 
     if shortname == "_core":
@@ -47,5 +47,5 @@ async def remove(event):
     else:
         msg = await event.respond(f"Plugin {shortname} is not loaded")
 
-    await asyncio.sleep(DELETE_TIMEOUT)
-    await borg.delete_messages(msg.to_id, msg)
+    # await asyncio.sleep(DELETE_TIMEOUT)
+    # await borg.delete_messages(msg.to_id, msg)
