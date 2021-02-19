@@ -9,6 +9,12 @@ from peewee import *
 from uniborg.util import embed2
 from uniborg.timetracker_util import *
 import json, yaml
+# from fuzzywuzzy import fuzz, process
+from rapidfuzz import process, fuzz
+try:
+    from cfuzzyset import cFuzzySet as FuzzySet
+except ImportError:
+    from fuzzyset import FuzzySet
 
 db_path = Path(z('print -r -- "${{attic_private_dir:-$HOME/tmp}}/timetracker.db"').outrs) # Path.home().joinpath(Path("cellar"))
 os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -35,8 +41,10 @@ timetracker_chat = -1001179162919
 starting_anchor = None
 subs = {
     "👀": "w",
+    "dot": ".",
     "res": "..out",
     # "out": "..out",
+    "untracked": "consciously untracked",
     "unt": "consciously untracked",
     "📖": "study",
     "s": "study",
@@ -61,16 +69,24 @@ subs = {
     "ai": "study_cs_ai",
     "aiv": "study_cs_ai_video",
     ##
+    "exercise": "chores_self_health_exercise",
     "🏃🏽‍♀️": "chores_self_health_exercise",
     "e": "chores_self_health_exercise",
     "🧫": "?",
     "💻": "sa", # System Administration
+    "system": "sa",
+    "system administration": "sa",
     "this": "sa_quantified self_timetracker",
     "r": "chores_self_rest",
+    "rest": "chores_self_rest",
     "🍽": "chores_self_rest_eat",
+    "eat": "chores_self_rest_eat",
+    "eating": "chores_self_rest_eat",
     "ea": "chores_self_rest_eat",
+    "brush": "chores_self_health_brush",
     "🦷": "chores_self_health_brush",
     "br": "chores_self_health_brush",
+    "bath": "chores_self_hygiene_bath",
     "🛁": "chores_self_hygiene_bath",
     "ba": "chores_self_hygiene_bath",
     "sl": "sleep", # putting this under chores will just make using the data harder, no?
@@ -78,7 +94,9 @@ subs = {
     "👥": "social",
     "soc": "social",
     "tlg": "social_online",
+    "family": "social_family",
     "fam": "social_family",
+    "family others": "social_family_others",
     "famo": "social_family_others",
     "🎪": "entertainment",
     "fun": "entertainment",
@@ -93,13 +111,17 @@ subs = {
     "😡": "wasted",
     "wt": "wasted",
     "nf": "nonfiction",
+    "technical": "nonfiction_technical",
     "nft": "nonfiction_technical",
+    "fiction": "entertainment_fiction",
     "fi": "entertainment_fiction",
     "classics": "entertainment_fiction_classics",
     "fanfic": "entertainment_fiction_fanfiction",
     "fanfiction": "entertainment_fiction_fanfiction",
     "fic": "entertainment_fiction_fanfiction",
+    "meditation": "meditation_serene",
     "med": "meditation_serene",
+    "thinking": "meditation_thinking",
     "th": "meditation_thinking",
     "go": "going out",
     "🐑": "chores",
@@ -111,10 +133,31 @@ subs = {
     "gath": "exploration_gathering"
     }
 
-del_pat = re.compile(r"^\.\.del\s*(\d*\.?\d*)")
-rename_pat = re.compile(r"^\.\.re(?:name)?\s+(.+)")
-out_pat = re.compile(r"^(?:\.\.)?o(?:ut)?\s*(\d*\.?\d*)")
-back_pat = re.compile(r"^(?:\.\.)?b(?:ack)?\s*(\-?\d*\.?\d*)")
+##
+# levenshtein is a two-edged sword for our purposes, but I think it's ultimately more intuitive. One huge problem with levenshtein is that it punishes longer strings.
+fuzzy_choices = list(subs.values()) + list(subs.keys())
+subs_fuzzy = FuzzySet(fuzzy_choices, use_levenshtein=True)
+def chooseAct(fuzzyChoice: str):
+    ##
+    # https://github.com/seatgeek/fuzzywuzzy/issues/251 : the token versions are somewhat broken
+    # https://github.com/maxbachmann/RapidFuzz/issues/76
+    res = process.extractOne(fuzzyChoice, fuzzy_choices, scorer=fuzz.WRatio, processor=(lambda x: x.replace('_',' ')))[0] # fuzz.partial_ratio
+    ##
+    # res = subs_fuzzy.get(fuzzyChoice)
+    # if res:
+    #     res = res[0][1]
+    ##
+    if res:
+        if res in subs:
+            res = subs[res]
+        return res
+    return fuzzyChoice
+    ##
+##
+del_pat = re.compile(r"^\.\.?del\s*(\d*\.?\d*)")
+rename_pat = re.compile(r"^\.\.?re(?:name)?\s+(.+)")
+out_pat = re.compile(r"^(?:\.\.?)?o(?:ut)?\s*(\d*\.?\d*)")
+back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(\-?\d*\.?\d*)")
 
 @borg.on(events.NewMessage(chats=[timetracker_chat], forwards=False)) # incoming=True causes us to miss stuff that tsend sends by 'ourselves'.
 async def _(event):
@@ -123,9 +166,12 @@ async def _(event):
     async def edit(text: str):
         await borg.edit_message(m0, text)
 
+    choiceConfirmed = False
     def text_sub(text):
+        nonlocal choiceConfirmed
         text = text.lower() # iOS capitalizes the first letter
         if text in subs:
+            choiceConfirmed = True
             text = subs[text]
         return text
 
@@ -163,18 +209,9 @@ async def _(event):
         await borg.edit_message(m0, f"{activity_list_to_str(delta=datetime.timedelta(hours=float(m.group(1) or 24)))}", parse_mode="markdown")
         return
 
-    start: datetime.datetime
     last_act = None
-    if starting_anchor == None:
-        if not last_act_query.exists():
-            await event.reply("The database is empty and also has no starting anchor. Create an anchor by sending 'w'.")
-            return
-        else:
-            last_act = last_act_query.get()
-            start = last_act.end
-    else:
-        start = starting_anchor
-        starting_anchor = None
+    if last_act_query.exists():
+        last_act = last_act_query.get()
 
     m = back_pat.match(m0_text)
     if m:
@@ -208,13 +245,31 @@ async def _(event):
             return
             ## @alt:
             # m0_text = last_act.name
+            # choiceConfirmed = True
             ##
         else:
             await event.reply("Empty database has no last act.")
             return
 
+    if m0_text.startswith("."):
+        m0_text = m0_text[1:]
+    elif not choiceConfirmed:
+        m0_text = chooseAct(m0_text)
+
+    start: datetime.datetime
+    if starting_anchor == None:
+        if last_act == None:
+            await event.reply("The database is empty and also has no starting anchor. Create an anchor by sending 'w'.")
+            return
+        else:
+            start = last_act.end
+    else:
+        start = starting_anchor
+        starting_anchor = None
+
     act = Activity(name=m0_text, start=start, end=now)
-    await borg.edit_message(m0, f"{str(act)}")
+    # await borg.edit_message(m0, f"{str(act)} ({choiceConfirmed})")
+    await edit(str(act))
     act.save()
 
 def activity_list_to_str(delta=datetime.timedelta(hours=24)):

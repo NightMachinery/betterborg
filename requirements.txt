@@ -15,3 +15,6 @@ hachoir
 cfscrape
 jsonpickle
 peewee
+fuzzywuzzy[speedup]
+rapidfuzz
+fuzzyset
