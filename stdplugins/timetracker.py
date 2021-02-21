@@ -39,13 +39,21 @@ db.create_tables([Activity])
 timetracker_chat = -1001179162919
 # borg.send_message(timetracker_chat, "New timetracker instance initiated")
 starting_anchor = None
-subs = {
+subs_commands = {
     "👀": "w",
     "dot": ".",
     # "res": "..out",
     # "out": "..out",
     "🧫": "?",
-    ##
+    ### habits:
+    "/br": ".habit 7 m=1 brush",
+    "/s": ".habit 7 m=0 study",
+    "/sl": ".habit 7 m=0 sleep",
+    "/e": ".habit 7 m=0 exercise",
+    "/w": ".habit 7 m=0 wasted",
+    ###
+}
+subs = {
     "😡": "wasted",
     "wt": "wasted",
     "untracked": "consciously untracked",
@@ -80,6 +88,7 @@ subs = {
     "system": "sa",
     "system administration": "sa",
     "sac": "chores_self_sa",
+    "sax": "exploration_sa",
     "dev": "sa_development",
     "_": "sa_development_testing_manual",
     "this": "sa_development_quantified self_timetracker",
@@ -101,6 +110,8 @@ subs = {
     "brush": "chores_self_health_brush",
     "🦷": "chores_self_health_brush",
     "br": "chores_self_health_brush",
+	"floss": "chores_self_health_brush_floss",
+    "fl": "chores_self_health_brush_floss",
     "bath": "chores_self_hygiene_bath",
     "🛁": "chores_self_hygiene_bath",
     "ba": "chores_self_hygiene_bath",
@@ -157,8 +168,8 @@ subs = {
 
 ##
 # levenshtein is a two-edged sword for our purposes, but I think it's ultimately more intuitive. One huge problem with levenshtein is that it punishes longer strings.
-fuzzy_choices = list(subs.values()) + list(subs.keys())
-fuzzy_choices_str = '\n'.join(subs.values())
+fuzzy_choices = set(list(subs.values()) + list(subs.keys()))
+fuzzy_choices_str = '\n'.join(set(subs.values())) # yes, this is just a subset of fuzzy_choices
 subs_fuzzy = FuzzySet(fuzzy_choices, use_levenshtein=True)
 def chooseAct(fuzzyChoice: str):
     ##
@@ -187,6 +198,7 @@ del_pat = re.compile(r"^\.\.?del\s*(\d*\.?\d*)$")
 rename_pat = re.compile(r"^\.\.?re(?:name)?\s+(.+)$")
 out_pat = re.compile(r"^(?:\.\.?)?o(?:ut)?\s*(\d*\.?\d*)$")
 back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(\-?\d*\.?\d*)$")
+habit_pat = re.compile(r"^(?:\.\.?)?habit\s*(?P<t>\d*\.?\d*)?\s+(?:m=(?P<mode>\d+)\s+)?(?P<name>.+)$")
 
 @borg.on(events.NewMessage(chats=[timetracker_chat], forwards=False)) # incoming=True causes us to miss stuff that tsend sends by 'ourselves'.
 async def process(event):
@@ -209,7 +221,26 @@ async def process_msg(m0):
         if text in subs:
             choiceConfirmed = True
             text = subs[text]
+        if text in subs_commands:
+            choiceConfirmed = True
+            text = subs_commands[text]
         return text
+
+    def text_sub_finalize(text):
+        nonlocal choiceConfirmed
+        if text.startswith("."):
+            text = text[1:]
+        elif not choiceConfirmed:
+            text = chooseAct(text)
+        return text
+
+    def text_sub_full(text):
+        nonlocal choiceConfirmed
+        tmp = choiceConfirmed # out of caution
+        choiceConfirmed = False
+        res = text_sub_finalize(text_sub(text))
+        choiceConfirmed = tmp
+        return res
 
     m0_text = text_sub(m0.text)
     if m0_text.startswith('#'): # comments :D
@@ -243,6 +274,17 @@ async def process_msg(m0):
     if m:
         out = f"{activity_list_to_str(delta=datetime.timedelta(hours=float(m.group(1) or 24)))}"
         await edit(f"{out}", parse_mode="markdown")
+        return out
+
+    m = habit_pat.match(m0_text)
+    if m:
+        habit_name = m.group('name')
+        habit_name = text_sub_full(habit_name)
+        habit_mode = int(m.group('mode') or 0)
+        habit_delta = datetime.timedelta(days=float(m.group('t') or 30)) # days
+        habit_data = activity_list_habit_get_now(habit_name, delta=habit_delta, mode=habit_mode)
+        out = f"{habit_name}\n\n{yaml.dump(habit_data)}"
+        await edit(out)
         return out
 
     last_act = None
@@ -290,10 +332,7 @@ async def process_msg(m0):
             await warn_empty()
             return
 
-    if m0_text.startswith("."):
-        m0_text = m0_text[1:]
-    elif not choiceConfirmed:
-        m0_text = chooseAct(m0_text)
+    m0_text = text_sub_finalize(m0_text)
 
     start: datetime.datetime
     if starting_anchor == None:
@@ -328,4 +367,40 @@ def activity_list_to_str(delta=datetime.timedelta(hours=24)):
     res += str(acts_agg)
     return res + "\n```"
 
+def activity_list_habit_get_now(name:str, delta=datetime.timedelta(days=30), mode=0):
+    # _now means 'now' is 'high'
+    high = datetime.datetime.today()
+    low = high - delta
+    def which_bucket(act):
+        if act.name == name or act.name.startswith(name + '_'):
+            return act.start.date()
+        return None
 
+    buckets = activity_list_buckets_get(low, high, which_bucket=which_bucket, mode=mode)
+    if mode == 0:
+        buckets_dur = {k: round(relativedelta_total_seconds(v.total_duration) / 3600, 2) for k, v in buckets.items()}
+    elif mode == 1:
+        buckets_dur = buckets
+
+    interval = datetime.timedelta(days=1)
+    while low <= high:
+        buckets_dur.setdefault(low.date(), 0)
+        low += interval
+
+    return buckets_dur
+
+def activity_list_buckets_get(low, high, which_bucket=(lambda act: act.start.date()), mode=0):
+    acts = Activity.select().where(Activity.start.between(low, high))
+    buckets = {}
+    for act in acts:
+        bucket_key = which_bucket(act)
+        if not bucket_key:
+            continue
+        if mode == 0:
+            bucket = buckets.setdefault(bucket_key, ActivityDuration("Total"))
+            dur = relativedelta(act.end, act.start)
+            bucket.add(dur, list(reversed(act.name.split('_'))))
+        elif mode == 1: # count mode
+            bucket = buckets.setdefault(bucket_key, 0)
+            buckets[bucket_key] += 1
+    return buckets
