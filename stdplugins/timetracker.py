@@ -8,7 +8,8 @@ import re
 from peewee import *
 from uniborg.util import embed2
 from uniborg.timetracker_util import *
-import json, yaml
+import json
+import yaml
 # from fuzzywuzzy import fuzz, process
 from rapidfuzz import process, fuzz
 try:
@@ -16,13 +17,17 @@ try:
 except ImportError:
     from fuzzyset import FuzzySet
 
-db_path = Path(z('print -r -- "${{attic_private_dir:-$HOME/tmp}}/timetracker.db"').outrs) # Path.home().joinpath(Path("cellar"))
+# Path.home().joinpath(Path("cellar"))
+db_path = Path(
+    z('print -r -- "${{attic_private_dir:-$HOME/tmp}}/timetracker.db"').outrs)
 os.makedirs(os.path.dirname(db_path), exist_ok=True)
 db = SqliteDatabase(db_path)
+
 
 class BaseModel(Model):
     class Meta:
         database = db
+
 
 class Activity(BaseModel):
     name = CharField()
@@ -33,7 +38,8 @@ class Activity(BaseModel):
         dur = relativedelta(self.end, self.start)
         return f"""{self.name} {relativedelta_str(dur)}"""
 
-db.connect() # @todo? db.close()
+
+db.connect()  # @todo? db.close()
 db.create_tables([Activity])
 
 timetracker_chat = -1001179162919
@@ -45,12 +51,13 @@ subs_commands = {
     # "res": "..out",
     # "out": "..out",
     "🧫": "?",
-    ### habits:
-    "/br": ".habit 7 m=1 brush",
-    "/s": ".habit 7 m=0 study",
-    "/sl": ".habit 7 m=0 sleep",
-    "/e": ".habit 7 m=0 exercise",
-    "/w": ".habit 7 m=0 wasted",
+    # habits:
+    "/br": ".habit 7 m=1 max=3 brush",
+    "/dummy": ".habit 7 m=0 max=10 .dummy",
+    "/s": ".habit 7 m=0 max=9 study",
+    "/sl": ".habit 7 m=0 max=12 sleep",
+    "/e": ".habit 7 m=0 max=2 exercise",
+    "/w": ".habit 7 m=0 max=12 wasted",
     ###
 }
 subs = {
@@ -61,10 +68,10 @@ subs = {
     ##
     "📖": "study",
     "s": "study",
-    "sc": "chores_self_study", # study chores: e.g., choosing courses
+    "sc": "chores_self_study",  # study chores: e.g., choosing courses
     "sv": "study_video",
-    "sp": "study_peripheral", # prerequisites, etc
-    ## uni10
+    "sp": "study_peripheral",  # prerequisites, etc
+    # uni10
     "p2": "study_physics_physics 2",
     "p2v": "study_physics_physics 2_video",
     "p4": "study_physics_physics 4",
@@ -110,12 +117,12 @@ subs = {
     "brush": "chores_self_health_brush",
     "🦷": "chores_self_health_brush",
     "br": "chores_self_health_brush",
-	"floss": "chores_self_health_brush_floss",
+    "floss": "chores_self_health_brush_floss",
     "fl": "chores_self_health_brush_floss",
     "bath": "chores_self_hygiene_bath",
     "🛁": "chores_self_hygiene_bath",
     "ba": "chores_self_hygiene_bath",
-    "sl": "sleep", # putting this under chores will just make using the data harder, no?
+    "sl": "sleep",  # putting this under chores will just make using the data harder, no?
     "💤": "sleep",
     ##
     "👥": "social",
@@ -164,13 +171,16 @@ subs = {
     "tl": "exploration_targetedLearning",
     "gath": "exploration_gathering"
     ##
-    }
+}
 
 ##
 # levenshtein is a two-edged sword for our purposes, but I think it's ultimately more intuitive. One huge problem with levenshtein is that it punishes longer strings.
 fuzzy_choices = set(list(subs.values()) + list(subs.keys()))
-fuzzy_choices_str = '\n'.join(set(subs.values())) # yes, this is just a subset of fuzzy_choices
+# yes, this is just a subset of fuzzy_choices
+fuzzy_choices_str = '\n'.join(set(subs.values()))
 subs_fuzzy = FuzzySet(fuzzy_choices, use_levenshtein=True)
+
+
 def chooseAct(fuzzyChoice: str):
     ##
     # https://github.com/seatgeek/fuzzywuzzy/issues/251 : the token versions are somewhat broken
@@ -181,7 +191,8 @@ def chooseAct(fuzzyChoice: str):
     # if res:
     #     res = res[0][1]
     ##
-    res = z("fzf --filter {fuzzyChoice} | ghead -n1", cmd_stdin=fuzzy_choices_str).outrs
+    res = z("fzf --filter {fuzzyChoice} | ghead -n1",
+            cmd_stdin=fuzzy_choices_str).outrs
     if not res:
         res = subs_fuzzy.get(fuzzyChoice)
         if res:
@@ -192,32 +203,46 @@ def chooseAct(fuzzyChoice: str):
             res = subs[res]
         return res
     return fuzzyChoice
+
     ##
 ##
 del_pat = re.compile(r"^\.\.?del\s*(\d*\.?\d*)$")
 rename_pat = re.compile(r"^\.\.?re(?:name)?\s+(.+)$")
 out_pat = re.compile(r"^(?:\.\.?)?o(?:ut)?\s*(\d*\.?\d*)$")
 back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(\-?\d*\.?\d*)$")
-habit_pat = re.compile(r"^(?:\.\.?)?habit\s*(?P<t>\d*\.?\d*)?\s+(?:m=(?P<mode>\d+)\s+)?(?P<name>.+)$")
+habit_pat = re.compile(
+    r"^(?:\.\.?)?habit\s*(?P<t>\d*\.?\d*)?\s+(?:m=(?P<mode>\d+)\s+)?(?:max=(?P<max>\d+\.?\d*)\s+)?(?P<name>.+)$")
 
-@borg.on(events.NewMessage(chats=[timetracker_chat], forwards=False)) # incoming=True causes us to miss stuff that tsend sends by 'ourselves'.
+
+# incoming=True causes us to miss stuff that tsend sends by 'ourselves'.
+@borg.on(events.NewMessage(chats=[timetracker_chat], forwards=False))
 async def process(event):
     m0 = event.message
     await process_msg(m0)
+
 
 async def process_msg(m0):
     global starting_anchor
 
     async def edit(text: str, **kwargs):
+        if len(text) > 4000:
+            text = f"{text[:4000]}\n\n..."
         await borg.edit_message(m0, text, **kwargs)
+
+    async def reply(text: str, **kwargs):
+        await m0.reply(text, **kwargs)
+
+    async def send_file(file, **kwargs):
+        await borg.send_file(timetracker_chat, file, allow_cache=False, **kwargs)
 
     async def warn_empty():
         await m0.reply("The empty database has no last act.")
 
     choiceConfirmed = False
+
     def text_sub(text):
         nonlocal choiceConfirmed
-        text = text.lower() # iOS capitalizes the first letter
+        text = text.lower()  # iOS capitalizes the first letter
         if text in subs:
             choiceConfirmed = True
             text = subs[text]
@@ -236,14 +261,14 @@ async def process_msg(m0):
 
     def text_sub_full(text):
         nonlocal choiceConfirmed
-        tmp = choiceConfirmed # out of caution
+        tmp = choiceConfirmed  # out of caution
         choiceConfirmed = False
         res = text_sub_finalize(text_sub(text))
         choiceConfirmed = tmp
         return res
 
     m0_text = text_sub(m0.text)
-    if m0_text.startswith('#'): # comments :D
+    if m0_text.startswith('#'):  # comments :D
         return "comment"
     elif m0_text == 'man':
         out = yaml.dump(subs)
@@ -257,16 +282,29 @@ async def process_msg(m0):
     if m:
         del_count = 0
         if m.group(1):
-            del_count = Activity.delete().where(Activity.end > (now - datetime.timedelta(minutes=float(m.group(1) or 5)))).execute()
+            del_count = Activity.delete().where(Activity.end > (
+                now - datetime.timedelta(minutes=float(m.group(1) or 5)))).execute()
         elif last_act_query.exists():
             del_count = last_act_query.get().delete_instance()
         out = f"Deleted the last {del_count} activities"
         await edit(out)
         return out
 
-    if m0_text.lower() == "w":
+    if m0_text == "w":
         starting_anchor = now
         out = "Anchored"
+        await edit(out)
+        return out
+
+    if m0_text == 'debugme':
+        Activity.delete().where(Activity.name == 'dummy').execute()
+        Activity(name="dummy", start=(now - datetime.timedelta(days=6*30,
+                                                               hours=7)), end=(now - datetime.timedelta(days=6*30))).save()
+        Activity(name="dummy", start=(now - datetime.timedelta(days=1*30,
+                                                               hours=3)), end=(now - datetime.timedelta(days=1*30))).save()
+        Activity(name="dummy", start=(now - datetime.timedelta(days=10*30,
+                                                               hours=10)), end=(now - datetime.timedelta(days=10*30))).save()
+        out = "DEBUG COMMAND"
         await edit(out)
         return out
 
@@ -281,10 +319,33 @@ async def process_msg(m0):
         habit_name = m.group('name')
         habit_name = text_sub_full(habit_name)
         habit_mode = int(m.group('mode') or 0)
-        habit_delta = datetime.timedelta(days=float(m.group('t') or 30)) # days
-        habit_data = activity_list_habit_get_now(habit_name, delta=habit_delta, mode=habit_mode)
+        habit_max = int(m.group('max') or 0)
+        habit_delta = datetime.timedelta(
+            days=float(m.group('t') or 30))  # days
+        habit_data = activity_list_habit_get_now(
+            habit_name, delta=habit_delta, mode=habit_mode)
         out = f"{habit_name}\n\n{yaml.dump(habit_data)}"
         await edit(out)
+        ##
+        now = datetime.datetime.now()
+        # ~10 days left empty as a buffer
+        habit_delta = datetime.timedelta(days=355)
+        habit_data = activity_list_habit_get_now(
+            habit_name, delta=habit_delta, mode=habit_mode, fill_default=False)
+        img = z("gmktemp --suffix .png").outrs
+        resolution = 100
+        # * we can increase habit_max by 1.2 to be able to still show overwork, but perhaps each habit should that manually
+        # * calendarheatmap is designed to handle a single year. Using this `year=now.year` hack, we can render the previous year's progress as well. (Might get us into trouble after 366-day years, but probably not.)
+        plot_data = {str(k.replace(year=now.year)): int(
+            min(resolution, resolution * (v/habit_max))) for k, v in habit_data.items()}
+        plot_data_json = json.dumps(plot_data)
+        # await reply(plot_data_json)
+        res = z(
+            "calendarheatmap -maxcount {resolution} > {img}", cmd_stdin=plot_data_json)
+        if res:
+            await send_file(img)
+        else:
+            await reply(f"Creating heatmap failed with {res.retcode}:\n\n{z.outerr}")
         return out
 
     last_act = None
@@ -295,7 +356,8 @@ async def process_msg(m0):
     if m:
         if last_act != None:
             mins = float(m.group(1) or 20)
-            last_act.end -= datetime.timedelta(minutes=mins) # supports negative numbers, too ;D
+            # supports negative numbers, too ;D
+            last_act.end -= datetime.timedelta(minutes=mins)
             last_act.save()
             out = f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)"
             await edit(out)
@@ -318,13 +380,13 @@ async def process_msg(m0):
 
     if m0_text == '.':
         if last_act != None:
-            ## this design doesn't work too well with deleting records
+            # this design doesn't work too well with deleting records
             last_act.end = now
             out = f"{str(last_act)} (Updated)"
             await edit(out)
             last_act.save()
             return out
-            ## @alt:
+            # @alt:
             # m0_text = last_act.name
             # choiceConfirmed = True
             ##
@@ -351,10 +413,11 @@ async def process_msg(m0):
     act.save()
     return out
 
+
 def activity_list_to_str(delta=datetime.timedelta(hours=24)):
     now = datetime.datetime.today()
     low = now - delta
-    acts = Activity.select().where(Activity.start > low) # @alt .between(low, high)
+    acts = Activity.select().where(Activity.start > low)  # @alt .between(low, high)
     acts_agg = ActivityDuration("Total")
     for act in acts:
         act_name = act.name
@@ -362,34 +425,44 @@ def activity_list_to_str(delta=datetime.timedelta(hours=24)):
         act_end = act.end
         dur = relativedelta(act_end, act_start)
         acts_agg.add(dur, list(reversed(act_name.split('_'))))
-    # ("TOTAL", total_dur), 
-    res = f"```\nLast {str(delta)}; UNACCOUNTED {relativedelta_str(relativedelta(now, low + acts_agg.total_duration))}\n" # we need a monospace font to justify the columns
+    # ("TOTAL", total_dur),
+    # we need a monospace font to justify the columns
+    res = f"```\nLast {str(delta)}; UNACCOUNTED {relativedelta_str(relativedelta(now, low + acts_agg.total_duration))}\n"
     res += str(acts_agg)
     return res + "\n```"
 
-def activity_list_habit_get_now(name:str, delta=datetime.timedelta(days=30), mode=0):
+
+def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mode=0, fill_default=True):
     # _now means 'now' is 'high'
     high = datetime.datetime.today()
     low = high - delta
+
+    # aligns dates with real life, so that date changes happen at, e.g., 5 AM
+    night_passover = datetime.timedelta(hours=5)
+
     def which_bucket(act):
         if act.name == name or act.name.startswith(name + '_'):
-            return act.start.date()
+            return (act.start - night_passover).date()
         return None
 
-    buckets = activity_list_buckets_get(low, high, which_bucket=which_bucket, mode=mode)
+    buckets = activity_list_buckets_get(
+        low, high, which_bucket=which_bucket, mode=mode)
     if mode == 0:
-        buckets_dur = {k: round(relativedelta_total_seconds(v.total_duration) / 3600, 2) for k, v in buckets.items()}
+        buckets_dur = {k: round(relativedelta_total_seconds(
+            v.total_duration) / 3600, 2) for k, v in buckets.items()}
     elif mode == 1:
         buckets_dur = buckets
 
-    interval = datetime.timedelta(days=1)
-    while low <= high:
-        buckets_dur.setdefault(low.date(), 0)
-        low += interval
+    if fill_default:
+        interval = datetime.timedelta(days=1)
+        while low <= high:
+            buckets_dur.setdefault(low.date(), 0)
+            low += interval
 
     return buckets_dur
 
-def activity_list_buckets_get(low, high, which_bucket=(lambda act: act.start.date()), mode=0):
+
+def activity_list_buckets_get(low, high, which_bucket, mode=0):
     acts = Activity.select().where(Activity.start.between(low, high))
     buckets = {}
     for act in acts:
@@ -400,7 +473,7 @@ def activity_list_buckets_get(low, high, which_bucket=(lambda act: act.start.dat
             bucket = buckets.setdefault(bucket_key, ActivityDuration("Total"))
             dur = relativedelta(act.end, act.start)
             bucket.add(dur, list(reversed(act.name.split('_'))))
-        elif mode == 1: # count mode
+        elif mode == 1:  # count mode
             bucket = buckets.setdefault(bucket_key, 0)
             buckets[bucket_key] += 1
     return buckets
