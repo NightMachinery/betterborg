@@ -44,8 +44,13 @@ subs = {
     "dot": ".",
     # "res": "..out",
     # "out": "..out",
+    "🧫": "?",
+    ##
+    "😡": "wasted",
+    "wt": "wasted",
     "untracked": "consciously untracked",
     "unt": "consciously untracked",
+    ##
     "📖": "study",
     "s": "study",
     "sc": "chores_self_study", # study chores: e.g., choosing courses
@@ -64,19 +69,29 @@ subs = {
     "rizmo": "study_math_engineering math",
     "emv": "study_math_engineering math_video",
     "rizmov": "study_math_engineering math_video",
-    "his": "study_history_history of mathematics",
-    "hisv": "study_history_history of mathematics_video",
+    "fin": "study_economics_finance",
+    "finv": "study_economics_finance_video",
+    # "his": "study_history_history of mathematics",
+    # "hisv": "study_history_history of mathematics_video",
     "ai": "study_cs_ai",
     "aiv": "study_cs_ai_video",
     ##
+    "💻": "sa",
+    "system": "sa",
+    "system administration": "sa",
+    "sac": "chores_self_sa",
+    "dev": "sa_development",
+    "_": "sa_development_testing_manual",
+    "this": "sa_development_quantified self_timetracker",
+    "doc": "sa_product_documentation",
+    "eval": "sa_product_evaluation",
+    ##
+    "🐑": "chores",
+    "ch": "chores",
+    "cho": "chores_others",
     "exercise": "chores_self_health_exercise",
     "🏃🏽‍♀️": "chores_self_health_exercise",
     "e": "chores_self_health_exercise",
-    "🧫": "?",
-    "💻": "sa", # System Administration
-    "system": "sa",
-    "system administration": "sa",
-    "this": "sa_quantified self_timetracker",
     "r": "chores_self_rest",
     "rest": "chores_self_rest",
     "🍽": "chores_self_rest_eat",
@@ -91,6 +106,7 @@ subs = {
     "ba": "chores_self_hygiene_bath",
     "sl": "sleep", # putting this under chores will just make using the data harder, no?
     "💤": "sleep",
+    ##
     "👥": "social",
     "soc": "social",
     "tlg": "social_online",
@@ -98,6 +114,7 @@ subs = {
     "fam": "social_family",
     "family others": "social_family_others",
     "famo": "social_family_others",
+    ###
     "🎪": "entertainment",
     "fun": "entertainment",
     "game": "entertainment_video games",
@@ -108,29 +125,34 @@ subs = {
     "anime": "entertainment_watch_anime",
     "anime movies": "entertainment_watch_anime_movies",
     "series": "entertainment_watch_series",
-    "😡": "wasted",
-    "wt": "wasted",
-    "nf": "nonfiction",
-    "technical": "nonfiction_technical",
-    "nft": "nonfiction_technical",
+    ##
     "fiction": "entertainment_fiction",
     "fi": "entertainment_fiction",
     "classics": "entertainment_fiction_classics",
     "fanfic": "entertainment_fiction_fanfiction",
     "fanfiction": "entertainment_fiction_fanfiction",
     "fic": "entertainment_fiction_fanfiction",
+    ###
+    "nf": "nonfiction_reading",
+    "technical": "nonfiction_technical_reading",
+    "nft": "nonfiction_technical_reading",
+    ##
+    "docu": "nonfiction_watch_documentaries",
+    "lec": "nonfiction_technical_watch_lectures",
+    "talk": "nonfiction_watch_talks",
+    ###
     "meditation": "meditation_serene",
     "med": "meditation_serene",
     "thinking": "meditation_thinking",
     "th": "meditation_thinking",
+    ##
     "go": "going out",
-    "🐑": "chores",
-    "ch": "chores",
-    "cho": "chores_others",
+    ##
     "expl": "exploration",
     "🌐": "exploration_targetedLearning",
     "tl": "exploration_targetedLearning",
     "gath": "exploration_gathering"
+    ##
     }
 
 ##
