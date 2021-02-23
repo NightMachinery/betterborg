@@ -64,6 +64,10 @@ subs_commands = {
 subs = {
     "😡": "wasted",
     "wt": "wasted",
+    "wtg": "wasted_exploration_gathering",
+    "wtgh": "wasted_exploration_github",
+    "nos": "wasted_exploration_gathering_nostalgia",
+    "worry": "wasted_thinking_worrying",
     "news": "wasted_news",
     ##
     "untracked": "consciously untracked",
@@ -252,6 +256,12 @@ async def process_msg(m0):
         if text in subs_commands:
             choiceConfirmed = True
             text = subs_commands[text]
+        if not choiceConfirmed and not text.startswith("."):
+            tokens = list(text.split('_'))
+            if len(tokens) > 1:
+                tokens[0] = text_sub_full(tokens[0])
+                choiceConfirmed = True
+                text = '_'.join(tokens)
         return text
 
     def text_sub_finalize(text):
@@ -315,7 +325,9 @@ async def process_msg(m0):
 
     m = out_pat.match(m0_text)
     if m:
-        out = f"{activity_list_to_str(delta=datetime.timedelta(hours=float(m.group(1) or 24)))}"
+        hours = m.group(1) or 24
+        # @todo1 if hours not supplied, get 5 AM to now
+        out = f"{activity_list_to_str(delta=datetime.timedelta(hours=float(hours)))}"
         await edit(f"{out}", parse_mode="markdown")
         return out
 
@@ -398,6 +410,11 @@ async def process_msg(m0):
         else:
             await warn_empty()
             return
+
+    if m0_text == '..':
+        out = z('borg-tt-last').outerr
+        await edit(out)
+        return out
 
     m0_text = text_sub_finalize(m0_text)
 
