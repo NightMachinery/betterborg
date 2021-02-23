@@ -55,6 +55,7 @@ subs_commands = {
     "/br": ".habit 7 m=1 max=3 brush",
     "/dummy": ".habit 7 m=0 max=10 .dummy",
     "/s": ".habit 7 m=0 max=9 study",
+    "/sa": ".habit 7 m=0 max=9 sa",
     "/sl": ".habit 7 m=0 max=12 sleep",
     "/e": ".habit 7 m=0 max=2 exercise",
     "/w": ".habit 7 m=0 max=12 wasted",
@@ -63,6 +64,8 @@ subs_commands = {
 subs = {
     "😡": "wasted",
     "wt": "wasted",
+    "news": "wasted_news",
+    ##
     "untracked": "consciously untracked",
     "unt": "consciously untracked",
     ##
@@ -268,7 +271,9 @@ async def process_msg(m0):
         return res
 
     m0_text = text_sub(m0.text)
-    if m0_text.startswith('#'):  # comments :D
+    print(f"TT got (raw): {repr(m0.text)}")
+    # print(f"TT got: {repr(m0_text)}")
+    if not m0_text or m0_text.startswith('#') or m0_text.isspace():  # comments :D
         return "comment"
     elif m0_text == 'man':
         out = yaml.dump(subs)
@@ -328,20 +333,20 @@ async def process_msg(m0):
         await edit(out)
         ##
         now = datetime.datetime.now()
-        # ~10 days left empty as a buffer
-        habit_delta = datetime.timedelta(days=355)
+        # ~1 day(s) left empty as a buffer
+        habit_delta = datetime.timedelta(days=364)
         habit_data = activity_list_habit_get_now(
             habit_name, delta=habit_delta, mode=habit_mode, fill_default=False)
         img = z("gmktemp --suffix .png").outrs
         resolution = 100
         # * we can increase habit_max by 1.2 to be able to still show overwork, but perhaps each habit should that manually
         # * calendarheatmap is designed to handle a single year. Using this `year=now.year` hack, we can render the previous year's progress as well. (Might get us into trouble after 366-day years, but probably not.)
-        plot_data = {str(k.replace(year=now.year)): int(
+        plot_data = {str(k.replace(year=now.year)): (1 if k.year == now.year else -1) * int(
             min(resolution, resolution * (v/habit_max))) for k, v in habit_data.items()}
         plot_data_json = json.dumps(plot_data)
         # await reply(plot_data_json)
         res = z(
-            "calendarheatmap -maxcount {resolution} > {img}", cmd_stdin=plot_data_json)
+            "calendarheatmap -maxcount {resolution} -colorscale BuGn_9 -colorscalealt Blues_9 -highlight-today '#00ff9d' > {img}", cmd_stdin=plot_data_json)
         if res:
             await send_file(img)
         else:
