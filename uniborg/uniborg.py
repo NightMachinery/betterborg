@@ -5,6 +5,7 @@ import asyncio
 import importlib.util
 import logging
 from pathlib import Path
+import traceback
 
 from telethon import TelegramClient
 import telethon.utils
@@ -16,6 +17,8 @@ from . import hacks
 
 
 class Uniborg(TelegramClient):
+    log_chat = -1001179162919 # alicization
+
     @classmethod
     async def create(
             cls, session, *, plugin_path="plugins", storage=None,
@@ -60,7 +63,7 @@ class Uniborg(TelegramClient):
 
     def load_plugin_from_file(self, path):
         path = Path(path)
-        shortname = path.stem
+        shortname = path.stem # removes extension and dirname
         name = f"_UniborgPlugins.{self._name}.{shortname}"
 
         spec = importlib.util.spec_from_file_location(name, path)
@@ -84,6 +87,23 @@ class Uniborg(TelegramClient):
 
         del self._plugins[shortname]
         self._logger.info(f"Removed plugin {shortname}")
+
+    async def reload_plugin(self, shortname: str, chat = None):
+        chat = chat or self.log_chat
+        path = Path(shortname)
+        if path.is_file():
+            shortname = path.stem
+        try:
+            if shortname in self._plugins:
+                self.remove_plugin(shortname)
+            self.load_plugin(shortname)
+
+            await self.send_message(chat,
+                f"Successfully (re)loaded plugin {shortname}")
+        except Exception as e:
+            tb = traceback.format_exc()
+            logger.warn(f"Failed to (re)load plugin {shortname}: {tb}")
+            await self.send_message(chat, f"Failed to (re)load plugin {shortname}: {e}")
 
     def await_event(self, event_matcher, filter=None):
         fut = asyncio.Future()

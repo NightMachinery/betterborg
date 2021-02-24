@@ -30,4 +30,8 @@ fuzzywuzzy[speedup]
 rapidfuzz
 fuzzyset
 
+watchgod
+
+# junk deps:
 jsonpickle
+

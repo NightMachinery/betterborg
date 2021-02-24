@@ -287,7 +287,7 @@ async def process_msg(m0):
     if not m0.text or m0.text.startswith('#') or m0.text.isspace():  # comments :D
         return "comment"
     elif m0_text == 'man':
-        out = yaml.dump(subs)
+        out = yaml.dump(subs_commands) + '\n' + yaml.dump(subs)
         await edit(out)
         return out
 
@@ -326,9 +326,14 @@ async def process_msg(m0):
 
     m = out_pat.match(m0_text)
     if m:
-        hours = m.group(1) or 24
-        # @todo1 if hours not supplied, get 5 AM to now
-        out = f"{activity_list_to_str(delta=datetime.timedelta(hours=float(hours)))}"
+        hours = m.group(1)
+        if hours:
+            out = activity_list_to_str_now(delta=datetime.timedelta(hours=float(hours)))
+        else:
+            low = now.replace(hour=5, minute=0, second=0)
+            if low > now:
+                low = low - datetime.timedelta(days=1)
+            out = activity_list_to_str(low, now)
         await edit(f"{out}", parse_mode="markdown")
         return out
 
@@ -343,6 +348,12 @@ async def process_msg(m0):
         habit_data = activity_list_habit_get_now(
             habit_name, delta=habit_delta, mode=habit_mode)
         out = f"{habit_name}\n\n{yaml.dump(habit_data)}"
+        habit_data.pop(now.date(), None)
+        def mean(numbers):
+            numbers = list(numbers)
+            return float(sum(numbers)) / max(len(numbers), 1)
+        average = mean(v for k, v in habit_data.items())
+        out += f"\n\naverage: {round(average, 1)}"
         await edit(out)
         ##
         now = datetime.datetime.now()
@@ -413,6 +424,7 @@ async def process_msg(m0):
             return
 
     if m0_text == '..':
+        # @perf @todo2 this is slow, do it natively
         out = z('borg-tt-last').outerr
         await edit(out)
         return out
@@ -437,20 +449,23 @@ async def process_msg(m0):
     return out
 
 
-def activity_list_to_str(delta=datetime.timedelta(hours=24)):
+def activity_list_to_str_now(delta=datetime.timedelta(hours=24)):
     now = datetime.datetime.today()
     low = now - delta
-    acts = Activity.select().where(Activity.start > low)  # @alt .between(low, high)
+    return activity_list_to_str(low,now)
+
+def activity_list_to_str(low, high):
+    acts = Activity.select().where((Activity.start.between(low, high)) | (Activity.end.between(low, high)))
     acts_agg = ActivityDuration("Total")
     for act in acts:
         act_name = act.name
-        act_start = act.start
-        act_end = act.end
+        act_start = max(act.start, low)
+        act_end = min(act.end, high)
         dur = relativedelta(act_end, act_start)
         acts_agg.add(dur, list(reversed(act_name.split('_'))))
     # ("TOTAL", total_dur),
     # we need a monospace font to justify the columns
-    res = f"```\nLast {str(delta)}; UNACCOUNTED {relativedelta_str(relativedelta(now, low + acts_agg.total_duration))}\n"
+    res = f"```\nSpanning {str(high - low)}; UNACCOUNTED {relativedelta_str(relativedelta(high, low + acts_agg.total_duration))}\n"
     res += str(acts_agg)
     return res + "\n```"
 

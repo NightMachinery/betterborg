@@ -8,6 +8,7 @@ import os
 import sys
 import socks
 from uniborg import Uniborg
+from watchgod import awatch, Change
 
 borg: Uniborg = None
 
@@ -25,10 +26,19 @@ async def borg_init(background_mode=True):
     borg = await Uniborg.create(session, plugin_path=plugin_path,
                 connection_retries=None, proxy=proxy)
     print("Borg created!")
+
+    async def watch_plugins():
+        async for changes in awatch(plugin_path, normal_sleep=5000):
+            for change_type, path in changes:
+                if change_type == Change.modified or change_type == Change.added:
+                    await borg.reload_plugin(path)
+    
+    coroutines = [borg.run_until_disconnected(), watch_plugins()]
     if background_mode:
-        asyncio.create_task(borg.run_until_disconnected())
+        for c in coroutines:
+            asyncio.create_task(c)
     else:
-        await borg.run_until_disconnected() # blocks until disconnection
+        await asyncio.gather(*coroutines) # blocks until disconnection
 
 if __name__ == '__main__': # stdborg.py is runnable without the FastAPI components
     asyncio.run(borg_init(background_mode=False))

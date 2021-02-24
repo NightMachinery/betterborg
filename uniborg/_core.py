@@ -17,22 +17,7 @@ async def load_reload(event):
         return
     # await event.delete()
     shortname = event.pattern_match["shortname"]
-
-    try:
-        if shortname in borg._plugins:
-            borg.remove_plugin(shortname)
-        borg.load_plugin(shortname)
-
-        msg = await event.respond(
-            f"Successfully (re)loaded plugin {shortname}")
-        # await asyncio.sleep(DELETE_TIMEOUT)
-        # await borg.delete_messages(msg.to_id, msg)
-
-    except Exception as e:
-        tb = traceback.format_exc()
-        logger.warn(f"Failed to (re)load plugin {shortname}: {tb}")
-        await event.respond(f"Failed to (re)load plugin {shortname}: {e}")
-
+    await borg.reload_plugin(shortname, event.chat_id)
 
 @borg.on(util.admin_cmd(r"^\.(?:unload|remove) (?P<shortname>\w+)$"))
 async def remove(event):
