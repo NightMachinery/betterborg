@@ -68,6 +68,7 @@ subs = {
     "wtgh": "wasted_exploration_github",
     "nos": "wasted_exploration_gathering_nostalgia",
     "worry": "wasted_thinking_worrying",
+    "fantasy": "wasted_thinking_fantasy",
     "news": "wasted_news",
     ##
     "untracked": "consciously untracked",
@@ -283,7 +284,7 @@ async def process_msg(m0):
     m0_text = text_sub(m0.text)
     print(f"TT got (raw): {repr(m0.text)}")
     # print(f"TT got: {repr(m0_text)}")
-    if not m0_text or m0_text.startswith('#') or m0_text.isspace():  # comments :D
+    if not m0.text or m0.text.startswith('#') or m0.text.isspace():  # comments :D
         return "comment"
     elif m0_text == 'man':
         out = yaml.dump(subs)
