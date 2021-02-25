@@ -90,6 +90,7 @@ class Uniborg(TelegramClient):
 
     async def reload_plugin(self, shortname: str, chat = None):
         chat = chat or self.log_chat
+        logger = self._logger
         path = Path(shortname)
         if path.is_file():
             shortname = path.stem

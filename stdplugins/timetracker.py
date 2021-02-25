@@ -105,7 +105,7 @@ subs = {
     "sac": "chores_self_sa",
     "sax": "exploration_sa",
     "dev": "sa_development",
-    "_": "sa_development_testing_manual",
+    "testman": "sa_development_testing_manual",
     "this": "sa_development_quantified self_timetracker",
     "doc": "sa_product_documentation",
     "eval": "sa_product_evaluation",
@@ -144,6 +144,7 @@ subs = {
     "🎪": "entertainment",
     "fun": "entertainment",
     "game": "entertainment_video games",
+    "music": "entertainment_listen_music",
     "vg": "entertainment_video games",
     "coop": "entertainment_video games_coop",
     "wa": "entertainment_watch",
@@ -177,7 +178,8 @@ subs = {
     "expl": "exploration",
     "🌐": "exploration_targetedLearning",
     "tl": "exploration_targetedLearning",
-    "gath": "exploration_gathering"
+    "gath": "exploration_gathering",
+    "gathmusic": "exploration_gathering_music"
     ##
 }
 
