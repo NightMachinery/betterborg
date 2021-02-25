@@ -138,6 +138,8 @@ subs = {
     "tlg": "social_online",
     "family": "social_family",
     "fam": "social_family",
+    "famfin": "social_family_finance",
+    "bills": "social_family_finance_bills",
     "family others": "social_family_others",
     "famo": "social_family_others",
     ###
