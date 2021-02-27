@@ -64,7 +64,7 @@ subs_commands = {
 subs = {
     "😡": "wasted",
     "wt": "wasted",
-    "t3": "dummy",
+    # "t3": "dummy",
     "wtg": "wasted_exploration_gathering",
     "wtgh": "wasted_exploration_github",
     "nos": "wasted_exploration_gathering_nostalgia",
