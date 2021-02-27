@@ -70,9 +70,14 @@ subs = {
     "worry": "wasted_thinking_worrying",
     "fantasy": "wasted_thinking_fantasy",
     "news": "wasted_news",
+    "wtso": "wasted_social_online",
+    "wtf": "wasted_social_online_forums",
+    "hn": "wasted_news_hackernews",
     ##
     "untracked": "consciously untracked",
     "unt": "consciously untracked",
+    "idk": "consciously untracked_idk",
+    "mixed": "consciously untracked_mixed",
     ##
     "📖": "study",
     "s": "study",
@@ -103,8 +108,10 @@ subs = {
     "system": "sa",
     "system administration": "sa",
     "sac": "chores_self_sa",
+    "sacgh": "chores_self_sa_github",
     "sax": "exploration_sa",
     "dev": "sa_development",
+    "siri": "sa_development_siri",
     "testman": "sa_development_testing_manual",
     "this": "sa_development_quantified self_timetracker",
     "doc": "sa_product_documentation",
@@ -285,9 +292,10 @@ async def process_msg(m0):
         choiceConfirmed = tmp
         return res
 
-    m0_text = text_sub(m0.text)
-    print(f"TT got (raw): {repr(m0.text)}")
-    # print(f"TT got: {repr(m0_text)}")
+    m0_text_raw = m0.text
+    m0_text_raw = z('per2en', cmd_stdin=m0_text_raw).outrs
+    m0_text = text_sub(m0_text_raw)
+    print(f"TT got: {repr(m0.text)} -> {repr(m0_text)}")
     if not m0.text or m0.text.startswith('#') or m0.text.isspace():  # comments :D
         return "comment"
     elif m0_text == 'man':
