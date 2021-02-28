@@ -1,4 +1,5 @@
 from telethon import events
+import traceback
 import datetime
 from dateutil.relativedelta import relativedelta
 from pathlib import Path
@@ -38,6 +39,12 @@ class Activity(BaseModel):
         dur = relativedelta(self.end, self.start)
         return f"""{self.name} {relativedelta_str(dur)}"""
 
+## indexes: add manually via Datagrip (right-click on table, modify table)? https://github.com/coleifer/peewee/issues/2360
+# create index activity_end_index
+#     on activity (end desc);
+# create index activity_start_end_index
+#     on activity (start desc, end desc);
+##
 
 db.connect()  # @todo? db.close()
 db.create_tables([Activity])
@@ -64,6 +71,7 @@ subs_commands = {
 subs = {
     "😡": "wasted",
     "wt": "wasted",
+    "tired": "wasted_tired",
     # "t3": "dummy",
     "wtg": "wasted_exploration_gathering",
     "wtgh": "wasted_exploration_github",
@@ -241,7 +249,10 @@ async def process(event):
     await process_msg(m0)
 
 
-async def process_msg(m0):
+async def reload_tt():
+    await borg.reload_plugin("timetracker")
+
+async def process_msg(m0, reload_on_failure=True):
     global starting_anchor
 
     async def edit(text: str, **kwargs):
@@ -293,174 +304,189 @@ async def process_msg(m0):
         choiceConfirmed = tmp
         return res
 
-    m0_text_raw = m0.text
-    m0_text_raw = z('per2en', cmd_stdin=m0_text_raw).outrs
-    m0_text = text_sub(m0_text_raw)
-    print(f"TT got: {repr(m0.text)} -> {repr(m0_text)}")
-    if not m0.text or m0.text.startswith('#') or m0.text.isspace():  # comments :D
-        return "comment"
-    elif m0_text == 'man':
-        out = yaml.dump(subs_commands) + '\n' + yaml.dump(subs)
-        await edit(out)
-        return out
+    try:
+            m0_text_raw = m0.text
+            m0_text_raw = z('per2en', cmd_stdin=m0_text_raw).outrs
+            m0_text = text_sub(m0_text_raw)
+            print(f"TT got: {repr(m0.text)} -> {repr(m0_text)}")
+            if not m0.text or m0.text.startswith('#') or m0.text.isspace():  # comments :D
+                return "comment"
+            elif m0_text == 'man':
+                out = yaml.dump(subs_commands) + '\n' + yaml.dump(subs)
+                await edit(out)
+                return out
+            elif m0_text == '.l':
+                await reload_tt()
+                return "reloaded"
+            elif m0_text == '.error':
+                raise Exception(".error invoked")
+                return ".error"
 
-    now = datetime.datetime.today()
-    last_act_query = Activity.select().order_by(Activity.end.desc())
+            now = datetime.datetime.today()
+            last_act_query = Activity.select().order_by(Activity.end.desc())
 
-    m = del_pat.match(m0_text)
-    if m:
-        del_count = 0
-        if m.group(1):
-            del_count = Activity.delete().where(Activity.end > (
-                now - datetime.timedelta(minutes=float(m.group(1) or 5)))).execute()
-        elif last_act_query.exists():
-            del_count = last_act_query.get().delete_instance()
-        out = f"Deleted the last {del_count} activities"
-        await edit(out)
-        return out
+            m = del_pat.match(m0_text)
+            if m:
+                del_count = 0
+                if m.group(1):
+                    del_count = Activity.delete().where(Activity.end > (
+                        now - datetime.timedelta(minutes=float(m.group(1) or 5)))).execute()
+                elif last_act_query.exists():
+                    del_count = last_act_query.get().delete_instance()
+                out = f"Deleted the last {del_count} activities"
+                await edit(out)
+                return out
 
-    if m0_text == "w":
-        starting_anchor = now
-        out = "Anchored"
-        await edit(out)
-        return out
+            if m0_text == "w":
+                starting_anchor = now
+                out = "Anchored"
+                await edit(out)
+                return out
 
-    if m0_text == 'debugme':
-        Activity.delete().where(Activity.name == 'dummy').execute()
-        Activity(name="dummy", start=(now - datetime.timedelta(days=6*30,
-                                                               hours=7)), end=(now - datetime.timedelta(days=6*30))).save()
-        Activity(name="dummy", start=(now - datetime.timedelta(days=1*30,
-                                                               hours=3)), end=(now - datetime.timedelta(days=1*30))).save()
-        Activity(name="dummy", start=(now - datetime.timedelta(days=10*30,
-                                                               hours=10)), end=(now - datetime.timedelta(days=10*30))).save()
-        out = "DEBUG COMMAND"
-        await edit(out)
-        return out
+            if m0_text == 'debugme':
+                Activity.delete().where(Activity.name == 'dummy').execute()
+                Activity(name="dummy", start=(now - datetime.timedelta(days=6*30,
+                                                                    hours=7)), end=(now - datetime.timedelta(days=6*30))).save()
+                Activity(name="dummy", start=(now - datetime.timedelta(days=1*30,
+                                                                    hours=3)), end=(now - datetime.timedelta(days=1*30))).save()
+                Activity(name="dummy", start=(now - datetime.timedelta(days=10*30,
+                                                                    hours=10)), end=(now - datetime.timedelta(days=10*30))).save()
+                out = "DEBUG COMMAND"
+                await edit(out)
+                return out
 
-    m = out_pat.match(m0_text)
-    if m:
-        hours = m.group(1)
-        if hours:
-            out = activity_list_to_str_now(delta=datetime.timedelta(hours=float(hours)))
-        else:
-            low = now.replace(hour=5, minute=0, second=0)
-            if low > now:
-                low = low - datetime.timedelta(days=1)
-            out = activity_list_to_str(low, now)
-        await edit(f"{out}", parse_mode="markdown")
-        return out
+            m = out_pat.match(m0_text)
+            if m:
+                hours = m.group(1)
+                if hours:
+                    out = activity_list_to_str_now(delta=datetime.timedelta(hours=float(hours)))
+                else:
+                    low = now.replace(hour=5, minute=0, second=0)
+                    if low > now:
+                        low = low - datetime.timedelta(days=1)
+                    out = activity_list_to_str(low, now)
+                await edit(f"{out}", parse_mode="markdown")
+                return out
 
-    m = habit_pat.match(m0_text)
-    if m:
-        habit_name = m.group('name')
-        habit_name = text_sub_full(habit_name)
-        habit_mode = int(m.group('mode') or 0)
-        habit_max = int(m.group('max') or 0)
-        habit_delta = datetime.timedelta(
-            days=float(m.group('t') or 30))  # days
-        habit_data = activity_list_habit_get_now(
-            habit_name, delta=habit_delta, mode=habit_mode)
-        out = f"{habit_name}\n\n{yaml.dump(habit_data)}"
-        habit_data.pop(now.date(), None)
-        def mean(numbers):
-            numbers = list(numbers)
-            return float(sum(numbers)) / max(len(numbers), 1)
-        average = mean(v for k, v in habit_data.items())
-        out += f"\n\naverage: {round(average, 1)}"
-        await edit(out)
-        ##
-        now = datetime.datetime.now()
-        # ~1 day(s) left empty as a buffer
-        habit_delta = datetime.timedelta(days=364)
-        habit_data = activity_list_habit_get_now(
-            habit_name, delta=habit_delta, mode=habit_mode, fill_default=False)
-        img = z("gmktemp --suffix .png").outrs
-        resolution = 100
-        # * we can increase habit_max by 1.2 to be able to still show overwork, but perhaps each habit should that manually
-        # * calendarheatmap is designed to handle a single year. Using this `year=now.year` hack, we can render the previous year's progress as well. (Might get us into trouble after 366-day years, but probably not.)
-        plot_data = {str(k.replace(year=now.year)): (1 if k.year == now.year else -1) * int(
-            min(resolution, resolution * (v/habit_max))) for k, v in habit_data.items()}
-        plot_data_json = json.dumps(plot_data)
-        # await reply(plot_data_json)
-        res = z(
-            "calendarheatmap -maxcount {resolution} -colorscale BuGn_9 -colorscalealt Blues_9 -highlight-today '#00ff9d' > {img}", cmd_stdin=plot_data_json)
-        if res:
-            await send_file(img)
-        else:
-            await reply(f"Creating heatmap failed with {res.retcode}:\n\n{z.outerr}")
-        return out
+            m = habit_pat.match(m0_text)
+            if m:
+                habit_name = m.group('name')
+                habit_name = text_sub_full(habit_name)
+                habit_mode = int(m.group('mode') or 0)
+                habit_max = int(m.group('max') or 0)
+                habit_delta = datetime.timedelta(
+                    days=float(m.group('t') or 30))  # days
+                habit_data = activity_list_habit_get_now(
+                    habit_name, delta=habit_delta, mode=habit_mode)
+                out = f"{habit_name}\n\n{yaml.dump(habit_data)}"
+                habit_data.pop(now.date(), None)
+                def mean(numbers):
+                    numbers = list(numbers)
+                    return float(sum(numbers)) / max(len(numbers), 1)
+                average = mean(v for k, v in habit_data.items())
+                out += f"\n\naverage: {round(average, 1)}"
+                await edit(out)
+                ##
+                now = datetime.datetime.now()
+                # ~1 day(s) left empty as a buffer
+                habit_delta = datetime.timedelta(days=364)
+                habit_data = activity_list_habit_get_now(
+                    habit_name, delta=habit_delta, mode=habit_mode, fill_default=False)
+                img = z("gmktemp --suffix .png").outrs
+                resolution = 100
+                # * we can increase habit_max by 1.2 to be able to still show overwork, but perhaps each habit should that manually
+                # * calendarheatmap is designed to handle a single year. Using this `year=now.year` hack, we can render the previous year's progress as well. (Might get us into trouble after 366-day years, but probably not.)
+                plot_data = {str(k.replace(year=now.year)): (1 if k.year == now.year else -1) * int(
+                    min(resolution, resolution * (v/habit_max))) for k, v in habit_data.items()}
+                plot_data_json = json.dumps(plot_data)
+                # await reply(plot_data_json)
+                res = z(
+                    "calendarheatmap -maxcount {resolution} -colorscale BuGn_9 -colorscalealt Blues_9 -highlight-today '#00ff9d' > {img}", cmd_stdin=plot_data_json)
+                if res:
+                    await send_file(img)
+                else:
+                    await reply(f"Creating heatmap failed with {res.retcode}:\n\n{z.outerr}")
+                return out
 
-    last_act = None
-    if last_act_query.exists():
-        last_act = last_act_query.get()
+            last_act = None
+            if last_act_query.exists():
+                last_act = last_act_query.get()
 
-    m = back_pat.match(m0_text)
-    if m:
-        if last_act != None:
-            mins = float(m.group(1) or 20)
-            # supports negative numbers, too ;D
-            last_act.end -= datetime.timedelta(minutes=mins)
-            last_act.save()
-            out = f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)"
+            m = back_pat.match(m0_text)
+            if m:
+                if last_act != None:
+                    mins = float(m.group(1) or 20)
+                    # supports negative numbers, too ;D
+                    last_act.end -= datetime.timedelta(minutes=mins)
+                    last_act.save()
+                    out = f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)"
+                    await edit(out)
+                    return out
+                else:
+                    await warn_empty()
+                    return
+
+            m = rename_pat.match(m0_text)
+            if m:
+                if last_act != None:
+                    last_act.name = text_sub(m.group(1))
+                    last_act.save()
+                    out = f"{str(last_act)} (Renamed)"
+                    await edit(out)
+                    return out
+                else:
+                    await warn_empty()
+                    return
+
+            if m0_text == '.':
+                if last_act != None:
+                    # this design doesn't work too well with deleting records
+                    last_act.end = now
+                    out = f"{str(last_act)} (Updated)"
+                    await edit(out)
+                    last_act.save()
+                    return out
+                    # @alt:
+                    # m0_text = last_act.name
+                    # choiceConfirmed = True
+                    ##
+                else:
+                    await warn_empty()
+                    return
+
+            if m0_text == '..':
+                # @perf @todo2 this is slow, do it natively
+                out = z('borg-tt-last').outerr
+                await edit(out)
+                return out
+
+            m0_text = text_sub_finalize(m0_text)
+
+            start: datetime.datetime
+            if starting_anchor == None:
+                if last_act == None:
+                    await m0.reply("The database is empty and also has no starting anchor. Create an anchor by sending 'w'.")
+                    return
+                else:
+                    start = last_act.end
+            else:
+                start = starting_anchor
+                starting_anchor = None
+
+            act = Activity(name=m0_text, start=start, end=now)
+            out = str(act)
             await edit(out)
+            act.save()
             return out
+    except:
+        out = "Julia encountered an exception. :(\n" + traceback.format_exc()
+        if reload_on_failure:
+            await reply(out + "\n\nReloading ...")
+            await reload_tt()
+            return await borg._plugins["timetracker"].process_msg(m0, reload_on_failure=False)
         else:
-            await warn_empty()
-            return
-
-    m = rename_pat.match(m0_text)
-    if m:
-        if last_act != None:
-            last_act.name = text_sub(m.group(1))
-            last_act.save()
-            out = f"{str(last_act)} (Renamed)"
-            await edit(out)
+            await reply(out)
             return out
-        else:
-            await warn_empty()
-            return
-
-    if m0_text == '.':
-        if last_act != None:
-            # this design doesn't work too well with deleting records
-            last_act.end = now
-            out = f"{str(last_act)} (Updated)"
-            await edit(out)
-            last_act.save()
-            return out
-            # @alt:
-            # m0_text = last_act.name
-            # choiceConfirmed = True
-            ##
-        else:
-            await warn_empty()
-            return
-
-    if m0_text == '..':
-        # @perf @todo2 this is slow, do it natively
-        out = z('borg-tt-last').outerr
-        await edit(out)
-        return out
-
-    m0_text = text_sub_finalize(m0_text)
-
-    start: datetime.datetime
-    if starting_anchor == None:
-        if last_act == None:
-            await m0.reply("The database is empty and also has no starting anchor. Create an anchor by sending 'w'.")
-            return
-        else:
-            start = last_act.end
-    else:
-        start = starting_anchor
-        starting_anchor = None
-
-    act = Activity(name=m0_text, start=start, end=now)
-    out = str(act)
-    await edit(out)
-    act.save()
-    return out
-
 
 def activity_list_to_str_now(delta=datetime.timedelta(hours=24)):
     now = datetime.datetime.today()
@@ -514,7 +540,7 @@ def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mo
 
 
 def activity_list_buckets_get(low, high, which_bucket, mode=0):
-    acts = Activity.select().where(Activity.start.between(low, high))
+    acts = Activity.select().where(Activity.start.between(low, high)) # adding the name query here will increase performance. (Currently done in which_bucket.)
     buckets = {}
     for act in acts:
         bucket_key = which_bucket(act)
