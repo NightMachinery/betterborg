@@ -39,7 +39,7 @@ class Activity(BaseModel):
         dur = relativedelta(self.end, self.start)
         return f"""{self.name} {relativedelta_str(dur)}"""
 
-## indexes: add manually via Datagrip (right-click on table, modify table)? https://github.com/coleifer/peewee/issues/2360
+## indexes: add manually via Datagrip (right-click on table, modify table)(adding it via peewee is not necesseray https://github.com/coleifer/peewee/issues/2360 )
 # create index activity_end_index
 #     on activity (end desc);
 # create index activity_start_end_index
@@ -252,7 +252,12 @@ async def process(event):
 async def reload_tt():
     await borg.reload_plugin("timetracker")
 
-async def process_msg(m0, reload_on_failure=True):
+
+async def process_msg(*args, **kwargs):
+    async with lock_tt:
+        await _process_msg(*args, **kwargs)
+
+async def _process_msg(m0, reload_on_failure=True):
     global starting_anchor
 
     async def edit(text: str, **kwargs):
@@ -483,7 +488,7 @@ async def process_msg(m0, reload_on_failure=True):
         if reload_on_failure:
             await reply(out + "\n\nReloading ...")
             await reload_tt()
-            return await borg._plugins["timetracker"].process_msg(m0, reload_on_failure=False)
+            return await borg._plugins["timetracker"]._process_msg(m0, reload_on_failure=False)
         else:
             await reply(out)
             return out
