@@ -120,6 +120,7 @@ subs = {
     "sacgh": "chores_self_sa_github",
     "sax": "exploration_sa",
     "dev": "sa_development",
+    "sat": "sa_thinking & design",
     "siri": "sa_development_siri",
     "testman": "sa_development_testing_manual",
     "this": "sa_development_quantified self_timetracker",
@@ -246,7 +247,7 @@ habit_pat = re.compile(
 @borg.on(events.NewMessage(chats=[timetracker_chat], forwards=False))
 async def process(event):
     m0 = event.message
-    await process_msg(m0)
+    return await process_msg(m0)
 
 
 async def reload_tt():
@@ -255,7 +256,7 @@ async def reload_tt():
 
 async def process_msg(*args, **kwargs):
     async with lock_tt:
-        await _process_msg(*args, **kwargs)
+        return await _process_msg(*args, **kwargs)
 
 async def _process_msg(m0, reload_on_failure=True):
     global starting_anchor
@@ -447,9 +448,9 @@ async def _process_msg(m0, reload_on_failure=True):
                 if last_act != None:
                     # this design doesn't work too well with deleting records
                     last_act.end = now
+                    last_act.save()
                     out = f"{str(last_act)} (Updated)"
                     await edit(out)
-                    last_act.save()
                     return out
                     # @alt:
                     # m0_text = last_act.name
@@ -479,9 +480,9 @@ async def _process_msg(m0, reload_on_failure=True):
                 starting_anchor = None
 
             act = Activity(name=m0_text, start=start, end=now)
+            act.save()
             out = str(act)
             await edit(out)
-            act.save()
             return out
     except:
         out = "Julia encountered an exception. :(\n" + traceback.format_exc()
