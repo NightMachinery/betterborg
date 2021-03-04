@@ -50,16 +50,16 @@ class Uniborg(TelegramClient):
             except:
                 pass
         try:
-            self.log_chat = self.get_input_entity(self.log_chat)
+            self.log_chat = await self.get_input_entity(self.log_chat)
         except:
             if await self.is_bot():
                 print(f"Borg needs a log chat to send some log messages to. Since this is a bot, you need to explicitly set this, or you won't receive these messages.")
                 try:
-                    self.log_chat = self.get_input_entity('Arstar')
+                    self.log_chat = await self.get_input_entity('Arstar')
                 except:
                     self.log_chat = None
             else:
-                self.log_chat = self.get_input_entity('me')
+                self.log_chat = await self.get_input_entity('me')
 
         core_plugin = Path(__file__).parent / "_core.py"
         self.load_plugin_from_file(core_plugin)

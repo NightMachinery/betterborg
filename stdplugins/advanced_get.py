@@ -12,7 +12,7 @@ import asyncio
 from brish import z, zp, Brish
 from functools import partial
 
-pattern_a = re.compile(r"(?im)^(?:\[In reply to [^]]*\]\n?)*\.a(?P<nobrish>a)?(?P<fork>f)?(?P<noalbum>d)?(?P<noglob>n)?\s+(?P<cmd>(?:.|\n)*)$")
+pattern_a = re.compile(r"(?im)^(?:\[(?:(?:In reply to)|(?:Forwarded from))\s+[^]]*\]\n)*\.a(?P<nobrish>a)?(?P<fork>f)?(?P<noalbum>d)?(?P<noglob>n)?\s+(?P<cmd>(?:.|\n)*)$")
 
 
 @borg.on(events.NewMessage(pattern=pattern_a))
