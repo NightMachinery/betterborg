@@ -18,13 +18,14 @@ async def borg_init(background_mode=True):
     logging.basicConfig(level=logging.INFO)
     proxy = None
     proxy_port = os.environ.get('borgp')
+    log_chat = os.environ.get('borg_log_chat', None)
     plugin_path = os.environ.get('borg_plugin_path', "stdplugins")
     session = os.environ.get('borg_session', "stdborg")
     if proxy_port != None:
         proxy = (socks.SOCKS5, '127.0.0.1', int(proxy_port))
 
     borg = await Uniborg.create(session, plugin_path=plugin_path,
-                connection_retries=None, proxy=proxy)
+                                connection_retries=None, proxy=proxy, log_chat=log_chat)
     print("Borg created!")
 
     async def watch_plugins():

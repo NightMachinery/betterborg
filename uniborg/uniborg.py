@@ -17,12 +17,13 @@ from . import hacks
 
 
 class Uniborg(TelegramClient):
+    # @warn this var can be None in which case send_message will fail and potentially crash the whole program
     log_chat = -1001179162919 # alicization
 
     @classmethod
     async def create(
             cls, session, *, plugin_path="plugins", storage=None,
-            bot_token=None, **kwargs):
+            bot_token=None, log_chat=None, **kwargs):
         kwargs = {
             "api_id": 6, "api_hash": "eb06d4abfb49dc3eeb1aeb98ae0f581e",
             **kwargs}
@@ -43,6 +44,22 @@ class Uniborg(TelegramClient):
         self._event_builders = hacks.ReverseList()
 
         await self._async_init(bot_token=bot_token)
+        if log_chat:
+            try:
+                self.log_chat = int(log_chat) # Cannot get entity by phone number as a bot (try using integer IDs, not strings)
+            except:
+                pass
+        try:
+            self.log_chat = self.get_input_entity(self.log_chat)
+        except:
+            if await self.is_bot():
+                print(f"Borg needs a log chat to send some log messages to. Since this is a bot, you need to explicitly set this, or you won't receive these messages.")
+                try:
+                    self.log_chat = self.get_input_entity('Arstar')
+                except:
+                    self.log_chat = None
+            else:
+                self.log_chat = self.get_input_entity('me')
 
         core_plugin = Path(__file__).parent / "_core.py"
         self.load_plugin_from_file(core_plugin)
@@ -104,7 +121,8 @@ class Uniborg(TelegramClient):
         except Exception as e:
             tb = traceback.format_exc()
             logger.warn(f"Failed to (re)load plugin {shortname}: {tb}")
-            await self.send_message(chat, f"Failed to (re)load plugin {shortname}: {e}")
+            if chat:
+                await self.send_message(chat, f"Failed to (re)load plugin {shortname}: {e}")
 
     def await_event(self, event_matcher, filter=None):
         fut = asyncio.Future()
