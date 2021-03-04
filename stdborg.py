@@ -73,13 +73,16 @@ async def read_root():
     return {"Hello": "Borg"}
 
 @app.post("/timetracker/mark/")
-async def read_root(mark: TTMark, request: Request):
+async def tt_mark(mark: TTMark, request: Request):
     def text_req(text: str):
         return Response(content=text, media_type="text/plain")
 
+    err = "cold shoulder"
+    if not mark.name or mark.name.isspace():
+        return text_req(err)
     tt = borg._plugins["timetracker"]
     m0 = await borg.send_message(tt.timetracker_chat, mark.name)
     res = await tt.process_msg(m0)
-    return text_req(res or "cold shoulder")
+    return text_req(res or err)
 
 

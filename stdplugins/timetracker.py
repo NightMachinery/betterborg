@@ -118,6 +118,7 @@ subs = {
     "system administration": "sa",
     "sac": "chores_self_sa",
     "sacgh": "chores_self_sa_github",
+    "hw": "chores_self_sa_hardware",
     "sax": "exploration_sa",
     "dev": "sa_development",
     "sat": "sa_thinking & design",
@@ -126,7 +127,7 @@ subs = {
     "this": "sa_development_quantified self_timetracker",
     "doc": "sa_product_documentation",
     "eval": "sa_product_evaluation",
-    ##
+    ###
     "🐑": "chores",
     "ch": "chores",
     "cho": "chores_others",
@@ -139,6 +140,9 @@ subs = {
     "eat": "chores_self_rest_eat",
     "eating": "chores_self_rest_eat",
     "ea": "chores_self_rest_eat",
+    "breakfast": "chores_self_rest_eat_breakfast",
+    "lunch": "chores_self_rest_eat_lunch",
+    "dinner": "chores_self_rest_eat_dinner",
     "brush": "chores_self_health_brush",
     "🦷": "chores_self_health_brush",
     "br": "chores_self_health_brush",
@@ -149,7 +153,7 @@ subs = {
     "ba": "chores_self_hygiene_bath",
     "sl": "sleep",  # putting this under chores will just make using the data harder, no?
     "💤": "sleep",
-    ##
+    ###
     "👥": "social",
     "soc": "social",
     "tlg": "social_online",

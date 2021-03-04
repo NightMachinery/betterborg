@@ -1,6 +1,7 @@
 telethon
 aiohttp[speedups]
 cryptg
+tgcrypto
 hachoir
 Pillow
 # python-socks[asyncio]

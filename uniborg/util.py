@@ -15,6 +15,7 @@ import traceback
 import os
 import pexpect
 import re
+import itertools
 import shutil
 from uniborg import util
 from telethon import TelegramClient, events
@@ -242,7 +243,11 @@ async def run_and_get(event, to_await, cwd=None):
     return cwd
 
 
-async def run_and_upload(event, to_await, quiet=True, reply_exc=True):
+async def run_and_upload(event, to_await, quiet=True, reply_exc=True, album_mode=True):
+    async def handle_exc():
+        exc = "Julia encountered an exception. :(\n" + traceback.format_exc()
+        await send_output(event, exc, shell=(reply_exc), retcode=1)
+
     file_add = ''
     cwd = ''
     # util.interact(locals())
@@ -258,33 +263,50 @@ async def run_and_upload(event, to_await, quiet=True, reply_exc=True):
         cwd = await run_and_get(event=event, to_await=to_await)
         #client = borg
         files = list(Path(cwd).glob('*'))
-        files.sort()
-        for p in files:
-            if not p.is_dir(
-            ):  # and not any(s in p.name for s in ('.torrent', '.aria2')):
-                file_add = p.absolute()
-                base_name = str(await os_aio.path.basename(file_add))
-                # trying_to_upload_msg = await util.discreet_send(
-                # event, "Julia is trying to upload \"" + base_name +
-                # "\".\nPlease wait ...", trying_to_dl, quiet)
-                voice_note = base_name.startswith('voicenote-')
-                video_note = base_name.startswith('videonote-')
-                force_doc = base_name.startswith('fdoc-')
-                supports_streaming = base_name.startswith(
-                    'streaming-')
-                if False:
-                    att, mime = telethon.utils.get_attributes(file_add)
-                    print(f"File attributes: {att.__dict__}")
+        if album_mode:
+            files = [p.absolute() for p in files if not p.is_dir()]
+            f2ext = lambda p: p.suffix
+            files = sorted(files, key=f2ext)
+            for (ext, fs) in itertools.groupby(files, f2ext): # groupby assumes sorted
+                print(f"Sending files of '{ext}':")
                 async with borg.action(chat, 'document') as action:
-                    await borg.send_file(chat, file_add, voice_note=voice_note, video_note=video_note, supports_streaming=supports_streaming,
-                                         force_document=force_doc,
-                                         reply_to=event.message,
-                                         allow_cache=False)
-                    #                            progress_callback=action.progress)
-                # caption=base_name)
+                    try:
+                        fs = list(fs)
+                        fs.sort()
+                        [print(f) for f in fs] ; print()
+                        await borg.send_file(chat, fs, allow_cache=False)
+                    except:
+                        await handle_exc()
+        else:
+            files.sort()
+            for p in files:
+                if not p.is_dir(
+                ):  # and not any(s in p.name for s in ('.torrent', '.aria2')):
+                    file_add = p.absolute()
+                    base_name = str(await os_aio.path.basename(file_add))
+                    # trying_to_upload_msg = await util.discreet_send(
+                    # event, "Julia is trying to upload \"" + base_name +
+                    # "\".\nPlease wait ...", trying_to_dl, quiet)
+                    voice_note = base_name.startswith('voicenote-')
+                    video_note = base_name.startswith('videonote-')
+                    force_doc = base_name.startswith('fdoc-')
+                    supports_streaming = base_name.startswith(
+                        'streaming-')
+                    if False:
+                        att, mime = telethon.utils.get_attributes(file_add)
+                        print(f"File attributes: {att.__dict__}")
+                    async with borg.action(chat, 'document') as action:
+                        try:
+                            await borg.send_file(chat, file_add, voice_note=voice_note, video_note=video_note, supports_streaming=supports_streaming,
+                                                force_document=force_doc,
+                                                reply_to=event.message,
+                                                allow_cache=False)
+                            #                            progress_callback=action.progress)
+                            # caption=base_name)
+                        except:
+                            await handle_exc()
     except:
-        exc = "Julia encountered an exception. :(\n" + traceback.format_exc()
-        await send_output(event, exc, shell=(reply_exc), retcode=1)
+        await handle_exc()
     finally:
         await remove_potential_file(cwd, event)
 
@@ -378,7 +400,7 @@ async def clean_cmd(cmd: str):
     return cmd.replace("‘", "'").replace('“', '"').replace("’", "'").replace('”', '"').replace('—', '--')
 
 
-async def aget(event, command='', shell=True, match=None):
+async def aget(event, command='', shell=True, match=None, album_mode=True):
     if match == None:
         match = event.pattern_match
     if command == '':
@@ -387,7 +409,7 @@ async def aget(event, command='', shell=True, match=None):
             command = 'noglob ' + command
     await util.run_and_upload(
         event=event,
-        to_await=partial(util.simple_run, command=command, shell=shell))
+        to_await=partial(util.simple_run, command=command, shell=shell), album_mode=album_mode)
 
 
 @force_async
