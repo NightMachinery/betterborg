@@ -71,6 +71,7 @@ subs_commands = {
 subs = {
     "😡": "wasted",
     "wt": "wasted",
+    "bundled": "wasted_overoptimization_bundling",
     "tired": "wasted_tired",
     # "t3": "dummy",
     "wtg": "wasted_exploration_gathering",
@@ -199,6 +200,7 @@ subs = {
     "go": "going out",
     ##
     "expl": "exploration",
+    "xbuy": "exploration_buying",
     "🌐": "exploration_targetedLearning",
     "tl": "exploration_targetedLearning",
     "gath": "exploration_gathering",
