@@ -59,8 +59,8 @@ subs_commands = {
     # "out": "..out",
     "🧫": "?",
     # habits:
-    "/br": ".habit 7 m=1 max=3 brush",
-    "/mw": ".habit 7 m=1 max=2 mouthwash",
+    "/br": ".habit 7 m=1 max=3 brush\n.habit 7 m=1 max=2 floss\n.habit 7 m=1 max=2 mouthwash",
+    # "/mw": ".habit 7 m=1 max=2 mouthwash",
     "/dummy": ".habit 7 m=0 max=10 .dummy",
     "/s": ".habit 7 m=0 max=9 study",
     "/sa": ".habit 7 m=0 max=9 sa",
@@ -72,6 +72,7 @@ subs_commands = {
 suffixes = {
     '-': [0, "wasted"],
     '$': [1, "halfhearted"],
+    '+': None,
 }
 subs = {
     "😡": "wasted",
@@ -156,12 +157,12 @@ subs = {
     "lunch": "chores_self_rest_eat_lunch",
     "dinner": "chores_self_rest_eat_dinner",
     ##
-    "brush": "chores_self_health_brush",
-    "🦷": "chores_self_health_brush",
-    "br": "chores_self_health_brush",
-    "floss": "chores_self_health_brush_floss",
-    "fl": "chores_self_health_brush_floss",
-    "mw": "chores_self_health_mouthwash",
+    "brush": "chores_self_health_teeth_brush",
+    "🦷": "chores_self_health_teeth_brush",
+    "br": "chores_self_health_teeth_brush",
+    "floss": "chores_self_health_teeth_floss",
+    "fl": "chores_self_health_teeth_floss",
+    "mw": "chores_self_health_teeth_mouthwash",
     ##
     "bath": "chores_self_hygiene_bath",
     "🛁": "chores_self_hygiene_bath",
@@ -223,7 +224,9 @@ subs = {
     "gathmusic": "exploration_gathering_music"
     ##
 }
-
+reminders_immediate = {
+    "chores_self_hygiene_bath": "Turn off the heater",
+}
 ##
 # levenshtein is a two-edged sword for our purposes, but I think it's ultimately more intuitive. One huge problem with levenshtein is that it punishes longer strings.
 fuzzy_choices = set(list(subs.values()) + list(subs.keys()))
@@ -280,7 +283,7 @@ async def process_msg(*args, **kwargs):
     async with lock_tt:
         return await _process_msg(*args, **kwargs)
 
-async def _process_msg(m0, reload_on_failure=True):
+async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
     global starting_anchor
 
     async def edit(text: str, **kwargs):
@@ -297,22 +300,40 @@ async def _process_msg(m0, reload_on_failure=True):
     async def warn_empty():
         await m0.reply("The empty database has no last act.")
 
+    async def process_reminders(text):
+        if text in reminders_immediate:
+            await reply(reminders_immediate[text])
+
     choiceConfirmed = False
     delayed_actions = []
+    delayed_actions_special = []
+    def out_add(text):
+        nonlocal out
+        if text:
+            if out:
+                out += "\n\n" + text
+            else:
+                out = text
 
     def text_sub(text):
         nonlocal choiceConfirmed
-        nonlocal delayed_actions
+        nonlocal delayed_actions # @redundant as we do not assign to it
+
         if not text:
             choiceConfirmed = True
-            return ""
+            return out
 
         while text[-1] in suffixes:
-            delayed_actions.append(suffixes[text[-1]])
+            suffix = text[-1]
+            action = suffixes[suffix]
+            if action:
+                delayed_actions.append(action)
+            else:
+                delayed_actions_special.append(suffix)
             text = text[:-1]
             if not text:
                 choiceConfirmed = True
-                return ""
+                return out
 
         text = text.lower()  # iOS capitalizes the first letter
         if text in subs:
@@ -335,6 +356,7 @@ async def _process_msg(m0, reload_on_failure=True):
     def text_sub_finalize(text):
         nonlocal choiceConfirmed
         nonlocal delayed_actions
+
         if text.startswith("."):
             text = text[1:]
         elif not choiceConfirmed:
@@ -359,35 +381,60 @@ async def _process_msg(m0, reload_on_failure=True):
     def text_sub_full(text):
         nonlocal choiceConfirmed
         nonlocal delayed_actions
+
         tmp = choiceConfirmed  # out of caution
         choiceConfirmed = False
         tmp2 = delayed_actions
         delayed_actions = []
+        # @warn delayed_actions_special currently not reset because I don't think it matters
         res = text_sub_finalize(text_sub(text))
         choiceConfirmed = tmp
         delayed_actions = tmp2
         return res
 
     try:
-            m0_text_raw = m0.text
-            m0_text_raw = z('per2en', cmd_stdin=m0_text_raw).outrs
+            if text_input == False: # not None, but explicit False
+                text_input = m0.text
+            elif not text_input:
+                return out
+            async def multi_commands(text_input):
+                nonlocal out
+                text_inputs = text_input.split("\n")
+                if len(text_inputs) > 1:
+                    for text_input in text_inputs:
+                        out = await _process_msg(m0, text_input=text_input, reload_on_failure=reload_on_failure, out=out)
+                    return True, out
+                return False, False
+
+            done, res = await multi_commands(text_input)
+            if done:
+                return res
+            m0_text_raw = z('per2en', cmd_stdin=text_input).outrs
             m0_text = text_sub(m0_text_raw)
-            print(f"TT got: {repr(m0.text)} -> {repr(m0_text)}")
-            if not m0.text or m0.text.startswith('#') or m0.text.isspace():  # comments :D
-                return "comment"
+            done, res = await multi_commands(m0_text)
+            if done:
+                return res
+            print(f"TT got: {repr(text_input)} -> {repr(m0_text)}")
+            if not text_input or text_input.startswith('#') or text_input.isspace():  # comments :D
+                # out_add("comment")
+                return out
             elif m0_text == 'man':
-                out = yaml.dump(suffixes) + '\n' + yaml.dump(subs_commands) + '\n' + yaml.dump(subs)
+                out_add(yaml.dump(suffixes) + '\n' + yaml.dump(subs_commands) + '\n' + yaml.dump(subs))
                 await edit(out)
                 return out
             elif m0_text == '.l':
                 await reload_tt()
-                return "reloaded"
+                out_add("reloaded")
+                return out
             elif m0_text == '.error':
                 raise Exception(".error invoked")
-                return ".error"
+                return "@impossible"
 
             now = datetime.datetime.today()
             last_act_query = Activity.select().order_by(Activity.end.desc())
+            last_act = None
+            if last_act_query.exists():
+                last_act = last_act_query.get()
 
             m = del_pat.match(m0_text)
             if m:
@@ -395,15 +442,18 @@ async def _process_msg(m0, reload_on_failure=True):
                 if m.group(1):
                     del_count = Activity.delete().where(Activity.end > (
                         now - datetime.timedelta(minutes=float(m.group(1) or 5)))).execute()
-                elif last_act_query.exists():
-                    del_count = last_act_query.get().delete_instance()
-                out = f"Deleted the last {del_count} activities"
+                    out_add(f"Deleted the last {del_count} activities")
+                elif last_act:
+                    out_add(f"Deleted the last act: {last_act}")
+                    del_count = last_act.delete_instance()
+                    if del_count != 1: # @impossible
+                        out_add(f"ERROR: Deletion has failed. Deleted {del_count}.")
                 await edit(out)
                 return out
 
             if m0_text == "w":
                 starting_anchor = now
-                out = "Anchored"
+                out_add("Anchored")
                 await edit(out)
                 return out
 
@@ -415,7 +465,7 @@ async def _process_msg(m0, reload_on_failure=True):
                                                                     hours=3)), end=(now - datetime.timedelta(days=1*30))).save()
                 Activity(name="dummy", start=(now - datetime.timedelta(days=10*30,
                                                                     hours=10)), end=(now - datetime.timedelta(days=10*30))).save()
-                out = "DEBUG COMMAND"
+                out_add("DEBUG COMMAND")
                 await edit(out)
                 return out
 
@@ -423,12 +473,12 @@ async def _process_msg(m0, reload_on_failure=True):
             if m:
                 hours = m.group(1)
                 if hours:
-                    out = activity_list_to_str_now(delta=datetime.timedelta(hours=float(hours)))
+                    out_add(activity_list_to_str_now(delta=datetime.timedelta(hours=float(hours))))
                 else:
                     low = now.replace(hour=5, minute=0, second=0)
                     if low > now:
                         low = low - datetime.timedelta(days=1)
-                    out = activity_list_to_str(low, now)
+                    out_add(activity_list_to_str(low, now))
                 await edit(f"{out}", parse_mode="markdown")
                 return out
 
@@ -442,13 +492,13 @@ async def _process_msg(m0, reload_on_failure=True):
                     days=float(m.group('t') or 30))  # days
                 habit_data = activity_list_habit_get_now(
                     habit_name, delta=habit_delta, mode=habit_mode)
-                out = f"{habit_name}\n\n{yaml.dump(habit_data)}"
+                out_add(f"{habit_name}\n\n{yaml.dump(habit_data)}")
                 habit_data.pop(now.date(), None)
                 def mean(numbers):
                     numbers = list(numbers)
                     return float(sum(numbers)) / max(len(numbers), 1)
                 average = mean(v for k, v in habit_data.items())
-                out += f"\n\naverage: {round(average, 1)}"
+                out_add(f"average: {round(average, 1)}")
                 await edit(out)
                 ##
                 now = datetime.datetime.now()
@@ -472,10 +522,6 @@ async def _process_msg(m0, reload_on_failure=True):
                     await reply(f"Creating heatmap failed with {res.retcode}:\n\n{z.outerr}")
                 return out
 
-            last_act = None
-            if last_act_query.exists():
-                last_act = last_act_query.get()
-
             m = back_pat.match(m0_text)
             if m:
                 if last_act != None:
@@ -483,7 +529,7 @@ async def _process_msg(m0, reload_on_failure=True):
                     # supports negative numbers, too ;D
                     last_act.end -= datetime.timedelta(minutes=mins)
                     last_act.save()
-                    out = f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)"
+                    out_add(f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)")
                     await edit(out)
                     return out
                 else:
@@ -495,8 +541,9 @@ async def _process_msg(m0, reload_on_failure=True):
                 if last_act != None:
                     last_act.name = text_sub_full(m.group(1))
                     last_act.save()
-                    out = f"{str(last_act)} (Renamed)"
+                    out_add(f"{str(last_act)} (Renamed)")
                     await edit(out)
+                    await process_reminders(last_act.name)
                     return out
                 else:
                     await warn_empty()
@@ -507,7 +554,7 @@ async def _process_msg(m0, reload_on_failure=True):
                     # this design doesn't work too well with deleting records
                     last_act.end = now
                     last_act.save()
-                    out = f"{str(last_act)} (Updated)"
+                    out_add(f"{str(last_act)} (Updated)")
                     await edit(out)
                     return out
                     # @alt:
@@ -520,30 +567,39 @@ async def _process_msg(m0, reload_on_failure=True):
 
             if m0_text == '..':
                 # @perf @todo2 this is slow, do it natively
-                out = z('borg-tt-last').outerr
+                out_add(z('borg-tt-last').outerr)
                 await edit(out)
                 return out
 
             m0_text = text_sub_finalize(m0_text)
 
             start: datetime.datetime
-            if starting_anchor == None:
-                if last_act == None:
-                    await m0.reply("The database is empty and also has no starting anchor. Create an anchor by sending 'w'.")
-                    return
-                else:
-                    start = last_act.end
+            if '+' in delayed_actions_special:
+                start = now
+                # @warn unless we update last_act_query to also sort by start date, or add an epsilon to either the new act or last_act, the next call to last_act_query might return either of them (theoretically). In practice, it seems last_act is always returned and this zero-timed new act gets ignored. This is pretty much what we want, except it makes hard to correct errors with `.del` etc.
+                if last_act != None: # @duplicatedCode
+                    last_act.end = now
+                    last_act.save()
+                    out_add(f"{str(last_act)} (Updated)")
             else:
-                start = starting_anchor
-                starting_anchor = None
+                if starting_anchor == None:
+                    if last_act == None:
+                        await m0.reply("The database is empty and also has no starting anchor. Create an anchor by sending 'w'.")
+                        return
+                    else:
+                        start = last_act.end
+                else:
+                    start = starting_anchor
+                    starting_anchor = None
 
             act = Activity(name=m0_text, start=start, end=now)
             act.save()
-            out = str(act)
+            out_add(str(act))
             await edit(out)
+            await process_reminders(act.name)
             return out
     except:
-        out = "Julia encountered an exception. :(\n" + traceback.format_exc()
+        out_add("Julia encountered an exception. :(\n" + traceback.format_exc())
         if reload_on_failure:
             await reply(out + "\n\nReloading ...")
             await reload_tt()
@@ -581,9 +637,8 @@ def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mo
     # aligns dates with real life, so that date changes happen at, e.g., 5 AM
     night_passover = datetime.timedelta(hours=5)
 
-    def which_bucket(act):
+    def which_bucket(act: Activity):
         if act.name == name or act.name.startswith(name + '_'):
-            # @deadcode is `act.name.startswith(name + '_')` even possible? Don't we break names on '_'?
             return (act.start - night_passover).date()
         return None
 
