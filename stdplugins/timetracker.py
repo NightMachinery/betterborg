@@ -567,7 +567,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
 
             if m0_text == '..':
                 # @perf @todo2 this is slow, do it natively
-                out_add(z('borg-tt-last').outerr)
+                out_add(z('borg-tt-last 10').outerr)
                 await edit(out)
                 return out
 
