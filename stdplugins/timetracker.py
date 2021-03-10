@@ -599,13 +599,14 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
             await process_reminders(act.name)
             return out
     except:
-        out_add("Julia encountered an exception. :(\n" + traceback.format_exc())
+        out_add("\nJulia encountered an exception. :(\n" + traceback.format_exc())
         if reload_on_failure:
-            await reply(out + "\n\nReloading ...")
+            out_add("Reloading ...\n")
+            await edit(out)
             await reload_tt()
-            return await borg._plugins["timetracker"]._process_msg(m0, reload_on_failure=False)
+            return await borg._plugins["timetracker"]._process_msg(m0, reload_on_failure=False, text_input=text_input, out=out)
         else:
-            await reply(out)
+            await edit(out)
             return out
 
 def activity_list_to_str_now(delta=datetime.timedelta(hours=24)):
