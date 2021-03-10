@@ -60,30 +60,39 @@ subs_commands = {
     "🧫": "?",
     # habits:
     "/br": ".habit 7 m=1 max=3 brush",
+    "/mw": ".habit 7 m=1 max=2 mouthwash",
     "/dummy": ".habit 7 m=0 max=10 .dummy",
     "/s": ".habit 7 m=0 max=9 study",
     "/sa": ".habit 7 m=0 max=9 sa",
     "/sl": ".habit 7 m=0 max=12 sleep",
     "/e": ".habit 7 m=0 max=2 exercise",
-    "/w": ".habit 7 m=0 max=12 wasted",
+    "/wt": ".habit 7 m=0 max=12 wasted",
     ###
+}
+suffixes = {
+    '-': [0, "wasted"],
+    '$': [1, "halfhearted"],
 }
 subs = {
     "😡": "wasted",
     "wt": "wasted",
     "bundled": "wasted_overoptimization_bundling",
     "tired": "wasted_tired",
-    # "t3": "dummy",
-    "wtg": "wasted_exploration_gathering",
-    "wtgh": "wasted_exploration_github",
+    ##
+    # "wtg": "wasted_exploration_gathering",
+    # "wtgh": "wasted_exploration_github",
     "nos": "wasted_exploration_gathering_nostalgia",
+    ##
+    # "wtth": "wasted_thinking",
     "worry": "wasted_thinking_worrying",
     "fantasy": "wasted_thinking_fantasy",
-    "news": "wasted_news",
-    "wtso": "wasted_social_online",
-    "wtf": "wasted_social_online_forums",
-    "hn": "wasted_news_hackernews",
     ##
+    "news": "wasted_news",
+    # "wtso": "wasted_social_online",
+    "wtf": "wasted_social_online_forums",
+    "reddit": "wasted_social_online_forums",
+    "hn": "wasted_news_hackernews",
+    ###
     "untracked": "consciously untracked",
     "unt": "consciously untracked",
     "idk": "consciously untracked_idk",
@@ -132,9 +141,11 @@ subs = {
     "🐑": "chores",
     "ch": "chores",
     "cho": "chores_others",
+    ##
     "exercise": "chores_self_health_exercise",
     "🏃🏽‍♀️": "chores_self_health_exercise",
     "e": "chores_self_health_exercise",
+    ##
     "r": "chores_self_rest",
     "rest": "chores_self_rest",
     "🍽": "chores_self_rest_eat",
@@ -144,16 +155,21 @@ subs = {
     "breakfast": "chores_self_rest_eat_breakfast",
     "lunch": "chores_self_rest_eat_lunch",
     "dinner": "chores_self_rest_eat_dinner",
+    ##
     "brush": "chores_self_health_brush",
     "🦷": "chores_self_health_brush",
     "br": "chores_self_health_brush",
     "floss": "chores_self_health_brush_floss",
     "fl": "chores_self_health_brush_floss",
+    "mw": "chores_self_health_mouthwash",
+    ##
     "bath": "chores_self_hygiene_bath",
     "🛁": "chores_self_hygiene_bath",
     "ba": "chores_self_hygiene_bath",
+    ##
     "sl": "sleep",  # putting this under chores will just make using the data harder, no?
     "💤": "sleep",
+    "waking": "chores_self_rest_wakingup",
     ###
     "👥": "social",
     "soc": "social",
@@ -282,9 +298,22 @@ async def _process_msg(m0, reload_on_failure=True):
         await m0.reply("The empty database has no last act.")
 
     choiceConfirmed = False
+    delayed_actions = []
 
     def text_sub(text):
         nonlocal choiceConfirmed
+        nonlocal delayed_actions
+        if not text:
+            choiceConfirmed = True
+            return ""
+
+        while text[-1] in suffixes:
+            delayed_actions.append(suffixes[text[-1]])
+            text = text[:-1]
+            if not text:
+                choiceConfirmed = True
+                return ""
+
         text = text.lower()  # iOS capitalizes the first letter
         if text in subs:
             choiceConfirmed = True
@@ -292,28 +321,51 @@ async def _process_msg(m0, reload_on_failure=True):
         if text in subs_commands:
             choiceConfirmed = True
             text = subs_commands[text]
-        if not choiceConfirmed and not text.startswith("."):
-            tokens = list(text.split('_'))
-            if len(tokens) > 1:
-                tokens[0] = text_sub_full(tokens[0])
-                choiceConfirmed = True
-                text = '_'.join(tokens)
+        ## MOVED to text_sub_finalize
+        # if not choiceConfirmed:
+        #     if not text.startswith("."):
+        #         tokens = list(text.split('_'))
+        #         if len(tokens) > 1:
+        #             tokens[0] = text_sub_full(tokens[0])
+        #             choiceConfirmed = True
+        #             text = '_'.join(tokens)
+        ##
         return text
 
     def text_sub_finalize(text):
         nonlocal choiceConfirmed
+        nonlocal delayed_actions
         if text.startswith("."):
             text = text[1:]
         elif not choiceConfirmed:
-            text = chooseAct(text)
+            tokens = list(text.split('_'))
+            if len(tokens) > 1:
+                tokens[0] = text_sub_full(tokens[0])
+                text = '_'.join(tokens)
+            else:
+                text = chooseAct(text)
+        for action in delayed_actions:
+            mode, c = action
+            if mode == 0:
+                pre = f"{c}_"
+                if not text.startswith(pre):
+                    text = f"{pre}{text}"
+            elif mode == 1:
+                post = f"_{c}"
+                if not text.endswith(post):
+                    text += post
         return text
 
     def text_sub_full(text):
         nonlocal choiceConfirmed
+        nonlocal delayed_actions
         tmp = choiceConfirmed  # out of caution
         choiceConfirmed = False
+        tmp2 = delayed_actions
+        delayed_actions = []
         res = text_sub_finalize(text_sub(text))
         choiceConfirmed = tmp
+        delayed_actions = tmp2
         return res
 
     try:
@@ -324,7 +376,7 @@ async def _process_msg(m0, reload_on_failure=True):
             if not m0.text or m0.text.startswith('#') or m0.text.isspace():  # comments :D
                 return "comment"
             elif m0_text == 'man':
-                out = yaml.dump(subs_commands) + '\n' + yaml.dump(subs)
+                out = yaml.dump(suffixes) + '\n' + yaml.dump(subs_commands) + '\n' + yaml.dump(subs)
                 await edit(out)
                 return out
             elif m0_text == '.l':
@@ -441,7 +493,7 @@ async def _process_msg(m0, reload_on_failure=True):
             m = rename_pat.match(m0_text)
             if m:
                 if last_act != None:
-                    last_act.name = text_sub(m.group(1))
+                    last_act.name = text_sub_full(m.group(1))
                     last_act.save()
                     out = f"{str(last_act)} (Renamed)"
                     await edit(out)
@@ -531,6 +583,7 @@ def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mo
 
     def which_bucket(act):
         if act.name == name or act.name.startswith(name + '_'):
+            # @deadcode is `act.name.startswith(name + '_')` even possible? Don't we break names on '_'?
             return (act.start - night_passover).date()
         return None
 
