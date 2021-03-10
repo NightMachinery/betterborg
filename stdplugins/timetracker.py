@@ -307,11 +307,11 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
     choiceConfirmed = False
     delayed_actions = []
     delayed_actions_special = []
-    def out_add(text):
+    def out_add(text, prefix="\n\n"):
         nonlocal out
         if text:
             if out:
-                out += "\n\n" + text
+                out += prefix + text
             else:
                 out = text
 
@@ -492,13 +492,13 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                     days=float(m.group('t') or 30))  # days
                 habit_data = activity_list_habit_get_now(
                     habit_name, delta=habit_delta, mode=habit_mode)
-                out_add(f"{habit_name}\n\n{yaml.dump(habit_data)}")
+                out_add(f"\n{habit_name}\n\n{yaml.dump(habit_data)}")
                 habit_data.pop(now.date(), None)
                 def mean(numbers):
                     numbers = list(numbers)
                     return float(sum(numbers)) / max(len(numbers), 1)
                 average = mean(v for k, v in habit_data.items())
-                out_add(f"average: {round(average, 1)}")
+                out_add(f"average: {round(average, 1)}", prefix="\n")
                 await edit(out)
                 ##
                 now = datetime.datetime.now()
