@@ -397,6 +397,8 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                 text_input = m0.text
             elif not text_input:
                 return out
+            if text_input.startswith('#'): # if the input starts with a comment, discard whole input
+                return out
             async def multi_commands(text_input):
                 nonlocal out
                 text_inputs = text_input.split("\n")
