@@ -143,6 +143,8 @@ subs = {
     "ch": "chores",
     "cho": "chores_others",
     ##
+    "cm": "chores_commute",
+    ##
     "exercise": "chores_self_health_exercise",
     "🏃🏽‍♀️": "chores_self_health_exercise",
     "e": "chores_self_health_exercise",
@@ -226,6 +228,7 @@ subs = {
 }
 reminders_immediate = {
     "chores_self_hygiene_bath": "Turn off the heater",
+    "sleep": "Clean your eyes",
 }
 ##
 # levenshtein is a two-edged sword for our purposes, but I think it's ultimately more intuitive. One huge problem with levenshtein is that it punishes longer strings.
@@ -302,7 +305,10 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
 
     async def process_reminders(text):
         if text in reminders_immediate:
-            await reply(reminders_immediate[text])
+            rem = reminders_immediate[text]
+            out_add(rem, prefix="\n🌈 ")
+            await edit(out)
+            # await reply(rem)
 
     choiceConfirmed = False
     delayed_actions = []
