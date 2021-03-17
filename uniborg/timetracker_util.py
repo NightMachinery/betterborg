@@ -1,7 +1,9 @@
 # Somehow putting ActivityDuration in the plugin file itself resulted in error (the culprit was probably dataclass), so I am putting them here.
 
-from __future__ import annotations
 import asyncio
+lock_tt = asyncio.Lock()
+##
+from __future__ import annotations
 import textwrap
 import dataclasses
 from dataclasses import dataclass
@@ -10,7 +12,6 @@ from typing import Dict, List
 import datetime
 from dateutil.relativedelta import relativedelta
 
-lock_tt = asyncio.Lock()
 
 def relativedelta_total_seconds(rd: relativedelta):
     # Used Google to convert the years and months, they are slightly more than 365 and 30 days respectively.

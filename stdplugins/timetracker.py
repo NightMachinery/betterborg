@@ -46,6 +46,9 @@ class Activity(BaseModel):
 #     on activity (start desc, end desc);
 ##
 
+db.close()
+db.close()
+db.close()
 db.connect()  # @todo? db.close()
 db.create_tables([Activity])
 
@@ -87,6 +90,7 @@ subs = {
     # "wtth": "wasted_thinking",
     "worry": "wasted_thinking_worrying",
     "fantasy": "wasted_thinking_fantasy",
+    "selfie": "wasted_thinking_self inspection",
     ##
     "news": "wasted_news",
     # "wtso": "wasted_social_online",
@@ -151,6 +155,7 @@ subs = {
     ##
     "r": "chores_self_rest",
     "rest": "chores_self_rest",
+    "glue": "chores_self_rest_glue",
     "🍽": "chores_self_rest_eat",
     "eat": "chores_self_rest_eat",
     "eating": "chores_self_rest_eat",
