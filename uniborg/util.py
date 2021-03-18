@@ -242,12 +242,33 @@ async def run_and_get(event, to_await, cwd=None):
             await remove_potential_file(dled_path, event)
     return cwd
 
+async def handle_exc(event, reply_exc=True):
+    exc = "Julia encountered an exception. :(\n" + traceback.format_exc()
+    await send_output(event, exc, shell=(reply_exc), retcode=1)
+
+async def handle_exc_chat(chat, reply_exc=True):
+    # @todo2 refactor send_output to work with just a chat, not an event
+    exc = "Julia encountered an exception. :(\n" + traceback.format_exc()
+    await borg.send_message(chat, exc)
+
+
+async def send_files(chat, files, **kwargs):
+    f2ext = lambda p: p.suffix
+    files = [Path(f) for f in files] # idempotent
+    files = sorted(files, key=f2ext)
+    for (ext, fs) in itertools.groupby(files, f2ext): # groupby assumes sorted
+        print(f"Sending files of '{ext}':")
+        async with borg.action(chat, 'document') as action:
+            try:
+                fs = list(fs)
+                fs.sort()
+                [print(f) for f in fs] ; print()
+                await borg.send_file(chat, fs, allow_cache=False, **kwargs)
+            except:
+                await handle_exc_chat(chat)
+
 
 async def run_and_upload(event, to_await, quiet=True, reply_exc=True, album_mode=True):
-    async def handle_exc():
-        exc = "Julia encountered an exception. :(\n" + traceback.format_exc()
-        await send_output(event, exc, shell=(reply_exc), retcode=1)
-
     file_add = ''
     cwd = ''
     # util.interact(locals())
@@ -265,18 +286,7 @@ async def run_and_upload(event, to_await, quiet=True, reply_exc=True, album_mode
         files = list(Path(cwd).glob('*'))
         if album_mode:
             files = [p.absolute() for p in files if not p.is_dir()]
-            f2ext = lambda p: p.suffix
-            files = sorted(files, key=f2ext)
-            for (ext, fs) in itertools.groupby(files, f2ext): # groupby assumes sorted
-                print(f"Sending files of '{ext}':")
-                async with borg.action(chat, 'document') as action:
-                    try:
-                        fs = list(fs)
-                        fs.sort()
-                        [print(f) for f in fs] ; print()
-                        await borg.send_file(chat, fs, allow_cache=False)
-                    except:
-                        await handle_exc()
+            await send_files(chat, files)
         else:
             files.sort()
             for p in files:
@@ -304,9 +314,9 @@ async def run_and_upload(event, to_await, quiet=True, reply_exc=True, album_mode
                             #                            progress_callback=action.progress)
                             # caption=base_name)
                         except:
-                            await handle_exc()
+                            await handle_exc(event, reply_exc)
     except:
-        await handle_exc()
+        await handle_exc(event, reply_exc)
     finally:
         await remove_potential_file(cwd, event)
 

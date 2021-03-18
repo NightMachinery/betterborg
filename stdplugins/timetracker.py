@@ -1,13 +1,13 @@
 from telethon import events
 import traceback
 import datetime
-from dateutil.relativedelta import relativedelta
-from pathlib import Path
 from brish import z
-import os
 import re
-from peewee import *
-from uniborg.util import embed2
+import os
+from dateutil.relativedelta import relativedelta
+# from pathlib import Path
+# from peewee import *
+from uniborg.util import embed2, send_files
 from uniborg.timetracker_util import *
 import json
 import yaml
@@ -17,40 +17,6 @@ try:
     from cfuzzyset import cFuzzySet as FuzzySet
 except ImportError:
     from fuzzyset import FuzzySet
-
-# Path.home().joinpath(Path("cellar"))
-db_path = Path(
-    z('print -r -- "${{attic_private_dir:-$HOME/tmp}}/timetracker.db"').outrs)
-os.makedirs(os.path.dirname(db_path), exist_ok=True)
-db = SqliteDatabase(db_path)
-
-
-class BaseModel(Model):
-    class Meta:
-        database = db
-
-
-class Activity(BaseModel):
-    name = CharField()
-    start = DateTimeField()
-    end = DateTimeField()
-
-    def __str__(self):
-        dur = relativedelta(self.end, self.start)
-        return f"""{self.name} {relativedelta_str(dur)}"""
-
-## indexes: add manually via Datagrip (right-click on table, modify table)(adding it via peewee is not necesseray https://github.com/coleifer/peewee/issues/2360 )
-# create index activity_end_index
-#     on activity (end desc);
-# create index activity_start_end_index
-#     on activity (start desc, end desc);
-##
-
-db.close()
-db.close()
-db.close()
-db.connect()  # @todo? db.close()
-db.create_tables([Activity])
 
 timetracker_chat = -1001179162919
 # borg.send_message(timetracker_chat, "New timetracker instance initiated")
@@ -62,14 +28,14 @@ subs_commands = {
     # "out": "..out",
     "🧫": "?",
     # habits:
-    "/br": ".habit 7 m=1 max=3 brush\n.habit 7 m=1 max=2 floss\n.habit 7 m=1 max=2 mouthwash",
-    # "/mw": ".habit 7 m=1 max=2 mouthwash",
-    "/dummy": ".habit 7 m=0 max=10 .dummy",
-    "/s": ".habit 7 m=0 max=9 study",
-    "/sa": ".habit 7 m=0 max=9 sa",
-    "/sl": ".habit 7 m=0 max=12 sleep",
-    "/e": ".habit 7 m=0 max=2 exercise",
-    "/wt": ".habit 7 m=0 max=12 wasted",
+    "/br": ".habit 8 m=1 max=3 brush\n.habit 8 m=1 max=2 floss\n.habit 8 m=1 max=2 mouthwash",
+    # "/mw": ".habit 8 m=1 max=2 mouthwash",
+    "/dummy": ".habit 8 m=0 max=10 .dummy",
+    "/s": ".habit 8 m=0 max=9 study",
+    "/sa": ".habit 8 m=0 max=9 sa",
+    "/sl": ".habit 8 m=0 max=12 sleep",
+    "/e": ".habit 8 m=0 max=2 exercise",
+    "/wt": ".habit 8 m=0 max=12 wasted",
     ###
 }
 suffixes = {
@@ -284,6 +250,8 @@ async def process(event):
 
 
 async def reload_tt():
+    db.close()
+    db.connect()
     await borg.reload_plugin("timetracker")
 
 
@@ -303,7 +271,9 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
         await m0.reply(text, **kwargs)
 
     async def send_file(file, **kwargs):
-        await borg.send_file(timetracker_chat, file, allow_cache=False, **kwargs)
+        if file:
+            # await borg.send_file(timetracker_chat, file, allow_cache=False, **kwargs)
+            await send_files(timetracker_chat, file, **kwargs)
 
     async def warn_empty():
         await m0.reply("The empty database has no last act.")
@@ -485,14 +455,21 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
             m = out_pat.match(m0_text)
             if m:
                 hours = m.group(1)
+                res = None
                 if hours:
-                    out_add(activity_list_to_str_now(delta=datetime.timedelta(hours=float(hours))))
+                    res = activity_list_to_str_now(delta=datetime.timedelta(hours=float(hours)))
                 else:
-                    low = now.replace(hour=5, minute=0, second=0)
+                    low = now.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
                     if low > now:
                         low = low - datetime.timedelta(days=1)
-                    out_add(activity_list_to_str(low, now))
+                    res = activity_list_to_str(low, now)
+                out_add(res['string'])
                 await edit(f"{out}", parse_mode="markdown")
+                out_links, out_files = visualize_plotly(res['acts_agg'])
+                out_links = '\n'.join(out_links)
+                out_add(out_links)
+                await edit(f"{out}", parse_mode="markdown")
+                await send_file(out_files)
                 return out
 
             m = habit_pat.match(m0_text)
@@ -621,70 +598,3 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
         else:
             await edit(out)
             return out
-
-def activity_list_to_str_now(delta=datetime.timedelta(hours=24)):
-    now = datetime.datetime.today()
-    low = now - delta
-    return activity_list_to_str(low,now)
-
-def activity_list_to_str(low, high):
-    acts = Activity.select().where((Activity.start.between(low, high)) | (Activity.end.between(low, high)))
-    acts_agg = ActivityDuration("Total")
-    for act in acts:
-        act_name = act.name
-        act_start = max(act.start, low)
-        act_end = min(act.end, high)
-        dur = relativedelta(act_end, act_start)
-        acts_agg.add(dur, list(reversed(act_name.split('_'))))
-    # ("TOTAL", total_dur),
-    # we need a monospace font to justify the columns
-    res = f"```\nSpanning {str(high - low)}; UNACCOUNTED {relativedelta_str(relativedelta(high, low + acts_agg.total_duration))}\n"
-    res += str(acts_agg)
-    return res + "\n```"
-
-
-def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mode=0, fill_default=True):
-    # _now means 'now' is 'high'
-    high = datetime.datetime.today()
-    low = high - delta
-
-    # aligns dates with real life, so that date changes happen at, e.g., 5 AM
-    night_passover = datetime.timedelta(hours=5)
-
-    def which_bucket(act: Activity):
-        if act.name == name or act.name.startswith(name + '_'):
-            return (act.start - night_passover).date()
-        return None
-
-    buckets = activity_list_buckets_get(
-        low, high, which_bucket=which_bucket, mode=mode)
-    if mode == 0:
-        buckets_dur = {k: round(relativedelta_total_seconds(
-            v.total_duration) / 3600, 2) for k, v in buckets.items()}
-    elif mode == 1:
-        buckets_dur = buckets
-
-    if fill_default:
-        interval = datetime.timedelta(days=1)
-        while low <= high:
-            buckets_dur.setdefault(low.date(), 0)
-            low += interval
-
-    return buckets_dur
-
-
-def activity_list_buckets_get(low, high, which_bucket, mode=0):
-    acts = Activity.select().where(Activity.start.between(low, high)) # adding the name query here will increase performance. (Currently done in which_bucket.)
-    buckets = {}
-    for act in acts:
-        bucket_key = which_bucket(act)
-        if not bucket_key:
-            continue
-        if mode == 0:
-            bucket = buckets.setdefault(bucket_key, ActivityDuration("Total"))
-            dur = relativedelta(act.end, act.start)
-            bucket.add(dur, list(reversed(act.name.split('_'))))
-        elif mode == 1:  # count mode
-            bucket = buckets.setdefault(bucket_key, 0)
-            buckets[bucket_key] += 1
-    return buckets

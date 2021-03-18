@@ -33,6 +33,7 @@ fuzzyset
 
 watchgod
 
+plotly
+
 # junk deps:
 jsonpickle
-
