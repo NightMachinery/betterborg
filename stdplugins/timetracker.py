@@ -1,4 +1,5 @@
 from telethon import events
+import telethon
 import traceback
 import datetime
 from brish import z
@@ -263,9 +264,12 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
     global starting_anchor
 
     async def edit(text: str, **kwargs):
-        if len(text) > 4000:
-            text = f"{text[:4000]}\n\n..."
-        await borg.edit_message(m0, text, **kwargs)
+        try:
+            if len(text) > 4000:
+                text = f"{text[:4000]}\n\n..."
+            await borg.edit_message(m0, text, **kwargs)
+        except telethon.errors.rpcerrorlist.MessageNotModifiedError:
+            pass
 
     async def reply(text: str, **kwargs):
         await m0.reply(text, **kwargs)

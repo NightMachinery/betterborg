@@ -159,7 +159,7 @@ def activity_list_to_str(low, high, skip_acts=["sleep"]):
     # ("TOTAL", total_dur),
     # we need a monospace font to justify the columns
     res = f"```\nSpanning {str(high - low)}; UNACCOUNTED {relativedelta_str(relativedelta(high, low + acts_agg.total_duration + acts_skipped.total_duration))}\nTotal: {relativedelta_str(acts_agg.total_duration)}; Skipped {relativedelta_str(acts_skipped.total_duration)}\n"
-    res += str(acts_agg)
+    res += str(acts_agg)[0:3500] # truncate it for Telegram
     return {'string': res + "\n```", 'acts_agg': acts_agg, 'acts_skipped': acts_skipped}
 
 def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mode=0, fill_default=True):
