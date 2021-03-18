@@ -66,18 +66,47 @@ def gen_s(num):
     return ""
 
 
-def relativedelta_str(rd: relativedelta):
+def relativedelta_str(rd: relativedelta, only_hours=False, scale=True):
     res = ""
-    rd = rd.normalized()
-    # rd.weeks seems to just convert rd.days into weeks
-    if rd.years:
-        res += f"{rd.years} year{gen_s(rd.years)}, "
-    if rd.months:
-        res += f"{rd.months} month{gen_s(rd.months)}, "
-    if rd.days:
-        res += f"{rd.days} day{gen_s(rd.days)}, "
-    res += f"{rd.hours or 0}:"
-    res += f"{rd.minutes}"
+    sleep = 9.5
+    active_h = 24-sleep
+    # scale_factor = (24/(active_h))
+
+    s = relativedelta_total_seconds(rd)
+    m, _ = divmod(s, 60)
+    h, m = divmod(m, 60)
+    if only_hours:
+        res = f"{h}:{m}"
+    elif scale:
+        days, hours = divmod(h, active_h)
+        hours, m_rem = divmod(hours, 1)
+        hours = int(hours)
+        m += int(round(m_rem,0))
+        months, days = divmod(days, 30)
+        years, months = divmod(months, 24)
+        if years:
+            res += f"{years} year{gen_s(years)}, "
+        if months:
+            res += f"{months} month{gen_s(months)}, "
+        if days:
+            res += f"{days} day{gen_s(days)}, "
+        res += f"{hours or 0:}:"
+        res += f"{m}"
+    else:
+        rd = rd.normalized()
+        scale_factor = 1
+        # rd.weeks seems to just convert rd.days into weeks
+        if rd.years:
+            years = rd.years * scale_factor
+            res += f"{years} year{gen_s(years)}, "
+        if rd.months:
+            months = rd.months * scale_factor
+            res += f"{months} month{gen_s(months)}, "
+        if rd.days:
+            days = rd.days * scale_factor
+            res += f"{days} day{gen_s(days)}, "
+        res += f"{rd.hours or 0}:"
+        res += f"{rd.minutes}"
     return res
 
 @total_ordering
@@ -158,7 +187,7 @@ def activity_list_to_str(low, high, skip_acts=["sleep"]):
             acts_agg.add(dur, path)
     # ("TOTAL", total_dur),
     # we need a monospace font to justify the columns
-    res = f"```\nSpanning {str(high - low)}; UNACCOUNTED {relativedelta_str(relativedelta(high, low + acts_agg.total_duration + acts_skipped.total_duration))}\nTotal: {relativedelta_str(acts_agg.total_duration)}; Skipped {relativedelta_str(acts_skipped.total_duration)}\n"
+    res = f"```\nSpanning {str(high - low)}; UNACCOUNTED {relativedelta_str(relativedelta(high, low + acts_agg.total_duration + acts_skipped.total_duration), scale=False)}\nTotal (scaled): {relativedelta_str(acts_agg.total_duration)}; Skipped {relativedelta_str(acts_skipped.total_duration, scale=False)}\n"
     res += str(acts_agg)[0:3500] # truncate it for Telegram
     return {'string': res + "\n```", 'acts_agg': acts_agg, 'acts_skipped': acts_skipped}
 
@@ -293,9 +322,11 @@ def visualize_plotly(acts):
         parents = parents,
         values = values,
         text = texts,
-        texttemplate = "%{label}<br>%{value:.1f}<br>%{percentParent:.1%} of %{parent}<br>%{percentEntry:.1%} of %{entry}<br>%{percentRoot:.1%} of %{root}",
+        # %{value:.1f}
+        texttemplate = "%{label}<br>%{text}<br>%{percentParent:.1%} of %{parent}<br>%{percentEntry:.1%} of %{entry}<br>%{percentRoot:.1%} of %{root}",
         # textinfo = "label+value+percent parent+percent entry+percent root",
-        hovertemplate = "%{label}<br>%{value:.1f}<br>%{percentParent:.1%} of %{parent}<br>%{percentEntry:.1%} of %{entry}<br>%{percentRoot:.1%} of %{root}<extra>%{currentPath}%{label}</extra>",
+        # %{currentPath}%{label}
+        hovertemplate = "%{label}<br>%{text}<br>%{percentParent:.1%} of %{parent}<br>%{percentEntry:.1%} of %{entry}<br>%{percentRoot:.1%} of %{root}<extra>%{id}</extra>",
         # https://community.plotly.com/t/how-to-explicitly-set-colors-for-some-sectors-in-a-treemap/51162
         # color="day",
         # color_discrete_map={'(?)':'gold', 'Study':'green', 'wasted':'black'},
@@ -305,16 +336,16 @@ def visualize_plotly(acts):
     fig.update_layout(margin = dict(t=30, l=0, r=30, b=30))
     # fig.update_layout(uniformtext=dict(minsize=6, mode='hide'))
     is_local and fig.show()
-    out_links, out_files = fig_export(fig, "treemap", svg_export = False, pdf_export = False)
+    out_links, out_files = fig_export(fig, "treemap", width=400, height=400, svg_export = False, pdf_export = False)
     ##
     # @unresolved https://community.plotly.com/t/show-the-current-path-bar-in-sunburst-plots-just-like-treemap-plots/51155
-    plot_opts['labels'] = [act.name for act in all_acts]
-    plot_opts['texttemplate'] = "%{label}<br>%{value:.1f}, %{percentRoot:%}"
+    plot_opts['labels'] = [act.shortname for act in all_acts]
+    plot_opts['texttemplate'] = "%{label}<br>%{text}, %{percentRoot:%}"
     fig = go.Figure(go.Sunburst(**plot_opts))
     fig.update_layout(margin = dict(t=0, l=0, r=0, b=0))
     # fig.update_layout(uniformtext=dict(minsize=6, mode='hide'))
     is_local and fig.show()
-    l, f = fig_export(fig, "sunburst", width=500, height=500, svg_export = False, pdf_export = False)
+    l, f = fig_export(fig, "sunburst", width=400, height=400, svg_export = False, pdf_export = False)
     out_links += l
     out_files += f
     return out_links, out_files

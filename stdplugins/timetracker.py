@@ -72,7 +72,11 @@ subs = {
     ##
     "📖": "study",
     "s": "study",
-    "sc": "chores_self_study",  # study chores: e.g., choosing courses
+    ##
+    # study chores: e.g., choosing courses
+    "sc": "chores_self_study",
+    # "sc": "study_chore",
+    ##
     "sv": "study_video",
     "sp": "study_peripheral",  # prerequisites, etc
     # uni10
@@ -98,10 +102,16 @@ subs = {
     "💻": "sa",
     "system": "sa",
     "system administration": "sa",
-    "sac": "chores_self_sa",
-    "sacgh": "chores_self_sa_github",
-    "hw": "chores_self_sa_hardware",
-    "sax": "exploration_sa",
+    ##
+    "sac": "sa_chores",
+    "sacgh": "sa_chores_github",
+    "hw": "sa_chores_hardware",
+    # "sac": "chores_self_sa",
+    # "sacgh": "chores_self_sa_github",
+    # "hw": "chores_self_sa_hardware",
+    ##
+    # "sax": "exploration_sa",
+    "sax": "sa_exploration",
     "dev": "sa_development",
     "sat": "sa_thinking & design",
     "siri": "sa_development_siri",
@@ -113,8 +123,9 @@ subs = {
     "🐑": "chores",
     "ch": "chores",
     "cho": "chores_others",
+    "chfam": "chores_others_family",
     ##
-    "cm": "chores_commute",
+    "cm": "chores_self_commute",
     ##
     "exercise": "chores_self_health_exercise",
     "🏃🏽‍♀️": "chores_self_health_exercise",
@@ -148,9 +159,10 @@ subs = {
     ###
     "👥": "social",
     "soc": "social",
-    "tlg": "social_online",
+    "tlg": "social_online_telegram",
     "family": "social_family",
     "fam": "social_family",
+    "fams": "social_family_s",
     "famfin": "social_family_finance",
     "bills": "social_family_finance_bills",
     "family others": "social_family_others",
@@ -427,8 +439,8 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
             if m:
                 del_count = 0
                 if m.group(1):
-                    del_count = Activity.delete().where(Activity.end > (
-                        now - datetime.timedelta(minutes=float(m.group(1) or 5)))).execute()
+                    cutoff = (now - datetime.timedelta(minutes=float(m.group(1) or 5)))
+                    del_count = Activity.delete().where((Activity.end > cutoff) | (Activity.start > cutoff)).execute()
                     out_add(f"Deleted the last {del_count} activities")
                 elif last_act:
                     out_add(f"Deleted the last act: {last_act}")
