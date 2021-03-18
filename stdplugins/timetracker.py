@@ -469,7 +469,13 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                 out_links = '\n'.join(out_links)
                 out_add(out_links)
                 await edit(f"{out}", parse_mode="markdown")
-                await send_file(out_files)
+                ##
+                if False: # send as album
+                    await send_file(out_files)
+                else:
+                    for f in out_files:
+                        await send_file(f)
+                ##
                 return out
 
             m = habit_pat.match(m0_text)

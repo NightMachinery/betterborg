@@ -3,6 +3,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from brish import z, zp, Brish
+from collections.abc import Iterable
 from IPython.terminal.embed import InteractiveShellEmbed, InteractiveShell
 from IPython.terminal.ipapp import load_default_config
 from aioify import aioify
@@ -253,6 +254,13 @@ async def handle_exc_chat(chat, reply_exc=True):
 
 
 async def send_files(chat, files, **kwargs):
+    if isinstance(files, str) or not isinstance(files, Iterable):
+        try:
+            await borg.send_file(chat, files, allow_cache=False, **kwargs)
+        except:
+            await handle_exc_chat(chat)
+        return
+
     f2ext = lambda p: p.suffix
     files = [Path(f) for f in files] # idempotent
     files = sorted(files, key=f2ext)

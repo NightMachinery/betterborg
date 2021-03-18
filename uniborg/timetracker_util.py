@@ -158,7 +158,7 @@ def activity_list_to_str(low, high, skip_acts=["sleep"]):
             acts_agg.add(dur, path)
     # ("TOTAL", total_dur),
     # we need a monospace font to justify the columns
-    res = f"```\nSpanning {str(high - low)}; UNACCOUNTED {relativedelta_str(relativedelta(high, low + acts_agg.total_duration + acts_skipped.total_duration))}; Skipped {relativedelta_str(acts_skipped.total_duration)}\n"
+    res = f"```\nSpanning {str(high - low)}; UNACCOUNTED {relativedelta_str(relativedelta(high, low + acts_agg.total_duration + acts_skipped.total_duration))}\nTotal: {relativedelta_str(acts_agg.total_duration)}; Skipped {relativedelta_str(acts_skipped.total_duration)}\n"
     res += str(acts_agg)
     return {'string': res + "\n```", 'acts_agg': acts_agg, 'acts_skipped': acts_skipped}
 
@@ -258,21 +258,17 @@ def local_helper_visualize_plotly():
     return visualize_plotly(res['acts_agg'])
 
 def visualize_plotly(acts):
+    # @warn this is not async, and it takes rather long to complete
     all_acts = get_acts(acts)
+    acts_agg = all_acts[0]
     # print(acts_agg)
     import plotly.graph_objects as go
 
-    ids = None
-    labels = [act.name for act in all_acts]
-    texts = [act.shortname for act in all_acts]
-    ## Make displayed labels short (recommended):
-    ids = labels
-    labels = texts
-    # texts = ids
+    ids = [act.name for act in all_acts]
+    labels = [f"{act.shortname} {(relativedelta_total_seconds(act.total_duration)*100/relativedelta_total_seconds(acts_agg.total_duration)):.1f}%" for act in all_acts]
     texts = [relativedelta_str(act.total_duration) for act in all_acts]
     ##
     parents = [(act.parent and act.parent.name) or "" for act in all_acts]
-    # values = [relativedelta_total_seconds(act.duration) for act in all_acts]
     values = [(relativedelta_total_seconds(act.total_duration)/(3600)) for act in all_acts]
     # Do NOT round the values. Plotly expects them to sum correctly or something.
 
@@ -297,7 +293,7 @@ def visualize_plotly(acts):
         parents = parents,
         values = values,
         text = texts,
-        texttemplate = "%{label}<br>%{value:.1f}, %{percentRoot:%}",
+        texttemplate = "%{label}<br>%{value:.1f}<br>%{percentParent:.1%} of %{parent}<br>%{percentEntry:.1%} of %{entry}<br>%{percentRoot:.1%} of %{root}",
         # textinfo = "label+value+percent parent+percent entry+percent root",
         hovertemplate = "%{label}<br>%{value:.1f}<br>%{percentParent:.1%} of %{parent}<br>%{percentEntry:.1%} of %{entry}<br>%{percentRoot:.1%} of %{root}<extra>%{currentPath}%{label}</extra>",
         # https://community.plotly.com/t/how-to-explicitly-set-colors-for-some-sectors-in-a-treemap/51162
@@ -309,14 +305,16 @@ def visualize_plotly(acts):
     fig.update_layout(margin = dict(t=30, l=0, r=30, b=30))
     # fig.update_layout(uniformtext=dict(minsize=6, mode='hide'))
     is_local and fig.show()
-    out_links, out_files = fig_export(fig, "treemap")
+    out_links, out_files = fig_export(fig, "treemap", svg_export = False, pdf_export = False)
     ##
     # @unresolved https://community.plotly.com/t/show-the-current-path-bar-in-sunburst-plots-just-like-treemap-plots/51155
+    plot_opts['labels'] = [act.name for act in all_acts]
+    plot_opts['texttemplate'] = "%{label}<br>%{value:.1f}, %{percentRoot:%}"
     fig = go.Figure(go.Sunburst(**plot_opts))
     fig.update_layout(margin = dict(t=0, l=0, r=0, b=0))
     # fig.update_layout(uniformtext=dict(minsize=6, mode='hide'))
     is_local and fig.show()
-    l, f = fig_export(fig, "sunburst")
+    l, f = fig_export(fig, "sunburst", width=500, height=500, svg_export = False, pdf_export = False)
     out_links += l
     out_files += f
     return out_links, out_files
