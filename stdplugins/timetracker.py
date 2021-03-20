@@ -152,6 +152,8 @@ subs = {
     "bath": "chores_self_hygiene_bath",
     "🛁": "chores_self_hygiene_bath",
     "ba": "chores_self_hygiene_bath",
+    "shave": "chores_self_hygiene_hair_shave",
+    "hair": "chores_self_hygiene_hair_haircut",
     ##
     "sl": "sleep",  # putting this under chores will just make using the data harder, no?
     "💤": "sleep",
