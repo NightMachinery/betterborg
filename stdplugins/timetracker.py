@@ -42,6 +42,7 @@ subs_commands = {
 suffixes = {
     '-': [0, "wasted"],
     '$': [1, "halfhearted"],
+    'C': [1, "chores"],
     '+': None,
 }
 subs = {
@@ -112,11 +113,13 @@ subs = {
     ##
     # "sax": "exploration_sa",
     "sax": "sa_exploration",
+    "android": "sa_exploration_android",
     "dev": "sa_development",
     "sat": "sa_thinking & design",
     "siri": "sa_development_siri",
     "testman": "sa_development_testing_manual",
     "this": "sa_development_quantified self_timetracker",
+    "d3": "sa_development_quantified self_timetracker_d3",
     "doc": "sa_product_documentation",
     "eval": "sa_product_evaluation",
     ###
