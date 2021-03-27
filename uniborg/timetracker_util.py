@@ -1,5 +1,10 @@
 from __future__ import annotations
 from brish import z
+import logging
+try:
+    logger = logger or logging.getLogger(__name__)
+except:
+    logger = logging.getLogger(__name__)
 ##
 import asyncio
 lock_tt = asyncio.Lock()
@@ -16,6 +21,8 @@ from pathlib import Path
 # Path.home().joinpath(Path("cellar"))
 db_path = Path(
     z('print -r -- "${{attic_private_dir:-$HOME/tmp}}/timetracker.db"').outrs)
+user_choices_path = Path(
+    z('print -r -- "${{attic_private_dir:-$HOME/tmp}}/timetracker_user_choices"').outrs)
 os.makedirs(os.path.dirname(db_path), exist_ok=True)
 db = SqliteDatabase(db_path)
 

@@ -1,3 +1,5 @@
+# @hiddenAPI the file's name 'timetracker' is used by borg._plugins
+###
 from telethon import events
 import telethon
 import traceback
@@ -58,7 +60,6 @@ subs = {
     # "wtth": "wasted_thinking",
     "worry": "wasted_thinking_worrying",
     "fantasy": "wasted_thinking_fantasy",
-    "selfie": "wasted_thinking_self inspection",
     ##
     "news": "wasted_news",
     # "wtso": "wasted_social_online",
@@ -114,12 +115,20 @@ subs = {
     # "sax": "exploration_sa",
     "sax": "sa_exploration",
     "android": "sa_exploration_android",
+    "crystal": "sa_exploration_crystallang",
+    ##
     "dev": "sa_development",
-    "sat": "sa_thinking & design",
-    "siri": "sa_development_siri",
     "testman": "sa_development_testing_manual",
+    "emc": "sa_development_emacs",
+    "sh": "sa_development_nightsh",
+    "brish": "sa_development_nightsh_brish",
+    "org": "sa_development_emacs_orgmode",
     "this": "sa_development_quantified self_timetracker",
     "d3": "sa_development_quantified self_timetracker_d3",
+    "siri": "sa_development_siri",
+    # "": "sa_development_",
+    ##
+    "sat": "sa_thinking & design",
     "doc": "sa_product_documentation",
     "eval": "sa_product_evaluation",
     ###
@@ -136,7 +145,7 @@ subs = {
     ##
     "r": "chores_self_rest",
     "rest": "chores_self_rest",
-    "glue": "chores_self_rest_glue",
+    "gl": "chores_self_rest_glue",
     "🍽": "chores_self_rest_eat",
     "eat": "chores_self_rest_eat",
     "eating": "chores_self_rest_eat",
@@ -204,8 +213,13 @@ subs = {
     "med": "meditation_serene",
     "thinking": "meditation_thinking",
     "th": "meditation_thinking",
+    "thl": "meditation_thinking_loose",
+    "selfie": "meditation_thinking_self inspection",
+    "qs": "meditation_thinking_self inspection_quantified self",
+    "sched": "meditation_thinking_scheduling",
     ##
-    "go": "going out",
+    "go": "outdoors",
+    "going out": "outdoors",
     ##
     "expl": "exploration",
     "xbuy": "exploration_buying",
@@ -215,17 +229,72 @@ subs = {
     "gathmusic": "exploration_gathering_music"
     ##
 }
+subs_additional = {
+    "chores_self_rest_eat_lunch_family",
+    "chores_self_rest_eat_dinner_family",
+}
 reminders_immediate = {
     "chores_self_hygiene_bath": "Turn off the heater",
     "sleep": "Clean your eyes",
 }
 ##
-# levenshtein is a two-edged sword for our purposes, but I think it's ultimately more intuitive. One huge problem with levenshtein is that it punishes longer strings.
-fuzzy_choices = set(list(subs.values()) + list(subs.keys()))
-# yes, this is just a subset of fuzzy_choices
-fuzzy_choices_str = '\n'.join(set(subs.values()))
-subs_fuzzy = FuzzySet(fuzzy_choices, use_levenshtein=True)
+def load_strlist(path, default):
+    try:
+        with open(path, 'r') as f:
+            # Perhaps skip empty lines?
+            return [line.strip() for line in f.readlines()]
+    except FileNotFoundError:
+        return default
+    except:
+        logger.warn(f"Could not load strlist from {repr(path)}:\n{traceback.format_exc()}")
+        return default
 
+def save_strlist(path, strlist, force=False):
+    if force or strlist:
+        try:
+            # 'w' for only writing (an existing file with the same name will be erased)
+            with open(path, 'w') as f:
+                return f.write('\n'.join(strlist))
+        except:
+            logger.warn(f"Could not save strlist to {repr(path)}:\n{traceback.format_exc()}")
+            return None
+
+##
+fuzzy_choices = None
+fuzzy_choices_str = None
+subs_fuzzy = None
+user_choices = set()
+def add_user_choice(choice):
+    global fuzzy_choices, fuzzy_choices_str, subs_fuzzy, user_choices
+    if not (choice in fuzzy_choices):
+        fuzzy_choices.add(choice)
+        user_choices.add(choice)
+        fuzzy_choices_str += f"\n{choice}"
+        save_fuzzy_choices()
+        logger.info(f"Added user choice: {choice}")
+
+def load_fuzzy_choices():
+    global fuzzy_choices, fuzzy_choices_str, subs_fuzzy, user_choices
+    save_fuzzy_choices(force=True)
+    user_choices = set(load_strlist(user_choices_path, user_choices))
+    fuzzy_choices = set(list(subs.values())).union(subs_additional) # list(subs.keys())
+    user_choices = user_choices.difference(fuzzy_choices) # remove redundant entries
+    fuzzy_choices = fuzzy_choices.union(user_choices)
+    fuzzy_choices_str = '\n'.join(fuzzy_choices)
+    ## @unused
+    # subs_fuzzy = FuzzySet(fuzzy_choices, use_levenshtein=True)
+    # levenshtein is a two-edged sword for our purposes, but I think it's ultimately more intuitive. One huge problem with levenshtein is that it punishes longer strings.
+    ##
+
+last_saved = datetime.datetime.today()
+def save_fuzzy_choices(force=False):
+    global last_saved
+    now = datetime.datetime.today()
+    if (force or (now - last_saved >= datetime.timedelta(hours=0.5))):
+        save_strlist(user_choices_path, sorted(user_choices))
+        last_saved = now
+
+load_fuzzy_choices()
 
 def chooseAct(fuzzyChoice: str):
     ##
@@ -267,9 +336,14 @@ async def process(event):
     return await process_msg(m0)
 
 
-async def reload_tt():
+
+async def reload_tt_prepare():
+    save_fuzzy_choices(force=True)
     db.close()
     db.connect()
+
+async def reload_tt():
+    # calls reload_tt_prepare itself
     await borg.reload_plugin("timetracker")
 
 
@@ -280,16 +354,34 @@ async def process_msg(*args, **kwargs):
 async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
     global starting_anchor
 
-    async def edit(text: str, **kwargs):
+    async def edit(text: str, truncate=True, **kwargs):
         try:
+            # if not text: # might be sending files
+                # return
+
+            text_raw = text
             if len(text) > 4000:
-                text = f"{text[:4000]}\n\n..."
+                if truncate:
+                    text = f"{text[:4000]}\n\n..."
+                else:
+                    text = text[:4000]
+
             await borg.edit_message(m0, text, **kwargs)
+            if not truncate:
+                await reply(text_raw[4000:]) # kwargs should not apply to a mere text message
+
         except telethon.errors.rpcerrorlist.MessageNotModifiedError:
             pass
 
     async def reply(text: str, **kwargs):
-        await m0.reply(text, **kwargs)
+        # if not text: # might be sending files
+            # return
+
+        if len(text) > 4000:
+            await m0.reply(text[:4000], **kwargs)
+            await reply(text[4000:]) # kwargs should not apply to a mere text message
+        else:
+            await m0.reply(text, **kwargs)
 
     async def send_file(file, **kwargs):
         if file:
@@ -332,6 +424,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                 delayed_actions.append(action)
             else:
                 delayed_actions_special.append(suffix)
+
             text = text[:-1]
             if not text:
                 choiceConfirmed = True
@@ -341,9 +434,14 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
         if text in subs:
             choiceConfirmed = True
             text = subs[text]
+
+        if text in subs_additional:
+            choiceConfirmed = True
+
         if text in subs_commands:
             choiceConfirmed = True
             text = subs_commands[text]
+
         ## MOVED to text_sub_finalize
         # if not choiceConfirmed:
         #     if not text.startswith("."):
@@ -361,11 +459,13 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
 
         if text.startswith("."):
             text = text[1:]
+            add_user_choice(text)
         elif not choiceConfirmed:
             tokens = list(text.split('_'))
             if len(tokens) > 1:
                 tokens[0] = text_sub_full(tokens[0])
                 text = '_'.join(tokens)
+                add_user_choice(text)
             else:
                 text = chooseAct(text)
         for action in delayed_actions:
@@ -423,8 +523,8 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                 # out_add("comment")
                 return out
             elif m0_text == 'man':
-                out_add(yaml.dump(suffixes) + '\n' + yaml.dump(subs_commands) + '\n' + yaml.dump(subs))
-                await edit(out)
+                out_add(yaml.dump(suffixes) + '\n' + yaml.dump(subs_commands) + '\n' + yaml.dump(subs) + "\n" + yaml.dump(list(subs_additional)) + '\n' + yaml.dump(sorted(user_choices)))
+                await edit(out, truncate=False)
                 return out
             elif m0_text == '.l':
                 await reload_tt()
@@ -445,7 +545,10 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                 del_count = 0
                 if m.group(1):
                     cutoff = (now - datetime.timedelta(minutes=float(m.group(1) or 5)))
-                    del_count = Activity.delete().where((Activity.end > cutoff) | (Activity.start > cutoff)).execute()
+                    ##
+                    # (Activity.end > cutoff) |
+                    del_count = Activity.delete().where((Activity.start > cutoff)).execute()
+                    ##
                     out_add(f"Deleted the last {del_count} activities")
                 elif last_act:
                     out_add(f"Deleted the last act: {last_act}")
@@ -545,8 +648,13 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                     mins = float(m.group(1) or 20)
                     # supports negative numbers, too ;D
                     last_act.end -= datetime.timedelta(minutes=mins)
+                    res = f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)"
+                    if last_act.end < last_act.start:
+                        out_add(f"Canceled: {res}")
+                        await edit(out)
+                        return out
                     last_act.save()
-                    out_add(f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)")
+                    out_add(res)
                     await edit(out)
                     return out
                 else:
@@ -569,9 +677,10 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
             if m0_text == '.':
                 if last_act != None:
                     # this design doesn't work too well with deleting records
+                    amount = now - last_act.end
                     last_act.end = now
                     last_act.save()
-                    out_add(f"{str(last_act)} (Updated)")
+                    out_add(f"{str(last_act)} (Updated by {int(amount.total_seconds()//60)} minutes)")
                     await edit(out)
                     return out
                     # @alt:
@@ -616,10 +725,12 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
             await process_reminders(act.name)
             return out
     except:
-        out_add("\nJulia encountered an exception. :(\n" + traceback.format_exc())
+        err = "\nJulia encountered an exception. :(\n" + traceback.format_exc()
+        logger.error(err)
+        out_add(err)
         if reload_on_failure:
             out_add("Reloading ...\n")
-            await edit(out)
+            await edit(out, truncate=False)
             await reload_tt()
             return await borg._plugins["timetracker"]._process_msg(m0, reload_on_failure=False, text_input=text_input, out=out)
         else:

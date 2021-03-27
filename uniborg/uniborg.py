@@ -113,6 +113,9 @@ class Uniborg(TelegramClient):
             shortname = path.stem
         try:
             if shortname in self._plugins:
+                if shortname == 'timetracker':
+                    await self._plugins['timetracker'].reload_tt_prepare()
+
                 self.remove_plugin(shortname)
             self.load_plugin(shortname)
 

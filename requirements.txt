@@ -35,5 +35,7 @@ watchgod
 
 plotly
 
+
 # junk deps:
-jsonpickle
+# sortedcontainers
+# jsonpickle
