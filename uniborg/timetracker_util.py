@@ -203,10 +203,10 @@ def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mo
     # _now means 'now' is 'high'
     high = received_at or datetime.datetime.today()
     low = high - delta
+    ## aligns dates with real life, so that date changes happen at, e.g., 5 AM:
     low = low.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
-
-    # aligns dates with real life, so that date changes happen at, e.g., 5 AM
     night_passover = datetime.timedelta(hours=DAY_START)
+    ##
 
     def which_bucket(act: Activity):
         if act.name == name or act.name.startswith(name + '_'):
@@ -230,25 +230,22 @@ def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mo
     return buckets_dur
 
 
-def stacked_area_get_act_roots(low=None, high=None, delta=datetime.timedelta(days=30), fill_default=True):
+def stacked_area_get_act_roots(low=None, high=None, delta=None, repeat=30,interval=datetime.timedelta(days=1)):
+    delta = delta or interval*repeat
     high = high or datetime.datetime.today()
     low = low or (high - delta)
     low = low.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
 
-    # aligns dates with real life, so that date changes happen at, e.g., 5 AM
-    night_passover = datetime.timedelta(hours=DAY_START)
+    buckets = dict()
+    while low < high:
+        mid = low + interval
+        bucket = buckets.setdefault(low.date(), ActivityDuration("Total"))
+        acts = Activity.select().where((Activity.start.between(low, mid)) | (Activity.end.between(low, mid)))
+        for act in acts:
+            dur = relativedelta(min(act.end, mid), max(act.start, low))
+            bucket.add(dur, list(reversed(act.name.split('_'))))
 
-    def which_bucket(act: Activity):
-        return (act.start - night_passover).date()
-
-    buckets = activity_list_buckets_get(
-        low, high, which_bucket=which_bucket, mode=0)
-
-    if fill_default:
-        interval = datetime.timedelta(days=1)
-        while low <= high:
-            buckets.setdefault(low.date(), ActivityDuration("Total"))
-            low += interval
+        low = mid
 
     return buckets
 
@@ -263,6 +260,7 @@ def activity_list_buckets_get(low, high, which_bucket, mode=0, correct_overlap=T
     buckets = {}
     for act in acts:
         if correct_overlap:
+            # @warn overlap is not corrected between the buckets themselves!
             act.start = max(act.start, low)
             act.end = min(act.end, high)
             ##
@@ -405,14 +403,14 @@ def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
 
     return out_links, out_files
 
-def get_sub_act_total_duration(act, sub_act_name: str):
+def get_sub_act_total_duration(act, sub_act_name: str, days):
     sub_act = act.sub_acts.get(sub_act_name, None)
     if sub_act:
-        return sub_act.total_duration
+        return round((relativedelta_total_seconds(sub_act.total_duration)/3600.0)/days,1)
     else:
         return 0
 
-def visualize_stacked_area(act_roots):
+def visualize_stacked_area(dated_act_roots, days=1):
     out_links = []
     out_files = []
 
@@ -423,21 +421,26 @@ def visualize_stacked_area(act_roots):
         'study' : 'rgb(204,235,197)',
         'sa' : 'rgb(179,205,227)',
         'chores' : 'rgb(255,255,204)',
-        # 'wasted' : 'rgb(255,255,255)',
-        'wasted' : 'rgb(251,180,174)',
+        # 'wasted' : 'rgb(251,180,174)',
+        'wasted' : 'rgb(227,26,28)',
+        'exploration' : 'rgb(106,61,154)',
+        'meditation' : 'rgb(255,127,0)',
+        'outdoors' : 'rgb(177,89,40)',
         'social' : 'rgb(253,218,236)',
-        'exploration' : 'rgb(222,203,228)',
-        'meditation' : 'rgb(254,217,166)',
-        'outdoors' : 'rgb(229,216,189)',
-        'consciously untracked' : 'rgb(242,242,242)',
+        'consciously untracked' : 'rgb(0,0,0)',
+        # 'sleep' : 'rgb(255,255,255)',
+        'sleep' : 'rgb(0,0,255)',
         # '' : 'rgb()',
     }
     ##
 
+    act_roots = dated_act_roots.values()
+    xs = list(dated_act_roots.keys())
     for category, color in categories.items():
         fig.add_trace(go.Scatter(
-            x=x,
-            y=[get_sub_act_total_duration(act, category) for act in act_roots],
+            name=category,
+            x=xs,
+            y=[get_sub_act_total_duration(act, category, days) for act in act_roots],
             hoverinfo='x+y',
             mode='lines',
             line=dict(width=0.5, color=color),
@@ -445,7 +448,10 @@ def visualize_stacked_area(act_roots):
             # groupnorm='percent' # sets the normalization for the sum of the stackgroup
         ))
 
-    l, f = fig_export(fig, "stacked_area", width=600, height=400, svg_export = False, pdf_export = False)
+
+    fig.update_layout(yaxis_range=(0, 24))
+    fig.update_layout(margin = dict(t=0, l=0, r=0, b=0))
+    l, f = fig_export(fig, "stacked_area", width=700, height=300, svg_export = False, pdf_export = False)
     out_links += l # is list
     out_files += f
 

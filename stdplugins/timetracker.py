@@ -43,10 +43,17 @@ subs_commands = {
     "/d": "o m=2 r=6 treemap=0",
     "/d30": "o m=2 r=29 treemap=0",
     "/w": "o168 m=2 r=7 treemap=0",
+    ##
+    "/s7": "o7 m=3 r=6",
+    "/s3": "o3 m=3 r=14",
+    "/s2": "o2 m=3 r=21",
+    "/s1": "o1 m=3 r=42",
+    "/sall": "/s1\n/s2\n/s3\n/s7",
     ###
 }
 suffixes = {
     '-': [0, "wasted"],
+    'O': [0, "outdoors"],
     '$': [1, "halfhearted"],
     'C': [1, "chores"],
     '+': None,
@@ -625,7 +632,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                 repeat = int(m.group('repeat') or 0)
                 hours = m.group('t')
                 res = None
-                async def send_plots(out_files, out_links):
+                async def send_plots(out_links, out_files):
                     out_links = '\n'.join(out_links)
                     out_add(out_links, prefix='\n')
                     await edit(f"{out}", parse_mode="markdown")
@@ -640,12 +647,16 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                 async def report(hours=None, output_mode=1, received_at=None, title=None):
                     if not received_at:
                         out_add("report: received_at is empty")
+                        await edit(f"{out}", parse_mode="markdown")
                         return
 
                     if output_mode in (3,):
                         out_add("Generating stacked area plots ...")
-                        act_roots = stacked_area_get_act_roots()
-                        out_links, out_files = visualize_stacked_area(act_roots)
+                        await edit(f"{out}", parse_mode="markdown")
+                        days = float(hours or 7)
+                        a = stacked_area_get_act_roots(repeat=(repeat or 20), interval=datetime.timedelta(days=days))
+                        # embed2()
+                        out_links, out_files = visualize_stacked_area(a, days=days)
                         await send_plots(out_links, out_files)
 
                     if hours:
@@ -674,7 +685,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                 fake_received_at = received_at
                 for i in range(0, repeat+1):
                     title = None
-                    if repeat > 0:
+                    if repeat > 0 and not (output_mode in (3,)):
                         title = f"Reporting (repeat={i}, hours={hours}, received_at={fake_received_at}):"
 
                     if i > 0:
@@ -682,6 +693,9 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                         # await reply(title)
 
                     await report(hours=hours, output_mode=output_mode, received_at=fake_received_at, title=title)
+                    if output_mode in (3,):
+                        break
+
                     fake_received_at = (fake_received_at - datetime.timedelta(hours=float(hours or 24)))
 
                 return out
