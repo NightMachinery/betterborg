@@ -9,6 +9,7 @@ import sys
 import socks
 from uniborg import Uniborg
 from watchgod import awatch, Change
+from brish import z, zp, zq
 
 borg: Uniborg = None
 
@@ -27,6 +28,7 @@ async def borg_init(background_mode=True):
     borg = await Uniborg.create(session, plugin_path=plugin_path,
                                 connection_retries=None, proxy=proxy, log_chat=log_chat)
     print("Borg created!")
+    zp("((${{+functions[bella-magic]}})) && bella-magic")
 
     async def watch_plugins():
         async for changes in awatch(plugin_path, normal_sleep=5000):
