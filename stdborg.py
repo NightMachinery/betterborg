@@ -53,8 +53,11 @@ from typing import Optional
 from fastapi import FastAPI, Response, Request
 from pydantic import BaseSettings, BaseModel
 
+import email.utils
+
 class TTMark(BaseModel):
     name: str
+    received_at: Optional[str] = None
 
 app = FastAPI(openapi_url="")
 logger = logging.getLogger("uvicorn")  # alt: from uvicorn.config import logger
@@ -83,7 +86,14 @@ async def tt_mark(mark: TTMark, request: Request):
         return text_req(err)
     tt = borg._plugins["timetracker"]
     m0 = await borg.send_message(tt.timetracker_chat, mark.name)
-    res = await tt.process_msg(m0)
+    received_at = getattr(mark, "received_at", None)
+    if received_at:
+        received_at = email.utils.parsedate_to_datetime(received_at)
+        # the resulting datetime includes the timezone info if present in the source
+        received_at = received_at.replace(tzinfo=None) # we currently don't support timezones
+
+    # print(f"tt_mark: received_at={received_at}, command={mark.name}")
+    res = await tt.process_msg(m0, received_at=received_at)
     return text_req(res or err)
 
 

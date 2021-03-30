@@ -55,7 +55,6 @@ subs = {
     ##
     # "wtg": "wasted_exploration_gathering",
     # "wtgh": "wasted_exploration_github",
-    "nos": "wasted_exploration_gathering_nostalgia",
     ##
     # "wtth": "wasted_thinking",
     "worry": "wasted_thinking_worrying",
@@ -137,6 +136,8 @@ subs = {
     "cho": "chores_others",
     "chfam": "chores_others_family",
     ##
+    "bills": "chores_finance_bills",
+    ##
     "cm": "chores_self_commute",
     ##
     "exercise": "chores_self_health_exercise",
@@ -178,7 +179,6 @@ subs = {
     "fam": "social_family",
     "fams": "social_family_s",
     "famfin": "social_family_finance",
-    "bills": "social_family_finance_bills",
     "family others": "social_family_others",
     "famo": "social_family_others",
     ###
@@ -226,7 +226,8 @@ subs = {
     "🌐": "exploration_targetedLearning",
     "tl": "exploration_targetedLearning",
     "gath": "exploration_gathering",
-    "gathmusic": "exploration_gathering_music"
+    "gathmusic": "exploration_gathering_music",
+    "nos": "exploration_gathering_nostalgia",
     ##
 }
 subs_additional = {
@@ -281,8 +282,8 @@ def load_fuzzy_choices():
     user_choices = user_choices.difference(fuzzy_choices) # remove redundant entries
     fuzzy_choices = fuzzy_choices.union(user_choices)
     fuzzy_choices_str = '\n'.join(fuzzy_choices)
-    ## @unused
-    # subs_fuzzy = FuzzySet(fuzzy_choices, use_levenshtein=True)
+    ##
+    subs_fuzzy = FuzzySet(fuzzy_choices, use_levenshtein=True)
     # levenshtein is a two-edged sword for our purposes, but I think it's ultimately more intuitive. One huge problem with levenshtein is that it punishes longer strings.
     ##
 
@@ -351,7 +352,7 @@ async def process_msg(*args, **kwargs):
     async with lock_tt:
         return await _process_msg(*args, **kwargs)
 
-async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
+async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", received_at=None):
     global starting_anchor
 
     async def edit(text: str, truncate=True, **kwargs):
@@ -381,7 +382,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
             await m0.reply(text[:4000], **kwargs)
             await reply(text[4000:]) # kwargs should not apply to a mere text message
         else:
-            await m0.reply(text, **kwargs)
+            await m0ereply(text, **kwargs)
 
     async def send_file(file, **kwargs):
         if file:
@@ -480,18 +481,22 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                     text += post
         return text
 
-    def text_sub_full(text):
+    def text_sub_full(text, reset_delayed_actions=True):
         nonlocal choiceConfirmed
         nonlocal delayed_actions
 
         tmp = choiceConfirmed  # out of caution
         choiceConfirmed = False
-        tmp2 = delayed_actions
-        delayed_actions = []
-        # @warn delayed_actions_special currently not reset because I don't think it matters
+        if reset_delayed_actions:
+            tmp2 = delayed_actions
+            delayed_actions = []
+            # @warn delayed_actions_special currently does not reset because I don't think it matters
+
         res = text_sub_finalize(text_sub(text))
         choiceConfirmed = tmp
-        delayed_actions = tmp2
+        if reset_delayed_actions:
+            delayed_actions = tmp2
+
         return res
 
     try:
@@ -506,7 +511,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                 text_inputs = text_input.split("\n")
                 if len(text_inputs) > 1:
                     for text_input in text_inputs:
-                        out = await _process_msg(m0, text_input=text_input, reload_on_failure=reload_on_failure, out=out)
+                        out = await _process_msg(m0, text_input=text_input, reload_on_failure=reload_on_failure, out=out, received_at=received_at)
                     return True, out
                 return False, False
 
@@ -534,8 +539,14 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                 raise Exception(".error invoked")
                 return "@impossible"
 
-            now = datetime.datetime.today()
-            last_act_query = Activity.select().order_by(Activity.end.desc())
+            if not received_at: # None, "" are both acceptable as null
+                received_at = datetime.datetime.today()
+            else:
+                print(f"_process_msg: received_at={received_at}")
+                pass
+
+            # last_act_query = Activity.select().order_by(Activity.end.desc())
+            last_act_query = Activity.select().where(Activity.end <= received_at).order_by(Activity.end.desc())
             last_act = None
             if last_act_query.exists():
                 last_act = last_act_query.get()
@@ -544,10 +555,10 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
             if m:
                 del_count = 0
                 if m.group(1):
-                    cutoff = (now - datetime.timedelta(minutes=float(m.group(1) or 5)))
+                    cutoff = (received_at - datetime.timedelta(minutes=float(m.group(1) or 5)))
                     ##
                     # (Activity.end > cutoff) |
-                    del_count = Activity.delete().where((Activity.start > cutoff)).execute()
+                    del_count = Activity.delete().where((Activity.start > cutoff & Activity.start <= received_at)).execute()
                     ##
                     out_add(f"Deleted the last {del_count} activities")
                 elif last_act:
@@ -559,19 +570,19 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                 return out
 
             if m0_text == "w":
-                starting_anchor = now
-                out_add("Anchored")
+                starting_anchor = received_at
+                out_add(f"Anchored to {starting_anchor}")
                 await edit(out)
                 return out
 
             if m0_text == 'debugme':
                 Activity.delete().where(Activity.name == 'dummy').execute()
-                Activity(name="dummy", start=(now - datetime.timedelta(days=6*30,
-                                                                    hours=7)), end=(now - datetime.timedelta(days=6*30))).save()
-                Activity(name="dummy", start=(now - datetime.timedelta(days=1*30,
-                                                                    hours=3)), end=(now - datetime.timedelta(days=1*30))).save()
-                Activity(name="dummy", start=(now - datetime.timedelta(days=10*30,
-                                                                    hours=10)), end=(now - datetime.timedelta(days=10*30))).save()
+                Activity(name="dummy", start=(received_at - datetime.timedelta(days=6*30,
+                                                                    hours=7)), end=(received_at - datetime.timedelta(days=6*30))).save()
+                Activity(name="dummy", start=(received_at - datetime.timedelta(days=1*30,
+                                                                    hours=3)), end=(received_at - datetime.timedelta(days=1*30))).save()
+                Activity(name="dummy", start=(received_at - datetime.timedelta(days=10*30,
+                                                                    hours=10)), end=(received_at - datetime.timedelta(days=10*30))).save()
                 out_add("DEBUG COMMAND")
                 await edit(out)
                 return out
@@ -581,12 +592,12 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                 hours = m.group(1)
                 res = None
                 if hours:
-                    res = activity_list_to_str_now(delta=datetime.timedelta(hours=float(hours)))
+                    res = activity_list_to_str_now(delta=datetime.timedelta(hours=float(hours)), received_at=received_at)
                 else:
-                    low = now.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
-                    if low > now:
+                    low = received_at.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
+                    if low > received_at:
                         low = low - datetime.timedelta(days=1)
-                    res = activity_list_to_str(low, now)
+                    res = activity_list_to_str(low, received_at)
                 out_add(res['string'])
                 await edit(f"{out}", parse_mode="markdown")
                 out_links, out_files = visualize_plotly(res['acts_agg'])
@@ -611,9 +622,9 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                 habit_delta = datetime.timedelta(
                     days=float(m.group('t') or 30))  # days
                 habit_data = activity_list_habit_get_now(
-                    habit_name, delta=habit_delta, mode=habit_mode)
+                    habit_name, delta=habit_delta, mode=habit_mode, received_at=received_at)
                 out_add(f"\n{habit_name}\n\n{yaml.dump(habit_data)}")
-                habit_data.pop(now.date(), None)
+                habit_data.pop(received_at.date(), None)
                 def mean(numbers):
                     numbers = list(numbers)
                     return float(sum(numbers)) / max(len(numbers), 1)
@@ -621,16 +632,15 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                 out_add(f"average: {round(average, 1)}", prefix="\n")
                 await edit(out)
                 ##
-                now = datetime.datetime.now()
                 # ~1 day(s) left empty as a buffer
                 habit_delta = datetime.timedelta(days=364)
                 habit_data = activity_list_habit_get_now(
-                    habit_name, delta=habit_delta, mode=habit_mode, fill_default=False)
+                    habit_name, delta=habit_delta, mode=habit_mode, fill_default=False, received_at=received_at)
                 img = z("gmktemp --suffix .png").outrs
                 resolution = 100
                 # * we can increase habit_max by 1.2 to be able to still show overwork, but perhaps each habit should that manually
-                # * calendarheatmap is designed to handle a single year. Using this `year=now.year` hack, we can render the previous year's progress as well. (Might get us into trouble after 366-day years, but probably not.)
-                plot_data = {str(k.replace(year=now.year)): (1 if k.year == now.year else -1) * int(
+                # * calendarheatmap is designed to handle a single year. Using this `year=received_at.year` hack, we can render the previous year's progress as well. (Might get us into trouble after 366-day years, but probably not.)
+                plot_data = {str(k.replace(year=received_at.year)): (1 if k.year == received_at.year else -1) * int(
                     min(resolution, resolution * (v/habit_max))) for k, v in habit_data.items()}
                 plot_data_json = json.dumps(plot_data)
                 # await reply(plot_data_json)
@@ -664,7 +674,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
             m = rename_pat.match(m0_text)
             if m:
                 if last_act != None:
-                    last_act.name = text_sub_full(m.group(1))
+                    last_act.name = text_sub_full(m.group(1), reset_delayed_actions=False)
                     last_act.save()
                     out_add(f"{str(last_act)} (Renamed)")
                     await edit(out)
@@ -674,19 +684,17 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                     await warn_empty()
                     return
 
+            async def update_to_now():
+                amount = received_at - last_act.end
+                last_act.end = received_at
+                last_act.save()
+                out_add(f"{str(last_act)} (Updated by {int(round(amount.total_seconds()/60.0, 0))} minutes)")
+                await edit(out)
+                return out
+
             if m0_text == '.':
                 if last_act != None:
-                    # this design doesn't work too well with deleting records
-                    amount = now - last_act.end
-                    last_act.end = now
-                    last_act.save()
-                    out_add(f"{str(last_act)} (Updated by {int(amount.total_seconds()//60)} minutes)")
-                    await edit(out)
-                    return out
-                    # @alt:
-                    # m0_text = last_act.name
-                    # choiceConfirmed = True
-                    ##
+                    return await update_to_now()
                 else:
                     await warn_empty()
                     return
@@ -701,12 +709,11 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
 
             start: datetime.datetime
             if '+' in delayed_actions_special:
-                start = now
-                # @warn unless we update last_act_query to also sort by start date, or add an epsilon to either the new act or last_act, the next call to last_act_query might return either of them (theoretically). In practice, it seems last_act is always returned and this zero-timed new act gets ignored. This is pretty much what we want, except it makes hard to correct errors with `.del` etc.
-                if last_act != None: # @duplicatedCode
-                    last_act.end = now
-                    last_act.save()
-                    out_add(f"{str(last_act)} (Updated)")
+                start = received_at
+                # @warn unless we update last_act_query to also sort by start date, or add an epsilon to either the new act or last_act, the next call to last_act_query might return either of them (theoretically). In practice, it seems last_act is always returned and this zero-timed new act gets ignored. This is pretty much what we want, except it makes it hard to correct errors with `.del` etc.
+                if last_act != None:
+                    await update_to_now()
+
             else:
                 if starting_anchor == None:
                     if last_act == None:
@@ -718,7 +725,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
                     start = starting_anchor
                     starting_anchor = None
 
-            act = Activity(name=m0_text, start=start, end=now)
+            act = Activity(name=m0_text, start=start, end=received_at)
             act.save()
             out_add(str(act))
             await edit(out)
@@ -732,7 +739,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out=""):
             out_add("Reloading ...\n")
             await edit(out, truncate=False)
             await reload_tt()
-            return await borg._plugins["timetracker"]._process_msg(m0, reload_on_failure=False, text_input=text_input, out=out)
+            return await borg._plugins["timetracker"]._process_msg(m0, reload_on_failure=False, text_input=text_input, out=out, received_at=received_at)
         else:
             await edit(out)
             return out

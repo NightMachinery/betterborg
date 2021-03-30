@@ -173,8 +173,8 @@ class ActivityDuration:
         return res
 
 ##
-def activity_list_to_str_now(delta=datetime.timedelta(hours=24), **kwargs):
-    now = datetime.datetime.today()
+def activity_list_to_str_now(delta=datetime.timedelta(hours=24), received_at=None, **kwargs):
+    now = received_at or datetime.datetime.today()
     low = now - delta
     return activity_list_to_str(low,now, **kwargs)
 
@@ -198,9 +198,9 @@ def activity_list_to_str(low, high, skip_acts=["sleep"]):
     res += str(acts_agg)[0:3500] # truncate it for Telegram
     return {'string': res + "\n```", 'acts_agg': acts_agg, 'acts_skipped': acts_skipped}
 
-def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mode=0, fill_default=True):
+def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mode=0, fill_default=True, received_at=None):
     # _now means 'now' is 'high'
-    high = datetime.datetime.today()
+    high = received_at or datetime.datetime.today()
     low = high - delta
     low = low.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
     # aligns dates with real life, so that date changes happen at, e.g., 5 AM
