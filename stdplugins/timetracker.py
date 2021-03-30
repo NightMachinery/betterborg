@@ -40,6 +40,10 @@ subs_commands = {
     "/e": ".habit 8 m=0 max=2 exercise",
     "/wt": ".habit 8 m=0 max=12 wasted",
     ###
+    "/d": "o m=2 r=6 treemap=0",
+    "/d30": "o m=2 r=29 treemap=0",
+    "/w": "o168 m=2 r=7 treemap=0",
+    ###
 }
 suffixes = {
     '-': [0, "wasted"],
@@ -325,7 +329,7 @@ def chooseAct(fuzzyChoice: str):
 ##
 del_pat = re.compile(r"^\.\.?del\s*(\d*\.?\d*)$")
 rename_pat = re.compile(r"^\.\.?re(?:name)?\s+(.+)$")
-out_pat = re.compile(r"^(?:\.\.?)?o(?:ut)?\s*(?P<t>\d*\.?\d*)?\s*(?:m=(?P<mode>\d+))?$")
+out_pat = re.compile(r"^(?:\.\.?)?o(?:ut)?\s*(?P<t>\d*\.?\d*)?\s*(?:m=(?P<mode>\d+))?\s*(?:r=(?P<repeat>\d+))?\s*(?:treemap=(?P<treemap>\d+))?$")
 back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(\-?\d*\.?\d*)$")
 habit_pat = re.compile(
     r"^(?:\.\.?)?habit\s*(?P<t>\d*\.?\d*)?\s+(?:m=(?P<mode>\d+)\s+)?(?:max=(?P<max>\d+\.?\d*)\s+)?(?P<name>.+)$")
@@ -387,7 +391,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
             await m0.reply(text[:4000], **kwargs)
             await reply(text[4000:]) # kwargs should not apply to a mere text message
         else:
-            await reply(text, **kwargs)
+            await m0.reply(text, **kwargs)
 
     async def send_file(file, **kwargs):
         if file:
@@ -573,6 +577,11 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                 if last_act_query.exists():
                     last_act = last_act_query.get()
 
+            if m0_text in ('.show', '.sh'):
+                out_add(f"last_act: {last_act}")
+                await edit(out)
+                return out
+
             m = del_pat.match(m0_text)
             if m:
                 del_count = 0
@@ -612,21 +621,13 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
             m = out_pat.match(m0_text)
             if m:
                 output_mode = int(m.group('mode') or 1)
+                treemap_enabled = bool(int(m.group('treemap') or 1))
+                repeat = int(m.group('repeat') or 0)
                 hours = m.group('t')
                 res = None
-                if hours:
-                    res = activity_list_to_str_now(delta=datetime.timedelta(hours=float(hours)), received_at=received_at)
-                else:
-                    low = received_at.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
-                    if low > received_at:
-                        low = low - datetime.timedelta(days=1)
-                    res = activity_list_to_str(low, received_at)
-                out_add(res['string'])
-                await edit(f"{out}", parse_mode="markdown")
-                if output_mode == 1:
-                    out_links, out_files = visualize_plotly(res['acts_agg'])
+                async def send_plots(out_files, out_links):
                     out_links = '\n'.join(out_links)
-                    out_add(out_links)
+                    out_add(out_links, prefix='\n')
                     await edit(f"{out}", parse_mode="markdown")
                     ##
                     if False: # send as album
@@ -635,6 +636,53 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                         for f in out_files:
                             await send_file(f)
                     ##
+
+                async def report(hours=None, output_mode=1, received_at=None, title=None):
+                    if not received_at:
+                        out_add("report: received_at is empty")
+                        return
+
+                    if output_mode in (3,):
+                        out_add("Generating stacked area plots ...")
+                        act_roots = stacked_area_get_act_roots()
+                        out_links, out_files = visualize_stacked_area(act_roots)
+                        await send_plots(out_links, out_files)
+
+                    if hours:
+                        res = activity_list_to_str_now(delta=datetime.timedelta(hours=float(hours)), received_at=received_at)
+                    else:
+                        low = received_at.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
+                        if low > received_at:
+                            low = low - datetime.timedelta(days=1)
+                        res = activity_list_to_str(low, received_at)
+                        if res['acts_agg'].total_duration == 0:
+                            out_add("report: acts_agg is zero.")
+                            await edit(f"{out}", parse_mode="markdown")
+                            return
+
+                    if output_mode in (0,1):
+                        out_add(res['string'])
+                        await edit(f"{out}", parse_mode="markdown")
+
+                    if output_mode in (1,2):
+                        out_add(f"Generating plots ...", prefix='\n')
+                        await edit(f"{out}", parse_mode="markdown")
+
+                        out_links, out_files = visualize_plotly(res['acts_agg'], title=title, treemap=treemap_enabled)
+                        await send_plots(out_links, out_files)
+
+                fake_received_at = received_at
+                for i in range(0, repeat+1):
+                    title = None
+                    if repeat > 0:
+                        title = f"Reporting (repeat={i}, hours={hours}, received_at={fake_received_at}):"
+
+                    if i > 0:
+                        out_add(title)
+                        # await reply(title)
+
+                    await report(hours=hours, output_mode=output_mode, received_at=fake_received_at, title=title)
+                    fake_received_at = (fake_received_at - datetime.timedelta(hours=float(hours or 24)))
 
                 return out
 

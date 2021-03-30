@@ -204,6 +204,7 @@ def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mo
     high = received_at or datetime.datetime.today()
     low = high - delta
     low = low.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
+
     # aligns dates with real life, so that date changes happen at, e.g., 5 AM
     night_passover = datetime.timedelta(hours=DAY_START)
 
@@ -228,6 +229,28 @@ def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mo
 
     return buckets_dur
 
+
+def stacked_area_get_act_roots(low=None, high=None, delta=datetime.timedelta(days=30), fill_default=True):
+    high = high or datetime.datetime.today()
+    low = low or (high - delta)
+    low = low.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
+
+    # aligns dates with real life, so that date changes happen at, e.g., 5 AM
+    night_passover = datetime.timedelta(hours=DAY_START)
+
+    def which_bucket(act: Activity):
+        return (act.start - night_passover).date()
+
+    buckets = activity_list_buckets_get(
+        low, high, which_bucket=which_bucket, mode=0)
+
+    if fill_default:
+        interval = datetime.timedelta(days=1)
+        while low <= high:
+            buckets.setdefault(low.date(), ActivityDuration("Total"))
+            low += interval
+
+    return buckets
 
 def activity_list_buckets_get(low, high, which_bucket, mode=0, correct_overlap=True):
     acts = None
@@ -265,6 +288,8 @@ if not is_local:
     # install `xvfb` via apt
     pio.orca.config.use_xvfb = True
 ##
+import plotly.graph_objects as go
+
 def get_acts(root: ActivityDuration, skip_acts=["sleep"]):
     # mutates its input! is not idempotent!
     acts = [root]
@@ -294,12 +319,17 @@ def local_helper_visualize_plotly():
     print(res['string'])
     return visualize_plotly(res['acts_agg'])
 
-def visualize_plotly(acts):
+def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
     # @warn this is not async, and it takes rather long to complete
+    ##
+    out_links = []
+    out_files = []
+    if acts.total_duration == 0:
+        return out_links, out_files
+
     all_acts = get_acts(acts)
     acts_agg = all_acts[0]
     # print(acts_agg)
-    import plotly.graph_objects as go
 
     ids = [act.name for act in all_acts]
     labels = [f"{act.shortname} {(relativedelta_total_seconds(act.total_duration)*100/relativedelta_total_seconds(acts_agg.total_duration)):.1f}%" for act in all_acts]
@@ -339,25 +369,87 @@ def visualize_plotly(acts):
         # color="day",
         # color_discrete_map={'(?)':'gold', 'Study':'green', 'wasted':'black'},
     )
-    fig = go.Figure(go.Treemap(**plot_opts))
-    # fig.update_layout(margin = dict(t=0, l=0, r=0, b=0))
-    fig.update_layout(margin = dict(t=30, l=0, r=30, b=30))
-    # fig.update_layout(uniformtext=dict(minsize=6, mode='hide'))
-    is_local and fig.show()
-    out_links, out_files = fig_export(fig, "treemap", width=400, height=400, svg_export = False, pdf_export = False)
+
+    if treemap:
+        fig = go.Figure(go.Treemap(**plot_opts))
+        # fig.update_layout(margin = dict(t=0, l=0, r=0, b=0))
+        fig.update_layout(margin = dict(t=30, l=0, r=30, b=30))
+        # fig.update_layout(uniformtext=dict(minsize=6, mode='hide'))
+        if title:
+            fig.update_layout(title_text=title)
+            fig.update_layout(title_font_size=11)
+            # fig.update_layout(title_x=0.1)
+
+        is_local and fig.show()
+        l, f = fig_export(fig, "treemap", width=400, height=400, svg_export = False, pdf_export = False)
+        out_links += l # is list
+        out_files += f
+
     ##
-    # @unresolved https://community.plotly.com/t/show-the-current-path-bar-in-sunburst-plots-just-like-treemap-plots/51155
-    plot_opts['labels'] = [act.shortname for act in all_acts]
-    plot_opts['texttemplate'] = "%{label}<br>%{text}, %{percentRoot:%}"
-    fig = go.Figure(go.Sunburst(**plot_opts))
-    fig.update_layout(margin = dict(t=0, l=0, r=0, b=0))
-    # fig.update_layout(uniformtext=dict(minsize=6, mode='hide'))
-    is_local and fig.show()
-    l, f = fig_export(fig, "sunburst", width=400, height=400, svg_export = False, pdf_export = False)
-    out_links += l
-    out_files += f
+    if sunburst:
+        # @unresolved https://community.plotly.com/t/show-the-current-path-bar-in-sunburst-plots-just-like-treemap-plots/51155
+        plot_opts['labels'] = [act.shortname for act in all_acts]
+        plot_opts['texttemplate'] = "%{label}<br>%{text}, %{percentRoot:%}"
+        fig = go.Figure(go.Sunburst(**plot_opts))
+        fig.update_layout(margin = dict(t=0, l=0, r=0, b=0))
+        # fig.update_layout(uniformtext=dict(minsize=6, mode='hide'))
+        if title:
+            fig.update_layout(title_text=title)
+            fig.update_layout(title_font_size=11)
+            fig.update_layout(title_y=0.99)
+
+        is_local and fig.show()
+        l, f = fig_export(fig, "sunburst", width=400, height=400, svg_export = False, pdf_export = False)
+        out_links += l # is list
+        out_files += f
+
     return out_links, out_files
 
+def get_sub_act_total_duration(act, sub_act_name: str):
+    sub_act = act.sub_acts.get(sub_act_name, None)
+    if sub_act:
+        return sub_act.total_duration
+    else:
+        return 0
+
+def visualize_stacked_area(act_roots):
+    out_links = []
+    out_files = []
+
+    fig = go.Figure()
+    ##
+    # https://colorbrewer2.org/#type=qualitative&scheme=Pastel1&n=9
+    categories = {
+        'study' : 'rgb(204,235,197)',
+        'sa' : 'rgb(179,205,227)',
+        'chores' : 'rgb(255,255,204)',
+        # 'wasted' : 'rgb(255,255,255)',
+        'wasted' : 'rgb(251,180,174)',
+        'social' : 'rgb(253,218,236)',
+        'exploration' : 'rgb(222,203,228)',
+        'meditation' : 'rgb(254,217,166)',
+        'outdoors' : 'rgb(229,216,189)',
+        'consciously untracked' : 'rgb(242,242,242)',
+        # '' : 'rgb()',
+    }
+    ##
+
+    for category, color in categories.items():
+        fig.add_trace(go.Scatter(
+            x=x,
+            y=[get_sub_act_total_duration(act, category) for act in act_roots],
+            hoverinfo='x+y',
+            mode='lines',
+            line=dict(width=0.5, color=color),
+            stackgroup='one',
+            # groupnorm='percent' # sets the normalization for the sum of the stackgroup
+        ))
+
+    l, f = fig_export(fig, "stacked_area", width=600, height=400, svg_export = False, pdf_export = False)
+    out_links += l # is list
+    out_files += f
+
+    return out_links, out_files
 
 def fig_export(fig, exported_name, html_export = True, png_export = True, svg_export = True, pdf_export = True, width = 600, height = 400, scale = 4):
     out_links = []
