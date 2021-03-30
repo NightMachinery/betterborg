@@ -336,7 +336,7 @@ def chooseAct(fuzzyChoice: str):
 ##
 del_pat = re.compile(r"^\.\.?del\s*(\d*\.?\d*)$")
 rename_pat = re.compile(r"^\.\.?re(?:name)?\s+(.+)$")
-out_pat = re.compile(r"^(?:\.\.?)?o(?:ut)?\s*(?P<t>\d*\.?\d*)?\s*(?:m=(?P<mode>\d+))?\s*(?:r=(?P<repeat>\d+))?\s*(?:treemap=(?P<treemap>\d+))?$")
+out_pat = re.compile(r"^(?:\.\.?)?o(?:ut)?\s*(?P<t>\d*\.?\d*)?\s*(?:m=(?P<mode>\d+))?\s*(?:r=(?P<repeat>\d+))?\s*(?:cmap=(?P<cmap>\S+))?\s*(?:treemap=(?P<treemap>\d+))?$")
 back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(\-?\d*\.?\d*)$")
 habit_pat = re.compile(
     r"^(?:\.\.?)?habit\s*(?P<t>\d*\.?\d*)?\s+(?:m=(?P<mode>\d+)\s+)?(?:max=(?P<max>\d+\.?\d*)\s+)?(?P<name>.+)$")
@@ -630,6 +630,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                 output_mode = int(m.group('mode') or 1)
                 treemap_enabled = bool(int(m.group('treemap') or 1))
                 repeat = int(m.group('repeat') or 0)
+                cmap = m.group('cmap')
                 hours = m.group('t')
                 res = None
                 async def send_plots(out_links, out_files):
@@ -656,7 +657,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                         days = float(hours or 7)
                         a = stacked_area_get_act_roots(repeat=(repeat or 20), interval=datetime.timedelta(days=days))
                         # embed2()
-                        out_links, out_files = visualize_stacked_area(a, days=days)
+                        out_links, out_files = visualize_stacked_area(a, days=days, cmap=cmap)
                         await send_plots(out_links, out_files)
 
                     if hours:
