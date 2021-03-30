@@ -8,6 +8,7 @@ except:
 ##
 import asyncio
 lock_tt = asyncio.Lock()
+msg2act = dict()
 ##
 DAY_START = 5
 is_local = bool(z("isLocal"))

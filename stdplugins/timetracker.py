@@ -292,6 +292,7 @@ def save_fuzzy_choices(force=False):
     global last_saved
     now = datetime.datetime.today()
     if (force or (now - last_saved >= datetime.timedelta(hours=0.5))):
+        # @maybe save msg2act here as well? I am holding back on this bloat until proven needed ...
         save_strlist(user_choices_path, sorted(user_choices))
         last_saved = now
 
@@ -324,7 +325,7 @@ def chooseAct(fuzzyChoice: str):
 ##
 del_pat = re.compile(r"^\.\.?del\s*(\d*\.?\d*)$")
 rename_pat = re.compile(r"^\.\.?re(?:name)?\s+(.+)$")
-out_pat = re.compile(r"^(?:\.\.?)?o(?:ut)?\s*(\d*\.?\d*)$")
+out_pat = re.compile(r"^(?:\.\.?)?o(?:ut)?\s*(?P<t>\d*\.?\d*)?\s*(?:m=(?P<mode>\d+))?$")
 back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(\-?\d*\.?\d*)$")
 habit_pat = re.compile(
     r"^(?:\.\.?)?habit\s*(?P<t>\d*\.?\d*)?\s+(?:m=(?P<mode>\d+)\s+)?(?:max=(?P<max>\d+\.?\d*)\s+)?(?P<name>.+)$")
@@ -355,6 +356,10 @@ async def process_msg(*args, **kwargs):
 async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", received_at=None):
     global starting_anchor
 
+    m0_id = m0.id
+    def set_msg_act(some_act):
+        msg2act[m0_id] = some_act.id
+
     async def edit(text: str, truncate=True, **kwargs):
         try:
             # if not text: # might be sending files
@@ -382,7 +387,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
             await m0.reply(text[:4000], **kwargs)
             await reply(text[4000:]) # kwargs should not apply to a mere text message
         else:
-            await m0ereply(text, **kwargs)
+            await reply(text, **kwargs)
 
     async def send_file(file, **kwargs):
         if file:
@@ -545,11 +550,28 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                 print(f"_process_msg: received_at={received_at}")
                 pass
 
-            # last_act_query = Activity.select().order_by(Activity.end.desc())
-            last_act_query = Activity.select().where(Activity.end <= received_at).order_by(Activity.end.desc())
+            rep_id = m0.reply_to_msg_id
             last_act = None
-            if last_act_query.exists():
-                last_act = last_act_query.get()
+            if rep_id:
+                act_id = msg2act.get(rep_id, None)
+                if not act_id:
+                    out_add(f"The message you replied to did not have its id stored in msg2act.")
+                    await edit(out)
+                    return out
+                else:
+                    q = Activity.select().where(Activity.id == act_id) # this can still be a new record if the record we are trying to get was the last one when it was deleted, as the ids just increment from the last one and are not unique when deletion is concerned
+                    if q.exists():
+                        last_act = q.get()
+                    else:
+                        out_add(f"The message you replied to has had its associated act deleted!")
+                        await edit(out)
+                        return out
+            else:
+                # last_act_query = Activity.select().order_by(Activity.end.desc())
+                last_act_query = Activity.select().where(Activity.end <= received_at).order_by(Activity.end.desc())
+                last_act = None
+                if last_act_query.exists():
+                    last_act = last_act_query.get()
 
             m = del_pat.match(m0_text)
             if m:
@@ -589,7 +611,8 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
 
             m = out_pat.match(m0_text)
             if m:
-                hours = m.group(1)
+                output_mode = int(m.group('mode') or 1)
+                hours = m.group('t')
                 res = None
                 if hours:
                     res = activity_list_to_str_now(delta=datetime.timedelta(hours=float(hours)), received_at=received_at)
@@ -600,17 +623,19 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                     res = activity_list_to_str(low, received_at)
                 out_add(res['string'])
                 await edit(f"{out}", parse_mode="markdown")
-                out_links, out_files = visualize_plotly(res['acts_agg'])
-                out_links = '\n'.join(out_links)
-                out_add(out_links)
-                await edit(f"{out}", parse_mode="markdown")
-                ##
-                if False: # send as album
-                    await send_file(out_files)
-                else:
-                    for f in out_files:
-                        await send_file(f)
-                ##
+                if output_mode == 1:
+                    out_links, out_files = visualize_plotly(res['acts_agg'])
+                    out_links = '\n'.join(out_links)
+                    out_add(out_links)
+                    await edit(f"{out}", parse_mode="markdown")
+                    ##
+                    if False: # send as album
+                        await send_file(out_files)
+                    else:
+                        for f in out_files:
+                            await send_file(f)
+                    ##
+
                 return out
 
             m = habit_pat.match(m0_text)
@@ -664,6 +689,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                         await edit(out)
                         return out
                     last_act.save()
+                    set_msg_act(last_act)
                     out_add(res)
                     await edit(out)
                     return out
@@ -676,6 +702,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                 if last_act != None:
                     last_act.name = text_sub_full(m.group(1), reset_delayed_actions=False)
                     last_act.save()
+                    set_msg_act(last_act)
                     out_add(f"{str(last_act)} (Renamed)")
                     await edit(out)
                     await process_reminders(last_act.name)
@@ -688,6 +715,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                 amount = received_at - last_act.end
                 last_act.end = received_at
                 last_act.save()
+                set_msg_act(last_act)
                 out_add(f"{str(last_act)} (Updated by {int(round(amount.total_seconds()/60.0, 0))} minutes)")
                 await edit(out)
                 return out
@@ -727,6 +755,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
 
             act = Activity(name=m0_text, start=start, end=received_at)
             act.save()
+            set_msg_act(act)
             out_add(str(act))
             await edit(out)
             await process_reminders(act.name)
