@@ -266,7 +266,7 @@ def stacked_area_get_act_roots(low=None, high=None, delta=None, repeat=30,interv
 
     buckets = dict()
     while low < high:
-        mid = low + interval
+        mid = min(high, low + interval)
         bucket = buckets.setdefault((low - night_passover).date(), ActivityDuration("Total"))
         acts = Activity.select().where((Activity.start.between(low, mid)) | (Activity.end.between(low, mid)))
         for act in acts:

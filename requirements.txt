@@ -35,6 +35,7 @@ watchgod
 
 plotly
 
+icecream
 
 # junk deps:
 # sortedcontainers
