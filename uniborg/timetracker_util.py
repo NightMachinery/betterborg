@@ -323,7 +323,7 @@ def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
     ##
     out_links = []
     out_files = []
-    if acts.total_duration == 0:
+    if relativedelta_total_seconds(acts.total_duration) == 0:
         return out_links, out_files
 
     all_acts = get_acts(acts)

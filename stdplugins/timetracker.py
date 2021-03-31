@@ -391,9 +391,10 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
             pass
 
     async def reply(text: str, **kwargs):
-        # if not text: # might be sending files
-            # return
+        if not text: # files are send via send_file
+            return
 
+        text = text.strip()
         if len(text) > 4000:
             await m0.reply(text[:4000], **kwargs)
             await reply(text[4000:]) # kwargs should not apply to a mere text message
@@ -667,7 +668,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                         if low > received_at:
                             low = low - datetime.timedelta(days=1)
                         res = activity_list_to_str(low, received_at)
-                        if res['acts_agg'].total_duration == 0:
+                        if relativedelta_total_seconds(res['acts_agg'].total_duration) == 0:
                             out_add("report: acts_agg is zero.")
                             await edit(f"{out}", parse_mode="markdown")
                             return
