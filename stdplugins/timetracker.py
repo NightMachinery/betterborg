@@ -74,7 +74,8 @@ subs = {
     "news": "wasted_news",
     # "wtso": "wasted_social_online",
     "wtf": "wasted_social_online_forums",
-    "reddit": "wasted_social_online_forums",
+    "reddit": "wasted_social_online_forums_reddit",
+    "lw": "wasted_social_online_forums_lesswrong",
     "hn": "wasted_news_hackernews",
     ###
     "untracked": "consciously untracked",
@@ -299,7 +300,8 @@ def load_fuzzy_choices():
     ##
 
 last_saved = datetime.datetime.today()
-def save_fuzzy_choices(force=False):
+def save_fuzzy_choices(force=True): # why not just save every single time? It's not like it's a bottleneck ...
+    # to remove from this, first stop borg, then manually edit the file.
     global last_saved
     now = datetime.datetime.today()
     if (force or (now - last_saved >= datetime.timedelta(hours=0.5))):

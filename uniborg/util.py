@@ -19,6 +19,7 @@ import re
 import itertools
 import shutil
 from uniborg import util
+import telethon
 from telethon import TelegramClient, events
 import telethon.utils
 from telethon.tl.functions.messages import GetPeerDialogsRequest
@@ -26,8 +27,79 @@ from telethon.tl.types import DocumentAttributeAudio
 from IPython import embed
 import IPython
 import sys
+import pathlib
 from pathlib import Path
+import typing
+import io
+from io import BytesIO
+try:
+    import PIL
+    import PIL.Image
+    import PIL.ImageOps
+except ImportError:
+    PIL = None
 
+##
+def _resize_photo_if_needed(
+        file, is_image, min_width=128, min_height=128, width=1280, height=1280, background=(255, 255, 255)):
+    # print("_resize_photo_if_needed entered")
+
+    # https://github.com/telegramdesktop/tdesktop/blob/12905f0dcb9d513378e7db11989455a1b764ef75/Telegram/SourceFiles/boxes/photo_crop_box.cpp#L254
+    if (not is_image
+            or PIL is None
+            or (isinstance(file, io.IOBase) and not file.seekable())):
+        return file
+
+    if isinstance(file, bytes):
+        file = io.BytesIO(file)
+
+    before = file.tell() if isinstance(file, io.IOBase) else None
+
+    try:
+        # Don't use a `with` block for `image`, or `file` would be closed.
+        # See https://github.com/LonamiWebs/Telethon/issues/1121 for more.
+        image = PIL.Image.open(file)
+        try:
+            kwargs = {'exif': image.info['exif']}
+        except KeyError:
+            kwargs = {}
+
+        too_small = image.width < min_width or image.height < min_height
+        # print(f"_resize_photo_if_needed: too_small {too_small}")
+        if too_small: # the true issue is the aspect ratio, see https://github.com/LonamiWebs/Telethon/pull/1718
+            image = PIL.ImageOps.pad(image, (max(image.width, min_width), max(image.height, min_height)), color=(255, 255, 255))
+        else:
+            if (image.width <= width and image.height <= height):
+                return file
+
+            image.thumbnail((width, height), PIL.Image.ANTIALIAS)
+
+        alpha_index = image.mode.find('A')
+        if alpha_index == -1:
+            # If the image mode doesn't have alpha
+            # channel then don't bother masking it away.
+            result = image
+        else:
+            # We could save the resized image with the original format, but
+            # JPEG often compresses better -> smaller size -> faster upload
+            # We need to mask away the alpha channel ([3]), since otherwise
+            # IOError is raised when trying to save alpha channels in JPEG.
+            result = PIL.Image.new('RGB', image.size, background)
+            result.paste(image, mask=image.split()[alpha_index])
+
+        buffer = io.BytesIO()
+        result.save(buffer, 'JPEG', **kwargs)
+        buffer.seek(0)
+        return buffer
+
+    except IOError:
+        return file
+    finally:
+        if before is not None:
+            file.seek(before, io.SEEK_SET)
+
+telethon.client.uploads._resize_photo_if_needed = _resize_photo_if_needed
+##
 dl_base = os.getcwd() + '/dls/'
 #pexpect_ai = aioify(obj=pexpect, name='pexpect_ai')
 pexpect_ai = aioify(pexpect)

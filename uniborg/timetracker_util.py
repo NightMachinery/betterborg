@@ -232,14 +232,22 @@ def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mo
 
 def stacked_area_get_act_roots(low=None, high=None, delta=None, repeat=30,interval=datetime.timedelta(days=1)):
     delta = delta or interval*repeat
-    high = high or datetime.datetime.today()
+
+    # high = high or (datetime.datetime.today() - datetime.timedelta(days=1))
+    high = high or (datetime.datetime.today())
     low = low or (high - delta)
     low = low.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
+    high = high.replace(hour=(DAY_START - 1), minute=59, second=59, microsecond=0) # high will go till previous day only, and skips the last day in range
+    if high <= low:
+        logger.error("stacked_area_get_act_roots: high <= low")
+        return
+
+    night_passover = datetime.timedelta(hours=(DAY_START), seconds=0)
 
     buckets = dict()
     while low < high:
         mid = low + interval
-        bucket = buckets.setdefault(low.date(), ActivityDuration("Total"))
+        bucket = buckets.setdefault((low - night_passover).date(), ActivityDuration("Total"))
         acts = Activity.select().where((Activity.start.between(low, mid)) | (Activity.end.between(low, mid)))
         for act in acts:
             dur = relativedelta(min(act.end, mid), max(act.start, low))
@@ -287,13 +295,127 @@ if not is_local:
     pio.orca.config.use_xvfb = True
 ##
 import plotly.graph_objects as go
+## https://plotly.com/python/discrete-color/
 # from plotly.express import colors as px_colors # this takes a few seconds to load even on MBP!
+cmaps = dict()
+cmaps['plotly'] = [
+    '#636EFA',
+    '#EF553B',
+    '#00CC96',
+    '#AB63FA',
+    '#FFA15A',
+    '#19D3F3',
+    '#FF6692',
+    '#B6E880',
+    '#FF97FF',
+    '#FECB52'
+]
+cmaps['d3'] = [
+    '#1F77B4',
+    '#FF7F0E',
+    '#2CA02C',
+    '#D62728',
+    '#9467BD',
+    '#8C564B',
+    '#E377C2',
+    '#7F7F7F',
+    '#BCBD22',
+    '#17BECF', # fake extension:
+    '#1CFFCE',
+    '#DEA0FD',
+]
+cmaps['g10'] = [
+    '#3366CC',
+    '#DC3912',
+    '#FF9900',
+    '#109618',
+    '#990099',
+    '#0099C6',
+    '#DD4477',
+    '#66AA00',
+    '#B82E2E',
+    '#316395'
+]
+cmaps['alphabet'] = [
+    '#AA0DFE',
+    '#3283FE',
+    '#85660D',
+    '#782AB6',
+    '#565656',
+    '#1C8356',
+    '#16FF32',
+    '#F7E1A0',
+    '#E2E2E2',
+    '#1CBE4F',
+    '#C4451C',
+    '#DEA0FD',
+    '#FE00FA',
+    '#325A9B',
+    '#FEAF16',
+    '#F8A19F',
+    '#90AD1C',
+    '#F6222E',
+    '#1CFFCE',
+    '#2ED9FF',
+    '#B10DA1',
+    '#C075A6',
+    '#FC1CBF',
+    '#B00068',
+    '#FBE426',
+    '#FA0087'
+]
+cmaps['light24'] = [
+    '#FD3216',
+    '#00FE35',
+    '#6A76FC',
+    '#FED4C4',
+    '#FE00CE',
+    '#0DF9FF',
+    '#F6F926',
+    '#FF9616',
+    '#479B55',
+    '#EEA6FB',
+    '#DC587D',
+    '#D626FF',
+    '#6E899C',
+    '#00B5F7',
+    '#B68E00',
+    '#C9FBE5',
+    '#FF0092',
+    '#22FFA7',
+    '#E3EE9E',
+    '#86CE00',
+    '#BC7196',
+    '#7E7DCD',
+    '#FC6955',
+    '#E48F72'
+]
+cmaps['pastel'] = [
+    'rgb(102, 197, 204)',
+    'rgb(246, 207, 113)',
+    'rgb(248, 156, 116)',
+    'rgb(220, 176, 242)',
+    'rgb(135, 197, 95)',
+    'rgb(158, 185, 243)',
+    'rgb(254, 136, 177)',
+    'rgb(201, 219, 116)',
+    'rgb(139, 224, 164)',
+    'rgb(180, 151, 231)',
+    'rgb(179, 179, 179)'
+]
+##
 
-def get_acts(root: ActivityDuration, skip_acts=["sleep"]):
+def get_acts(root: ActivityDuration, skip_acts=["sleep"],dict_mode=False):
     # mutates its input! is not idempotent!
-    acts = [root]
+    if dict_mode == False:
+        acts = [root]
+    elif dict_mode == True:
+        dict_mode = dict()
+        dict_mode[root.name] = root
+
     if not hasattr(root, 'parent'):
         root.parent = None
+
     if not hasattr(root, 'shortname'):
         root.shortname = root.name
 
@@ -303,12 +425,22 @@ def get_acts(root: ActivityDuration, skip_acts=["sleep"]):
         if act.name in skip_acts:
             act.parent.total_duration -= act.total_duration
             continue
+
         act.shortname = act.name
         if act.parent.name != 'Total':
             act.name = f"{act.parent.name}_{act.name}"
+
         # print(f"{act.shortname} -> {act.name} via parent {act.parent.name}")
-        acts += get_acts(act)
-    return acts
+        if dict_mode:
+            dict_mode[act.name] = act
+            get_acts(act, skip_acts=skip_acts, dict_mode=dict_mode)
+        else:
+            acts += get_acts(act, skip_acts=skip_acts, dict_mode=dict_mode)
+
+    if dict_mode:
+        return dict_mode
+    else:
+        return acts
 
 def local_helper_visualize_plotly():
     # @local To play with stuff on local PC
@@ -418,145 +550,81 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
     fig = go.Figure()
     ##
     # https://colorbrewer2.org/#type=qualitative&scheme=Pastel1&n=9
+    # https://plotly.com/python/discrete-color/
+    # https://medialab.github.io/iwanthue/
+    # https://google.github.io/palette.js/ (most colors are from here)
+    ##
+    # As of Python 3.7, the standard dict preserves insertion order
     categories = {
-        'study' : 'rgb(204,235,197)',
-        'sa' : 'rgb(179,205,227)',
-        'chores' : 'rgb(255,255,204)',
-        # 'wasted' : 'rgb(251,180,174)',
-        'wasted' : 'rgb(227,26,28)',
-        'exploration' : 'rgb(106,61,154)',
-        'meditation' : 'rgb(255,127,0)',
-        'outdoors' : 'rgb(177,89,40)',
-        'entertainment' : 'rgb(255,0,0)',
-        'social' : 'rgb(253,218,236)',
-        'nonfiction' : 'rgb(0,0,255)',
+        'study' : 'rgb(102, 166, 30)',
+        'chores_self_study' : 'rgb(102, 166, 30)',
+        'chores_self_health' : 'rgb(179, 233, 0)',
+        'meditation' : 'rgb(93, 255, 0)',
+        'chores_self_hygiene' : 'rgb(178, 190, 77)',
+        'outdoors' : 'rgb(175, 141, 0)',
+        'sa' : 'rgb(55, 126, 184)',
+        'exploration' : 'rgb(0, 210, 213)',
+        'social' : 'rgb(188, 128, 189)',
+        'social_online' : 'rgb(252, 205, 229)',
+        'chores' : 'rgb(255, 243, 185)',
+        'chores_self_rest' : 'rgb(255, 237, 111)',
+        'chores_self_commute' : 'rgb(170, 28, 59)',
+        'wasted' : 'rgb(255, 0, 41)',
+        # 'outdoors' : 'rgb(0, 255, 185)',
+        'entertainment' : 'rgb(251, 128, 114)',
+        'nonfiction' : 'rgb(255, 127, 0)',
+        # 'consciously untracked' : 'rgb(247, 249, 226)',
         'consciously untracked' : 'rgb(0,0,0)',
         # 'sleep' : 'rgb(255,255,255)',
-        'sleep' : 'rgb(0,130,255)',
+        # 'sleep' : 'rgb(221, 243, 250)',
+        'sleep' : 'rgb(142, 200, 239)',
         # '' : 'rgb()',
     }
     ##
 
     act_roots = dated_act_roots.values()
     xs = list(dated_act_roots.keys())
-    ## https://plotly.com/python/discrete-color/
-    cmaps = dict()
-    cmaps['plotly'] = [
-        '#636EFA',
-        '#EF553B',
-        '#00CC96',
-        '#AB63FA',
-        '#FFA15A',
-        '#19D3F3',
-        '#FF6692',
-        '#B6E880',
-        '#FF97FF',
-        '#FECB52'
-    ]
-    cmaps['d3'] = [
-        '#1F77B4',
-        '#FF7F0E',
-        '#2CA02C',
-        '#D62728',
-        '#9467BD',
-        '#8C564B',
-        '#E377C2',
-        '#7F7F7F',
-        '#BCBD22',
-        '#17BECF', # fake extension:
-        '#1CFFCE',
-        '#DEA0FD',
-    ]
-    cmaps['g10'] = [
-        '#3366CC',
-        '#DC3912',
-        '#FF9900',
-        '#109618',
-        '#990099',
-        '#0099C6',
-        '#DD4477',
-        '#66AA00',
-        '#B82E2E',
-        '#316395'
-    ]
-    cmaps['alphabet'] = [
-        '#AA0DFE',
-        '#3283FE',
-        '#85660D',
-        '#782AB6',
-        '#565656',
-        '#1C8356',
-        '#16FF32',
-        '#F7E1A0',
-        '#E2E2E2',
-        '#1CBE4F',
-        '#C4451C',
-        '#DEA0FD',
-        '#FE00FA',
-        '#325A9B',
-        '#FEAF16',
-        '#F8A19F',
-        '#90AD1C',
-        '#F6222E',
-        '#1CFFCE',
-        '#2ED9FF',
-        '#B10DA1',
-        '#C075A6',
-        '#FC1CBF',
-        '#B00068',
-        '#FBE426',
-        '#FA0087'
-    ]
-    cmaps['light24'] = [
-        '#FD3216',
-        '#00FE35',
-        '#6A76FC',
-        '#FED4C4',
-        '#FE00CE',
-        '#0DF9FF',
-        '#F6F926',
-        '#FF9616',
-        '#479B55',
-        '#EEA6FB',
-        '#DC587D',
-        '#D626FF',
-        '#6E899C',
-        '#00B5F7',
-        '#B68E00',
-        '#C9FBE5',
-        '#FF0092',
-        '#22FFA7',
-        '#E3EE9E',
-        '#86CE00',
-        '#BC7196',
-        '#7E7DCD',
-        '#FC6955',
-        '#E48F72'
-    ]
-    cmaps['pastel'] = [
-        'rgb(102, 197, 204)',
-        'rgb(246, 207, 113)',
-        'rgb(248, 156, 116)',
-        'rgb(220, 176, 242)',
-        'rgb(135, 197, 95)',
-        'rgb(158, 185, 243)',
-        'rgb(254, 136, 177)',
-        'rgb(201, 219, 116)',
-        'rgb(139, 224, 164)',
-        'rgb(180, 151, 231)',
-        'rgb(179, 179, 179)'
-    ]
+
     # good: alphabet, d3, pastel
     # mediocre: light24
-    cmap = cmaps[cmap or 'alphabet' or 'd3']
+    if not cmap or cmap == 's':
+        cmap = list(categories.values())
+    else:
+        cmap = cmaps[cmap or 'alphabet' or 'd3']
+
     cmap_len = len(cmap)
     ##
+    act_roots_all = [get_acts(act, dict_mode=True, skip_acts=[]) for act in act_roots]
+    def get_dur(act_root_all, category):
+        if category in act_root_all:
+            return (relativedelta_total_seconds(act_root_all[category].total_duration) / 3600.0) / days
+        else:
+            return 0
+
+    def get_y(act_root_all, category):
+        if category == 'social':
+            return (get_dur(act_root_all, 'social') - get_dur(act_root_all, 'social_online'))
+        if category == 'chores':
+            return (get_dur(act_root_all, 'chores') - sum(get_dur(act_root_all, sub_cat) for sub_cat in (
+                "chores_self_study",
+                "chores_self_health",
+                "chores_self_hygiene",
+                "chores_self_commute",
+                "chores_self_rest",
+            )))
+        else:
+            return get_dur(act_root_all, category)
+
+    def get_ys(category):
+        return [get_y(act_root_all, category) for act_root_all in act_roots_all]
+
     i = 0
     for category, color in categories.items():
         fig.add_trace(go.Scatter(
             name=category,
             x=xs,
-            y=[get_sub_act_total_duration(act, category, days) for act in act_roots],
+            # y=[get_sub_act_total_duration(act, category, days) for act in act_roots],
+            y=get_ys(category),
             hoverinfo='x+y',
             mode='lines',
             line=dict(width=0.5,
@@ -571,7 +639,7 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
 
     fig.update_layout(yaxis_range=(0, 24)) # since we are only including a subset of all the sub acts of the root, we should always be <= 24 hours
     fig.update_layout(margin = dict(t=0, l=0, r=0, b=0))
-    l, f = fig_export(fig, "stacked_area", width=700, height=300, svg_export = False, pdf_export = False)
+    l, f = fig_export(fig, "stacked_area", width=700, height=400, svg_export = False, pdf_export = False)
     out_links += l # is list
     out_files += f
 
