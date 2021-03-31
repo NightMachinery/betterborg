@@ -31,14 +31,15 @@ subs_commands = {
     # "out": "..out",
     "🧫": "?",
     # habits:
-    "/br": ".habit 8 m=1 max=3 brush\n.habit 8 m=1 max=2 floss\n.habit 8 m=1 max=2 mouthwash",
+    "/br": ".habit 8 m=1 max=3 brush$;br$;\n.habit 8 m=1 max=2 floss$;fl$;\n.habit 8 m=1 max=2 mouthwash$;",
     # "/mw": ".habit 8 m=1 max=2 mouthwash",
-    "/dummy": ".habit 8 m=0 max=10 .dummy",
+    "/dummy": ".habit 8 m=0 max=10 dummy",
     "/s": ".habit 8 m=0 max=9 study",
     "/sa": ".habit 8 m=0 max=9 sa",
     "/sl": ".habit 8 m=0 max=12 sleep",
     "/e": ".habit 8 m=0 max=2 exercise",
-    "/wt": ".habit 8 m=0 max=12 wasted",
+    "/wt": ".habit 8 m=0 max=6 wasted",
+    "/hh": ".habit 8 m=0 max=6 halfhearted$;",
     ###
     "/d": "o m=2 r=6 treemap=0",
     "/d30": "o m=2 r=29 treemap=0",
@@ -50,7 +51,7 @@ subs_commands = {
     "/s3": "o3 m=3 r=14",
     "/s2": "o2 m=3 r=21",
     "/s1": "o1 m=3 r=42",
-    "/sall": "/s1\n/s2\n/s3\n/s7",
+    "/sall": "/s1\n/s2\n/s3\n/s4\n/s7",
     ###
 }
 suffixes = {
@@ -442,6 +443,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
             choiceConfirmed = True
             return out
 
+        # @badDesign @todo3 these suffixes are only relevant for adding new acts and renaming them, but they are acted on globally ...
         while text[-1] in suffixes:
             suffix = text[-1]
             action = suffixes[suffix]
@@ -712,14 +714,17 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
             m = habit_pat.match(m0_text)
             if m:
                 habit_name = m.group('name')
-                habit_name = text_sub_full(habit_name)
+                habit_name = habit_name.split(';')
+                habit_name = [name.strip() for name in habit_name if name and not name.isspace()]
+                # habit_name = [text_sub_full(name) for name in habit_name]
+                out_add(f"{'; '.join(habit_name)}")
                 habit_mode = int(m.group('mode') or 0)
                 habit_max = int(m.group('max') or 0)
                 habit_delta = datetime.timedelta(
                     days=float(m.group('t') or 30))  # days
                 habit_data = activity_list_habit_get_now(
                     habit_name, delta=habit_delta, mode=habit_mode, received_at=received_at)
-                out_add(f"\n{habit_name}\n\n{yaml.dump(habit_data)}")
+                out_add(f"{yaml.dump(habit_data)}")
                 habit_data.pop(received_at.date(), None)
                 def mean(numbers):
                     numbers = list(numbers)

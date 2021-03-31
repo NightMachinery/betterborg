@@ -199,8 +199,13 @@ def activity_list_to_str(low, high, skip_acts=["sleep"]):
     res += str(acts_agg)[0:3500] # truncate it for Telegram
     return {'string': res + "\n```", 'acts_agg': acts_agg, 'acts_skipped': acts_skipped}
 
-def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mode=0, fill_default=True, received_at=None):
+def activity_list_habit_get_now(names, delta=datetime.timedelta(days=30), mode=0, fill_default=True, received_at=None):
     # _now means 'now' is 'high'
+    ##
+    if type(names) is str:
+        names = [names]
+
+    ##
     high = received_at or datetime.datetime.today()
     low = high - delta
     ## aligns dates with real life, so that date changes happen at, e.g., 5 AM:
@@ -209,9 +214,23 @@ def activity_list_habit_get_now(name: str, delta=datetime.timedelta(days=30), mo
     ##
 
     def which_bucket(act: Activity):
-        if act.name == name or act.name.startswith(name + '_'):
+        accept = False
+        for name in names:
+            check_end = name.endswith('$')
+            if check_end:
+                name = name[:-1]
+                if act.name.endswith('_' + name):
+                    accept = True
+                    break
+
+            if act.name == name or act.name.startswith(name + '_'):
+                accept = True
+                break
+
+        if accept:
             return (act.start - night_passover).date()
-        return None
+        else:
+            return None
 
     buckets = activity_list_buckets_get(
         low, high, which_bucket=which_bucket, mode=mode)
@@ -553,6 +572,7 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
     # https://plotly.com/python/discrete-color/
     # https://medialab.github.io/iwanthue/
     # https://google.github.io/palette.js/ (most colors are from here)
+    # https://carto.com/carto-colors/ (good preview here, to see how well the colors actually look on a map)
     ##
     # As of Python 3.7, the standard dict preserves insertion order
     categories = {
