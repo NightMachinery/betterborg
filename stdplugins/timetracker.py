@@ -44,7 +44,9 @@ subs_commands = {
     "/d30": "o m=2 r=29 treemap=0",
     "/w": "o168 m=2 r=7 treemap=0",
     ##
+    # @todo @futurecron0 lcm(2,3,4,7) = 84
     "/s7": "o7 m=3 r=6",
+    "/s4": "o4 m=3 r=11",
     "/s3": "o3 m=3 r=14",
     "/s2": "o2 m=3 r=21",
     "/s1": "o1 m=3 r=42",
@@ -196,10 +198,13 @@ subs = {
     ###
     "🎪": "entertainment",
     "fun": "entertainment",
-    "game": "entertainment_video games",
+    ##
     "music": "entertainment_listen_music",
+    ##
+    "game": "entertainment_video games",
     "vg": "entertainment_video games",
     "coop": "entertainment_video games_coop",
+    ##
     "wa": "entertainment_watch",
     "movies": "entertainment_watch_movies",
     "anime": "entertainment_watch_anime",
