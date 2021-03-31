@@ -1,5 +1,6 @@
 from __future__ import annotations
 from brish import z
+from uniborg.util import force_async
 import logging
 try:
     logger = logger or logging.getLogger(__name__)
@@ -469,6 +470,8 @@ def local_helper_visualize_plotly():
     print(res['string'])
     return visualize_plotly(res['acts_agg'])
 
+
+@force_async
 def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
     # @warn this is not async, and it takes rather long to complete
     ##
@@ -562,6 +565,8 @@ def get_sub_act_total_duration(act, sub_act_name: str, days):
     else:
         return 0
 
+
+@force_async
 def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
     out_links = []
     out_files = []

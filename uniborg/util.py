@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from brish import z, zp, Brish
+from brish import z, zp, zs, bsh, Brish
 from collections.abc import Iterable
 from IPython.terminal.embed import InteractiveShellEmbed, InteractiveShell
 from IPython.terminal.ipapp import load_default_config
@@ -125,6 +125,18 @@ def force_async(f):
 
 # @force_async
 
+async def za(template, *args, bsh=bsh, getframe=1, locals_=None, **kwargs):
+    # @todo1 move this to brish itself
+    loop = asyncio.get_running_loop()
+    locals_ = locals_ or sys._getframe(getframe).f_locals
+    def h_z():
+        # can't get the previous frames in here, idk why
+        cmd = bsh.zstring(template, locals_=locals_)
+        return bsh.send_cmd(cmd, *args, **kwargs)
+
+    future = loop.run_in_executor(None, h_z)
+
+    return await future
 
 def init_brishes():
     brish_count = int(os.environ.get('borg_brish_count', '4'))
@@ -504,18 +516,19 @@ async def aget(event, command='', shell=True, match=None, album_mode=True):
 
 @force_async
 def brishz_helper(myBrish, cwd, cmd, fork=True):
-    myBrish.z('typeset -g jd={cwd}')
-    myBrish.send_cmd('''
-    cd "$jd"
-    ! ((${+functions[jinit]})) || jinit
-    ''')
-    # res = myBrish.send_cmd(cmd, fork=fork, cmd_stdin='')
-    # res = myBrish.z("{{ eval {cmd} }} 2>&1", fork=fork, cmd_stdin='')
-    res = myBrish.send_cmd('{ eval "$(< /dev/stdin)" } 2>&1', fork=fork, cmd_stdin=cmd)
-    # embed2()
-    myBrish.z('cd /tmp')
-    return res
+    if cwd:
+        myBrish.z('typeset -g jd={cwd}')
+        myBrish.send_cmd('''
+        cd "$jd"
+        ! ((${+functions[jinit]})) || jinit
+        ''')
 
+    # res = myBrish.send_cmd(cmd, fork=fork, cmd_stdin='')
+    res = myBrish.send_cmd('{ eval "$(< /dev/stdin)" } 2>&1', fork=fork, cmd_stdin=cmd)
+    if cwd:
+        myBrish.z('cd /tmp')
+
+    return res
 
 async def brishz(event, cwd, cmd, fork=True, shell=True, **kwargs):
     # print(f"entering brishz with cwd: '{cwd}', cmd: '{cmd}'")

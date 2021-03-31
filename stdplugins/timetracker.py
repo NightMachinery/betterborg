@@ -10,7 +10,7 @@ import os
 from dateutil.relativedelta import relativedelta
 # from pathlib import Path
 # from peewee import *
-from uniborg.util import embed2, send_files
+from uniborg.util import embed2, send_files, za
 from uniborg.timetracker_util import *
 import json
 import yaml
@@ -667,7 +667,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                         days = float(hours or 7)
                         a = stacked_area_get_act_roots(repeat=(repeat or 20), interval=datetime.timedelta(days=days))
                         # embed2()
-                        out_links, out_files = visualize_stacked_area(a, days=days, cmap=cmap)
+                        out_links, out_files = await visualize_stacked_area(a, days=days, cmap=cmap)
                         await send_plots(out_links, out_files)
 
                     if hours:
@@ -690,7 +690,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                         out_add(f"Generating plots ...", prefix='\n')
                         await edit(f"{out}", parse_mode="markdown")
 
-                        out_links, out_files = visualize_plotly(res['acts_agg'], title=title, treemap=treemap_enabled)
+                        out_links, out_files = await visualize_plotly(res['acts_agg'], title=title, treemap=treemap_enabled)
                         await send_plots(out_links, out_files)
 
                 fake_received_at = received_at
@@ -745,7 +745,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                     min(resolution, resolution * (v/habit_max))) for k, v in habit_data.items()}
                 plot_data_json = json.dumps(plot_data)
                 # await reply(plot_data_json)
-                res = z(
+                res = await za(
                     "calendarheatmap -maxcount {resolution} -colorscale BuGn_9 -colorscalealt Blues_9 -highlight-today '#00ff9d' > {img}", cmd_stdin=plot_data_json)
                 if res:
                     await send_file(img)
