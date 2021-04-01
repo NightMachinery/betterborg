@@ -200,19 +200,22 @@ def activity_list_to_str(low, high, skip_acts=["sleep"]):
     res += str(acts_agg)[0:3500] # truncate it for Telegram
     return {'string': res + "\n```", 'acts_agg': acts_agg, 'acts_skipped': acts_skipped}
 
-def activity_list_habit_get_now(names, delta=datetime.timedelta(days=30), mode=0, fill_default=True, received_at=None):
-    # _now means 'now' is 'high'
-    ##
+def activity_list_habit_get_now(names, low=None, high=None, delta=datetime.timedelta(days=30), mode=0, fill_default=True, received_at=None, day_start=DAY_START, adjust_high=False, **kwargs):
     if type(names) is str:
         names = [names]
 
     ##
-    high = received_at or datetime.datetime.today()
-    low = high - delta
-    ## aligns dates with real life, so that date changes happen at, e.g., 5 AM:
-    low = low.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
-    night_passover = datetime.timedelta(hours=DAY_START)
-    ##
+    high = high or (received_at or datetime.datetime.today())
+    low = low or (high - delta)
+    low = low.replace(hour=day_start, minute=0, second=0, microsecond=0)
+    if adjust_high:
+        high = high.replace(hour=(day_start - 1), minute=59, second=59, microsecond=0) # high will go till previous day only, and skips the last day in range
+
+    if high <= low:
+        logger.error("high <= low")
+        return
+
+    night_passover = datetime.timedelta(hours=(day_start), seconds=0)
 
     def which_bucket(act: Activity):
         accept = False
@@ -234,27 +237,34 @@ def activity_list_habit_get_now(names, delta=datetime.timedelta(days=30), mode=0
             return None
 
     buckets = activity_list_buckets_get(
-        low, high, which_bucket=which_bucket, mode=mode)
+        low, high, which_bucket=which_bucket, mode=mode, **kwargs)
     if mode == 0:
         buckets_dur = {k: round(relativedelta_total_seconds(
             v.total_duration) / 3600, 2) for k, v in buckets.items()}
-    elif mode == 1:
+    elif mode in (1,2):
         buckets_dur = buckets
 
     if fill_default:
         interval = datetime.timedelta(days=1)
         while low <= high:
-            buckets_dur.setdefault(low.date(), 0)
+            d = (low - night_passover).date()
+            if mode == 0:
+                buckets_dur.setdefault(d, 0)
+            elif mode == 1:
+                buckets_dur.setdefault(d, ActivityDuration("Total"))
+            elif mode == 2:
+                buckets_dur.setdefault(d, [])
+
             low += interval
 
     return buckets_dur
 
 
-def stacked_area_get_act_roots(low=None, high=None, delta=None, repeat=30,interval=datetime.timedelta(days=1)):
+def stacked_area_get_act_roots(low=None, high=None, delta=None, repeat=30,interval=datetime.timedelta(days=1), received_at=None):
     delta = delta or interval*repeat
 
     # high = high or (datetime.datetime.today() - datetime.timedelta(days=1))
-    high = high or (datetime.datetime.today())
+    high = high or (received_at or datetime.datetime.today())
     low = low or (high - delta)
     low = low.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
     high = high.replace(hour=(DAY_START - 1), minute=59, second=59, microsecond=0) # high will go till previous day only, and skips the last day in range
@@ -306,6 +316,10 @@ def activity_list_buckets_get(low, high, which_bucket, mode=0, correct_overlap=T
         elif mode == 1:  # count mode
             bucket = buckets.setdefault(bucket_key, 0)
             buckets[bucket_key] += 1
+        elif mode == 2:  # raw act mode
+            bucket = buckets.setdefault(bucket_key, [])
+            bucket.append(act)
+
     return buckets
 
 ### visualizations

@@ -37,6 +37,7 @@ subs_commands = {
     "/s": ".habit 8 m=0 max=9 study",
     "/sa": ".habit 8 m=0 max=9 sa",
     "/sl": ".habit 8 m=0 max=12 sleep",
+    "/sls": ".habit 8 m=2 max=12 sleep",
     "/e": ".habit 8 m=0 max=2 exercise",
     "/wt": ".habit 8 m=0 max=6 wasted",
     "/hh": ".habit 8 m=0 max=6 halfhearted$;",
@@ -665,7 +666,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                         out_add("Generating stacked area plots ...")
                         await edit(f"{out}", parse_mode="markdown")
                         days = float(hours or 7)
-                        a = stacked_area_get_act_roots(repeat=(repeat or 20), interval=datetime.timedelta(days=days))
+                        a = stacked_area_get_act_roots(repeat=(repeat or 20), interval=datetime.timedelta(days=days), received_at=received_at)
                         # embed2()
                         out_links, out_files = await visualize_stacked_area(a, days=days, cmap=cmap)
                         await send_plots(out_links, out_files)
@@ -722,8 +723,48 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                 habit_max = int(m.group('max') or 0)
                 habit_delta = datetime.timedelta(
                     days=float(m.group('t') or 30))  # days
+                correct_overlap = True
+                day_start = DAY_START
+                negative_previous_year = True
+                colorscheme1 = 'BuGn_9'
+                colorscheme2 = 'Blues_9'
+                if habit_mode == 2:
+                    correct_overlap = False
+                    day_start = 15
+                    negative_previous_year = False
+                    # colorscheme1 = 'PuRd_9'
+                    # colorscheme2 = 'PuBu_9'
+                    ##
+                    colorscheme1 = 'PuRd_9'
+                    colorscheme2 = 'YlGnBu_9'
+                    ##
+                    neutral_start = 23
+                    neutral_start = 24 + 0
+                    # neutral_start = 24 + 3
+
                 habit_data = activity_list_habit_get_now(
-                    habit_name, delta=habit_delta, mode=habit_mode, received_at=received_at)
+                    habit_name, delta=habit_delta, mode=habit_mode, day_start=day_start, correct_overlap=correct_overlap, received_at=received_at)
+                def raw_acts_to_start_offset(habit_data):
+                    tmp = habit_data
+                    habit_data = dict()
+                    for date, act_list in tmp.items():
+                        if len(act_list) == 0:
+                            start_offset = 0
+                        else:
+                            s = act_list[0].start
+                            s = s - s.replace(hour=0, minute=0, second=0, microsecond=0)
+                            s = s.total_seconds()/3600.0
+                            if s < day_start:
+                                s += 24
+                            start_offset = s - neutral_start
+
+                        habit_data[date] = round(start_offset,1)
+
+                    return habit_data
+
+                if habit_mode == 2:
+                    habit_data = raw_acts_to_start_offset(habit_data)
+
                 out_add(f"{yaml.dump(habit_data)}")
                 habit_data.pop(received_at.date(), None)
                 def mean(numbers):
@@ -736,17 +777,20 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                 # ~1 day(s) left empty as a buffer
                 habit_delta = datetime.timedelta(days=364)
                 habit_data = activity_list_habit_get_now(
-                    habit_name, delta=habit_delta, mode=habit_mode, fill_default=False, received_at=received_at)
+                    habit_name, delta=habit_delta, mode=habit_mode, day_start=day_start, correct_overlap=correct_overlap, fill_default=False, received_at=received_at)
+                if habit_mode == 2:
+                    habit_data = raw_acts_to_start_offset(habit_data)
+
                 img = z("gmktemp --suffix .png").outrs
                 resolution = 100
                 # * we can increase habit_max by 1.2 to be able to still show overwork, but perhaps each habit should that manually
                 # * calendarheatmap is designed to handle a single year. Using this `year=received_at.year` hack, we can render the previous year's progress as well. (Might get us into trouble after 366-day years, but probably not.)
-                plot_data = {str(k.replace(year=received_at.year)): (1 if k.year == received_at.year else -1) * int(
-                    min(resolution, resolution * (v/habit_max))) for k, v in habit_data.items()}
+                plot_data = {str(k.replace(year=received_at.year)): (1 if (not negative_previous_year or k.year == received_at.year) else -1) * int(
+                    max(-resolution, min(resolution, resolution * (v/habit_max)))) for k, v in habit_data.items()}
                 plot_data_json = json.dumps(plot_data)
                 # await reply(plot_data_json)
                 res = await za(
-                    "calendarheatmap -maxcount {resolution} -colorscale BuGn_9 -colorscalealt Blues_9 -highlight-today '#00ff9d' > {img}", cmd_stdin=plot_data_json)
+                    "calendarheatmap -maxcount {resolution} -colorscale {colorscheme1} -colorscalealt {colorscheme2} -highlight-today '#00ff9d' > {img}", cmd_stdin=plot_data_json)
                 if res:
                     await send_file(img)
                 else:
