@@ -248,9 +248,7 @@ def activity_list_habit_get_now(names, low=None, high=None, delta=datetime.timed
         interval = datetime.timedelta(days=1)
         while low <= high:
             d = (low - night_passover).date()
-            if mode == 0:
-                buckets_dur.setdefault(d, ActivityDuration("Total"))
-            elif mode == 1:
+            if mode in (0,1):
                 buckets_dur.setdefault(d, 0)
             elif mode == 2:
                 buckets_dur.setdefault(d, [])
