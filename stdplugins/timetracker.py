@@ -152,7 +152,13 @@ subs = {
     "cho": "chores_others",
     "chfam": "chores_others_family",
     ##
-    "bills": "chores_finance_bills",
+    "note": "chores_self_notes",
+    ##
+    "tidy": "chores_self_tidying up",
+    "hclean": "chores_self_house_cleaning",
+    "vacuum": "chores_self_house_cleaning_vacuum",
+    ##
+    "bills": "chores_self_finance_bills",
     ##
     "cm": "chores_self_commute",
     ##
@@ -178,6 +184,8 @@ subs = {
     "fl": "chores_self_health_teeth_floss",
     "mw": "chores_self_health_teeth_mouthwash",
     ##
+    "hygiene": "chores_self_hygiene",
+    "nail": "chores_self_hygiene_nails",
     "bath": "chores_self_hygiene_bath",
     "🛁": "chores_self_hygiene_bath",
     "ba": "chores_self_hygiene_bath",
@@ -254,7 +262,7 @@ subs_additional = {
     "chores_self_rest_eat_dinner_family",
 }
 reminders_immediate = {
-    "chores_self_hygiene_bath": "Turn off the heater",
+    "chores_self_hygiene_bath": "Leaf; heater",
     "sleep": "Clean your eyes",
 }
 ##
@@ -489,6 +497,9 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
             text = text[1:]
             add_user_choice(text)
         elif not choiceConfirmed:
+            if not('_' in text):
+                text = text.replace(' ', '_')
+
             tokens = list(text.split('_'))
             if len(tokens) > 1:
                 tokens[0] = text_sub_full(tokens[0])
@@ -838,6 +849,7 @@ async def _process_msg(m0, text_input=False, reload_on_failure=True, out="", rec
                 set_msg_act(last_act)
                 out_add(f"{str(last_act)} (Updated by {int(round(amount.total_seconds()/60.0, 0))} minutes)")
                 await edit(out)
+                await process_reminders(last_act.name)
                 return out
 
             if m0_text == '.':
