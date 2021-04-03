@@ -152,7 +152,7 @@ subs = {
     "cho": "chores_others",
     "chfam": "chores_others_family",
     ##
-    "note": "chores_self_notes",
+    "nt": "chores_self_notes",
     ##
     "tidy": "chores_self_tidying up",
     "hclean": "chores_self_house_cleaning",
