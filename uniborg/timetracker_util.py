@@ -436,7 +436,40 @@ cmaps['pastel'] = [
     'rgb(179, 179, 179)'
 ]
 ##
-
+# https://colorbrewer2.org/#type=qualitative&scheme=Pastel1&n=9
+# https://plotly.com/python/discrete-color/
+# https://medialab.github.io/iwanthue/
+# https://google.github.io/palette.js/ (most colors are from here)
+# https://carto.com/carto-colors/ (good preview here, to see how well the colors actually look on a map)
+##
+# As of Python 3.7, the standard dict preserves insertion order
+categories = {
+    'Total' : 'rgb(255, 255, 255)',
+    'study' : 'rgb(102, 166, 30)',
+    'chores_self_study' : 'rgb(102, 166, 30)',
+    'chores_self_health' : 'rgb(179, 233, 0)',
+    'meditation' : 'rgb(93, 255, 0)',
+    'chores_self_hygiene' : 'rgb(178, 190, 77)',
+    'outdoors' : 'rgb(175, 141, 0)',
+    'sa' : 'rgb(55, 126, 184)',
+    'exploration' : 'rgb(0, 210, 213)',
+    'social' : 'rgb(188, 128, 189)',
+    'social_online' : 'rgb(252, 205, 229)',
+    'chores' : 'rgb(255, 243, 185)',
+    'chores_self_rest' : 'rgb(255, 237, 111)',
+    'chores_self_commute' : 'rgb(170, 28, 59)',
+    'wasted' : 'rgb(255, 0, 41)',
+    # 'outdoors' : 'rgb(0, 255, 185)',
+    'entertainment' : 'rgb(251, 128, 114)',
+    'nonfiction' : 'rgb(255, 127, 0)',
+    # 'consciously untracked' : 'rgb(247, 249, 226)',
+    'consciously untracked' : 'rgb(0,0,0)',
+    # 'sleep' : 'rgb(255,255,255)',
+    # 'sleep' : 'rgb(221, 243, 250)',
+    'sleep' : 'rgb(142, 200, 239)',
+    # '' : 'rgb()',
+}
+##
 def get_acts(root: ActivityDuration, skip_acts=["sleep"],dict_mode=False):
     # mutates its input! is not idempotent!
     if dict_mode == False:
@@ -535,11 +568,30 @@ def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
         # color_discrete_map={'(?)':'gold', 'Study':'green', 'wasted':'black'},
     )
 
+    ## colors @unresolved https://community.plotly.com/t/how-to-explicitly-set-colors-for-some-sectors-in-a-treemap/51162
+    def choose_color(i, act, parent_names = None, cmap = cmaps['alphabet']):
+        if parent_names == None:
+            parent_names = act.name.split('_')
+
+        longname = '_'.join(parent_names)
+        if longname in categories:
+            return categories[longname]
+
+        parent_names = parent_names[:-1]
+        if len(parent_names) >= 1:
+            return choose_color(i, act, parent_names)
+        else:
+            return cmap[abs((hash(longname) % len(cmap)))] # abs is redundant, I think
+
+    cs=[choose_color(i, act) for i, act in enumerate(all_acts)]
+
     if treemap:
         fig = go.Figure(go.Treemap(**plot_opts))
         # fig.update_layout(margin = dict(t=0, l=0, r=0, b=0))
         fig.update_layout(margin = dict(t=30, l=0, r=30, b=30))
         # fig.update_layout(uniformtext=dict(minsize=6, mode='hide'))
+        fig.update_traces(marker_colors=cs)
+        fig.update_traces(marker_depthfade=True)
         if title:
             fig.update_layout(title_text=title)
             fig.update_layout(title_font_size=11)
@@ -558,6 +610,8 @@ def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
         fig = go.Figure(go.Sunburst(**plot_opts))
         fig.update_layout(margin = dict(t=0, l=0, r=0, b=0))
         # fig.update_layout(uniformtext=dict(minsize=6, mode='hide'))
+
+        fig.update_traces(marker_colors=cs)
         if title:
             fig.update_layout(title_text=title)
             fig.update_layout(title_font_size=11)
@@ -584,40 +638,6 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
     out_files = []
 
     fig = go.Figure()
-    ##
-    # https://colorbrewer2.org/#type=qualitative&scheme=Pastel1&n=9
-    # https://plotly.com/python/discrete-color/
-    # https://medialab.github.io/iwanthue/
-    # https://google.github.io/palette.js/ (most colors are from here)
-    # https://carto.com/carto-colors/ (good preview here, to see how well the colors actually look on a map)
-    ##
-    # As of Python 3.7, the standard dict preserves insertion order
-    categories = {
-        'study' : 'rgb(102, 166, 30)',
-        'chores_self_study' : 'rgb(102, 166, 30)',
-        'chores_self_health' : 'rgb(179, 233, 0)',
-        'meditation' : 'rgb(93, 255, 0)',
-        'chores_self_hygiene' : 'rgb(178, 190, 77)',
-        'outdoors' : 'rgb(175, 141, 0)',
-        'sa' : 'rgb(55, 126, 184)',
-        'exploration' : 'rgb(0, 210, 213)',
-        'social' : 'rgb(188, 128, 189)',
-        'social_online' : 'rgb(252, 205, 229)',
-        'chores' : 'rgb(255, 243, 185)',
-        'chores_self_rest' : 'rgb(255, 237, 111)',
-        'chores_self_commute' : 'rgb(170, 28, 59)',
-        'wasted' : 'rgb(255, 0, 41)',
-        # 'outdoors' : 'rgb(0, 255, 185)',
-        'entertainment' : 'rgb(251, 128, 114)',
-        'nonfiction' : 'rgb(255, 127, 0)',
-        # 'consciously untracked' : 'rgb(247, 249, 226)',
-        'consciously untracked' : 'rgb(0,0,0)',
-        # 'sleep' : 'rgb(255,255,255)',
-        # 'sleep' : 'rgb(221, 243, 250)',
-        'sleep' : 'rgb(142, 200, 239)',
-        # '' : 'rgb()',
-    }
-    ##
 
     act_roots = dated_act_roots.values()
     xs = list(dated_act_roots.keys())
@@ -625,11 +645,11 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
     # good: alphabet, d3, pastel
     # mediocre: light24
     if not cmap or cmap == 's':
-        cmap = list(categories.values())
+        cmap = None
     else:
         cmap = cmaps[cmap or 'alphabet' or 'd3']
+        cmap_len = len(cmap)
 
-    cmap_len = len(cmap)
     ##
     act_roots_all = [get_acts(act, dict_mode=True, skip_acts=[]) for act in act_roots]
     def get_dur(act_root_all, category):
@@ -657,6 +677,15 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
 
     i = 0
     for category, color in categories.items():
+        if category in ('Total',):
+            continue
+
+        if cmap:
+            if type(cmap) is dict:
+                color = cmap[category]
+            else:
+                color = cmap[(i % cmap_len)]
+
         fig.add_trace(go.Scatter(
             name=category,
             x=xs,
@@ -665,8 +694,7 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
             hoverinfo='x+y',
             mode='lines',
             line=dict(width=0.5,
-                      # color=color,
-                      color=cmap[(i % cmap_len)],
+                      color=color,
                       ),
             stackgroup='one',
             # groupnorm='percent' # sets the normalization for the sum of the stackgroup

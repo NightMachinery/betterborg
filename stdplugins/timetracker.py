@@ -839,6 +839,7 @@ async def _process_msg(
                 fake_received_at = fake_received_at - datetime.timedelta(
                     hours=float(hours or 24)
                 )
+                fake_received_at = fake_received_at.replace(hour=(DAY_START - 1), minute=59, second=59, microsecond=0)
 
             return out
 
