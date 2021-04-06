@@ -7,8 +7,6 @@ import datetime
 from brish import z
 import re
 import os
-from dateutil.relativedelta import relativedelta
-
 # from pathlib import Path
 # from peewee import *
 from uniborg.util import embed2, send_files, za
@@ -243,6 +241,7 @@ subs = {
     "med": "meditation_serene",
     "thinking": "meditation_thinking",
     "th": "meditation_thinking",
+    "ang": "meditation_thinking_angry",
     "thl": "meditation_thinking_loose",
     "selfie": "meditation_thinking_self inspection",
     "qs": "meditation_thinking_self inspection_quantified self",

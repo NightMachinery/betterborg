@@ -18,6 +18,7 @@ is_local = bool(z("isLocal"))
 from peewee import *
 import os
 from dateutil.relativedelta import relativedelta
+from datetime import timedelta
 from pathlib import Path
 
 # Path.home().joinpath(Path("cellar"))
@@ -61,36 +62,36 @@ from dataclasses import dataclass
 from functools import total_ordering
 from typing import Dict, List
 import datetime
-from dateutil.relativedelta import relativedelta
 
+def timedelta_total_seconds(td: timedelta):
+    return td.total_seconds
 
-def relativedelta_total_seconds(rd: relativedelta):
-    # Used Google to convert the years and months, they are slightly more than 365 and 30 days respectively.
-    return rd.years * 31540000 + rd.months * 2628000 + rd.days * 86400 + rd.hours * 3600 + rd.minutes * 60 + rd.seconds
-
+def timedelta_str(td: timedelta, **kwargs):
+    s = timedelta_total_seconds(td)
+    return seconds_str(s, **kwargs)
 
 def gen_s(num):
     if num != 1:
         return "s"
     return ""
 
-
-def relativedelta_str(rd: relativedelta, only_hours=False, scale=True):
+def seconds_str(s, only_hours=False, scale=True):
     res = ""
     sleep = 9.5
-    active_h = 24-sleep
-    # scale_factor = (24/(active_h))
+    if scale:
+        active_h = 24-sleep
+    else:
+        active_h = 24
 
-    s = relativedelta_total_seconds(rd)
-    m, _ = divmod(s, 60)
-    h, m = divmod(m, 60)
     if only_hours:
+        # m, _ = divmod(s, 60)
+        m = int(round(s/60.0, 0))
+        h, m = divmod(m, 60)
         res = f"{h}:{m}"
     elif scale:
-        days, hours = divmod(h, active_h)
-        hours, m_rem = divmod(hours, 1)
-        hours = int(hours)
-        m += int(round(m_rem,0))
+        days, s = divmod(s, active_h*3600)
+        m = int(round(s/60.0, 0))
+        hours, m = divmod(m, 60)
         months, days = divmod(days, 30)
         years, months = divmod(months, 24)
         if years:
@@ -101,21 +102,7 @@ def relativedelta_str(rd: relativedelta, only_hours=False, scale=True):
             res += f"{days} day{gen_s(days)}, "
         res += f"{hours or 0:}:"
         res += f"{m}"
-    else:
-        rd = rd.normalized()
-        scale_factor = 1
-        # rd.weeks seems to just convert rd.days into weeks
-        if rd.years:
-            years = rd.years * scale_factor
-            res += f"{years} year{gen_s(years)}, "
-        if rd.months:
-            months = rd.months * scale_factor
-            res += f"{months} month{gen_s(months)}, "
-        if rd.days:
-            days = rd.days * scale_factor
-            res += f"{days} day{gen_s(days)}, "
-        res += f"{rd.hours or 0}:"
-        res += f"{rd.minutes}"
+
     return res
 
 @total_ordering
@@ -581,7 +568,7 @@ def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
         if len(parent_names) >= 1:
             return choose_color(i, act, parent_names)
         else:
-            return cmap[abs((hash(longname) % len(cmap)))] # abs is redundant, I think
+            return cmap[abs((hash(longname) % len(cmap)))] # abs is redundant: Python modulo operator always return the remainder having the same sign as the divisor.
 
     cs=[choose_color(i, act) for i, act in enumerate(all_acts)]
 
