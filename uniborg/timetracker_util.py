@@ -17,9 +17,11 @@ is_local = bool(z("isLocal"))
 ##
 from peewee import *
 import os
-from dateutil.relativedelta import relativedelta
 from datetime import timedelta
 from pathlib import Path
+
+def timedelta_dur(end, start):
+    return end - start
 
 # Path.home().joinpath(Path("cellar"))
 db_path = Path(
@@ -41,8 +43,8 @@ class Activity(BaseModel):
     end = DateTimeField()
 
     def __str__(self):
-        dur = relativedelta(self.end, self.start)
-        return f"""{self.name} {relativedelta_str(dur)}"""
+        dur = timedelta_dur(self.end, self.start)
+        return f"""{self.name} {timedelta_str(dur)}"""
 
 ## indexes: add manually via Datagrip (right-click on table, modify table)(adding it via peewee is not necesseray https://github.com/coleifer/peewee/issues/2360 )
 # create index activity_end_index
@@ -64,7 +66,7 @@ from typing import Dict, List
 import datetime
 
 def timedelta_total_seconds(td: timedelta):
-    return td.total_seconds
+    return td.total_seconds()
 
 def timedelta_str(td: timedelta, **kwargs):
     s = timedelta_total_seconds(td)
@@ -88,7 +90,7 @@ def seconds_str(s, only_hours=False, scale=True):
         m = int(round(s/60.0, 0))
         h, m = divmod(m, 60)
         res = f"{h}:{m}"
-    elif scale:
+    else:
         days, s = divmod(s, active_h*3600)
         m = int(round(s/60.0, 0))
         hours, m = divmod(m, 60)
@@ -110,12 +112,12 @@ def seconds_str(s, only_hours=False, scale=True):
 class ActivityDuration:
     # @legacyComment Somehow putting ActivityDuration in the plugin file itself resulted in error (the culprit was probably dataclass), so I am putting them here.
     name: str
-    duration: relativedelta = dataclasses.field(default_factory=relativedelta)
+    duration: timedelta = dataclasses.field(default_factory=timedelta)
     sub_acts: Dict[str, ActivityDuration] = dataclasses.field(
         default_factory=dict)
 
-    total_duration: relativedelta = dataclasses.field(
-        default_factory=relativedelta)
+    total_duration: timedelta = dataclasses.field(
+        default_factory=timedelta)
     # @property
     # def total_duration(self):
     #     res = self.duration
@@ -125,13 +127,13 @@ class ActivityDuration:
 
     def __lt__(self, other):
         if type(other) is ActivityDuration:
-            return relativedelta_total_seconds(self.total_duration) < relativedelta_total_seconds(other.total_duration)
-        elif type(other) is relativedelta:
-            return relativedelta_total_seconds(self.total_duration) < relativedelta_total_seconds(other)
+            return timedelta_total_seconds(self.total_duration) < timedelta_total_seconds(other.total_duration)
+        elif type(other) is timedelta:
+            return timedelta_total_seconds(self.total_duration) < timedelta_total_seconds(other)
         else:
             return NotImplemented
 
-    def add(self, dur: relativedelta, act_chain: List[str]):
+    def add(self, dur: timedelta, act_chain: List[str]):
         self.total_duration += dur
         if len(act_chain) == 0:
             self.duration += dur
@@ -152,9 +154,9 @@ class ActivityDuration:
         my_indent = indent
         next_width = width - len(indent)
         if not skip_me:
-            res += f"""{adjust_name(name)} {relativedelta_str(self.total_duration)}\n"""
-            if len(self.sub_acts) > 0 and relativedelta_total_seconds(self.duration) > 60:
-                res += f"""{my_indent}{adjust_name(".", width=next_width)} {relativedelta_str(self.duration)}\n"""
+            res += f"""{adjust_name(name)} {timedelta_str(self.total_duration)}\n"""
+            if len(self.sub_acts) > 0 and timedelta_total_seconds(self.duration) > 60:
+                res += f"""{my_indent}{adjust_name(".", width=next_width)} {timedelta_str(self.duration)}\n"""
         else:
             my_indent = ""
         for act in sorted(self.sub_acts.values(), reverse=True):
@@ -175,7 +177,7 @@ def activity_list_to_str(low, high, skip_acts=["sleep"]):
         act_name = act.name
         act_start = max(act.start, low)
         act_end = min(act.end, high)
-        dur = relativedelta(act_end, act_start)
+        dur = timedelta_dur(act_end, act_start)
         path = list(reversed(act_name.split('_')))
         if act_name in skip_acts:
             acts_skipped.add(dur, path)
@@ -183,7 +185,7 @@ def activity_list_to_str(low, high, skip_acts=["sleep"]):
             acts_agg.add(dur, path)
     # ("TOTAL", total_dur),
     # we need a monospace font to justify the columns
-    res = f"```\nSpanning {str(high - low)}; UNACCOUNTED {relativedelta_str(relativedelta(high, low + acts_agg.total_duration + acts_skipped.total_duration), scale=False)}\nTotal (scaled): {relativedelta_str(acts_agg.total_duration)}; Skipped {relativedelta_str(acts_skipped.total_duration, scale=False)}\n"
+    res = f"```\nSpanning {str(high - low)}; UNACCOUNTED {timedelta_str(timedelta_dur(high, low + acts_agg.total_duration + acts_skipped.total_duration), scale=False)}\nTotal (scaled): {timedelta_str(acts_agg.total_duration)}; Skipped {timedelta_str(acts_skipped.total_duration, scale=False)}\n"
     res += str(acts_agg)[0:3500] # truncate it for Telegram
     return {'string': res + "\n```", 'acts_agg': acts_agg, 'acts_skipped': acts_skipped}
 
@@ -226,7 +228,7 @@ def activity_list_habit_get_now(names, low=None, high=None, delta=datetime.timed
     buckets = activity_list_buckets_get(
         low, high, which_bucket=which_bucket, mode=mode, **kwargs)
     if mode == 0:
-        buckets_dur = {k: round(relativedelta_total_seconds(
+        buckets_dur = {k: round(timedelta_total_seconds(
             v.total_duration) / 3600, 2) for k, v in buckets.items()}
     elif mode in (1,2):
         buckets_dur = buckets
@@ -265,7 +267,7 @@ def stacked_area_get_act_roots(low=None, high=None, delta=None, repeat=30,interv
         bucket = buckets.setdefault((low - night_passover).date(), ActivityDuration("Total"))
         acts = Activity.select().where((Activity.start.between(low, mid)) | (Activity.end.between(low, mid)))
         for act in acts:
-            dur = relativedelta(min(act.end, mid), max(act.start, low))
+            dur = timedelta_dur(min(act.end, mid), max(act.start, low))
             bucket.add(dur, list(reversed(act.name.split('_'))))
 
         low = mid
@@ -296,7 +298,7 @@ def activity_list_buckets_get(low, high, which_bucket, mode=0, correct_overlap=T
             continue
         if mode == 0:
             bucket = buckets.setdefault(bucket_key, ActivityDuration("Total"))
-            dur = relativedelta(act.end, act.start)
+            dur = timedelta_dur(act.end, act.start)
             bucket.add(dur, list(reversed(act.name.split('_'))))
         elif mode == 1:  # count mode
             bucket = buckets.setdefault(bucket_key, 0)
@@ -509,7 +511,7 @@ def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
     ##
     out_links = []
     out_files = []
-    if relativedelta_total_seconds(acts.total_duration) == 0:
+    if timedelta_total_seconds(acts.total_duration) == 0:
         return out_links, out_files
 
     all_acts = get_acts(acts)
@@ -517,11 +519,11 @@ def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
     # print(acts_agg)
 
     ids = [act.name for act in all_acts]
-    labels = [f"{act.shortname} {(relativedelta_total_seconds(act.total_duration)*100/relativedelta_total_seconds(acts_agg.total_duration)):.1f}%" for act in all_acts]
-    texts = [relativedelta_str(act.total_duration) for act in all_acts]
+    labels = [f"{act.shortname} {(timedelta_total_seconds(act.total_duration)*100/timedelta_total_seconds(acts_agg.total_duration)):.1f}%" for act in all_acts]
+    texts = [timedelta_str(act.total_duration) for act in all_acts]
     ##
     parents = [(act.parent and act.parent.name) or "" for act in all_acts]
-    values = [(relativedelta_total_seconds(act.total_duration)/(3600)) for act in all_acts]
+    values = [(timedelta_total_seconds(act.total_duration)/(3600)) for act in all_acts]
     # Do NOT round the values. Plotly expects them to sum correctly or something.
 
     ## Test out input values:
@@ -614,7 +616,7 @@ def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
 def get_sub_act_total_duration(act, sub_act_name: str, days):
     sub_act = act.sub_acts.get(sub_act_name, None)
     if sub_act:
-        return round((relativedelta_total_seconds(sub_act.total_duration)/3600.0)/days,1)
+        return round((timedelta_total_seconds(sub_act.total_duration)/3600.0)/days,1)
     else:
         return 0
 
@@ -641,7 +643,7 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
     act_roots_all = [get_acts(act, dict_mode=True, skip_acts=[]) for act in act_roots]
     def get_dur(act_root_all, category):
         if category in act_root_all:
-            return (relativedelta_total_seconds(act_root_all[category].total_duration) / 3600.0) / days
+            return (timedelta_total_seconds(act_root_all[category].total_duration) / 3600.0) / days
         else:
             return 0
 

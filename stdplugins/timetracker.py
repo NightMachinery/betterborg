@@ -794,7 +794,7 @@ async def _process_msg(
                     if low > received_at:
                         low = low - datetime.timedelta(days=1)
                     res = activity_list_to_str(low, received_at)
-                    if relativedelta_total_seconds(res["acts_agg"].total_duration) == 0:
+                    if timedelta_total_seconds(res["acts_agg"].total_duration) == 0:
                         out_add("report: acts_agg is zero.")
                         await edit(f"{out}", parse_mode="markdown")
                         return
