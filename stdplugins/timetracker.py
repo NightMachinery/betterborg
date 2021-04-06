@@ -39,7 +39,7 @@ subs_commands = {
     "/sa": ".habit 8 m=0 max=9 sa",
     "/sl": ".habit 8 m=0 max=12 sleep",
     "/sls": ".habit 8 m=2 max=12 sleep",
-    "/e": ".habit 8 m=0 max=2 exercise",
+    "/e": ".habit 8 m=0 max=2 exercise$; e$;",
     "/wt": ".habit 8 m=0 max=6 cs1=Reds_9 cs2=RdPu_9 wasted",
     "/hh": ".habit 8 m=0 max=6 cs1=Reds_9 cs2=RdPu_9 halfhearted$;",
     ###
