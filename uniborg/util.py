@@ -30,6 +30,7 @@ import sys
 import pathlib
 from pathlib import Path
 import typing
+from concurrent.futures import ThreadPoolExecutor
 import io
 from io import BytesIO
 try:
@@ -114,6 +115,10 @@ if z('test -n "$borg_admins"'):
 # Use chatids instead. Might need to prepend -100.
 adminChats = ['1353500128', ]
 
+loop = asyncio.get_running_loop()
+brish_count = int(os.environ.get('borg_brish_count', 16))
+executor = ThreadPoolExecutor(max_workers=(brish_count + 16))
+loop.set_default_executor(executor)
 
 def force_async(f):
     @functools.wraps(f)
@@ -138,23 +143,29 @@ async def za(template, *args, bsh=bsh, getframe=1, locals_=None, **kwargs):
 
     return await future
 
+def brish_server_cleanup(brish_server):
+    if brish_server:
+        brish_server.cleanup()
+
 def init_brishes():
-    brish_count = int(os.environ.get('borg_brish_count', '4'))
     print(f"Initializing {brish_count} brishes ...")
     global persistent_brish
-    global brishes
+
+    executor.submit(lambda: brish_server_cleanup(persistent_brish))
+
     boot_cmd = 'export JBRISH=y'
-    persistent_brish = Brish(boot_cmd=boot_cmd)
-    brishes = [Brish(boot_cmd=boot_cmd) for i in range(brish_count)] # range includes 0
+    persistent_brish = Brish(boot_cmd=boot_cmd, server_count=brish_count)
+    ##
+    # global brishes
+    # brishes = [Brish(boot_cmd=boot_cmd) for i in range(brish_count)] # range includes 0
+    ##
 
 
 init_brishes()
 
 
 def restart_brishes():
-    persistent_brish.restart()
-    for b in brishes:
-        b.restart()
+    init_brishes()
 
 
 def admin_cmd(pattern, outgoing='Ignored', additional_admins=[]):
@@ -515,37 +526,34 @@ async def aget(event, command='', shell=True, match=None, album_mode=True):
 
 
 @force_async
-def brishz_helper(myBrish, cwd, cmd, fork=True):
-    if cwd:
-        myBrish.z('typeset -g jd={cwd}')
-        myBrish.send_cmd('''
-        cd "$jd"
-        ! ((${+functions[jinit]})) || jinit
-        ''')
+def brishz_helper(myBrish, cwd, cmd, fork=True, server_index=None, **kwargs):
+    lock, server_index = myBrish.acquire_lock(server_index=server_index, lock_sleep=1)
+    try:
+        if cwd:
+            myBrish.z('typeset -g jd={cwd}', server_index=server_index, **kwargs)
+            myBrish.send_cmd('''
+            cd "$jd"
+            ! ((${+functions[jinit]})) || jinit
+            ''', server_index=server_index, **kwargs)
 
-    # res = myBrish.send_cmd(cmd, fork=fork, cmd_stdin='')
-    res = myBrish.send_cmd('{ eval "$(< /dev/stdin)" } 2>&1', fork=fork, cmd_stdin=cmd)
-    if cwd:
-        myBrish.z('cd /tmp')
+        res = myBrish.send_cmd('{ eval "$(< /dev/stdin)" } 2>&1', fork=fork, cmd_stdin=cmd, server_index=server_index, **kwargs)
+        if cwd:
+            myBrish.z('cd /tmp', server_index=server_index, **kwargs)
 
-    return res
+        return res
+    finally:
+        lock.release()
 
 async def brishz(event, cwd, cmd, fork=True, shell=True, **kwargs):
     # print(f"entering brishz with cwd: '{cwd}', cmd: '{cmd}'")
     res = None
+    server_index = None
     if fork == False:
-        res = await brishz_helper(persistent_brish, cwd, cmd, fork=False)
-    else:
-        while len(brishes) <= 0:
-            await asyncio.sleep(1)
-        # print(f"Running '{cmd}'")
-        myBrish = brishes.pop()
-        res = await brishz_helper(myBrish, cwd, cmd, fork=True)
-        brishes.append(myBrish)
+        server_index = 0 # to have a persistent REPL
+
+    res = await brishz_helper(persistent_brish, cwd, cmd, fork=fork, server_index=server_index)
 
     await send_output(event, res.outerr, retcode=res.retcode, shell=shell)
-
-    # print("exiting brishz")
 
 
 def humanbytes(size):
