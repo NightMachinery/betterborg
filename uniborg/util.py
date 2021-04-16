@@ -153,7 +153,7 @@ def init_brishes():
 
     executor.submit(lambda: brish_server_cleanup(persistent_brish))
 
-    boot_cmd = 'export JBRISH=y'
+    boot_cmd = 'export JBRISH=y ; unset FORCE_INTERACTIVE'
     persistent_brish = Brish(boot_cmd=boot_cmd, server_count=brish_count)
     ##
     # global brishes

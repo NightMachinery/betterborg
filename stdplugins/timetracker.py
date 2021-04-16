@@ -74,6 +74,7 @@ subs = {
     ##
     # "wtth": "wasted_thinking",
     "worry": "wasted_thinking_worrying",
+    "hers": "wasted_thinking_hers", # حرص
     "fantasy": "wasted_thinking_fantasy",
     ##
     "news": "wasted_news",
@@ -176,7 +177,9 @@ subs = {
     "ea": "chores_self_rest_eat",
     "breakfast": "chores_self_rest_eat_breakfast",
     "lunch": "chores_self_rest_eat_lunch",
+    "lu": "chores_self_rest_eat_lunch",
     "dinner": "chores_self_rest_eat_dinner",
+    "din": "chores_self_rest_eat_dinner",
     ##
     "brush": "chores_self_health_teeth_brush",
     "🦷": "chores_self_health_teeth_brush",
@@ -196,6 +199,7 @@ subs = {
     "sl": "sleep",  # putting this under chores will just make using the data harder, no?
     "💤": "sleep",
     "waking": "chores_self_rest_wakingup",
+    "wa": "chores_self_rest_wakingup",
     ###
     "👥": "social",
     "soc": "social",
@@ -216,7 +220,7 @@ subs = {
     "vg": "entertainment_video games",
     "coop": "entertainment_video games_coop",
     ##
-    "wa": "entertainment_watch",
+    "watch": "entertainment_watch",
     "movies": "entertainment_watch_movies",
     "anime": "entertainment_watch_anime",
     "anime movies": "entertainment_watch_anime_movies",
