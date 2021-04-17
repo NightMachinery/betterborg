@@ -335,7 +335,7 @@ async def isAdmin(event, admins=admins, adminChats=adminChats):
             sender is not None
             and (
                 getattr(sender, "is_self", False)
-                or str(sender.id) in admins
+                or (sender.id) in admins
                 or (sender).username in admins
             )
         )
