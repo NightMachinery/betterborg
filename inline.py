@@ -23,16 +23,28 @@ from cachetools import cached, LRUCache, TTLCache
 from threading import RLock
 import traceback
 
-from telegram import InlineQueryResultArticle, ParseMode, \
-    InputTextMessageContent, InlineQueryResultCachedDocument, InlineQueryResultCachedVideo, InlineQueryResultCachedGif, InlineQueryResultCachedMpeg4Gif, InlineQueryResultCachedPhoto, InlineQueryResultCachedVoice, InlineQueryResultPhoto, InlineQueryResultVideo
+from telegram import (
+    InlineQueryResultArticle,
+    ParseMode,
+    InputTextMessageContent,
+    InlineQueryResultCachedDocument,
+    InlineQueryResultCachedVideo,
+    InlineQueryResultCachedGif,
+    InlineQueryResultCachedMpeg4Gif,
+    InlineQueryResultCachedPhoto,
+    InlineQueryResultCachedVoice,
+    InlineQueryResultPhoto,
+    InlineQueryResultVideo,
+)
 from telegram import parsemode
 from telegram.ext import Updater, InlineQueryHandler, CommandHandler
 from telegram.utils.helpers import DEFAULT_NONE, escape_markdown
 
 ##
 # Enable logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 
 logger = logging.getLogger(__name__)
 ##
@@ -44,11 +56,11 @@ PDI = re.compile(r"(?im)^\.di\s+(\S+)(?:\s+(\S*))?\s+fin$")
 PC_KITSU = re.compile(r"(?im)^\.ki\s+(.+)$")
 PC_GOO = re.compile(r"(?im)^\.(g|d|as)\s+(.+)$")
 WHITESPACE = re.compile(r"^\s*$")
-dl_base = os.getcwd() + '/dls/'
+dl_base = os.getcwd() + "/dls/"
 ##
 # @todoc A throwaway group/channel for storing files. (I use TMPC.)
 tmp_chat = int(z('ecn "${{borg_tmpc:--1001215308649}}"').outrs)
-#-1001496131468 (old TMPC)
+# -1001496131468 (old TMPC)
 ##
 lock_inline = RLock()
 ##
@@ -56,21 +68,22 @@ lock_inline = RLock()
 
 def start(update, context):
     """Send a message when the command /start is issued."""
-    update.message.reply_text('Hi!')
+    update.message.reply_text("Hi!")
 
 
 def help_command(update, context):
     """Send a message when the command /help is issued."""
-    update.message.reply_text('Help!')
+    update.message.reply_text("Help!")
 
 
-
-admins = [195391705, ]
+admins = [
+    195391705,
+]
 if z('test -n "$borg_admins"'):
     admins = admins + list(z("arr0 ${{(s.,.)borg_admins}}").iter0())
-graylist = [467602588, 92863048,
-            90821188, 915098299, 665261327, 91294899, 1111288832]
+graylist = [467602588, 92863048, 90821188, 915098299, 665261327, 91294899, 1111288832]
 graylist = admins + graylist
+
 
 def isAdmin(update, admins=admins):
     # print(f"id: {update.effective_user.id}")
@@ -80,7 +93,9 @@ def isAdmin(update, admins=admins):
     res = False
     try:
         # embed()
-        res = (update.effective_user.id in admins) or (getattr(update.effective_user, 'username', None) in admins)
+        res = (update.effective_user.id in admins) or (
+            getattr(update.effective_user, "username", None) in admins
+        )
     except:
         res = False
     return res
@@ -96,13 +111,23 @@ def inlinequery(update, context):
     def ans_text(text: str = "", cache_time=1):  # "To undo the folded lie,"
         if not text:
             return
-        update.inline_query.answer([InlineQueryResultArticle(
-            id=uuid4(),
-            title=text,
-            input_message_content=InputTextMessageContent(text, disable_web_page_preview=False))], cache_time=cache_time, is_personal=True)
+        update.inline_query.answer(
+            [
+                InlineQueryResultArticle(
+                    id=uuid4(),
+                    title=text,
+                    input_message_content=InputTextMessageContent(
+                        text, disable_web_page_preview=False
+                    ),
+                )
+            ],
+            cache_time=cache_time,
+            is_personal=True,
+        )
 
-    if (not isAdmin(update, admins=graylist)):
-        ans_text("""Defenceless under the night
+    if not isAdmin(update, admins=graylist):
+        ans_text(
+            """Defenceless under the night
 Our world in stupor lies;
 Yet, dotted everywhere,
 Ironic points of light
@@ -113,7 +138,9 @@ Of Eros and of dust,
 Beleaguered by the same
 Negation and despair,
 Show an affirming flame.
-    - Auden""", cache_time=86400)
+    - Auden""",
+            cache_time=86400,
+        )
         return
 
     with lock_inline:
@@ -121,39 +148,34 @@ Show an affirming flame.
         m = PDI.match(query)
         if m:
             c_id = m.group(1)
-            c_kind = m.group(2) or ''
+            c_kind = m.group(2) or ""
             print(f"Download ID: {c_id} {c_kind}")
             result = None
-            if c_kind == '':
+            if c_kind == "":
                 result = InlineQueryResultCachedDocument(
-                    id=uuid4(),
-                    title=str(c_id),
-                    document_file_id=c_id)
-            elif c_kind.startswith('vid'):
+                    id=uuid4(), title=str(c_id), document_file_id=c_id
+                )
+            elif c_kind.startswith("vid"):
                 result = InlineQueryResultCachedVideo(
-                    id=uuid4(),
-                    title=str(c_id),
-                    video_file_id=c_id)
-            elif c_kind == 'photo':
+                    id=uuid4(), title=str(c_id), video_file_id=c_id
+                )
+            elif c_kind == "photo":
                 result = InlineQueryResultCachedPhoto(
-                    id=uuid4(),
-                    title=str(c_id),
-                    photo_file_id=c_id)
-            elif c_kind == 'gif':
+                    id=uuid4(), title=str(c_id), photo_file_id=c_id
+                )
+            elif c_kind == "gif":
                 result = InlineQueryResultCachedMpeg4Gif(
-                    id=uuid4(),
-                    title=str(c_id),
-                    mpeg4_file_id=c_id)
+                    id=uuid4(), title=str(c_id), mpeg4_file_id=c_id
+                )
             if result:
                 try:
-                    update.inline_query.answer(
-                        [result], cache_time=1, is_personal=True)
+                    update.inline_query.answer([result], cache_time=1, is_personal=True)
                 except:
                     ans_text(traceback.format_exc())
             else:
                 ans_text(f"Invalid kind: {c_kind}")
             return
-        command = ''
+        command = ""
         cache_time = 1
         is_personal = True
         no_match = True
@@ -175,19 +197,21 @@ Show an affirming flame.
             if not arg:
                 ans_text()
                 return
-            if mode == 'g':
+            if mode == "g":
                 command = f"jigoo {arg}"
-            elif mode == 'as':
+            elif mode == "as":
                 command = f"jias {arg}"
-            else: # 'd'
+            else:  # 'd'
                 command = f"search_json_ddg=y jigoo {arg}"
             is_personal = False
         if no_match:
-            if (not isAdmin(update)):
-                ans_text("""The enlightenment driven away,
+            if not isAdmin(update):
+                ans_text(
+                    """The enlightenment driven away,
 The habit-forming pain,
 Mismanagement and grief:
-We must suffer them all again. - Auden""")
+We must suffer them all again. - Auden"""
+                )
                 return
             if query == ".x":
                 bsh.restart()
@@ -199,16 +223,17 @@ We must suffer them all again. - Auden""")
                 ans_text()
                 return
             command = m.group(2)
-            if m.group(1) == 'n':
+            if m.group(1) == "n":
                 # embed()
-                command = 'noglob ' + command
+                command = "noglob " + command
         if not command:
             ans_text()
             return
         print(f"Inline command accepted: {command}")
         results = get_results(command)
         update.inline_query.answer(
-            results, cache_time=cache_time, is_personal=is_personal)
+            results, cache_time=cache_time, is_personal=is_personal
+        )
 
 
 cache = TTLCache(maxsize=256, ttl=3600)
@@ -216,15 +241,18 @@ cache = TTLCache(maxsize=256, ttl=3600)
 
 @cached(cache)
 def get_results(command: str, json_mode: bool = True):
-    cwd = dl_base + "Inline " + str(uuid4()) + '/'
+    cwd = dl_base + "Inline " + str(uuid4()) + "/"
     Path(cwd).mkdir(parents=True, exist_ok=True)
-    res = z("""
+    res = z(
+        """
     if cd {cwd} ; then
         {command:e}
     else
         echo Inline Query: cd failed >&2
     fi
-    """, fork=True)  # @design We might want to add a timeout here. We also need a file cacher ... Easier yet, just cache the results array and reset it using our 'x' command
+    """,
+        fork=True,
+    )  # @design We might want to add a timeout here. We also need a file cacher ... Easier yet, just cache the results array and reset it using our 'x' command
     out = res.outerr
     if WHITESPACE.match(out):
         out = f"The process exited {res.retcode}."
@@ -260,7 +288,8 @@ def get_results(command: str, json_mode: bool = True):
                     if tlg_img:
                         # There is a bug that makes, e.g., `@spiritwellbot kitsu-getall moon 2 fin` show only two returned results, even though we return 10 results. Idk what's the cause.
                         print(
-                            f"tlg_img found: {tlg_title}: {tlg_img} , {tlg_img_thumb}")
+                            f"tlg_img found: {tlg_title}: {tlg_img} , {tlg_img_thumb}"
+                        )
                         results.append(
                             InlineQueryResultPhoto(
                                 id=uuid4(),
@@ -268,7 +297,8 @@ def get_results(command: str, json_mode: bool = True):
                                 thumb_url=tlg_img_thumb,
                                 title=f"{tlg_title}",
                                 caption=tlg_content[:MEDIA_MAX_LENGTH],
-                                parse_mode=pm)
+                                parse_mode=pm,
+                            )
                         )
                     elif tlg_video:
                         # test @spiritwellbot ec '[{"tlg_title":"f","tlg_video":"https://files.lilf.ir/tmp/Tokyo%20Ghoul%20AMV%20-%20Run-rVed44_uz8s.mp4"}]' fin
@@ -280,10 +310,14 @@ def get_results(command: str, json_mode: bool = True):
                                 mime_type=tlg_video_mime,
                                 # To bypass telegram.error.BadRequest: Video_thumb_url_empty
                                 thumb_url=(
-                                    tlg_img_thumb or "https://media.kitsu.io/anime/cover_images/3936/original.jpg?1597696323"),
+                                    tlg_img_thumb
+                                    or "https://media.kitsu.io/anime/cover_images/3936/original.jpg?1597696323"
+                                ),
                                 title=f"{tlg_title}",
                                 caption=tlg_content[:MEDIA_MAX_LENGTH],
-                                parse_mode=pm))
+                                parse_mode=pm,
+                            )
+                        )
                     elif tlg_title:
                         print(f"tlg_title found: {tlg_title}")
                         results.append(
@@ -291,7 +325,12 @@ def get_results(command: str, json_mode: bool = True):
                                 id=uuid4(),
                                 title=tlg_title,
                                 thumb_url=tlg_img_thumb,
-                                input_message_content=InputTextMessageContent(tlg_content[:MAX_LENGTH], disable_web_page_preview=(not tlg_preview), parse_mode=pm))
+                                input_message_content=InputTextMessageContent(
+                                    tlg_content[:MAX_LENGTH],
+                                    disable_web_page_preview=(not tlg_preview),
+                                    parse_mode=pm,
+                                ),
+                            )
                         )
                     # @design We can add an else clause and go to the normal (json-less) mode below
     else:
@@ -300,9 +339,12 @@ def get_results(command: str, json_mode: bool = True):
                 id=uuid4(),
                 # Telegram truncates itself, so this is redundant.
                 title=out[:150],
-                input_message_content=InputTextMessageContent(out[:MAX_LENGTH], disable_web_page_preview=False))
+                input_message_content=InputTextMessageContent(
+                    out[:MAX_LENGTH], disable_web_page_preview=False
+                ),
+            )
         ]
-        files = list(Path(cwd).glob('*'))
+        files = list(Path(cwd).glob("*"))
         files.sort()
         for f in files:
             if not f.is_dir():
@@ -318,7 +360,8 @@ def get_results(command: str, json_mode: bool = True):
                         InlineQueryResultCachedDocument(
                             id=uuid4(),
                             title=base_name,
-                            document_file_id=uploaded_file.document.file_id)
+                            document_file_id=uploaded_file.document.file_id,
+                        )
                     )
                 else:
                     print("BUG?: Uploaded file had no document!")
@@ -355,5 +398,5 @@ def main():
     updater.idle()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

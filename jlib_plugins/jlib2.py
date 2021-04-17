@@ -11,7 +11,8 @@ async def _(event):
     if event.message.forward == None and event.sender:
         md5 = event.pattern_match.group(1)
         print(
-            f"User (id={event.sender.id}, username={event.sender.username}) requested {md5}")
+            f"User (id={event.sender.id}, username={event.sender.username}) requested {md5}"
+        )
         await event.reply(f"Downloading {md5} ...")
 
         ##
@@ -26,6 +27,7 @@ async def _(event):
         #     semail = ''
         ##
 
-        command = zs(
-            "lgNoBok=y pkno sout jlib {md5}")
-        await util.run_and_upload(event=event, to_await=partial(brishz, cmd=command, fork=True, shell=False))
+        command = zs("lgNoBok=y pkno sout jlib {md5}")
+        await util.run_and_upload(
+            event=event, to_await=partial(brishz, cmd=command, fork=True, shell=False)
+        )

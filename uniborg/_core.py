@@ -19,6 +19,7 @@ async def load_reload(event):
     shortname = event.pattern_match["shortname"]
     await borg.reload_plugin(shortname, event.chat_id)
 
+
 @borg.on(util.admin_cmd(r"^\.(?:unload|remove) (?P<shortname>\w+)$"))
 async def remove(event):
     # await event.delete()
