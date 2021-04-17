@@ -8,6 +8,7 @@ import os
 import sys
 import socks
 from uniborg import Uniborg
+from uniborg.util import executor
 from watchgod import awatch, Change
 from brish import z, zp, zq
 
@@ -16,6 +17,9 @@ borg: Uniborg = None
 
 async def borg_init(background_mode=True):
     global borg
+
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(executor)
 
     logging.basicConfig(level=logging.INFO)
     proxy = None

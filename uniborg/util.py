@@ -136,10 +136,8 @@ adminChats = [
     "1353500128",
 ]
 
-loop = asyncio.get_running_loop()
 brish_count = int(os.environ.get("borg_brish_count", 16))
 executor = ThreadPoolExecutor(max_workers=(brish_count + 16))
-loop.set_default_executor(executor)
 
 
 def force_async(f):
