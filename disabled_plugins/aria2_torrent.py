@@ -11,5 +11,12 @@ async def _(event):
         event=event,
         to_await=partial(
             util.safe_run,
-            command= ['aria2c', '--seed-time=0', '--ca-certificate=/etc/ssl/certs/ca-certificates.crt', event.pattern_match.group(1)])
-        , quiet=False)
+            command=[
+                "aria2c",
+                "--seed-time=0",
+                "--ca-certificate=/etc/ssl/certs/ca-certificates.crt",
+                event.pattern_match.group(1),
+            ],
+        ),
+        quiet=False,
+    )

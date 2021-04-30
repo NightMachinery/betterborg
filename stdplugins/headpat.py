@@ -13,9 +13,11 @@ import urllib.request
 import urllib.parse
 
 pats = []
-oops = "OOPSIE WOOPSIE!! Uwu We madea fucky wucky!! A wittle fucko boingo! " \
-       "The code monkeys at our headquarters are working VEWY HAWD to fix " \
-       "this!"
+oops = (
+    "OOPSIE WOOPSIE!! Uwu We madea fucky wucky!! A wittle fucko boingo! "
+    "The code monkeys at our headquarters are working VEWY HAWD to fix "
+    "this!"
+)
 
 
 @borg.on(events.NewMessage)
@@ -31,11 +33,19 @@ async def on_pat(event):
     global pats
     if not pats:
         try:
-            pats = json.loads(urllib.request.urlopen(urllib.request.Request(
-                "http://headp.at/js/pats.json",
-                headers={"User-Agent": "Mozilla/5.0 (X11; U; Linux i686) "
-                         "Gecko/20071127 Firefox/2.0.0.11"}
-            )).read().decode("utf-8"))
+            pats = json.loads(
+                urllib.request.urlopen(
+                    urllib.request.Request(
+                        "http://headp.at/js/pats.json",
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (X11; U; Linux i686) "
+                            "Gecko/20071127 Firefox/2.0.0.11"
+                        },
+                    )
+                )
+                .read()
+                .decode("utf-8")
+            )
         except Exception as e:
             print(e)
             print(traceback.format_exc())
@@ -43,7 +53,9 @@ async def on_pat(event):
             return
 
     choice = urllib.parse.quote(random.choice(pats))
-    borg.iter_participants(await event.input_chat, 9000) #To have users' entities. Possibly redundant. TODO Only invoke once per chat per day?
+    borg.iter_participants(
+        await event.input_chat, 9000
+    )  # To have users' entities. Possibly redundant. TODO Only invoke once per chat per day?
     try:
         target = m.group(1)
         target_entity = None
@@ -51,10 +63,12 @@ async def on_pat(event):
             target_entity = await borg.get_entity(target)
         except:
             target_entity = borg.me
-        await borg.send_message(await event.chat,f"[Pat!](https://headp.at/pats/{choice})[\u2063](tg://user?id={target_entity.id})")
+        await borg.send_message(
+            await event.chat,
+            f"[Pat!](https://headp.at/pats/{choice})[\u2063](tg://user?id={target_entity.id})",
+        )
     except Exception as e:
         print(e)
         print(traceback.format_exc())
         await event.reply(oops)
         return
-

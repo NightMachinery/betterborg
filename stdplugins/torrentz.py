@@ -6,15 +6,16 @@ from bs4 import BeautifulSoup
 from uniborg.util import admin_cmd, humanbytes, embeda, embed2, ix
 from IPython import embed
 
-@borg.on(admin_cmd(  # pylint:disable=E0602
-    pattern=".tz (torrentz2\.eu|idop\.se)?\s*(.*)"
-))
+
+@borg.on(
+    admin_cmd(pattern=".tz (torrentz2\.eu|idop\.se)?\s*(.*)")  # pylint:disable=E0602
+)
 async def _(event):
     if event.fwd_from:
         return
     start = datetime.now()
     # await event.edit("Processing ...")
-    input_type = event.pattern_match.group(1) or 'torrentz2.eu' #or "idop.se"
+    input_type = event.pattern_match.group(1) or "torrentz2.eu"  # or "idop.se"
     input_str = event.pattern_match.group(2)
     logger.info(f"{input_type}: {input_str}")  # pylint:disable=E0602
     search_results = []
@@ -30,15 +31,24 @@ async def _(event):
         if i > 10:
             break
         magnet = z('hash2magnet {result["hash"]}').outrs
-        message_text = "👉 <a href=https://t.me/TorrentSearchRoBot?start=" + result["hash"] +  ">" + result["title"] + ": " + "</a>" + " \r\n"
+        message_text = (
+            "👉 <a href=https://t.me/TorrentSearchRoBot?start="
+            + result["hash"]
+            + ">"
+            + result["title"]
+            + ": "
+            + "</a>"
+            + " \r\n"
+        )
         # message_text += "<a href=https://t.me/spiritwellbot?start=" + z('base64', cmd_stdin=zs('magnet2torrent {magnet}')).outrs +  ">" +'Get hash torrent!'  + ": " + "</a>" + " \r\n"
 
         # Telegram's HTML doesn't support magnet hrefs.
         message_text += " Hash Magnet: " + magnet + "\r\n"
         message_text += " Size: " + result["size"] + "\r\n"
         # message_text += " Uploaded " + result["date"] + "\r\n"
-        message_text += " Seeds: " + \
-            result["seeds"] + "\r\n Peers: " + result["peers"] + " \r\n"
+        message_text += (
+            " Seeds: " + result["seeds"] + "\r\n Peers: " + result["peers"] + " \r\n"
+        )
         message_text += "\r\n"
         output_str += message_text
         i = i + 1
@@ -47,7 +57,7 @@ async def _(event):
     await event.reply(
         f"Scrapped {input_type} for {input_str} in {ms} seconds. Obtained Results: \n {output_str}",
         link_preview=False,
-        parse_mode="html"
+        parse_mode="html",
     )
 
 
@@ -65,14 +75,16 @@ def search_idop_se(search_query):
         age = item["create_time"]
         size = item["length"]
         seeds = str(item["seeds"])
-        r.append({
-            "title": title,
-            "hash": hash,
-            "age": age,
-            "size": humanbytes(size),
-            "seeds": seeds,
-            "peers": "NA"
-        })
+        r.append(
+            {
+                "title": title,
+                "hash": hash,
+                "age": age,
+                "size": humanbytes(size),
+                "seeds": seeds,
+                "peers": "NA",
+            }
+        )
     return r
 
 
@@ -81,7 +93,7 @@ def search_torrentz_eu(search_query):
     url = "https://torrentz2.eu/search?safe=1&f=" + search_query + ""
     # scraper = cfscrape.create_scraper()  # returns a CloudflareScraper instance
     # raw_html = scraper.get(url).content
-    raw_html = z('curlfull.js {url}').out
+    raw_html = z("curlfull.js {url}").out
     # print(f"tz2 html: {raw_html}")
     soup = BeautifulSoup(raw_html, "html.parser")
     results = soup.find_all("div", {"class": "results"})
@@ -106,15 +118,17 @@ def search_torrentz_eu(search_query):
                 seeds = span_elements[3].get_text()
                 peers = span_elements[4].get_text()
                 #
-                r.append({
-                    "title": title,
-                    "hash": link,
-                    "date": date,
-                    "size": size,
-                    "seeds": seeds,
-                    "peers": peers
-                })
+                r.append(
+                    {
+                        "title": title,
+                        "hash": link,
+                        "date": date,
+                        "size": size,
+                        "seeds": seeds,
+                        "peers": peers,
+                    }
+                )
             except:
                 pass
-            
+
     return r

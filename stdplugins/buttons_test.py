@@ -13,31 +13,35 @@ borg: TelegramClient = borg
 
 p_zsh = re.compile(r"(?im)^\.z\s+((?:.|\n)*)$")
 
+
 def create_key(pl):
-    return f'borg_callback_{pl}'
+    return f"borg_callback_{pl}"
+
 
 @borg.on(events.CallbackQuery)
 async def callback(event: events.callbackquery.CallbackQuery.Event):
     # We can edit the event to edit the clicked message.
     chat = await event.get_chat()
-    pl = str(event.data, 'utf-8')
+    pl = str(event.data, "utf-8")
     # embed2()
     msg = await borg.get_messages(chat, ids=event.message_id)
     msg_id = event.message_id
 
-    print(f'pl: {pl}')
+    print(f"pl: {pl}")
     # await event.reply(f'pl: {pl}\n\n{event.__dict__}\n\n{event.query.__dict__}')
 
     m_zsh = p_zsh.match(pl)
-    if pl.startswith('zsh_'):
+    if pl.startswith("zsh_"):
         key = create_key(pl)
-        results = list(z("""jfromkey {key}""").iter0()) # TODO inject data from event, e.g., the sender's name
-        out = results[0] # contains both stdout and stderr
+        results = list(
+            z("""jfromkey {key}""").iter0()
+        )  # TODO inject data from event, e.g., the sender's name
+        out = results[0]  # contains both stdout and stderr
         jaction = results[1]
-        if jaction == 'edit':
+        if jaction == "edit":
             # await event.edit(out) # this loses the buttons
             await msg.edit(out)
-        elif jaction == 'toast':
+        elif jaction == "toast":
             await event.answer(message=out)
         else:
             await discreet_send(event, out, msg)
@@ -46,7 +50,7 @@ async def callback(event: events.callbackquery.CallbackQuery.Event):
         await discreet_send(event, res.outerr, msg)
     else:
         await event.reply(pl)
-    await event.answer() # does nothing if we answered before
+    await event.answer()  # does nothing if we answered before
 
 
 @borg.on(admin_cmd(pattern=r"(?im)^\.jjson\s+((?:.|\n)*)$"))
@@ -64,10 +68,10 @@ async def send_json(borg: TelegramClient, json_pl: str, chat=None):
         if out_j and not isinstance(out_j, str) and isinstance(out_j, Iterable):
             for item in out_j:
                 if isinstance(item, dict):
-                    chat = item.get('receiver', chat)
+                    chat = item.get("receiver", chat)
                     caption = item.get("tlg_content", item.get("caption", ""))
-                    buttons_inline = item.get('buttons_inline', [])
-                    buttons_zsh = item.get('buttons_zsh', [])
+                    buttons_inline = item.get("buttons_inline", [])
+                    buttons_zsh = item.get("buttons_zsh", [])
 
                     buttons_inline_tl = []
                     buttons_tl = None
@@ -76,8 +80,7 @@ async def send_json(borg: TelegramClient, json_pl: str, chat=None):
                         if len(btn) == 1:
                             buttons_inline_tl.append(Button.inline(btn[0]))
                         else:
-                            buttons_inline_tl.append(
-                                Button.inline(btn[0], btn[1]))
+                            buttons_inline_tl.append(Button.inline(btn[0], btn[1]))
                     for btn in buttons_zsh:
                         btn_json = json.dumps(btn)
                         cmd = btn.get("cmd", "echo Empty command was inlined")
@@ -88,7 +91,9 @@ async def send_json(borg: TelegramClient, json_pl: str, chat=None):
                         uid = uuid4()
                         pl = f"zsh_{uid}"
                         key = create_key(pl)
-                        zp("reval-ec jtokey {key} {cmd} {json_pl} {btn_json} {jdata} {jaction}")
+                        zp(
+                            "reval-ec jtokey {key} {cmd} {json_pl} {btn_json} {jdata} {jaction}"
+                        )
                         buttons_inline_tl.append(Button.inline(btn_caption, pl))
                     if len(buttons_inline_tl) >= 1:
                         buttons_tl = [buttons_inline_tl]
@@ -98,10 +103,17 @@ async def send_json(borg: TelegramClient, json_pl: str, chat=None):
         await borg.send_message(chat, exc)
 
     return
-    await borg.send_message(chat, 'A single button, with "clk1" as data',
-                            buttons=Button.inline('Click me', b'clk1'))
+    await borg.send_message(
+        chat,
+        'A single button, with "clk1" as data',
+        buttons=Button.inline("Click me", b"clk1"),
+    )
 
-    await borg.send_message(chat, 'Pick one from this grid', buttons=[
-        [Button.inline('Left'), Button.inline('Right')],
-        [Button.url('Check this site!', 'https://lonamiwebs.github.io')]
-    ])
+    await borg.send_message(
+        chat,
+        "Pick one from this grid",
+        buttons=[
+            [Button.inline("Left"), Button.inline("Right")],
+            [Button.url("Check this site!", "https://lonamiwebs.github.io")],
+        ],
+    )

@@ -7,6 +7,7 @@ import datetime
 from brish import z
 import re
 import os
+
 # from pathlib import Path
 # from peewee import *
 from uniborg.util import embed2, send_files, za
@@ -74,7 +75,7 @@ subs = {
     ##
     # "wtth": "wasted_thinking",
     "worry": "wasted_thinking_worrying",
-    "hers": "wasted_thinking_hers", # حرص
+    "hers": "wasted_thinking_hers",  # حرص
     "fantasy": "wasted_thinking_fantasy",
     ##
     "news": "wasted_news",
@@ -514,7 +515,7 @@ async def _process_msg(
                 choiceConfirmed = True
                 return out
 
-        if not text.startswith('.'):
+        if not text.startswith("."):
             text = text.lower()  # iOS capitalizes the first letter
 
         if text in subs:
@@ -844,7 +845,9 @@ async def _process_msg(
                 fake_received_at = fake_received_at - datetime.timedelta(
                     hours=float(hours or 24)
                 )
-                fake_received_at = fake_received_at.replace(hour=(DAY_START - 1), minute=59, second=59, microsecond=0)
+                fake_received_at = fake_received_at.replace(
+                    hour=(DAY_START - 1), minute=59, second=59, microsecond=0
+                )
 
             return out
 
@@ -879,8 +882,8 @@ async def _process_msg(
                 neutral_start = 24 + 0
                 # neutral_start = 24 + 3
 
-            colorscheme1 = m.group('cs1') or colorscheme1
-            colorscheme2 = m.group('cs2') or colorscheme2
+            colorscheme1 = m.group("cs1") or colorscheme1
+            colorscheme2 = m.group("cs2") or colorscheme2
             habit_data = activity_list_habit_get_now(
                 habit_name,
                 delta=habit_delta,

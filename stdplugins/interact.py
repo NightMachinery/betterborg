@@ -14,4 +14,4 @@ async def _(event):
         # you can get, e.g., their default name and id using this
         ##
         util.ix()
-        embed(using='asyncio')
+        embed(using="asyncio")

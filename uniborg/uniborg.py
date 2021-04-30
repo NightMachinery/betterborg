@@ -18,15 +18,20 @@ from . import hacks
 
 class Uniborg(TelegramClient):
     # @warn this var can be None in which case send_message will fail and potentially crash the whole program
-    log_chat = -1001179162919 # alicization
+    log_chat = -1001179162919  # alicization
 
     @classmethod
     async def create(
-            cls, session, *, plugin_path="plugins", storage=None,
-            bot_token=None, log_chat=None, **kwargs):
-        kwargs = {
-            "api_id": 6, "api_hash": "eb06d4abfb49dc3eeb1aeb98ae0f581e",
-            **kwargs}
+        cls,
+        session,
+        *,
+        plugin_path="plugins",
+        storage=None,
+        bot_token=None,
+        log_chat=None,
+        **kwargs,
+    ):
+        kwargs = {"api_id": 6, "api_hash": "eb06d4abfb49dc3eeb1aeb98ae0f581e", **kwargs}
         self = Uniborg(session, **kwargs)
         # TODO: handle non-string session
         #
@@ -46,20 +51,24 @@ class Uniborg(TelegramClient):
         await self._async_init(bot_token=bot_token)
         if log_chat:
             try:
-                self.log_chat = int(log_chat) # Cannot get entity by phone number as a bot (try using integer IDs, not strings)
+                self.log_chat = int(
+                    log_chat
+                )  # Cannot get entity by phone number as a bot (try using integer IDs, not strings)
             except:
                 pass
         try:
             self.log_chat = await self.get_input_entity(self.log_chat)
         except:
             if await self.is_bot():
-                print(f"Borg needs a log chat to send some log messages to. Since this is a bot, you need to explicitly set this, or you won't receive these messages.")
+                print(
+                    f"Borg needs a log chat to send some log messages to. Since this is a bot, you need to explicitly set this, or you won't receive these messages."
+                )
                 try:
-                    self.log_chat = await self.get_input_entity('Arstar')
+                    self.log_chat = await self.get_input_entity("Arstar")
                 except:
                     self.log_chat = None
             else:
-                self.log_chat = await self.get_input_entity('me')
+                self.log_chat = await self.get_input_entity("me")
 
         core_plugin = Path(__file__).parent / "_core.py"
         self.load_plugin_from_file(core_plugin)
@@ -80,7 +89,7 @@ class Uniborg(TelegramClient):
 
     def load_plugin_from_file(self, path):
         path = Path(path)
-        shortname = path.stem # removes extension and dirname
+        shortname = path.stem  # removes extension and dirname
         name = f"_UniborgPlugins.{self._name}.{shortname}"
 
         spec = importlib.util.spec_from_file_location(name, path)
@@ -105,7 +114,7 @@ class Uniborg(TelegramClient):
         del self._plugins[shortname]
         self._logger.info(f"Removed plugin {shortname}")
 
-    async def reload_plugin(self, shortname: str, chat = None):
+    async def reload_plugin(self, shortname: str, chat=None):
         chat = chat or self.log_chat
         logger = self._logger
         path = Path(shortname)
@@ -113,19 +122,20 @@ class Uniborg(TelegramClient):
             shortname = path.stem
         try:
             if shortname in self._plugins:
-                if shortname == 'timetracker':
-                    await self._plugins['timetracker'].reload_tt_prepare()
+                if shortname == "timetracker":
+                    await self._plugins["timetracker"].reload_tt_prepare()
 
                 self.remove_plugin(shortname)
             self.load_plugin(shortname)
 
-            await self.send_message(chat,
-                f"Successfully (re)loaded plugin {shortname}")
+            await self.send_message(chat, f"Successfully (re)loaded plugin {shortname}")
         except Exception as e:
             tb = traceback.format_exc()
             logger.warn(f"Failed to (re)load plugin {shortname}: {tb}")
             if chat:
-                await self.send_message(chat, f"Failed to (re)load plugin {shortname}: {e}")
+                await self.send_message(
+                    chat, f"Failed to (re)load plugin {shortname}: {e}"
+                )
 
     def await_event(self, event_matcher, filter=None):
         fut = asyncio.Future()
@@ -139,7 +149,6 @@ class Uniborg(TelegramClient):
                 fut.set_result(event)
                 raise
 
-        fut.add_done_callback(
-            lambda _: self.remove_event_handler(cb, event_matcher))
+        fut.add_done_callback(lambda _: self.remove_event_handler(cb, event_matcher))
 
         return fut
