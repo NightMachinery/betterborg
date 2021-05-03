@@ -82,6 +82,7 @@ subs = {
     # "wtso": "wasted_social_online",
     "wtf": "wasted_social_online_forums",
     "reddit": "wasted_social_online_forums_reddit",
+    "twitter": "wasted_social_online_forums_twitter",
     "lw": "wasted_social_online_forums_lesswrong",
     "hn": "wasted_news_hackernews",
     ###
@@ -208,6 +209,7 @@ subs = {
     "family": "social_family",
     "fam": "social_family",
     "fams": "social_family_s",
+    "famd": "social_family_discussion",
     "famfin": "social_family_finance",
     "family others": "social_family_others",
     "famo": "social_family_others",
