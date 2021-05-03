@@ -128,13 +128,13 @@ class Uniborg(TelegramClient):
                 self.remove_plugin(shortname)
             self.load_plugin(shortname)
 
-            await self.send_message(chat, f"Successfully (re)loaded plugin {shortname}")
+            await self.send_message(chat, f"# Successfully (re)loaded plugin {shortname}")
         except Exception as e:
             tb = traceback.format_exc()
             logger.warn(f"Failed to (re)load plugin {shortname}: {tb}")
             if chat:
                 await self.send_message(
-                    chat, f"Failed to (re)load plugin {shortname}: {e}"
+                    chat, f"# Failed to (re)load plugin {shortname}: {e}"
                 )
 
     def await_event(self, event_matcher, filter=None):
