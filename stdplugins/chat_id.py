@@ -9,7 +9,8 @@ async def _(event):
     # print(help(await event.chat))
 
     chat = await event.get_chat()
-    await event.reply(str(chat.id))
+    # await event.reply(str(chat.id))
+    await event.reply(str(chat.__dict__))
 
     r_id = event.message.reply_to_msg_id
     if r_id:
