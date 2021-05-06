@@ -173,6 +173,7 @@ subs = {
     "r": "chores_self_rest",
     "rest": "chores_self_rest",
     "gl": "chores_self_rest_glue",
+    "setup": "chores_self_setup",
     "🍽": "chores_self_rest_eat",
     "eat": "chores_self_rest_eat",
     "eating": "chores_self_rest_eat",
@@ -225,9 +226,12 @@ subs = {
     ##
     "watch": "entertainment_watch",
     "movies": "entertainment_watch_movies",
-    "anime": "entertainment_watch_anime",
-    "anime movies": "entertainment_watch_anime_movies",
     "series": "entertainment_watch_series",
+    "anime": "entertainment_watch_anime_series",
+    "anime movies": "entertainment_watch_anime_movies",
+    "amov": "entertainment_watch_anime_movies",
+    "amv": "entertainment_watch_music videos_anime",
+    "muv": "entertainment_watch_music videos",
     ##
     "fiction": "entertainment_fiction",
     "fi": "entertainment_fiction",
@@ -240,9 +244,23 @@ subs = {
     "technical": "nonfiction_technical_reading",
     "nft": "nonfiction_technical_reading",
     ##
+    "nfl": "nonfiction_listening",
+    "audiobook": "nonfiction_listening_audiobooks",
+    "adb": "nonfiction_listening_audiobooks",
+    "podcast": "nonfiction_listening_podcasts",
+    "pdc": "nonfiction_listening_podcasts",
+
+    "nftl": "nonfiction_technical_listening",
+    ##
+    "nfw": "nonfiction_watch",
     "docu": "nonfiction_watch_documentaries",
+    "nfwl": "nonfiction_watch_lectures",
+    "ttcv": "nonfiction_watch_lectures",
+    "ted": "nonfiction_watch_talks",
+
+    "nftw": "nonfiction_technical_watch",
     "lec": "nonfiction_technical_watch_lectures",
-    "talk": "nonfiction_watch_talks",
+    "talk": "nonfiction_technical_watch_talks",
     ###
     "meditation": "meditation_serene",
     "med": "meditation_serene",
