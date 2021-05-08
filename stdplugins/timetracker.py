@@ -83,8 +83,9 @@ subs = {
     "wtf": "wasted_social_online_forums",
     "reddit": "wasted_social_online_forums_reddit",
     "twitter": "wasted_social_online_forums_twitter",
-    "lw": "wasted_social_online_forums_lesswrong",
     "hn": "wasted_news_hackernews",
+    "lw": "social_online_forums_lesswrong",
+    "tumblr": "entertainment_web_pictures_tumblr",
     ###
     "untracked": "consciously untracked",
     "unt": "consciously untracked",
@@ -126,6 +127,7 @@ subs = {
     ##
     "sac": "sa_chores",
     "sacgh": "sa_chores_github",
+    "gh": "sa_chores_github",
     "hw": "sa_chores_hardware",
     # "sac": "chores_self_sa",
     # "sacgh": "chores_self_sa_github",
@@ -154,7 +156,9 @@ subs = {
     "🐑": "chores",
     "ch": "chores",
     "cho": "chores_others",
+    "chos": "chores_others_society",
     "chfam": "chores_others_family",
+    "chf": "chores_others_family",
     ##
     "nt": "chores_self_notes",
     ##
@@ -174,6 +178,7 @@ subs = {
     "rest": "chores_self_rest",
     "gl": "chores_self_rest_glue",
     "setup": "chores_self_setup",
+    "cook": "chores_self_cook",
     "🍽": "chores_self_rest_eat",
     "eat": "chores_self_rest_eat",
     "eating": "chores_self_rest_eat",
