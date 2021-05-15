@@ -431,7 +431,12 @@ async def send_files(chat, files, **kwargs):
                 fs.sort()
                 [print(f) for f in fs]
                 print()
-                await borg.send_file(chat, fs, allow_cache=False, **kwargs)
+                if ext == '.gif':
+                    # @upstreamBug on GIF files
+                    for f in fs:
+                        await borg.send_file(chat, f, allow_cache=False, **kwargs)
+                else:
+                    await borg.send_file(chat, fs, allow_cache=False, **kwargs)
             except:
                 await handle_exc_chat(chat)
 
@@ -452,7 +457,7 @@ async def run_and_upload(event, to_await, quiet=True, reply_exc=True, album_mode
         cwd = await run_and_get(event=event, to_await=to_await)
         # client = borg
         files = list(Path(cwd).glob("*"))
-        if album_mode:
+        if album_mode and len(files) != 1:
             files = [p.absolute() for p in files if not p.is_dir()]
             await send_files(chat, files)
         else:
