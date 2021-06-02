@@ -4,15 +4,16 @@ from uniborg.util import admin_cmd, embed2
 from brish import z
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^\.del (?P<self_only>s?)\s*(?P<n>\d+)$"))
+@borg.on(events.NewMessage(pattern=r"(?i)^\.del\s+(?P<self_only>s?)\s*(?P<n>\d+)$"))
 async def _(event):
     # USERBOT ONLY (Can't get_messages in bot API)
 
     # embed2()
     if not (await util.isAdmin(event) and event.message.forward == None):
+        # print("deleter: not admin")
         return
     await event.delete()
-    n = int(event.pattern_match.group('n'))
+    n = int(event.pattern_match.group('n') or 1)
     self_only = bool(event.pattern_match.group('self_only'))
     print(f"del received: {n}")
     chat = await event.get_chat()

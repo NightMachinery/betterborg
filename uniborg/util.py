@@ -140,6 +140,7 @@ if z('test -n "$borg_admins"'):
 # Use chatids instead. Might need to prepend -100.
 adminChats = [
     "1353500128",
+    "1185370891", # HEART
 ]
 
 brish_count = int(os.environ.get("borg_brish_count", 16))
@@ -349,6 +350,7 @@ async def isAdmin(event, admins=admins, adminChats=adminChats, msg=None):
         # ix()
         # embed(using='asyncio')
         # embed2()
+
         return res
     else:
         return sender_is_admin
