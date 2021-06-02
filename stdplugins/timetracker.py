@@ -147,11 +147,16 @@ subs = {
     "this": "sa_development_quantified self_timetracker",
     "d3": "sa_development_quantified self_timetracker_d3",
     "siri": "sa_development_siri",
+    "sbcl": "sa_development_commonlisp",
+    "css": "sa_development_web_css",
+    "hugo": "sa_development_blog_hugo",
     # "": "sa_development_",
     ##
     "sat": "sa_thinking & design",
     "doc": "sa_product_documentation",
     "eval": "sa_product_evaluation",
+    "marketing": "sa_product_marketing",
+    "market": "sa_product_marketing",
     ###
     "🐑": "chores",
     "ch": "chores",
@@ -161,6 +166,9 @@ subs = {
     "chf": "chores_others_family",
     ##
     "nt": "chores_self_notes",
+    ##
+    "journal": "creative_writing_journal",
+    "jrl": "creative_writing_journal",
     ##
     "tidy": "chores_self_tidying up",
     "hclean": "chores_self_house_cleaning",
@@ -233,6 +241,7 @@ subs = {
     "movies": "entertainment_watch_movies",
     "series": "entertainment_watch_series",
     "anime": "entertainment_watch_anime_series",
+    "anim": "entertainment_watch_anime_series",
     "anime movies": "entertainment_watch_anime_movies",
     "amov": "entertainment_watch_anime_movies",
     "amv": "entertainment_watch_music videos_anime",

@@ -499,6 +499,7 @@ categories = {
     "outdoors": "rgb(175, 141, 0)",
     "sa": "rgb(55, 126, 184)",
     "exploration": "rgb(0, 210, 213)",
+    "creative": "rgb(240, 107, 255)",
     "social": "rgb(188, 128, 189)",
     "social_online": "rgb(252, 205, 229)",
     "chores": "rgb(255, 243, 185)",
