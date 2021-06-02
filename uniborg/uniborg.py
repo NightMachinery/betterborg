@@ -14,6 +14,7 @@ import telethon.events
 from uniborg import util
 from .storage import Storage
 from . import hacks
+from .util import admins
 
 
 class Uniborg(TelegramClient):
@@ -61,12 +62,15 @@ class Uniborg(TelegramClient):
         except:
             if await self.is_bot():
                 print(
-                    f"Borg needs a log chat to send some log messages to. Since this is a bot, you need to explicitly set this, or you won't receive these messages."
+                    f"Borg needs a log chat to send some log messages to. Since this is a bot, you need to explicitly set this using the env var 'borg_log_chat', or you won't receive these messages. Trying to set the log chat automatically anyway ..."
                 )
-                try:
-                    self.log_chat = await self.get_input_entity("Arstar")
-                except:
-                    self.log_chat = None
+                self.log_chat = None
+                for admin in admins:
+                    try:
+                        self.log_chat = await self.get_input_entity(admin)
+                    except:
+                        # self.log_chat = None
+                        pass
             else:
                 self.log_chat = await self.get_input_entity("me")
 
