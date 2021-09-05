@@ -62,6 +62,8 @@ suffixes = {
     "O": [0, "outdoors"],
     "$": [1, "halfhearted"],
     "C": [1, "chores"],
+    "V": [1, "video"],
+    "P": [1, "practical"],
     "+": None,
 }
 subs = {
@@ -85,15 +87,22 @@ subs = {
     "twitter": "wasted_social_online_forums_twitter",
     "hn": "wasted_news_hackernews",
     "lw": "social_online_forums_lesswrong",
+    "irc": "social_online_forums_irc",
     "tumblr": "entertainment_web_pictures_tumblr",
+    "tiktok": "entertainment_web_video_tiktok",
     ###
     "untracked": "consciously untracked",
     "unt": "consciously untracked",
     "idk": "consciously untracked_idk",
     "mixed": "consciously untracked_mixed",
     ##
+    "c": "career",
+    "cx": "career_exploration",
+    ##
     "📖": "study",
     "s": "study",
+
+    "ta": "study_ta",
     ##
     # study chores: e.g., choosing courses
     "sc": "chores_self_study",
@@ -101,25 +110,58 @@ subs = {
     ##
     "sv": "study_video",
     "sp": "study_peripheral",  # prerequisites, etc
+
+    "analysis": "study_math_analysis",
+    "ana": "study_math_analysis",
+
+    "la": "study_math_linear algebra",
+
+    "algebra": "study_math_algebra",
+    "al": "study_math_algebra",
+
+    "sed": "study_cs_software_design", # sed: software engineering -> design
+    "oop": "study_cs_software_design_oop",
+    "func": "study_cs_software_design_functional",
+    "pattern": "study_cs_software_design_patterns",
+
+    "dist": "study_cs_distributed systems",
+    "distp": "study_cs_distributed systems_practical",
     # uni10
-    "p2": "study_physics_physics 2",
-    "p2v": "study_physics_physics 2_video",
-    "p4": "study_physics_physics 4",
-    "p4v": "study_physics_physics 4_video",
+    "phys": "study_physics",
+    # "p2": "study_physics_physics 2",
+    # "p2v": "study_physics_physics 2_video",
+    # "p4": "study_physics_physics 4",
+    # "p4v": "study_physics_physics 4_video",
     "feyn": "study_physics_feynman",
     "feynman": "study_physics_feynman",
+
     "st": "study_math_probability and statistics",
     "stv": "study_math_probability and statistics_video",
+
     "em": "study_math_engineering math",
     "rizmo": "study_math_engineering math",
     "emv": "study_math_engineering math_video",
     "rizmov": "study_math_engineering math_video",
+
     "fin": "study_economics_finance",
     "finv": "study_economics_finance_video",
+
     # "his": "study_history_history of mathematics",
     # "hisv": "study_history_history of mathematics_video",
+
+
+    "git": "study_cs_version control_git",
+
     "ai": "study_cs_ai",
     "aiv": "study_cs_ai_video",
+
+    "ml": "study_cs_ai_ml",
+    "mlp": "study_cs_ai_ml_practical",
+    "data": "study_cs_ai_ml_practical_data procuration",
+    "mli": "study_cs_ai_ml_practical_ideation",
+
+    "nlp": "study_cs_ai_ml_nlp",
+    "nlpp": "study_cs_ai_ml_nlp_practical",
     ##
     "💻": "sa",
     "system": "sa",
@@ -128,6 +170,7 @@ subs = {
     "sac": "sa_chores",
     "sacgh": "sa_chores_github",
     "gh": "sa_chores_github",
+    "bugre": "sa_chores_bug report",
     "hw": "sa_chores_hardware",
     # "sac": "chores_self_sa",
     # "sacgh": "chores_self_sa_github",
@@ -140,14 +183,25 @@ subs = {
     ##
     "dev": "sa_development",
     "testman": "sa_development_testing_manual",
-    "emc": "sa_development_emacs",
+
     "sh": "sa_development_nightsh",
     "brish": "sa_development_nightsh_brish",
-    "org": "sa_development_emacs_orgmode",
+
+    "emc": "sa_development_emacs",
+    "orgm": "sa_development_emacs_orgmode",
+
+    "archive": "sa_development_archival",
+    "arc": "sa_development_archival",
+
+    "borg": "sa_development_borg",
     "this": "sa_development_quantified self_timetracker",
     "d3": "sa_development_quantified self_timetracker_d3",
+
     "siri": "sa_development_siri",
+
     "sbcl": "sa_development_commonlisp",
+    "cl": "sa_development_commonlisp",
+
     "css": "sa_development_web_css",
     "hugo": "sa_development_blog_hugo",
     # "": "sa_development_",
@@ -160,24 +214,40 @@ subs = {
     ###
     "🐑": "chores",
     "ch": "chores",
+
     "cho": "chores_others",
     "chos": "chores_others_society",
+
     "chfam": "chores_others_family",
     "chf": "chores_others_family",
+    "chs": "chores_others_family_sister",
     ##
     "nt": "chores_self_notes",
     ##
+    "fiw": "creative_writing_fiction",
+    "fim": "creative_mentalWriting_fiction",
+
     "journal": "creative_writing_journal",
     "jrl": "creative_writing_journal",
     ##
-    "tidy": "chores_self_tidying up",
+    "org": "chores_self_organizational_digital",
+    "todo": "chores_self_organizational_digital_todo",
+    "tidy": "chores_self_organizational_tidying up",
+
     "hclean": "chores_self_house_cleaning",
     "vacuum": "chores_self_house_cleaning_vacuum",
     ##
+    "cfin": "chores_self_finance",
     "bills": "chores_self_finance_bills",
     ##
-    "cm": "chores_self_commute",
+    "cbuy": "chores_self_buying",
     ##
+    "commute": "chores_self_commute",
+    "cm": "chores_self_commute",
+    "cms": "chores_self_commute_setup",
+    ##
+    "health": "chores_self_health",
+    "dental": "chores_self_health_dental",
     "exercise": "chores_self_health_exercise",
     "🏃🏽‍♀️": "chores_self_health_exercise",
     "e": "chores_self_health_exercise",
@@ -185,8 +255,7 @@ subs = {
     "r": "chores_self_rest",
     "rest": "chores_self_rest",
     "gl": "chores_self_rest_glue",
-    "setup": "chores_self_setup",
-    "cook": "chores_self_cook",
+
     "🍽": "chores_self_rest_eat",
     "eat": "chores_self_rest_eat",
     "eating": "chores_self_rest_eat",
@@ -195,7 +264,12 @@ subs = {
     "lunch": "chores_self_rest_eat_lunch",
     "lu": "chores_self_rest_eat_lunch",
     "dinner": "chores_self_rest_eat_dinner",
-    "din": "chores_self_rest_eat_dinner",
+    "di": "chores_self_rest_eat_dinner",
+
+    "cook": "chores_self_food_cook",
+    "dish": "chores_self_food_dishes",
+
+    "setup": "chores_self_setup",
     ##
     "brush": "chores_self_health_teeth_brush",
     "🦷": "chores_self_health_teeth_brush",
@@ -219,6 +293,8 @@ subs = {
     ###
     "👥": "social",
     "soc": "social",
+    "sov": "social_online_videocall",
+    "soa": "social_online_audiocall",
     "tlg": "social_online_telegram",
     "family": "social_family",
     "fam": "social_family",
@@ -253,6 +329,8 @@ subs = {
     "fanfic": "entertainment_fiction_fanfiction",
     "fanfiction": "entertainment_fiction_fanfiction",
     "fic": "entertainment_fiction_fanfiction",
+
+    "pth": "entertainment_postthinking",
     ###
     "nf": "nonfiction_reading",
     "technical": "nonfiction_technical_reading",
@@ -668,8 +746,8 @@ async def _process_msg(
                 + yaml.dump(subs)
                 + "\n"
                 + yaml.dump(list(subs_additional))
-                + "\n"
-                + yaml.dump(sorted(user_choices))
+                # + "\n"
+                # + yaml.dump(sorted(user_choices))
             )
             await edit(out, truncate=False)
             return out

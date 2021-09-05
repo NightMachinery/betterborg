@@ -490,7 +490,10 @@ cmaps["pastel"] = [
 ##
 # As of Python 3.7, the standard dict preserves insertion order
 categories = {
+    # @hiddenDep visualize_stacked_area/get_y needs to be able to calculate the correct duration for each category.
     "Total": "rgb(255, 255, 255)",
+    "career": "rgb(17, 99, 0)",
+    "study_ta": "rgb(89, 0, 255)",
     "study": "rgb(102, 166, 30)",
     "chores_self_study": "rgb(102, 166, 30)",
     "chores_self_health": "rgb(179, 233, 0)",
@@ -504,6 +507,7 @@ categories = {
     "social_online": "rgb(252, 205, 229)",
     "chores": "rgb(255, 243, 185)",
     "chores_self_rest": "rgb(255, 237, 111)",
+    "chores_others": "rgb(221, 255, 173)",
     "chores_self_commute": "rgb(170, 28, 59)",
     "wasted": "rgb(255, 0, 41)",
     # 'outdoors' : 'rgb(0, 255, 185)',
@@ -724,24 +728,14 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
             return 0
 
     def get_y(act_root_all, category):
-        if category == "social":
-            return get_dur(act_root_all, "social") - get_dur(
-                act_root_all, "social_online"
-            )
-        if category == "chores":
-            return get_dur(act_root_all, "chores") - sum(
-                get_dur(act_root_all, sub_cat)
-                for sub_cat in (
-                    "chores_self_study",
-                    "chores_self_health",
-                    "chores_self_hygiene",
-                    "chores_self_commute",
-                    "chores_self_rest",
-                )
-            )
-        else:
+        sub_categories = [sub_category for sub_category in categories.keys() if sub_category.startswith(f"{category}_")]
+        if len(sub_categories) == 0:
             return get_dur(act_root_all, category)
-
+        else:
+            return get_dur(act_root_all, category) - sum(
+                get_y(act_root_all, sub_category) for sub_category in sub_categories
+            )
+        
     def get_ys(category):
         return [get_y(act_root_all, category) for act_root_all in act_roots_all]
 

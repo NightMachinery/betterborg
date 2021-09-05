@@ -83,7 +83,7 @@ def _resize_photo_if_needed(
             image = PIL.ImageOps.pad(
                 image,
                 (max(image.width, min_width), max(image.height, min_height)),
-                color=(255, 255, 255),
+                color='white',
             )
         else:
             if image.width <= width and image.height <= height:
