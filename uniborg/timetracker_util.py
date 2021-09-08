@@ -492,32 +492,47 @@ cmaps["pastel"] = [
 categories = {
     # @hiddenDep visualize_stacked_area/get_y needs to be able to calculate the correct duration for each category.
     "Total": "rgb(255, 255, 255)",
+
     "career": "rgb(17, 99, 0)",
     "study_ta": "rgb(89, 0, 255)",
     "study": "rgb(102, 166, 30)",
     "chores_self_study": "rgb(102, 166, 30)",
+
     "chores_self_health": "rgb(179, 233, 0)",
     "meditation": "rgb(93, 255, 0)",
     "chores_self_hygiene": "rgb(178, 190, 77)",
+
     "outdoors": "rgb(175, 141, 0)",
+
     "sa": "rgb(55, 126, 184)",
     "exploration": "rgb(0, 210, 213)",
+
     "creative": "rgb(240, 107, 255)",
+
     "social": "rgb(188, 128, 189)",
     "social_online": "rgb(252, 205, 229)",
+
     "chores": "rgb(255, 243, 185)",
     "chores_self_rest": "rgb(255, 237, 111)",
     "chores_others": "rgb(221, 255, 173)",
     "chores_self_commute": "rgb(170, 28, 59)",
+
     "wasted": "rgb(255, 0, 41)",
+
     # 'outdoors' : 'rgb(0, 255, 185)',
+
     "entertainment": "rgb(251, 128, 114)",
+
     "nonfiction": "rgb(255, 127, 0)",
+    "nonfiction_technical": "rgb(132, 166, 30)",
+
     # 'consciously untracked' : 'rgb(247, 249, 226)',
     "consciously untracked": "rgb(0,0,0)",
+
     # 'sleep' : 'rgb(255,255,255)',
     # 'sleep' : 'rgb(221, 243, 250)',
     "sleep": "rgb(142, 200, 239)",
+
     # '' : 'rgb()',
 }
 ##
@@ -700,6 +715,8 @@ def get_sub_act_total_duration(act, sub_act_name: str, days):
 
 @force_async
 def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
+    # @warn if an act such as 'untracked' starts before a day and ends after that day, then the day will look empty to our aggregation algorithm. I can't think of any easy solutions for this.
+    ##
     out_links = []
     out_files = []
 

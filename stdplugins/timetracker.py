@@ -7,6 +7,8 @@ import datetime
 from brish import z
 import re
 import os
+import copy
+from icecream import ic
 
 # from pathlib import Path
 # from peewee import *
@@ -162,6 +164,7 @@ subs = {
 
     "nlp": "study_cs_ai_ml_nlp",
     "nlpp": "study_cs_ai_ml_nlp_practical",
+    "ir": "study_cs_ai_ml_nlp_information retrieval",
     ##
     "💻": "sa",
     "system": "sa",
@@ -231,6 +234,7 @@ subs = {
     "jrl": "creative_writing_journal",
     ##
     "org": "chores_self_organizational_digital",
+    "digitization": "chores_self_organizational_digital_digitization",
     "todo": "chores_self_organizational_digital_todo",
     "tidy": "chores_self_organizational_tidying up",
 
@@ -708,6 +712,32 @@ async def _process_msg(
         ):  # if the input starts with a comment, discard whole input
             return out
 
+        rep_id = m0.reply_to_msg_id
+        if rep_id:
+            act_id = msg2act.get(rep_id, None)
+            if not act_id:
+                out_add(
+                    f"The message you replied to did not have its id stored in msg2act."
+                )
+                await edit(out)
+                return out
+            else:
+                q = Activity.select().where(
+                    Activity.id == act_id
+                )  # this can still be a new record if the record we are trying to get was the last one when it was deleted, as the ids just increment from the last one and are not unique when deletion is concerned
+                if q.exists():
+                    act_replied_to = q.get()
+                    if not received_at: # the first command of a replied_to message will not have this set, but the subsequent commands will reuse the one we set for the first.
+                        received_at = copy.copy(act_replied_to.end)
+
+                        # last_act = act_replied_to # the last_act will be set correctly by received_at; We can't set it explicitly, as it can't be passed through 'multi_commands'.
+                else:
+                    out_add(
+                        f"The message you replied to has had its associated act deleted!"
+                    )
+                    await edit(out)
+                    return out
+
         async def multi_commands(text_input):
             nonlocal out
             text_inputs = text_input.split("\n")
@@ -765,28 +795,9 @@ async def _process_msg(
             print(f"_process_msg: received_at={received_at}")
             pass
 
-        rep_id = m0.reply_to_msg_id
         last_act = None
-        if rep_id:
-            act_id = msg2act.get(rep_id, None)
-            if not act_id:
-                out_add(
-                    f"The message you replied to did not have its id stored in msg2act."
-                )
-                await edit(out)
-                return out
-            else:
-                q = Activity.select().where(
-                    Activity.id == act_id
-                )  # this can still be a new record if the record we are trying to get was the last one when it was deleted, as the ids just increment from the last one and are not unique when deletion is concerned
-                if q.exists():
-                    last_act = q.get()
-                else:
-                    out_add(
-                        f"The message you replied to has had its associated act deleted!"
-                    )
-                    await edit(out)
-                    return out
+        if last_act:
+            pass
         else:
             # last_act_query = Activity.select().order_by(Activity.end.desc())
             last_act_query = (
