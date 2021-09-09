@@ -128,6 +128,8 @@ subs = {
 
     "dist": "study_cs_distributed systems",
     "distp": "study_cs_distributed systems_practical",
+
+    "security": "study_cs_security",
     # uni10
     "phys": "study_physics",
     # "p2": "study_physics_physics 2",
@@ -225,8 +227,6 @@ subs = {
     "chf": "chores_others_family",
     "chs": "chores_others_family_sister",
     ##
-    "nt": "chores_self_notes",
-    ##
     "fiw": "creative_writing_fiction",
     "fim": "creative_mentalWriting_fiction",
 
@@ -234,13 +234,19 @@ subs = {
     "jrl": "creative_writing_journal",
     ##
     "org": "chores_self_organizational_digital",
-    "digitization": "chores_self_organizational_digital_digitization",
     "todo": "chores_self_organizational_digital_todo",
+    "nt": "chores_self_organizational_digital_notes",
+
+    "digitization": "chores_self_organizational_digital_digitization",
+    "scan": "chores_self_organizational_digital_digitization",
+
     "tidy": "chores_self_organizational_tidying up",
 
     "hclean": "chores_self_house_cleaning",
     "vacuum": "chores_self_house_cleaning_vacuum",
     ##
+    "redtape": "chores_self_bureaucracy",
+
     "cfin": "chores_self_finance",
     "bills": "chores_self_finance_bills",
     ##
@@ -251,7 +257,8 @@ subs = {
     "cms": "chores_self_commute_setup",
     ##
     "health": "chores_self_health",
-    "dental": "chores_self_health_dental",
+    "healthp": "chores_self_health_pro",
+    "dental": "chores_self_health_pro_dental",
     "exercise": "chores_self_health_exercise",
     "🏃🏽‍♀️": "chores_self_health_exercise",
     "e": "chores_self_health_exercise",

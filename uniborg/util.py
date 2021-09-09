@@ -323,7 +323,10 @@ def embeda(locals_=None):
         IPython.start_ipython(user_ns=locals_)
 
 
-async def isAdmin(event, admins=admins, adminChats=adminChats, msg=None):
+async def isAdmin(event, admins=admins, adminChats=adminChats, additional_admins=[], msg=None):
+    if additional_admins:
+        admins = admins + additional_admins
+
     msg = msg or getattr(event, "message", None)
     assert msg != None
     sender = getattr(msg, "sender", getattr(event, "sender", None))
@@ -621,6 +624,12 @@ async def aget(event, command="", shell=True, match=None, album_mode=True):
         to_await=partial(util.simple_run, command=command, shell=shell),
         album_mode=album_mode,
     )
+
+async def aget_brishz(event, cmd, fork=True, album_mode=True):
+    # cmd: an argument array
+    ##
+    to_await = partial(brishz, cmd=zs("{cmd}"), fork=fork)
+    await util.run_and_upload(event=event, to_await=to_await, album_mode=album_mode)
 
 
 @force_async
