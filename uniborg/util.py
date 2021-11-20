@@ -141,6 +141,7 @@ if z('test -n "$borg_admins"'):
 adminChats = [
     "1353500128",
     "1185370891", # HEART
+    "1600457131", # This Anime Does not Exist
 ]
 
 brish_count = int(os.environ.get("borg_brish_count", 16))

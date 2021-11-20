@@ -5,6 +5,7 @@
 import logging
 import asyncio
 import os
+import os.path
 import sys
 import socks
 from uniborg import Uniborg
@@ -43,9 +44,11 @@ async def borg_init(background_mode=True):
     async def watch_plugins():
         async for changes in awatch(plugin_path, normal_sleep=5000):
             for change_type, path in changes:
-                if change_type == Change.modified:
-                    # if change_type == Change.modified or change_type == Change.added:
-                    await borg.reload_plugin(path)
+                bname = os.path.basename(path)
+                if not (bname.startswith("#") or bname.startswith(".")):
+                    if change_type == Change.modified:
+                        # if change_type == Change.modified or change_type == Change.added:
+                        await borg.reload_plugin(path)
 
     coroutines = [borg.run_until_disconnected(), watch_plugins()]
     if background_mode:

@@ -14,6 +14,7 @@ lock_tt = asyncio.Lock()
 msg2act = dict()
 ##
 DAY_START = 5
+activity_child_separator = "_" # I am not sure if I got the refactoring to use this perfectly
 is_local = bool(z("isLocal"))
 # is_linux = bool(z("isLinux"))
 ##
@@ -199,7 +200,7 @@ def activity_list_to_str(low, high, skip_acts=["sleep"]):
         act_start = max(act.start, low)
         act_end = min(act.end, high)
         dur = timedelta_dur(act_end, act_start)
-        path = list(reversed(act_name.split("_")))
+        path = list(reversed(act_name.split(activity_child_separator)))
         if act_name in skip_acts:
             acts_skipped.add(dur, path)
         else:
@@ -247,11 +248,11 @@ def activity_list_habit_get_now(
             check_end = name.endswith("$")
             if check_end:
                 name = name[:-1]
-                if act.name.endswith("_" + name):
+                if act.name.endswith(activity_child_separator + name):
                     accept = True
                     break
 
-            if act.name == name or act.name.startswith(name + "_"):
+            if act.name == name or act.name.startswith(name + activity_child_separator):
                 accept = True
                 break
 
@@ -319,7 +320,7 @@ def stacked_area_get_act_roots(
         )
         for act in acts:
             dur = timedelta_dur(min(act.end, mid), max(act.start, low))
-            bucket.add(dur, list(reversed(act.name.split("_"))))
+            bucket.add(dur, list(reversed(act.name.split(activity_child_separator))))
 
         low = mid
 
@@ -353,7 +354,7 @@ def activity_list_buckets_get(low, high, which_bucket, mode=0, correct_overlap=T
         if mode == 0:
             bucket = buckets.setdefault(bucket_key, ActivityDuration("Total"))
             dur = timedelta_dur(act.end, act.start)
-            bucket.add(dur, list(reversed(act.name.split("_"))))
+            bucket.add(dur, list(reversed(act.name.split(activity_child_separator))))
         elif mode == 1:  # count mode
             bucket = buckets.setdefault(bucket_key, 0)
             buckets[bucket_key] += 1
@@ -496,6 +497,7 @@ categories = {
     "career": "rgb(17, 99, 0)",
     "study_ta": "rgb(89, 0, 255)",
     "study": "rgb(102, 166, 30)",
+    "study_exploration": "rgb(50, 255, 207)",
     "chores_self_study": "rgb(102, 166, 30)",
 
     "chores_self_health": "rgb(179, 233, 0)",
@@ -521,6 +523,7 @@ categories = {
 
     # 'outdoors' : 'rgb(0, 255, 185)',
 
+    "exploration_gathering_fiction": "rgb(255, 100, 100)",
     "entertainment": "rgb(251, 128, 114)",
 
     "nonfiction": "rgb(255, 127, 0)",
@@ -584,7 +587,7 @@ def local_helper_visualize_plotly():
 
 
 @force_async
-def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
+def visualize_plotly(acts, title=None, treemap=True, sunburst=True, icicle=True):
     # @warn this is not async, and it takes rather long to complete
     ##
     out_links = []
@@ -640,12 +643,12 @@ def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
         # color_discrete_map={'(?)':'gold', 'Study':'green', 'wasted':'black'},
     )
 
-    ## colors @unresolved https://community.plotly.com/t/how-to-explicitly-set-colors-for-some-sectors-in-a-treemap/51162
+    ## colors @unresolved/noLongerNeeded https://community.plotly.com/t/how-to-explicitly-set-colors-for-some-sectors-in-a-treemap/51162
     def choose_color(i, act, parent_names=None, cmap=cmaps["alphabet"]):
         if parent_names == None:
-            parent_names = act.name.split("_")
+            parent_names = act.name.split(activity_child_separator)
 
-        longname = "_".join(parent_names)
+        longname = activity_child_separator.join(parent_names)
         if longname in categories:
             return categories[longname]
 
@@ -681,13 +684,17 @@ def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
     ##
     if sunburst:
         # @unresolved https://community.plotly.com/t/show-the-current-path-bar-in-sunburst-plots-just-like-treemap-plots/51155
+
         plot_opts["labels"] = [act.shortname for act in all_acts]
-        plot_opts["texttemplate"] = "%{label}<br>%{text}, %{percentRoot:%}"
+        plot_opts["texttemplate"] = "%{label}<br>%{text}, %{percentRoot:.1%}"
+
         fig = go.Figure(go.Sunburst(**plot_opts))
+
         fig.update_layout(margin=dict(t=0, l=0, r=0, b=0))
         # fig.update_layout(uniformtext=dict(minsize=6, mode='hide'))
 
         fig.update_traces(marker_colors=cs)
+
         if title:
             fig.update_layout(title_text=title)
             fig.update_layout(title_font_size=11)
@@ -696,6 +703,27 @@ def visualize_plotly(acts, title=None, treemap=True, sunburst=True):
         is_local and fig.show()
         l, f = fig_export(
             fig, "sunburst", width=400, height=400, svg_export=False, pdf_export=False
+        )
+        out_links += l  # is list
+        out_files += f
+
+    if icicle:
+        # https://plotly.com/python/icicle-charts/
+        ##
+        # @warn previous changes to plot_opts are inherited by us (copy plot_opts if you don't like this; currently, it's not a bad thing.)
+        ##
+        fig = go.Figure(go.Icicle(**plot_opts))
+        fig.update_layout(margin=dict(t=30, l=0, r=30, b=30))
+        fig.update_traces(marker_colors=cs)
+        # fig.update_traces(marker_depthfade=True)
+        if title:
+            fig.update_layout(title_text=title)
+            fig.update_layout(title_font_size=11)
+            # fig.update_layout(title_x=0.1)
+
+        is_local and fig.show()
+        l, f = fig_export(
+            fig, "icicle", width=400, height=400, svg_export=False, pdf_export=False, html_export=True
         )
         out_links += l  # is list
         out_files += f
@@ -769,6 +797,12 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
 
         fig.add_trace(
             go.Scatter(
+                # https://plotly.com/python/reference/scatter/
+                ##
+                # legendrank controls the ordering
+                ##
+                legendgroup=category.split(activity_child_separator)[0],
+                ##
                 name=category,
                 x=xs,
                 # y=[get_sub_act_total_duration(act, category, days) for act in act_roots],
@@ -782,9 +816,42 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
         )
         i += 1
 
+    # https://github.com/plotly/plotly.py/issues/2922#issuecomment-922461952
+    # I am trying to fit a large legend on a small image; Setting the font size to a small value doesn't help, as the freed up space just goes to become vertical margin.
     fig.update_layout(
-        yaxis_range=(0, 24)
-    )  # since we are only including a subset of all the sub acts of the root, we should always be <= 24 hours
+        yaxis_range=(0, 24), # since we are only including a subset of all the sub acts of the root, we should always be <= 24 hours
+
+        # yaxis={'tickfont_size':8}, # sets the font size of the y axis, the default is good
+
+        ## the legend (the color guide): https://plotly.com/python/reference/layout/#layout-showlegend
+        legend = dict(
+            # orientation = "h",
+            ##
+            # y          = 1.03,
+            # yanchor    = "middle",
+            ##
+            # traceorder = "grouped",
+            # traceorder = "grouped+reversed",
+            # traceorder = "reversed",
+            traceorder = "normal",
+            ##
+            font       = dict(
+                # family = "sans-serif",
+                size   = 11,
+                # color  = "black"
+            ),
+
+            # itemwidth=30, # An int or float in the interval [30, inf]
+
+            tracegroupgap=0, # the amount of vertical space (in px) between legend groups.
+
+            # title = dict(
+            #     font = dict(
+            #         size = 5,
+            #         color = "green"
+            #     )
+            )
+    )
     fig.update_layout(margin=dict(t=0, l=0, r=0, b=0))
     l, f = fig_export(
         fig, "stacked_area", width=700, height=400, svg_export=False, pdf_export=False

@@ -42,7 +42,7 @@ subs_commands = {
     "/sa": ".habit 8 m=0 max=9 sa",
     "/sl": ".habit 8 m=0 max=12 sleep",
     "/sls": ".habit 8 m=2 max=12 sleep",
-    "/e": ".habit 8 m=0 max=2 exercise$; e$;",
+    "/e": ".habit 8 m=0 max=2 chores_self_health_exercise; exercise$; e$;",
     "/wt": ".habit 8 m=0 max=6 cs1=Reds_9 cs2=RdPu_9 wasted",
     "/hh": ".habit 8 m=0 max=6 cs1=Reds_9 cs2=RdPu_9 halfhearted$;",
     ###
@@ -88,8 +88,13 @@ subs = {
     "reddit": "wasted_social_online_forums_reddit",
     "twitter": "wasted_social_online_forums_twitter",
     "hn": "wasted_news_hackernews",
+
+    "forum": "social_online_forums",
+    "stack": "social_online_forums_stackexchange",
     "lw": "social_online_forums_lesswrong",
     "irc": "social_online_forums_irc",
+    "discord": "social_online_forums_discord",
+
     "tumblr": "entertainment_web_pictures_tumblr",
     "tiktok": "entertainment_web_video_tiktok",
     ###
@@ -104,6 +109,8 @@ subs = {
     "📖": "study",
     "s": "study",
 
+    "sx": "study_exploration",
+
     "ta": "study_ta",
     ##
     # study chores: e.g., choosing courses
@@ -113,13 +120,22 @@ subs = {
     "sv": "study_video",
     "sp": "study_peripheral",  # prerequisites, etc
 
+    "eng": "study_languages_english",
+
     "analysis": "study_math_analysis",
     "ana": "study_math_analysis",
+
+    "calc": "study_math_calculus",
 
     "la": "study_math_linear algebra",
 
     "algebra": "study_math_algebra",
     "al": "study_math_algebra",
+
+    "smanage": "study_cs_software_management",
+    "agile": "study_cs_software_management_agile",
+    "scrum": "study_cs_software_management_agile_scrum",
+    "kanban": "study_cs_software_management_kanban",
 
     "sed": "study_cs_software_design", # sed: software engineering -> design
     "oop": "study_cs_software_design_oop",
@@ -140,12 +156,15 @@ subs = {
     "feynman": "study_physics_feynman",
 
     "st": "study_math_probability and statistics",
-    "stv": "study_math_probability and statistics_video",
+    "stat": "study_math_probability and statistics",
 
-    "em": "study_math_engineering math",
+    "engm": "study_math_engineering math",
     "rizmo": "study_math_engineering math",
-    "emv": "study_math_engineering math_video",
-    "rizmov": "study_math_engineering math_video",
+    # "emv": "study_math_engineering math_video",
+    # "rizmov": "study_math_engineering math_video",
+
+    "sig": "study_math_signal processing",
+    "dsp": "study_math_signal processing_digital",
 
     "fin": "study_economics_finance",
     "finv": "study_economics_finance_video",
@@ -156,41 +175,104 @@ subs = {
 
     "git": "study_cs_version control_git",
 
+    "pl": "study_cs_programming languages",
+
+    "tex": "study_cs_programming languages_tex",
+
+    "python": "study_cs_programming languages_python",
+
+    "jvm": "study_cs_programming languages_jvm",
+
+    "scala": "study_cs_programming languages_scala",
+
+    "julia": "study_cs_programming languages_julia",
+
+    "zig": "study_cs_programming languages_zig",
+
+    "perl": "study_cs_programming languages_perl",
+
+    "elixir": "study_cs_programming languages_elixir",
+
+    "cc": "study_cs_programming languages_c",
+
+    "cpp": "study_cs_programming languages_cpp",
+
+    "haskell": "study_cs_programming languages_haskell",
+
+    "ocaml": "study_cs_programming languages_ocaml",
+
+    "m4": "study_cs_programming languages_m4",
+
+    "php": "study_cs_programming languages_php",
+
+    "prolog": "study_cs_programming languages_prolog",
+
+    "ruby": "study_cs_programming languages_ruby",
+
+    # "crystal": "sa_exploration_crystallang",
+    "crystal": "study_cs_programming languages_crystal",
+
+    "sql": "study_cs_data_database_sql",
+
+    "racket": "study_cs_programming languages_scheme_racket",
+    "rkt": "study_cs_programming languages_scheme_racket",
+
+    # "sbcl": "sa_development_commonlisp",
+    # "cl": "sa_development_commonlisp",
+    "cl": "study_cs_programming languages_commonlisp",
+
+    "clj": "study_cs_programming languages_clojure",
+    # "clj": "sa_development_clojure",
+
+    "css": "sa_development_web_css",
+
+    "templating": "study_cs_programming languages_templating",
+
+    "d3": "study_cs_visualization_d3",
+
+    "ds": "study_cs_datastructures",
+
     "ai": "study_cs_ai",
     "aiv": "study_cs_ai_video",
 
     "ml": "study_cs_ai_ml",
     "mlp": "study_cs_ai_ml_practical",
-    "data": "study_cs_ai_ml_practical_data procuration",
+    "dataproc": "study_cs_data_procurement",
     "mli": "study_cs_ai_ml_practical_ideation",
+
+    "mls": "study_cs_ai_ml_safety",
 
     "nlp": "study_cs_ai_ml_nlp",
     "nlpp": "study_cs_ai_ml_nlp_practical",
     "ir": "study_cs_ai_ml_nlp_information retrieval",
+    "irui": "study_cs_ai_ml_nlp_information retrieval_output ui",
     ##
     "💻": "sa",
     "system": "sa",
     "system administration": "sa",
-    ##
+
+    "sas" : "sa_social", # contributing, etc
+
     "sac": "sa_chores",
-    "sacgh": "sa_chores_github",
-    "gh": "sa_chores_github",
-    "bugre": "sa_chores_bug report",
+    "debug": "sa_chores_debugging",
+    "bugre": "sa_chores_debugging_bug report",
     "hw": "sa_chores_hardware",
     # "sac": "chores_self_sa",
-    # "sacgh": "chores_self_sa_github",
     # "hw": "chores_self_sa_hardware",
-    ##
+
     # "sax": "exploration_sa",
     "sax": "sa_exploration",
-    "android": "sa_exploration_android",
-    "crystal": "sa_exploration_crystallang",
-    ##
+    # "android": "sa_exploration_android",
+
+    "net": "sa_network",
+
     "dev": "sa_development",
     "testman": "sa_development_testing_manual",
 
     "sh": "sa_development_nightsh",
     "brish": "sa_development_nightsh_brish",
+
+    "vim": "sa_development_vim",
 
     "emc": "sa_development_emacs",
     "orgm": "sa_development_emacs_orgmode",
@@ -200,19 +282,21 @@ subs = {
 
     "borg": "sa_development_borg",
     "this": "sa_development_quantified self_timetracker",
-    "d3": "sa_development_quantified self_timetracker_d3",
+
+    "android": "sa_development_android",
+    "termux": "sa_development_android_termux",
 
     "siri": "sa_development_siri",
 
-    "sbcl": "sa_development_commonlisp",
-    "cl": "sa_development_commonlisp",
-
-    "css": "sa_development_web_css",
     "hugo": "sa_development_blog_hugo",
+
+    "search": "sa_development_search",
     # "": "sa_development_",
-    ##
+
     "sat": "sa_thinking & design",
     "doc": "sa_product_documentation",
+    "doco": "sa_product_documentation_contrib",
+    "vc": "sa_product_documentation_version control",
     "eval": "sa_product_evaluation",
     "marketing": "sa_product_marketing",
     "market": "sa_product_marketing",
@@ -235,6 +319,9 @@ subs = {
     ##
     "org": "chores_self_organizational_digital",
     "todo": "chores_self_organizational_digital_todo",
+    "in": "chores_self_organizational_digital_todo_inbox",
+    "em": "chores_self_organizational_digital_todo_inbox_emails",
+    "gh": "chores_self_organizational_digital_todo_inbox_github", # @renameMe sa_chores_github
     "nt": "chores_self_organizational_digital_notes",
 
     "digitization": "chores_self_organizational_digital_digitization",
@@ -249,6 +336,7 @@ subs = {
 
     "cfin": "chores_self_finance",
     "bills": "chores_self_finance_bills",
+    "tax": "chores_self_finance_bills_tax",
     ##
     "cbuy": "chores_self_buying",
     ##
@@ -259,9 +347,12 @@ subs = {
     "health": "chores_self_health",
     "healthp": "chores_self_health_pro",
     "dental": "chores_self_health_pro_dental",
+
     "exercise": "chores_self_health_exercise",
     "🏃🏽‍♀️": "chores_self_health_exercise",
     "e": "chores_self_health_exercise",
+    "run": "chores_self_health_exercise_running",
+    "step": "chores_self_health_exercise_step",
     ##
     "r": "chores_self_rest",
     "rest": "chores_self_rest",
@@ -302,23 +393,25 @@ subs = {
     "waking": "chores_self_rest_wakingup",
     "wa": "chores_self_rest_wakingup",
     ###
-    "👥": "social",
-    "soc": "social",
+    "👥": "social_others",
+    "soc": "social_others",
     "sov": "social_online_videocall",
     "soa": "social_online_audiocall",
     "tlg": "social_online_telegram",
+    "insta": "social_online_instagram",
     "family": "social_family",
     "fam": "social_family",
     "fams": "social_family_s",
     "famd": "social_family_discussion",
     "famfin": "social_family_finance",
-    "family others": "social_family_others",
+    "familyothers": "social_family_others",
     "famo": "social_family_others",
     ###
     "🎪": "entertainment",
     "fun": "entertainment",
     ##
     "music": "entertainment_listen_music",
+    "mu": "entertainment_listen_music",
     ##
     "game": "entertainment_video games",
     "vg": "entertainment_video games",
@@ -349,7 +442,7 @@ subs = {
     ##
     "nfl": "nonfiction_listening",
     "audiobook": "nonfiction_listening_audiobooks",
-    "adb": "nonfiction_listening_audiobooks",
+    "ab": "nonfiction_listening_audiobooks",
     "podcast": "nonfiction_listening_podcasts",
     "pdc": "nonfiction_listening_podcasts",
 
@@ -379,11 +472,37 @@ subs = {
     "going out": "outdoors",
     ##
     "expl": "exploration",
+
     "xbuy": "exploration_buying",
+
     "🌐": "exploration_targetedLearning",
     "tl": "exploration_targetedLearning",
-    "gath": "exploration_gathering",
-    "gathmusic": "exploration_gathering_music",
+    ##
+    "gath": "exploration_gathering", # <- outreach
+    "ga": "exploration_gathering",
+
+    "gathmu": "exploration_gathering_music",
+    "gamu": "exploration_gathering_music",
+
+    "gathg": "exploration_gathering_games",
+    "gag": "exploration_gathering_games",
+
+    "gathf": "exploration_gathering_fiction",
+    "gaf": "exploration_gathering_fiction",
+
+    "ganf": "exploration_gathering_nonfiction",
+
+    "gatha": "exploration_gathering_anime",
+    "gaa": "exploration_gathering_anime",
+    "gaanim": "exploration_gathering_anime",
+
+    "gathmo": "exploration_gathering_movies",
+    "gamo": "exploration_gathering_movies",
+    "gamov": "exploration_gathering_movies",
+
+    "gaths": "exploration_gathering_series",
+    "gas": "exploration_gathering_series",
+
     "nos": "exploration_gathering_nostalgia",
     ##
 }
@@ -650,43 +769,34 @@ async def _process_msg(
             choiceConfirmed = True
             text = subs_commands[text]
 
-        ## MOVED to text_sub_finalize
-        # if not choiceConfirmed:
-        #     if not text.startswith("."):
-        #         tokens = list(text.split('_'))
-        #         if len(tokens) > 1:
-        #             tokens[0] = text_sub_full(tokens[0])
-        #             choiceConfirmed = True
-        #             text = '_'.join(tokens)
-        ##
         return text
 
     def text_sub_finalize(text):
         nonlocal choiceConfirmed
         nonlocal delayed_actions
 
-        if text.startswith("."):
+        if text.startswith("."): # allows explicit escape from further processing
             text = text[1:]
             add_user_choice(text)
         elif not choiceConfirmed:
-            if not ("_" in text):
-                text = text.replace(" ", "_")
+            if not (activity_child_separator in text):
+                text = text.replace(" ", activity_child_separator)
 
-            tokens = list(text.split("_"))
+            tokens = list(text.split(activity_child_separator))
             if len(tokens) > 1:
                 tokens[0] = text_sub_full(tokens[0])
-                text = "_".join(tokens)
+                text = activity_child_separator.join(tokens)
                 add_user_choice(text)
             else:
                 text = chooseAct(text)
         for action in delayed_actions:
             mode, c = action
             if mode == 0:
-                pre = f"{c}_"
+                pre = f"{c}{activity_child_separator}"
                 if not text.startswith(pre):
                     text = f"{pre}{text}"
             elif mode == 1:
-                post = f"_{c}"
+                post = f"{activity_child_separator}{c}"
                 if not text.endswith(post):
                     text += post
         return text
