@@ -38,7 +38,7 @@ subs_commands = {
     "/br": ".habit 8 m=1 max=3 brush$;br$;\n.habit 8 m=1 max=2 cs1=Blues_9 cs2=PuBu_9 floss$;fl$;\n.habit 8 m=1 max=2 cs1=PuRd_9 cs2=RdPu_9 mouthwash$;",
     # "/mw": ".habit 8 m=1 max=2 mouthwash",
     "/dummy": ".habit 8 m=0 max=10 dummy",
-    "/s": ".habit 8 m=0 max=9 study",
+    "/s": ".habit 8 m=0 max=13 study$",
     "/sa": ".habit 8 m=0 max=9 sa",
     "/sl": ".habit 8 m=0 max=12 sleep",
     "/sls": ".habit 8 m=2 max=12 sleep",
@@ -66,6 +66,8 @@ suffixes = {
     "C": [1, "chores"],
     "V": [1, "video"],
     "P": [1, "practical"],
+    "M": [1, "meeting"],
+    "S": [1, "soallab"],
     "+": None,
 }
 subs = {
@@ -112,6 +114,8 @@ subs = {
     "sx": "study_exploration",
 
     "ta": "study_ta",
+    "ra": "study_ra",
+    "ram": "study_ra_meeting",
     ##
     # study chores: e.g., choosing courses
     "sc": "chores_self_study",
@@ -122,10 +126,16 @@ subs = {
 
     "eng": "study_languages_english",
 
+    "discrete": "study_math_discrete",
+
     "analysis": "study_math_analysis",
     "ana": "study_math_analysis",
 
+    "topo": "study_math_topology",
+
     "calc": "study_math_calculus",
+
+    "info": "study_math_information theory",
 
     "la": "study_math_linear algebra",
 
@@ -137,15 +147,26 @@ subs = {
     "scrum": "study_cs_software_management_agile_scrum",
     "kanban": "study_cs_software_management_kanban",
 
+    "auto": "study_cs_automata",
+
+    "os": "study_cs_os",
+    "arc": "study_cs_computer architecture",
+    "dd": "study_cs_digital design",
+    "elec": "study_cs_digital electronics",
+
     "sed": "study_cs_software_design", # sed: software engineering -> design
     "oop": "study_cs_software_design_oop",
     "func": "study_cs_software_design_functional",
     "pattern": "study_cs_software_design_patterns",
 
+    "para": "study_cs_parallelism",
     "dist": "study_cs_distributed systems",
     "distp": "study_cs_distributed systems_practical",
 
     "security": "study_cs_security",
+
+    "db": "study_cs_databases",
+    "sql": "study_cs_databases_sql",
     # uni10
     "phys": "study_physics",
     # "p2": "study_physics_physics 2",
@@ -178,6 +199,8 @@ subs = {
     "pl": "study_cs_programming languages",
 
     "tex": "study_cs_programming languages_tex",
+
+    "golang": "study_cs_programming languages_golang",
 
     "python": "study_cs_programming languages_python",
 
@@ -212,8 +235,6 @@ subs = {
     # "crystal": "sa_exploration_crystallang",
     "crystal": "study_cs_programming languages_crystal",
 
-    "sql": "study_cs_data_database_sql",
-
     "racket": "study_cs_programming languages_scheme_racket",
     "rkt": "study_cs_programming languages_scheme_racket",
 
@@ -224,23 +245,35 @@ subs = {
     "clj": "study_cs_programming languages_clojure",
     # "clj": "sa_development_clojure",
 
+
+    "web": "sa_development_web",
     "css": "sa_development_web_css",
+    "django": "sa_development_web_django",
 
     "templating": "study_cs_programming languages_templating",
 
     "d3": "study_cs_visualization_d3",
 
+    "comp": "study_cs_computation",
+
     "ds": "study_cs_datastructures",
+
+    "net": "study_cs_network",
 
     "ai": "study_cs_ai",
     "aiv": "study_cs_ai_video",
 
     "ml": "study_cs_ai_ml",
+    "mlv": "study_cs_ai_ml_video",
     "mlp": "study_cs_ai_ml_practical",
     "dataproc": "study_cs_data_procurement",
     "mli": "study_cs_ai_ml_practical_ideation",
 
+    "alignment": "study_cs_ai_ml_safety",
     "mls": "study_cs_ai_ml_safety",
+
+
+    "rl": "study_cs_ai_ml_rl",
 
     "nlp": "study_cs_ai_ml_nlp",
     "nlpp": "study_cs_ai_ml_nlp_practical",
@@ -264,7 +297,7 @@ subs = {
     "sax": "sa_exploration",
     # "android": "sa_exploration_android",
 
-    "net": "sa_network",
+    # "net": "sa_network",
 
     "dev": "sa_development",
     "testman": "sa_development_testing_manual",
@@ -278,7 +311,7 @@ subs = {
     "orgm": "sa_development_emacs_orgmode",
 
     "archive": "sa_development_archival",
-    "arc": "sa_development_archival",
+    "archival": "sa_development_archival",
 
     "borg": "sa_development_borg",
     "this": "sa_development_quantified self_timetracker",
@@ -335,6 +368,7 @@ subs = {
     "redtape": "chores_self_bureaucracy",
 
     "cfin": "chores_self_finance",
+    "charge": "chores_self_finance_charge",
     "bills": "chores_self_finance_bills",
     "tax": "chores_self_finance_bills_tax",
     ##
@@ -437,8 +471,11 @@ subs = {
     "pth": "entertainment_postthinking",
     ###
     "nf": "nonfiction_reading",
+
     "technical": "nonfiction_technical_reading",
     "nft": "nonfiction_technical_reading",
+
+    "mla": "nonfiction_ml_applications",
     ##
     "nfl": "nonfiction_listening",
     "audiobook": "nonfiction_listening_audiobooks",
@@ -470,6 +507,8 @@ subs = {
     ##
     "go": "outdoors",
     "going out": "outdoors",
+    "walk": "outdoors_walking",
+    "walking": "outdoors_walking",
     ##
     "expl": "exploration",
 
@@ -506,13 +545,17 @@ subs = {
     "nos": "exploration_gathering_nostalgia",
     ##
 }
+
 subs_additional = {
     "chores_self_rest_eat_lunch_family",
     "chores_self_rest_eat_dinner_family",
 }
+
 reminders_immediate = {
     "chores_self_hygiene_bath": "Leaf; heater",
-    "sleep": "Clean your eyes",
+
+    # "sleep": "Clean your eyes",
+    "sleep": "Introspect your previous day",
 }
 ##
 def load_strlist(path, default):
@@ -623,7 +666,7 @@ rename_pat = re.compile(r"^\.\.?re(?:name)?\s+(.+)$")
 out_pat = re.compile(
     r"^(?:\.\.?)?o(?:ut)?\s*(?P<t>\d*\.?\d*)?\s*(?:m=(?P<mode>\d+))?\s*(?:r=(?P<repeat>\d+))?\s*(?:cmap=(?P<cmap>\S+))?\s*(?:treemap=(?P<treemap>\d+))?$"
 )
-back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(\-?\d*\.?\d*)$")
+back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(?P<eq>=)?(?P<val>\-?\d*\.?\d*)$")
 habit_pat = re.compile(
     r"^(?:\.\.?)?habit\s*"
     + r"(?P<t>\d*\.?\d*)?\s*"
@@ -935,6 +978,9 @@ async def _process_msg(
         if m:
             del_count = 0
             if m.group(1):
+                out_add(z("backup-file {timetracker_db_path}").assert_zero.outrs)
+                # test -z ${{functions[backup-file]}} ||
+                ##
                 cutoff = received_at - datetime.timedelta(
                     minutes=float(m.group(1) or 5)
                 )
@@ -942,16 +988,18 @@ async def _process_msg(
                 # (Activity.end > cutoff) |
                 del_count = (
                     Activity.delete()
-                    .where((Activity.start > cutoff & Activity.start <= received_at))
+                    .where((Activity.start > cutoff) & (Activity.start <= received_at))
+                    # .where((Activity.start > cutoff))
                     .execute()
                 )
                 ##
-                out_add(f"Deleted the last {del_count} activities")
+                out_add(f"Deleted the last {del_count} activities (cutoff={cutoff}, received_at={received_at}")
             elif last_act:
                 out_add(f"Deleted the last act: {last_act}")
                 del_count = last_act.delete_instance()
                 if del_count != 1:  # @impossible
                     out_add(f"ERROR: Deletion has failed. Deleted {del_count}.")
+
             await edit(out)
             return out
 
@@ -1212,10 +1260,17 @@ async def _process_msg(
         m = back_pat.match(m0_text)
         if m:
             if last_act != None:
-                mins = float(m.group(1) or 20)
-                # supports negative numbers, too ;D
-                last_act.end -= datetime.timedelta(minutes=mins)
-                res = f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)"
+                eq_mode = m.group('eq')
+                mins = float(m.group('val') or 20)
+                mins_td = datetime.timedelta(minutes=mins)
+                if eq_mode:
+                    last_act.end = last_act.start + mins_td
+                    res = f"{str(last_act)} (Set last_act.end to last_act.start + {mins})"
+                else:
+                    # supports negative numbers, too ;D
+                    last_act.end -= mins_td
+                    res = f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)"
+
                 if last_act.end < last_act.start:
                     out_add(f"Canceled: {res}")
                     await edit(out)

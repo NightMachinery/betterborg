@@ -104,10 +104,13 @@ async def tt_mark(mark: TTMark, request: Request):
         return Response(content=text, media_type="text/plain")
 
     err = "cold shoulder"
-    if not mark.name or mark.name.isspace():
+
+    command = mark.name
+    if not command or command.isspace():
         return text_req(err)
+
     tt = borg._plugins["timetracker"]
-    m0 = await borg.send_message(tt.timetracker_chat, mark.name)
+    m0 = await borg.send_message(tt.timetracker_chat, command)
     received_at = getattr(mark, "received_at", None)
     if received_at:
         received_at = email.utils.parsedate_to_datetime(received_at)
@@ -116,6 +119,6 @@ async def tt_mark(mark: TTMark, request: Request):
             tzinfo=None
         )  # we currently don't support timezones
 
-    # print(f"tt_mark: received_at={received_at}, command={mark.name}")
+    # print(f"tt_mark: received_at={received_at}, command={command}")
     res = await tt.process_msg(m0, received_at=received_at)
     return text_req(res or err)
