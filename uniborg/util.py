@@ -3,6 +3,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from brish import z, zp, zs, bsh, Brish
+from icecream import ic
 from collections.abc import Iterable
 from IPython.terminal.embed import InteractiveShellEmbed, InteractiveShell
 from IPython.terminal.ipapp import load_default_config
@@ -33,6 +34,7 @@ import typing
 from concurrent.futures import ThreadPoolExecutor
 import io
 from io import BytesIO
+import tempfile
 
 try:
     import PIL
@@ -572,23 +574,49 @@ async def discreet_send(event, message, reply_to=None, quiet=False, link_preview
                 e = s + 4000
         else:
             chat = await event.get_chat()
-            f = z(
-                """
-            local f="$(gmktemp --suffix .txt)"
-            ec {message} > "$f"
-            ec "$f"
-            """
-            ).outrs
-            async with borg.action(chat, "document") as action:
-                last_msg = await borg.send_file(
-                    chat,
-                    f,
-                    reply_to=reply_to,
-                    allow_cache=False,
-                    caption="This message is too long, so it has been sent as a text file.",
-                )
-            z("command rm {f}")
+            last_msg = await send_text_as_file(
+                text=message,
+                chat=chat,
+                reply_to=reply_to,
+                caption="This message is too long, so it has been sent as a text file.",
+            )
+            return last_msg
+
+
+def postproccesor_json(file_path):
+    (z("cat {file_path}").out)
+
+    return (z("cat {file_path} | command jq . | sponge {file_path}").assert_zero)
+
+
+async def send_text_as_file(text: str,
+                            *,
+                            suffix: str = ".txt",
+                            chat,
+                            postproccesors=[],
+                            **kwargs):
+    f = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    try:
+        f_path = f.name
+        # ic(f_path)
+
+        f.write(text.encode())
+        f.close()
+
+        for postproccesor in postproccesors:
+            postproccesor(f_path)
+
+        async with borg.action(chat, "document") as action:
+            last_msg = await borg.send_file(
+                chat,
+                f_path,
+                allow_cache=False,
+                **kwargs,
+            )
+
         return last_msg
+    finally:
+        await remove_potential_file(f)
 
 
 async def saexec(code: str, **kwargs):
