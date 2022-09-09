@@ -107,6 +107,7 @@ subs = {
     ##
     "c": "career",
     "cx": "career_exploration",
+    "work": "career_work",
     ##
     "📖": "study",
     "s": "study",
@@ -116,6 +117,8 @@ subs = {
     "ta": "study_ta",
     "ra": "study_ra",
     "ram": "study_ra_meeting",
+    ##
+    "drive": "study_driving_car",
     ##
     # study chores: e.g., choosing courses
     "sc": "chores_self_study",
@@ -165,6 +168,9 @@ subs = {
 
     "security": "study_cs_security",
 
+    "blockchain": "study_cs_cryptography_blockchains",
+    "blc": "study_cs_cryptography_blockchains",
+
     "db": "study_cs_databases",
     "sql": "study_cs_databases_sql",
     # uni10
@@ -192,7 +198,6 @@ subs = {
 
     # "his": "study_history_history of mathematics",
     # "hisv": "study_history_history of mathematics_video",
-
 
     "git": "study_cs_version control_git",
 
@@ -433,6 +438,7 @@ subs = {
     "soa": "social_online_audiocall",
     "tlg": "social_online_telegram",
     "insta": "social_online_instagram",
+    "linkedin": "social_online_linkedin",
     "family": "social_family",
     "fam": "social_family",
     "fams": "social_family_s",
