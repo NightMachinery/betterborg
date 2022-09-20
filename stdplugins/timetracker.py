@@ -64,10 +64,12 @@ suffixes = {
     "O": [0, "outdoors"],
     "$": [1, "halfhearted"],
     "C": [1, "chores"],
+    "X": [1, "exploration"],
     "V": [1, "video"],
+    "L": [1, "class"],
     "P": [1, "practical"],
     "M": [1, "meeting"],
-    "S": [1, "soallab"],
+    # "S": [1, "soallab"],
     "+": None,
 }
 subs = {
@@ -115,8 +117,9 @@ subs = {
     "sx": "study_exploration",
 
     "ta": "study_ta",
+
     "ra": "study_ra",
-    "ram": "study_ra_meeting",
+    "soal": "study_ra_soal",
     ##
     "drive": "study_driving_car",
     ##
