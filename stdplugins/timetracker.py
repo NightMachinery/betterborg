@@ -123,9 +123,10 @@ subs = {
     ##
     "drive": "study_driving_car",
     ##
-    # study chores: e.g., choosing courses
     "sc": "chores_self_study",
     # "sc": "study_chore",
+
+    "scm": "chores_self_study_communication",
     ##
     "sv": "study_video",
     "sp": "study_peripheral",  # prerequisites, etc
@@ -352,6 +353,11 @@ subs = {
     "chf": "chores_others_family",
     "chs": "chores_others_family_sister",
     ##
+    "creative": "creative",
+    "cr": "creative",
+
+    "crv": "creative_visual",
+
     "fiw": "creative_writing_fiction",
     "fim": "creative_mentalWriting_fiction",
 
@@ -370,6 +376,7 @@ subs = {
 
     "tidy": "chores_self_organizational_tidying up",
 
+    "house": "chores_self_house",
     "hclean": "chores_self_house_cleaning",
     "vacuum": "chores_self_house_cleaning_vacuum",
     ##
