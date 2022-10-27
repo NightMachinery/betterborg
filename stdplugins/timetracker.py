@@ -64,10 +64,12 @@ suffixes = {
     "O": [0, "outdoors"],
     "$": [1, "halfhearted"],
     "C": [1, "chores"],
+    "X": [1, "exploration"],
     "V": [1, "video"],
+    "L": [1, "class"],
     "P": [1, "practical"],
     "M": [1, "meeting"],
-    "S": [1, "soallab"],
+    # "S": [1, "soallab"],
     "+": None,
 }
 subs = {
@@ -115,14 +117,16 @@ subs = {
     "sx": "study_exploration",
 
     "ta": "study_ta",
+
     "ra": "study_ra",
-    "ram": "study_ra_meeting",
+    "soal": "study_ra_soal",
     ##
     "drive": "study_driving_car",
     ##
-    # study chores: e.g., choosing courses
     "sc": "chores_self_study",
     # "sc": "study_chore",
+
+    "scm": "chores_self_study_communication",
     ##
     "sv": "study_video",
     "sp": "study_peripheral",  # prerequisites, etc
@@ -349,6 +353,11 @@ subs = {
     "chf": "chores_others_family",
     "chs": "chores_others_family_sister",
     ##
+    "creative": "creative",
+    "cr": "creative",
+
+    "crv": "creative_visual",
+
     "fiw": "creative_writing_fiction",
     "fim": "creative_mentalWriting_fiction",
 
