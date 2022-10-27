@@ -1,0 +1,38 @@
+* betterborg
+The crust of this fork is the advanced_get plugin, which gives you a unix shell in Telegram, with the ability to exchange files. I'll update the README when I have the time to document it.
+
+Needs Python 3.7.2+.
+
+* uniborg
+Pluggable [[https://docs.python.org/3/library/asyncio.html][=asyncio=]] [[https://telegram.org][Telegram]] userbot based on [[https://github.com/LonamiWebs/Telethon][Telethon]].
+
+** installing
+Simply clone the repository and run the main file:
+
+#+begin_example zsh
+git clone https://github.com/uniborg/uniborg.git
+cd uniborg
+pip install -r requirements.txt
+sudo apt-get install -y coreutils fzf zsh
+python stdborg.py
+#+end_example
+
+** design
+The modular design of the project enhances your Telegram experience through [[https://github.com/uniborg/uniborg/tree/master/stdplugins][plugins]] which you can enable or disable on demand.
+
+Each plugin gets the =borg=, =logger= and =storage= magical [[https://github.com/uniborg/uniborg/blob/4805f2f6de7d734c341bb978318f44323ad525f1/uniborg/uniborg.py#L66-L68][variables]] to ease their use. Thus creating a plugin as easy as adding a new file under the plugin directory to do the job:
+
+#+begin_src python
+  # stdplugins/myplugin.py
+  from telethon import events
+
+  @borg.on(events.NewMessage(pattern='hi'))
+  async def handler(event):
+      await event.reply('hey')
+#+end_src
+
+** internals
+The core features offered by the custom =TelegramClient= live under the [[https://github.com/uniborg/uniborg/tree/master/uniborg][=uniborg/=]] directory, with some utilities, enhancements and the core plugin.
+
+** learning
+Check out the already-mentioned [[https://github.com/uniborg/uniborg/tree/master/stdplugins][plugins]] directory to learn how to write your own, and consider reading [[http://telethon.readthedocs.io/][Telethon's documentation]].

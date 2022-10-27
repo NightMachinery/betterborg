@@ -128,15 +128,19 @@ os_aio = aioify(os)
 # subprocess_aio = aioify(obj=subprocess, name='subprocess_aio')
 subprocess_aio = aioify(subprocess)
 borg: TelegramClient = None  # is set by init
+##
 admins = [
     # "Arstar",
     195391705,
 ]
-if z('test -n "$borg_admins"'):
-    for admin in list(z("arr0 ${{(s.,.)borg_admins}}").iter0()):
+admins_injected = os.environ.get("borg_admins", None)
+if admins_injected:
+    admins_injected = admins_injected.split(",")
+    for admin in admins_injected:
         try:
             admin = int(admin)
         except: pass
+        print(f"Admin added: {admin}", file=sys.stderr)
         admins.append(admin)
 
 # Use chatids instead. Might need to prepend -100.
@@ -145,7 +149,7 @@ adminChats = [
     "1185370891", # HEART
     "1600457131", # This Anime Does not Exist
 ]
-
+##
 brish_count = int(os.environ.get("borg_brish_count", 16))
 executor = ThreadPoolExecutor(max_workers=(brish_count + 16))
 

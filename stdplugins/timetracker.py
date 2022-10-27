@@ -367,6 +367,7 @@ subs = {
 
     "tidy": "chores_self_organizational_tidying up",
 
+    "house": "chores_self_house",
     "hclean": "chores_self_house_cleaning",
     "vacuum": "chores_self_house_cleaning_vacuum",
     ##

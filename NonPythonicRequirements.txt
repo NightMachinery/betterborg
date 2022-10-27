@@ -1,6 +1,6 @@
 libav
 exa
-coreutils (ghead, etc)
+coreutils
 fzf
 zsh
 
