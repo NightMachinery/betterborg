@@ -10,11 +10,14 @@ Pluggable [[https://docs.python.org/3/library/asyncio.html][=asyncio=]] [[https:
 Simply clone the repository and run the main file:
 
 #+begin_example zsh
-git clone https://github.com/uniborg/uniborg.git
-cd uniborg
-pip install -r requirements.txt
-sudo apt-get install -y coreutils fzf zsh
-python stdborg.py
+sudo apt-get install -y coreutils fzf zsh python3
+
+git clone 'https://github.com/NightMachinary/betterborg.git'
+cd betterborg
+
+pip3 install -r requirements.txt
+
+python3 stdborg.py
 #+end_example
 
 ** design
