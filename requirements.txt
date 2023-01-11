@@ -29,7 +29,7 @@ peewee
 
 fuzzywuzzy[speedup]
 rapidfuzz
-fuzzyset
+fuzzyset2
 
 watchgod
 
