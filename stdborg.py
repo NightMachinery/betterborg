@@ -38,10 +38,11 @@ async def borg_init(background_mode=True):
         proxy=proxy,
         log_chat=log_chat,
     )
-    print("Borg created!")
-    zp("((${{+functions[bella-magic]}})) && bella-magic")
+    print(f"""Borg created!\nme: {borg.me.first_name or ""} {borg.me.last_name or ""} (@{borg.me.username or "NA"})""")
+    # zp("((${{+functions[bella-magic]}})) && bella-magic")
+    zp("((${{+functions[bell-batman-cave-open]}})) && bell-batman-cave-open")
 
-    async def watch_plugins():
+    async def watch_plugins(plugin_path):
         async for changes in awatch(plugin_path, normal_sleep=5000):
             for change_type, path in changes:
                 bname = os.path.basename(path)
@@ -50,7 +51,7 @@ async def borg_init(background_mode=True):
                         # if change_type == Change.modified or change_type == Change.added:
                         await borg.reload_plugin(path)
 
-    coroutines = [borg.run_until_disconnected(), watch_plugins()]
+    coroutines = [borg.run_until_disconnected(), watch_plugins(plugin_path)]
     if background_mode:
         for c in coroutines:
             asyncio.create_task(c)
