@@ -1,4 +1,4 @@
-# @hiddenAPI the file's name 'timetracker' is used by borg._plugins
+# @hiddenAPI the file's name 'timetracker' is used by borg._plugins and borg.load_plugin
 ###
 from telethon import events
 import telethon

@@ -1,11 +1,13 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+import sys
 import asyncio
 import importlib.util
 import logging
 from pathlib import Path
 import traceback
+from icecream import ic
 
 from telethon import TelegramClient
 import telethon.utils
@@ -94,6 +96,12 @@ class Uniborg(TelegramClient):
     def load_plugin_from_file(self, path):
         path = Path(path)
         shortname = path.stem  # removes extension and dirname
+
+        if shortname == 'timetracker':
+            if self.me.bot == False:
+                self._logger.info(f"{shortname}: skipped loading (the logged-in user is not a bot)")
+                return
+
         name = f"_UniborgPlugins.{self._name}.{shortname}"
 
         spec = importlib.util.spec_from_file_location(name, path)
