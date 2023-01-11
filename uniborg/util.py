@@ -331,39 +331,43 @@ def embeda(locals_=None):
 
 
 async def isAdmin(event, admins=admins, adminChats=adminChats, additional_admins=[], msg=None):
-    if additional_admins:
-        admins = admins + additional_admins
+    try:
+        if additional_admins:
+            admins = admins + additional_admins
 
-    msg = msg or getattr(event, "message", None)
-    assert msg != None
-    sender = getattr(msg, "sender", getattr(event, "sender", None))
-    sender_is_admin = (
-        sender is not None
-        and (
-            getattr(sender, "is_self", False)
-            or (sender.id) in admins
-            or (sender).username in admins
-        )
-    )
-
-    if event:
-        chat = await event.get_chat()
-
-        # Doesnt work with private channels' links
-        res = (
-            sender_is_admin
-            or (getattr(msg, "out", False))
-            or (str(chat.id) in adminChats)
-            or (getattr(chat, "username", "NA") in admins)
+        msg = msg or getattr(event, "message", None)
+        assert msg != None
+        sender = getattr(msg, "sender", getattr(event, "sender", None))
+        sender_is_admin = (
+            sender is not None
+            and (
+                getattr(sender, "is_self", False)
+                or (sender.id) in admins
+                or (sender).username in admins
+            )
         )
 
-        # ix()
-        # embed(using='asyncio')
-        # embed2()
+        if event:
+            chat = await event.get_chat()
 
-        return res
-    else:
-        return sender_is_admin
+            # Doesnt work with private channels' links
+            res = (
+                sender_is_admin
+                or (getattr(msg, "out", False))
+                or (str(chat.id) in adminChats)
+                or (getattr(chat, "username", "NA") in admins)
+            )
+
+            # ix()
+            # embed(using='asyncio')
+            # embed2()
+
+            return res
+        else:
+            return sender_is_admin
+    except:
+        self._logger.warn(traceback.format_exc())
+        return False
 
 
 async def is_read(borg, entity, message, is_out=None):
