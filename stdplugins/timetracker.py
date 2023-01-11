@@ -126,6 +126,9 @@ subs = {
     "sc": "chores_self_study",
     # "sc": "study_chore",
 
+    "homework": "chores_self_study_homework",
+    "hw": "chores_self_study_homework",
+
     "scm": "chores_self_study_communication",
     ##
     "sv": "study_video",
@@ -286,6 +289,7 @@ subs = {
 
     "nlp": "study_cs_ai_ml_nlp",
     "nlpp": "study_cs_ai_ml_nlp_practical",
+    "thesis": "study_cs_ai_ml_nlp_thesis",
     "ir": "study_cs_ai_ml_nlp_information retrieval",
     "irui": "study_cs_ai_ml_nlp_information retrieval_output ui",
     ##
@@ -296,11 +300,12 @@ subs = {
     "sas" : "sa_social", # contributing, etc
 
     "sac": "sa_chores",
+    "vpn": "sa_chores_vpn",
     "debug": "sa_chores_debugging",
     "bugre": "sa_chores_debugging_bug report",
-    "hw": "sa_chores_hardware",
+    "sahw": "sa_chores_hardware",
     # "sac": "chores_self_sa",
-    # "hw": "chores_self_sa_hardware",
+    # "sahw": "chores_self_sa_hardware",
 
     # "sax": "exploration_sa",
     "sax": "sa_exploration",
@@ -403,9 +408,11 @@ subs = {
     "run": "chores_self_health_exercise_running",
     "step": "chores_self_health_exercise_step",
     ##
-    "r": "chores_self_rest",
     "rest": "chores_self_rest",
+    "r": "chores_self_rest",
+    "glue": "chores_self_rest_glue",
     "gl": "chores_self_rest_glue",
+    "sick": "chores_self_rest_sick",
 
     "🍽": "chores_self_rest_eat",
     "eat": "chores_self_rest_eat",
@@ -447,6 +454,7 @@ subs = {
     "sov": "social_online_videocall",
     "soa": "social_online_audiocall",
     "tlg": "social_online_telegram",
+    "chat": "social_online_telegram_chat",
     "insta": "social_online_instagram",
     "linkedin": "social_online_linkedin",
     "family": "social_family",
