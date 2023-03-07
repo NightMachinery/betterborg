@@ -69,6 +69,7 @@ suffixes = {
     "L": [1, "class"],
     "P": [1, "practical"],
     "M": [1, "meeting"],
+    "T": [1, "technical"],
     # "S": [1, "soallab"],
     "+": None,
 }
@@ -144,6 +145,10 @@ subs = {
     "topo": "study_math_topology",
 
     "calc": "study_math_calculus",
+
+    "opt": "study_math_optimization",
+
+    "convex": "study_math_optimization_convex",
 
     "info": "study_math_information theory",
 
@@ -280,6 +285,8 @@ subs = {
     "mlp": "study_cs_ai_ml_practical",
     "dataproc": "study_cs_data_procurement",
     "mli": "study_cs_ai_ml_practical_ideation",
+
+    "mlt": "study_cs_ai_ml_theory",
 
     "alignment": "study_cs_ai_ml_safety",
     "mls": "study_cs_ai_ml_safety",
