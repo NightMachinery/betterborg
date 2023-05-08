@@ -88,6 +88,7 @@ subs = {
     "fantasy": "wasted_thinking_fantasy",
     ##
     "news": "wasted_news",
+    "nw": "wasted_news",
     # "wtso": "wasted_social_online",
     "wtf": "wasted_social_online_forums",
     "reddit": "wasted_social_online_forums_reddit",
@@ -162,7 +163,9 @@ subs = {
     "scrum": "study_cs_software_management_agile_scrum",
     "kanban": "study_cs_software_management_kanban",
 
-    "auto": "study_cs_automata",
+    "automata": "study_cs_automata",
+
+    "medicine": "study_biology_medicine",
 
     "os": "study_cs_os",
     "arc": "study_cs_computer architecture",
@@ -262,6 +265,7 @@ subs = {
     "clj": "study_cs_programming languages_clojure",
     # "clj": "sa_development_clojure",
 
+    "prompt": "sa_development_prompt engineering",
 
     "web": "sa_development_web",
     "css": "sa_development_web_css",
@@ -287,6 +291,8 @@ subs = {
     "mli": "study_cs_ai_ml_practical_ideation",
 
     "mlt": "study_cs_ai_ml_theory",
+
+    "spml": "study_cs_ai_ml_spml",
 
     "alignment": "study_cs_ai_ml_safety",
     "mls": "study_cs_ai_ml_safety",
@@ -368,7 +374,11 @@ subs = {
     "creative": "creative",
     "cr": "creative",
 
-    "crv": "creative_visual",
+    "crai": "creative_ai",
+
+    "crl": "creative_ai_llm",
+    "crv": "creative_ai_visual",
+    # "crv": "creative_visual",
 
     "fiw": "creative_writing_fiction",
     "fim": "creative_mentalWriting_fiction",
