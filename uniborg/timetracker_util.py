@@ -245,16 +245,23 @@ def activity_list_habit_get_now(
     def which_bucket(act: Activity):
         accept = False
         for name in names:
-            check_end = name.endswith("$")
-            if check_end:
-                name = name[:-1]
-                if act.name.endswith(activity_child_separator + name):
+            if isinstance(a, re.Pattern):
+                if name.match(act.name):
                     accept = True
                     break
+            elif isinstance(name, str):
+                check_end = name.endswith("$")
+                if check_end:
+                    name = name[:-1]
+                    if act.name.endswith(activity_child_separator + name):
+                        accept = True
+                        break
 
-            if act.name == name or act.name.startswith(name + activity_child_separator):
-                accept = True
-                break
+                if act.name == name or act.name.startswith(name + activity_child_separator):
+                    accept = True
+                    break
+            else:
+                raise ValueError(f"Unsupported type for name: {type(name)}")
 
         if accept:
             return (act.start - night_passover).date()

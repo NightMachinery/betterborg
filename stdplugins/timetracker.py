@@ -1184,13 +1184,22 @@ async def _process_msg(
         m = habit_pat.match(m0_text)
         if m:
             habit_name = m.group("name")
-            habit_name = habit_name.split(";")
-            habit_name = [
-                name.strip() for name in habit_name if name and not name.isspace()
-            ]
-            # habit_name = [text_sub_full(name) for name in habit_name]
-            out_add(f"{'; '.join(habit_name)}")
             habit_mode = int(m.group("mode") or 0)
+
+            if habit_name.startswith('RE:'):
+                habit_name = habit_name[3:]
+
+                out_add(f"regex: {habit_name}")
+
+                habit_name = [re.compile(habit_name)]
+            else:
+                habit_name = habit_name.split(";")
+                habit_name = [
+                    name.strip() for name in habit_name if name and not name.isspace()
+                ]
+                # habit_name = [text_sub_full(name) for name in habit_name]
+                out_add(f"{'; '.join(habit_name)}")
+
             habit_max = int(m.group("max") or 0)
             habit_delta = datetime.timedelta(days=float(m.group("t") or 30))  # days
             correct_overlap = True
