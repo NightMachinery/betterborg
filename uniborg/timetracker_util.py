@@ -2,6 +2,7 @@ from __future__ import annotations
 from brish import z
 from uniborg.util import force_async
 import logging
+import re
 
 try:
     logger = logger or logging.getLogger(__name__)
@@ -245,7 +246,7 @@ def activity_list_habit_get_now(
     def which_bucket(act: Activity):
         accept = False
         for name in names:
-            if isinstance(a, re.Pattern):
+            if isinstance(name, re.Pattern):
                 if name.match(act.name):
                     accept = True
                     break

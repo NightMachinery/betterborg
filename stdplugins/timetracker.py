@@ -39,6 +39,7 @@ subs_commands = {
     # "/mw": ".habit 8 m=1 max=2 mouthwash",
     "/dummy": ".habit 8 m=0 max=10 dummy",
     "/s": ".habit 8 m=0 max=13 study$",
+    "/ssa": r".habit 8 m=0 max=13 RE:^sa($|\b|_)|study$",
     "/sa": ".habit 8 m=0 max=9 sa",
     "/sl": ".habit 8 m=0 max=12 sleep",
     "/sls": ".habit 8 m=2 max=12 sleep",
@@ -960,7 +961,11 @@ async def _process_msg(
         done, res = await multi_commands(text_input)
         if done:
             return res
-        m0_text_raw = z("per2en", cmd_stdin=text_input).outrs
+
+        persian_exclusive_chars = list('ضصثقفغعهخحجچشسیبلاتنمکگظطزرذدپوؤئيإأآة»«؛كٓژٰ\u200cٔء؟٬٫﷼٪×،ـ۱۲۳۴۵۶۷۸۹۰')
+        m0_text_raw = text_input
+        if any(c in m0_text_raw for c in persian_exclusive_chars):
+            m0_text_raw = z("per2en", cmd_stdin=m0_text_raw).outrs
         m0_text = text_sub(m0_text_raw)
         done, res = await multi_commands(m0_text)
         if done:
@@ -1181,6 +1186,7 @@ async def _process_msg(
 
             return out
 
+        ic(m0_text)
         m = habit_pat.match(m0_text)
         if m:
             habit_name = m.group("name")
