@@ -34,12 +34,14 @@ subs_commands = {
     # "res": "..out",
     # "out": "..out",
     "🧫": "?",
-    # habits:
+    ## habits:
     "/br": ".habit 8 m=1 max=3 brush$;br$;\n.habit 8 m=1 max=2 cs1=Blues_9 cs2=PuBu_9 floss$;fl$;\n.habit 8 m=1 max=2 cs1=PuRd_9 cs2=RdPu_9 mouthwash$;",
     # "/mw": ".habit 8 m=1 max=2 mouthwash",
+    ##
+    #: Use parentheses for regex patterns to ensure that the last char is not interpreted as sth else: `RE:(...)`
     "/dummy": ".habit 8 m=0 max=10 dummy",
-    "/s": ".habit 8 m=0 max=13 study$",
-    "/ssa": r".habit 8 m=0 max=13 RE:^sa($|\b|_)|study$",
+    "/s": ".habit 8 m=0 max=12 study$",
+    "/ssa": r".habit 8 m=0 max=12 RE:^sa($|_)|(^study($|_)|_study$)",
     "/sa": ".habit 8 m=0 max=9 sa",
     "/sl": ".habit 8 m=0 max=12 sleep",
     "/sls": ".habit 8 m=2 max=12 sleep",
