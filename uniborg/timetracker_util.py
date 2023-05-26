@@ -246,8 +246,19 @@ def activity_list_habit_get_now(
     def which_bucket(act: Activity):
         accept = False
         for name in names:
-            if isinstance(name, re.Pattern):
-                if name.match(act.name):
+            if name == 'STUDY_SA_NX':
+                include = [
+                        re.compile(r'^sa($|_)|(^|_)study($|_)'),
+                        ]
+                exclude = [
+                        re.compile(f'(^|_)exploration($|_)'),
+                        ]
+                
+                accept = all(re.search(p, act.name) for p in include)
+                accept = accept and not any(re.search(p, act.name) for p in exclude)
+                break
+            elif isinstance(name, re.Pattern):
+                if re.search(name, act.name):
                     accept = True
                     break
             elif isinstance(name, str):

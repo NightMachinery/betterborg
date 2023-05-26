@@ -40,9 +40,11 @@ subs_commands = {
     ##
     #: Use parentheses for regex patterns to ensure that the last char is not interpreted as sth else: `RE:(...)`
     "/dummy": ".habit 8 m=0 max=10 dummy",
+    "/u": ".habit 8 m=0 max=12 STUDY_SA_NX",
     "/s": ".habit 8 m=0 max=12 study$",
-    "/ssa": r".habit 8 m=0 max=12 RE:^sa($|_)|(^study($|_)|_study$)",
+    "/ssa": r".habit 8 m=0 max=12 RE:^sa($|_)|(^|_)study($|_)",
     "/sa": ".habit 8 m=0 max=9 sa",
+    "/x": r".habit 8 m=0 max=12 RE:(^|_)exploration($|_)",
     "/sl": ".habit 8 m=0 max=12 sleep",
     "/sls": ".habit 8 m=2 max=12 sleep",
     "/e": ".habit 8 m=0 max=2 chores_self_health_exercise; exercise$; e$;",
