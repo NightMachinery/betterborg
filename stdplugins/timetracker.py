@@ -498,6 +498,8 @@ subs = {
     "coop": "entertainment_video games_coop",
     ##
     "watch": "entertainment_watch",
+    "youtube": "entertainment_watch_youtube",
+    "yt": "entertainment_watch_youtube",
     "movies": "entertainment_watch_movies",
     "series": "entertainment_watch_series",
     "anime": "entertainment_watch_anime_series",
