@@ -34,12 +34,17 @@ subs_commands = {
     # "res": "..out",
     # "out": "..out",
     "🧫": "?",
-    # habits:
+    ## habits:
     "/br": ".habit 8 m=1 max=3 brush$;br$;\n.habit 8 m=1 max=2 cs1=Blues_9 cs2=PuBu_9 floss$;fl$;\n.habit 8 m=1 max=2 cs1=PuRd_9 cs2=RdPu_9 mouthwash$;",
     # "/mw": ".habit 8 m=1 max=2 mouthwash",
+    ##
+    #: Use parentheses for regex patterns to ensure that the last char is not interpreted as sth else: `RE:(...)`
     "/dummy": ".habit 8 m=0 max=10 dummy",
-    "/s": ".habit 8 m=0 max=13 study$",
+    "/u": ".habit 8 m=0 max=12 STUDY_SA_NX",
+    "/s": ".habit 8 m=0 max=12 study$",
+    "/ssa": r".habit 8 m=0 max=12 RE:^sa($|_)|(^|_)study($|_)",
     "/sa": ".habit 8 m=0 max=9 sa",
+    "/x": r".habit 8 m=0 max=12 RE:(^|_)exploration($|_)",
     "/sl": ".habit 8 m=0 max=12 sleep",
     "/sls": ".habit 8 m=2 max=12 sleep",
     "/e": ".habit 8 m=0 max=2 chores_self_health_exercise; exercise$; e$;",
@@ -493,6 +498,8 @@ subs = {
     "coop": "entertainment_video games_coop",
     ##
     "watch": "entertainment_watch",
+    "youtube": "entertainment_watch_youtube",
+    "yt": "entertainment_watch_youtube",
     "movies": "entertainment_watch_movies",
     "series": "entertainment_watch_series",
     "anime": "entertainment_watch_anime_series",
@@ -960,7 +967,11 @@ async def _process_msg(
         done, res = await multi_commands(text_input)
         if done:
             return res
-        m0_text_raw = z("per2en", cmd_stdin=text_input).outrs
+
+        persian_exclusive_chars = list('ضصثقفغعهخحجچشسیبلاتنمکگظطزرذدپوؤئيإأآة»«؛كٓژٰ\u200cٔء؟٬٫﷼٪×،ـ۱۲۳۴۵۶۷۸۹۰')
+        m0_text_raw = text_input
+        if any(c in m0_text_raw for c in persian_exclusive_chars):
+            m0_text_raw = z("per2en", cmd_stdin=m0_text_raw).outrs
         m0_text = text_sub(m0_text_raw)
         done, res = await multi_commands(m0_text)
         if done:
@@ -1181,6 +1192,7 @@ async def _process_msg(
 
             return out
 
+        ic(m0_text)
         m = habit_pat.match(m0_text)
         if m:
             habit_name = m.group("name")
