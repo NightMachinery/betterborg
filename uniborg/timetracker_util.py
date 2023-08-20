@@ -94,7 +94,7 @@ def seconds_str(s, only_hours=False, scale=True):
     res = ""
     sleep = 9.5
     if scale:
-        active_h = 24 - sleep
+        active_h = 24 - sleep #: 14.5 active hours in a day
     else:
         active_h = 24
 
