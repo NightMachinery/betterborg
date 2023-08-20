@@ -142,6 +142,14 @@ subs = {
     "sp": "study_peripheral",  # prerequisites, etc
 
     "eng": "study_languages_english",
+    "english": "study_languages_english",
+    "ielts": "study_languages_english_ielts",
+    "toefl": "study_languages_english_toefl",
+    "tofl": "study_languages_english_toefl",
+
+    "french": "study_languages_french",
+    "german": "study_languages_german",
+    "japanese": "study_languages_japanese",
 
     "discrete": "study_math_discrete",
 
