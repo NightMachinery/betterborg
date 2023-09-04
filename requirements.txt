@@ -38,6 +38,8 @@ plotly
 
 icecream
 
+sqlalchemy
+
 # junk deps:
 # sortedcontainers
 # jsonpickle
