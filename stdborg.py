@@ -68,7 +68,8 @@ if __name__ == "__main__":  # stdborg.py is runnable without the FastAPI compone
 from typing import Optional
 
 from fastapi import FastAPI, Response, Request
-from pydantic import BaseSettings, BaseModel
+from pydantic import BaseModel
+from pydantic_settings import BaseSettings
 
 import email.utils
 
