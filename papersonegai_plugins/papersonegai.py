@@ -80,7 +80,7 @@ async def csv_format_handler(event):
     await event.answer("You selected CSV format!")
 
 
-@borg.on(events.NewMessage(pattern=r"^(?!/)(.*)$"))
+@borg.on(events.NewMessage(pattern=r"(?im)^(?!/)((?:.|\n)+)$"))
 async def _(event):
     if (
         event.message.forward != None
