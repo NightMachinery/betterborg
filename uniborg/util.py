@@ -91,7 +91,7 @@ def _resize_photo_if_needed(
             if image.width <= width and image.height <= height:
                 return file
 
-            image.thumbnail((width, height), PIL.Image.ANTIALIAS)
+            image.thumbnail((width, height), PIL.Image.LANCZOS)
 
         alpha_index = image.mode.find("A")
         if alpha_index == -1:
