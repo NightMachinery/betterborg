@@ -31,10 +31,10 @@ def timedelta_dur(end, start):
 
 # Path.home().joinpath(Path("cellar"))
 timetracker_db_path = Path(
-    z('print -r -- "${{attic_private_dir:-$HOME/tmp}}/timetracker.db"').outrs
+    z('print -r -- "${{timetracker_dir:-$HOME/tmp}}/timetracker.db"').outrs
 )
 user_choices_path = Path(
-    z('print -r -- "${{attic_private_dir:-$HOME/tmp}}/timetracker_user_choices"').outrs
+    z('print -r -- "${{timetracker_dir:-$HOME/tmp}}/timetracker_user_choices"').outrs
 )
 os.makedirs(os.path.dirname(timetracker_db_path), exist_ok=True)
 db = SqliteDatabase(timetracker_db_path)
