@@ -132,11 +132,13 @@ subs = {
     ##
     "sc": "chores_self_study",
     # "sc": "study_chore",
+    "scth": "chores_self_study_thinking",
 
     "homework": "chores_self_study_homework",
     "hw": "chores_self_study_homework",
 
     "scm": "chores_self_study_communication",
+    "sm": "chores_self_study_management",
     ##
     "sv": "study_video",
     "sp": "study_peripheral",  # prerequisites, etc
@@ -297,27 +299,48 @@ subs = {
     "ai": "study_cs_ai",
     "aiv": "study_cs_ai_video",
 
-    "ml": "study_cs_ai_ml",
-    "mlv": "study_cs_ai_ml_video",
-    "mlp": "study_cs_ai_ml_practical",
+    "ml": "study_cs_ai",
+    "mlc": "study_cs_ai_ml", #: ML Classic, ML Course
+    "mlv": "study_cs_ai_video",
+    "mlp": "study_cs_ai_practical",
     "dataproc": "study_cs_data_procurement",
-    "mli": "study_cs_ai_ml_practical_ideation",
+    "mli": "study_cs_ai_practical_ideation",
 
     "mlt": "study_cs_ai_ml_theory",
 
-    "spml": "study_cs_ai_ml_spml",
+    "spml": "study_cs_ai_spml",
 
-    "alignment": "study_cs_ai_ml_safety",
-    "mls": "study_cs_ai_ml_safety",
+    "alignment": "study_cs_ai_safety",
+    "mls": "study_cs_ai_safety",
 
 
-    "rl": "study_cs_ai_ml_rl",
+    "rl": "study_cs_ai_rl",
 
-    "nlp": "study_cs_ai_ml_nlp",
-    "nlpp": "study_cs_ai_ml_nlp_practical",
-    "thesis": "study_cs_ai_ml_nlp_thesis",
-    "ir": "study_cs_ai_ml_nlp_information retrieval",
-    "irui": "study_cs_ai_ml_nlp_information retrieval_output ui",
+    "plan": "study_cs_ai_gofai_planning",
+
+    "nlp": "study_cs_ai_nlp",
+    "nlpp": "study_cs_ai_nlp_practical",
+    "llm": "study_cs_ai_nlp_llm",
+    "ir": "study_cs_ai_nlp_information retrieval",
+    "irui": "study_cs_ai_nlp_information retrieval_output ui",
+
+    "thesis": "study_cs_ai_thesis",
+    "th": "study_cs_ai_thesis",
+    "thp": "study_cs_ai_thesis_practical",
+
+    "attr": "study_cs_ai_thesis_attribution",
+    "attrs": "study_cs_ai_thesis_attribution_survey",
+    "contrastive": "study_cs_ai_thesis_attribution_contrastive",
+    "crs": "study_cs_ai_thesis_attribution_contrastive",
+
+    "robustness": "study_cs_ai_thesis_robustness",
+    "robust": "study_cs_ai_thesis_robustness",
+
+    "dss": "study_cs_ai_thesis_dataset_spurious",
+
+    "filip": "study_cs_ai_thesis_clip_finegrained",
+
+    "medical": "study_cs_ai_thesis_medical",
     ##
     "💻": "sa",
     "system": "sa",
