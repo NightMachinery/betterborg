@@ -8,6 +8,7 @@ from brish import z
 import re
 import os
 import copy
+from collections import OrderedDict
 from icecream import ic
 
 # from pathlib import Path
@@ -1297,15 +1298,25 @@ async def _process_msg(
             if habit_mode == 2:
                 habit_data = raw_acts_to_start_offset(habit_data)
 
-            out_add(f"{yaml.dump(habit_data)}")
-            habit_data.pop(received_at.date(), None)
+            out_add(f"{yaml.dump(dict(habit_data))}")
 
             def mean(numbers):
                 numbers = list(numbers)
                 return float(sum(numbers)) / max(len(numbers), 1)
 
+            habit_data_with_current_day = OrderedDict(habit_data) #: copies
+            del habit_data_with_current_day[min(habit_data.keys())]
+            #: pops the oldest item
+            #: We have 8 days for a duration of week as we want to exclude the current day. But for =with_current_day=, we do NOT want to do that, so we pop the extra item.
+            # ic(habit_data, habit_data_with_current_day)
+
+            average_with_current_day = mean(v for k, v in habit_data_with_current_day.items())
+
+            habit_data.pop(received_at.date(), None)
+            #: This removes the current day from =habit_data=.
+
             average = mean(v for k, v in habit_data.items())
-            out_add(f"average: {round(average, 1)}", prefix="\n")
+            out_add(f"average: {round(average, 1)}\naverage (including today): {round(average_with_current_day, 1)}", prefix="\n")
             await edit(out)
             ##
             # ~1 day(s) left empty as a buffer

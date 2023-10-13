@@ -3,6 +3,8 @@ from brish import z
 from uniborg.util import force_async
 import logging
 import re
+from collections import OrderedDict
+
 
 try:
     logger = logger or logging.getLogger(__name__)
@@ -284,10 +286,10 @@ def activity_list_habit_get_now(
         low, high, which_bucket=which_bucket, mode=mode, **kwargs
     )
     if mode == 0:
-        buckets_dur = {
-            k: round(timedelta_total_seconds(v.total_duration) / 3600, 2)
+        buckets_dur = OrderedDict(
+            (k, round(timedelta_total_seconds(v.total_duration) / 3600, 2))
             for k, v in buckets.items()
-        }
+        )
     elif mode in (1, 2):
         buckets_dur = buckets
 
@@ -356,7 +358,7 @@ def activity_list_buckets_get(low, high, which_bucket, mode=0, correct_overlap=T
     else:
         acts = Activity.select().where((Activity.start.between(low, high)))
 
-    buckets = {}
+    buckets = OrderedDict()
     for act in acts:
         if correct_overlap:
             # @warn overlap is not corrected between the buckets themselves!
