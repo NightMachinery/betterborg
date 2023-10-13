@@ -40,8 +40,8 @@ subs_commands = {
     ##
     #: Use parentheses for regex patterns to ensure that the last char is not interpreted as sth else: `RE:(...)`
     "/dummy": ".habit 8 m=0 max=10 dummy",
-    "/u": ".habit 8 m=0 max=12 STUDY_SA_NX",
     "/s": ".habit 8 m=0 max=12 study$",
+    "/u": ".habit 8 m=0 max=12 STUDY_SA_NX",
     "/ssa": r".habit 8 m=0 max=12 RE:^sa($|_)|(^|_)study($|_)",
     "/sa": ".habit 8 m=0 max=9 sa",
     "/x": r".habit 8 m=0 max=12 RE:(^|_)exploration($|_)",
@@ -519,6 +519,7 @@ subs = {
     "famo": "social_family_others",
     ###
     "🎪": "entertainment",
+    "et": "entertainment",
     "fun": "entertainment",
     ##
     "music": "entertainment_listen_music",
