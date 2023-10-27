@@ -20,8 +20,8 @@ async def _(event):
         # print("deleter: not admin")
         return
     await event.delete()
-    n = int(event.pattern_match.group('n') or 1)
-    self_only = bool(event.pattern_match.group('self_only'))
+    n = int(event.pattern_match.group("n") or 1)
+    self_only = bool(event.pattern_match.group("self_only"))
     print(f"del received: {n}", flush=True)
     chat = await event.get_chat()
     delete_count = 0

@@ -100,13 +100,11 @@ subs = {
     "reddit": "wasted_social_online_forums_reddit",
     "twitter": "wasted_social_online_forums_twitter",
     "hn": "wasted_news_hackernews",
-
     "forum": "social_online_forums",
     "stack": "social_online_forums_stackexchange",
     "lw": "social_online_forums_lesswrong",
     "irc": "social_online_forums_irc",
     "discord": "social_online_forums_discord",
-
     "tumblr": "entertainment_web_pictures_tumblr",
     "tiktok": "entertainment_web_video_tiktok",
     ###
@@ -121,11 +119,8 @@ subs = {
     ##
     "📖": "study",
     "s": "study",
-
     "sx": "study_exploration",
-
     "ta": "study_ta",
-
     "ra": "study_ra",
     "soal": "study_ra_soal",
     ##
@@ -134,16 +129,13 @@ subs = {
     "sc": "chores_self_study",
     # "sc": "study_chore",
     "scth": "chores_self_study_thinking",
-
     "homework": "chores_self_study_homework",
     "hw": "chores_self_study_homework",
-
     "scm": "chores_self_study_communication",
     "sm": "chores_self_study_management",
     ##
     "sv": "study_video",
     "sp": "study_peripheral",  # prerequisites, etc
-
     "eng": "study_languages_english",
     "english": "study_languages_english",
     "speak": "study_languages_english_speaking",
@@ -151,59 +143,40 @@ subs = {
     "ielts": "study_languages_english_ielts",
     "toefl": "study_languages_english_toefl",
     "tofl": "study_languages_english_toefl",
-
     "french": "study_languages_french",
     "german": "study_languages_german",
     "japanese": "study_languages_japanese",
-
     "discrete": "study_math_discrete",
-
     "analysis": "study_math_analysis",
     "ana": "study_math_analysis",
-
     "topo": "study_math_topology",
-
     "calc": "study_math_calculus",
-
     "opt": "study_math_optimization",
-
     "convex": "study_math_optimization_convex",
-
     "info": "study_math_information theory",
-
     "la": "study_math_linear algebra",
-
     "algebra": "study_math_algebra",
     "al": "study_math_algebra",
-
     "smanage": "study_cs_software_management",
     "agile": "study_cs_software_management_agile",
     "scrum": "study_cs_software_management_agile_scrum",
     "kanban": "study_cs_software_management_kanban",
-
     "automata": "study_cs_automata",
-
     "medicine": "study_biology_medicine",
-
     "os": "study_cs_os",
     "arc": "study_cs_computer architecture",
     "dd": "study_cs_digital design",
     "elec": "study_cs_digital electronics",
-
-    "sed": "study_cs_software_design", # sed: software engineering -> design
+    "sed": "study_cs_software_design",  # sed: software engineering -> design
     "oop": "study_cs_software_design_oop",
     "func": "study_cs_software_design_functional",
     "pattern": "study_cs_software_design_patterns",
-
     "para": "study_cs_parallelism",
     "dist": "study_cs_distributed systems",
     "distp": "study_cs_distributed systems_practical",
-
     "security": "study_cs_security",
-
     "blockchain": "study_cs_cryptography_blockchains",
     "blc": "study_cs_cryptography_blockchains",
-
     "db": "study_cs_databases",
     "sql": "study_cs_databases_sql",
     # uni10
@@ -214,143 +187,91 @@ subs = {
     # "p4v": "study_physics_physics 4_video",
     "feyn": "study_physics_feynman",
     "feynman": "study_physics_feynman",
-
     "st": "study_math_probability and statistics",
     "stat": "study_math_probability and statistics",
-
     "engm": "study_math_engineering math",
     "rizmo": "study_math_engineering math",
     # "emv": "study_math_engineering math_video",
     # "rizmov": "study_math_engineering math_video",
-
     "sig": "study_math_signal processing",
     "dsp": "study_math_signal processing_digital",
-
     "fin": "study_economics_finance",
     "finv": "study_economics_finance_video",
-
     # "his": "study_history_history of mathematics",
     # "hisv": "study_history_history of mathematics_video",
-
     "git": "study_cs_version control_git",
-
     "pl": "study_cs_programming languages",
-
     "tex": "study_cs_programming languages_tex",
-
     "golang": "study_cs_programming languages_golang",
-
     "python": "study_cs_programming languages_python",
-
     "jvm": "study_cs_programming languages_jvm",
-
     "scala": "study_cs_programming languages_scala",
-
     "julia": "study_cs_programming languages_julia",
-
     "zig": "study_cs_programming languages_zig",
-
     "perl": "study_cs_programming languages_perl",
-
     "elixir": "study_cs_programming languages_elixir",
-
     "cc": "study_cs_programming languages_c",
-
     "cpp": "study_cs_programming languages_cpp",
-
     "haskell": "study_cs_programming languages_haskell",
-
     "ocaml": "study_cs_programming languages_ocaml",
-
     "m4": "study_cs_programming languages_m4",
-
     "php": "study_cs_programming languages_php",
-
     "prolog": "study_cs_programming languages_prolog",
-
     "ruby": "study_cs_programming languages_ruby",
-
     # "crystal": "sa_exploration_crystallang",
     "crystal": "study_cs_programming languages_crystal",
-
     "racket": "study_cs_programming languages_scheme_racket",
     "rkt": "study_cs_programming languages_scheme_racket",
-
     # "sbcl": "sa_development_commonlisp",
     # "cl": "sa_development_commonlisp",
     "cl": "study_cs_programming languages_commonlisp",
-
     "clj": "study_cs_programming languages_clojure",
     # "clj": "sa_development_clojure",
-
     "prompt": "sa_development_prompt engineering",
-
     "web": "sa_development_web",
     "css": "sa_development_web_css",
     "django": "sa_development_web_django",
-
     "templating": "study_cs_programming languages_templating",
-
     "d3": "study_cs_visualization_d3",
-
     "comp": "study_cs_computation",
-
     "ds": "study_cs_datastructures",
-
     "net": "study_cs_network",
-
     "ai": "study_cs_ai",
     "aiv": "study_cs_ai_video",
-
     "ml": "study_cs_ai",
-    "mlc": "study_cs_ai_ml", #: ML Classic, ML Course
+    "mlc": "study_cs_ai_ml",  #: ML Classic, ML Course
     "mlv": "study_cs_ai_video",
     "mlp": "study_cs_ai_practical",
     "dataproc": "study_cs_data_procurement",
     "mli": "study_cs_ai_practical_ideation",
-
     "mlt": "study_cs_ai_ml_theory",
-
     "spml": "study_cs_ai_spml",
-
     "alignment": "study_cs_ai_safety",
     "mls": "study_cs_ai_safety",
-
-
     "rl": "study_cs_ai_rl",
-
     "plan": "study_cs_ai_gofai_planning",
-
     "nlp": "study_cs_ai_nlp",
     "nlpp": "study_cs_ai_nlp_practical",
     "llm": "study_cs_ai_nlp_llm",
     "ir": "study_cs_ai_nlp_information retrieval",
     "irui": "study_cs_ai_nlp_information retrieval_output ui",
-
     "thesis": "study_cs_ai_thesis",
     "th": "study_cs_ai_thesis",
     "thp": "study_cs_ai_thesis_practical",
-
     "attr": "study_cs_ai_thesis_attribution",
     "attrs": "study_cs_ai_thesis_attribution_survey",
     "contrastive": "study_cs_ai_thesis_attribution_contrastive",
     "crs": "study_cs_ai_thesis_attribution_contrastive",
-
     "robustness": "study_cs_ai_thesis_robustness",
     "robust": "study_cs_ai_thesis_robustness",
-
     "dss": "study_cs_ai_thesis_dataset_spurious",
-
     "filip": "study_cs_ai_thesis_clip_finegrained",
-
     "medical": "study_cs_ai_thesis_medical",
     ##
     "💻": "sa",
     "system": "sa",
     "system administration": "sa",
-
-    "sas" : "sa_social", # contributing, etc
-
+    "sas": "sa_social",  # contributing, etc
     "sac": "sa_chores",
     "vpn": "sa_chores_vpn",
     "debug": "sa_chores_debugging",
@@ -358,40 +279,27 @@ subs = {
     "sahw": "sa_chores_hardware",
     # "sac": "chores_self_sa",
     # "sahw": "chores_self_sa_hardware",
-
     # "sax": "exploration_sa",
     "sax": "sa_exploration",
     # "android": "sa_exploration_android",
-
     # "net": "sa_network",
-
     "dev": "sa_development",
     "testman": "sa_development_testing_manual",
-
     "sh": "sa_development_nightsh",
     "brish": "sa_development_nightsh_brish",
-
     "vim": "sa_development_vim",
-
     "emc": "sa_development_emacs",
     "orgm": "sa_development_emacs_orgmode",
-
     "archive": "sa_development_archival",
     "archival": "sa_development_archival",
-
     "borg": "sa_development_borg",
     "this": "sa_development_quantified self_timetracker",
-
     "android": "sa_development_android",
     "termux": "sa_development_android_termux",
-
     "siri": "sa_development_siri",
-
     "hugo": "sa_development_blog_hugo",
-
     "search": "sa_development_search",
     # "": "sa_development_",
-
     "sat": "sa_thinking & design",
     "doc": "sa_product_documentation",
     "doco": "sa_product_documentation_contrib",
@@ -402,26 +310,20 @@ subs = {
     ###
     "🐑": "chores",
     "ch": "chores",
-
     "cho": "chores_others",
     "chos": "chores_others_society",
-
     "chfam": "chores_others_family",
     "chf": "chores_others_family",
     "chs": "chores_others_family_sister",
     ##
     "creative": "creative",
     "cr": "creative",
-
     "crai": "creative_ai",
-
     "crl": "creative_ai_llm",
     "crv": "creative_ai_visual",
     # "crv": "creative_visual",
-
     "fiw": "creative_writing_fiction",
     "fim": "creative_mentalWriting_fiction",
-
     "journal": "creative_writing_journal",
     "jrl": "creative_writing_journal",
     ##
@@ -429,20 +331,16 @@ subs = {
     "todo": "chores_self_organizational_digital_todo",
     "in": "chores_self_organizational_digital_todo_inbox",
     "em": "chores_self_organizational_digital_todo_inbox_emails",
-    "gh": "chores_self_organizational_digital_todo_inbox_github", # @renameMe sa_chores_github
+    "gh": "chores_self_organizational_digital_todo_inbox_github",  # @renameMe sa_chores_github
     "nt": "chores_self_organizational_digital_notes",
-
     "digitization": "chores_self_organizational_digital_digitization",
     "scan": "chores_self_organizational_digital_digitization",
-
     "tidy": "chores_self_organizational_tidying up",
-
     "house": "chores_self_house",
     "hclean": "chores_self_house_cleaning",
     "vacuum": "chores_self_house_cleaning_vacuum",
     ##
     "redtape": "chores_self_bureaucracy",
-
     "cfin": "chores_self_finance",
     "charge": "chores_self_finance_charge",
     "bills": "chores_self_finance_bills",
@@ -457,7 +355,6 @@ subs = {
     "health": "chores_self_health",
     "healthp": "chores_self_health_pro",
     "dental": "chores_self_health_pro_dental",
-
     "exercise": "chores_self_health_exercise",
     "🏃🏽‍♀️": "chores_self_health_exercise",
     "e": "chores_self_health_exercise",
@@ -469,7 +366,6 @@ subs = {
     "glue": "chores_self_rest_glue",
     "gl": "chores_self_rest_glue",
     "sick": "chores_self_rest_sick",
-
     "🍽": "chores_self_rest_eat",
     "eat": "chores_self_rest_eat",
     "eating": "chores_self_rest_eat",
@@ -479,10 +375,8 @@ subs = {
     "lu": "chores_self_rest_eat_lunch",
     "dinner": "chores_self_rest_eat_dinner",
     "di": "chores_self_rest_eat_dinner",
-
     "cook": "chores_self_food_cook",
     "dish": "chores_self_food_dishes",
-
     "setup": "chores_self_setup",
     ##
     "brush": "chores_self_health_teeth_brush",
@@ -550,14 +444,11 @@ subs = {
     "fanfic": "entertainment_fiction_fanfiction",
     "fanfiction": "entertainment_fiction_fanfiction",
     "fic": "entertainment_fiction_fanfiction",
-
     "pth": "entertainment_postthinking",
     ###
     "nf": "nonfiction_reading",
-
     "technical": "nonfiction_technical_reading",
     "nft": "nonfiction_technical_reading",
-
     "mla": "nonfiction_ml_applications",
     ##
     "nfl": "nonfiction_listening",
@@ -565,7 +456,6 @@ subs = {
     "ab": "nonfiction_listening_audiobooks",
     "podcast": "nonfiction_listening_podcasts",
     "pdc": "nonfiction_listening_podcasts",
-
     "nftl": "nonfiction_technical_listening",
     ##
     "nfw": "nonfiction_watch",
@@ -573,7 +463,6 @@ subs = {
     "nfwl": "nonfiction_watch_lectures",
     "ttcv": "nonfiction_watch_lectures",
     "ted": "nonfiction_watch_talks",
-
     "nftw": "nonfiction_technical_watch",
     "lec": "nonfiction_technical_watch_lectures",
     "talk": "nonfiction_technical_watch_talks",
@@ -590,44 +479,32 @@ subs = {
     ##
     "go": "outdoors",
     "going out": "outdoors",
-
     "walk": "outdoors_walking",
     "walking": "outdoors_walking",
-
     "park": "outdoors_walking_park",
     ##
     "expl": "exploration",
-
     "xbuy": "exploration_buying",
-
     "🌐": "exploration_targetedLearning",
     "tl": "exploration_targetedLearning",
     ##
-    "gath": "exploration_gathering", # <- outreach
+    "gath": "exploration_gathering",  # <- outreach
     "ga": "exploration_gathering",
-
     "gathmu": "exploration_gathering_music",
     "gamu": "exploration_gathering_music",
-
     "gathg": "exploration_gathering_games",
     "gag": "exploration_gathering_games",
-
     "gathf": "exploration_gathering_fiction",
     "gaf": "exploration_gathering_fiction",
-
     "ganf": "exploration_gathering_nonfiction",
-
     "gatha": "exploration_gathering_anime",
     "gaa": "exploration_gathering_anime",
     "gaanim": "exploration_gathering_anime",
-
     "gathmo": "exploration_gathering_movies",
     "gamo": "exploration_gathering_movies",
     "gamov": "exploration_gathering_movies",
-
     "gaths": "exploration_gathering_series",
     "gas": "exploration_gathering_series",
-
     "nos": "exploration_gathering_nostalgia",
     ##
 }
@@ -639,10 +516,11 @@ subs_additional = {
 
 reminders_immediate = {
     "chores_self_hygiene_bath": "Leaf; heater",
-
     # "sleep": "Clean your eyes",
     "sleep": "Introspect your previous day",
 }
+
+
 ##
 def load_strlist(path, default):
     try:
@@ -904,7 +782,7 @@ async def _process_msg(
         nonlocal choiceConfirmed
         nonlocal delayed_actions
 
-        if text.startswith("."): # allows explicit escape from further processing
+        if text.startswith("."):  # allows explicit escape from further processing
             text = text[1:]
             add_user_choice(text)
         elif not choiceConfirmed:
@@ -973,7 +851,9 @@ async def _process_msg(
                 )  # this can still be a new record if the record we are trying to get was the last one when it was deleted, as the ids just increment from the last one and are not unique when deletion is concerned
                 if q.exists():
                     act_replied_to = q.get()
-                    if not received_at: # the first command of a replied_to message will not have this set, but the subsequent commands will reuse the one we set for the first.
+                    if (
+                        not received_at
+                    ):  # the first command of a replied_to message will not have this set, but the subsequent commands will reuse the one we set for the first.
                         received_at = copy.copy(act_replied_to.end)
 
                         # last_act = act_replied_to # the last_act will be set correctly by received_at; We can't set it explicitly, as it can't be passed through 'multi_commands'.
@@ -1003,7 +883,9 @@ async def _process_msg(
         if done:
             return res
 
-        persian_exclusive_chars = list('ضصثقفغعهخحجچشسیبلاتنمکگظطزرذدپوؤئيإأآة»«؛كٓژٰ\u200cٔء؟٬٫﷼٪×،ـ۱۲۳۴۵۶۷۸۹۰')
+        persian_exclusive_chars = list(
+            "ضصثقفغعهخحجچشسیبلاتنمکگظطزرذدپوؤئيإأآة»«؛كٓژٰ\u200cٔء؟٬٫﷼٪×،ـ۱۲۳۴۵۶۷۸۹۰"
+        )
         m0_text_raw = text_input
         if any(c in m0_text_raw for c in persian_exclusive_chars):
             m0_text_raw = z("per2en", cmd_stdin=m0_text_raw).outrs
@@ -1077,13 +959,16 @@ async def _process_msg(
                 ##
                 # (Activity.end > cutoff) |
                 del_count = (
-                    Activity.delete()
-                    .where((Activity.start > cutoff) & (Activity.start <= received_at))
+                    Activity.delete().where(
+                        (Activity.start > cutoff) & (Activity.start <= received_at)
+                    )
                     # .where((Activity.start > cutoff))
                     .execute()
                 )
                 ##
-                out_add(f"Deleted the last {del_count} activities (cutoff={cutoff}, received_at={received_at}")
+                out_add(
+                    f"Deleted the last {del_count} activities (cutoff={cutoff}, received_at={received_at}"
+                )
             elif last_act:
                 out_add(f"Deleted the last act: {last_act}")
                 del_count = last_act.delete_instance()
@@ -1233,7 +1118,7 @@ async def _process_msg(
             habit_name = m.group("name")
             habit_mode = int(m.group("mode") or 0)
 
-            if habit_name.startswith('RE:'):
+            if habit_name.startswith("RE:"):
                 habit_name = habit_name[3:]
 
                 out_add(f"regex: {habit_name}")
@@ -1306,19 +1191,24 @@ async def _process_msg(
                 numbers = list(numbers)
                 return float(sum(numbers)) / max(len(numbers), 1)
 
-            habit_data_with_current_day = OrderedDict(habit_data) #: copies
+            habit_data_with_current_day = OrderedDict(habit_data)  #: copies
             del habit_data_with_current_day[min(habit_data.keys())]
             #: pops the oldest item
             #: We have 8 days for a duration of week as we want to exclude the current day. But for =with_current_day=, we do NOT want to do that, so we pop the extra item.
             # ic(habit_data, habit_data_with_current_day)
 
-            average_with_current_day = mean(v for k, v in habit_data_with_current_day.items())
+            average_with_current_day = mean(
+                v for k, v in habit_data_with_current_day.items()
+            )
 
             habit_data.pop(received_at.date(), None)
             #: This removes the current day from =habit_data=.
 
             average = mean(v for k, v in habit_data.items())
-            out_add(f"average: {round(average, 1)}\naverage (including today): {round(average_with_current_day, 1)}", prefix="\n")
+            out_add(
+                f"average: {round(average, 1)}\naverage (including today): {round(average_with_current_day, 1)}",
+                prefix="\n",
+            )
             await edit(out)
             ##
             # ~1 day(s) left empty as a buffer
@@ -1370,16 +1260,20 @@ async def _process_msg(
         m = back_pat.match(m0_text)
         if m:
             if last_act != None:
-                eq_mode = m.group('eq')
-                mins = float(m.group('val') or 20)
+                eq_mode = m.group("eq")
+                mins = float(m.group("val") or 20)
                 mins_td = datetime.timedelta(minutes=mins)
                 if eq_mode:
                     last_act.end = last_act.start + mins_td
-                    res = f"{str(last_act)} (Set last_act.end to last_act.start + {mins})"
+                    res = (
+                        f"{str(last_act)} (Set last_act.end to last_act.start + {mins})"
+                    )
                 else:
                     # supports negative numbers, too ;D
                     last_act.end -= mins_td
-                    res = f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)"
+                    res = (
+                        f"{str(last_act)} (Pushed last_act.end back by {mins} minutes)"
+                    )
 
                 if last_act.end < last_act.start:
                     out_add(f"Canceled: {res}")

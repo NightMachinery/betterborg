@@ -103,6 +103,7 @@ def isAdmin(update, admins=admins):
 
 def inlinequery(update, context):
     """Handle the inline query."""
+
     ###
     # https://python-telegram-bot.readthedocs.io/en/stable/telegram.inlinequery.html
     ##

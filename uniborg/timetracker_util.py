@@ -17,7 +17,9 @@ lock_tt = asyncio.Lock()
 msg2act = dict()
 ##
 DAY_START = 5
-activity_child_separator = "_" # I am not sure if I got the refactoring to use this perfectly
+activity_child_separator = (
+    "_"  # I am not sure if I got the refactoring to use this perfectly
+)
 is_local = bool(z("isLocal"))
 # is_linux = bool(z("isLinux"))
 ##
@@ -96,7 +98,7 @@ def seconds_str(s, only_hours=False, scale=True):
     res = ""
     sleep = 9.5
     if scale:
-        active_h = 24 - sleep #: 14.5 active hours in a day
+        active_h = 24 - sleep  #: 14.5 active hours in a day
     else:
         active_h = 24
 
@@ -185,14 +187,26 @@ class ActivityDuration:
 
 ##
 def activity_list_to_str_now(
-    delta=datetime.timedelta(hours=24), received_at=None, **kwargs
+    delta=datetime.timedelta(hours=24),
+    received_at=None,
+    **kwargs,
 ):
     now = received_at or datetime.datetime.today()
     low = now - delta
-    return activity_list_to_str(low, now, **kwargs)
+    return activity_list_to_str(
+        low,
+        now,
+        **kwargs,
+    )
 
 
-def activity_list_to_str(low, high, skip_acts=["sleep"]):
+def activity_list_to_str(
+    low,
+    high,
+    skip_acts=[
+        "sleep",
+    ],
+):
     acts = Activity.select().where(
         (Activity.start.between(low, high)) | (Activity.end.between(low, high))
     )
@@ -248,14 +262,14 @@ def activity_list_habit_get_now(
     def which_bucket(act: Activity):
         accept = False
         for name in names:
-            if name == 'STUDY_SA_NX':
+            if name == "STUDY_SA_NX":
                 include = [
-                        re.compile(r'^sa($|_)|(^|_)study($|_)'),
-                        ]
+                    re.compile(r"^sa($|_)|(^|_)study($|_)"),
+                ]
                 exclude = [
-                        re.compile(f'(^|_)exploration($|_)'),
-                        ]
-                
+                    re.compile(f"(^|_)exploration($|_)"),
+                ]
+
                 accept = all(re.search(p, act.name) for p in include)
                 accept = accept and not any(re.search(p, act.name) for p in exclude)
                 break
@@ -271,7 +285,9 @@ def activity_list_habit_get_now(
                         accept = True
                         break
 
-                if act.name == name or act.name.startswith(name + activity_child_separator):
+                if act.name == name or act.name.startswith(
+                    name + activity_child_separator
+                ):
                     accept = True
                     break
             else:
@@ -514,51 +530,39 @@ cmaps["pastel"] = [
 categories = {
     # @hiddenDep visualize_stacked_area/get_y needs to be able to calculate the correct duration for each category.
     "Total": "rgb(255, 255, 255)",
-
     "career": "rgb(17, 99, 0)",
     "study_ta": "rgb(89, 0, 255)",
     "study": "rgb(102, 166, 30)",
     "study_exploration": "rgb(50, 255, 207)",
     "chores_self_study": "rgb(102, 166, 30)",
-
     "chores_self_health": "rgb(179, 233, 0)",
     "meditation": "rgb(93, 255, 0)",
     "chores_self_hygiene": "rgb(178, 190, 77)",
-
     "outdoors": "rgb(175, 141, 0)",
-
     "sa": "rgb(55, 126, 184)",
     "exploration": "rgb(0, 210, 213)",
-
     "creative": "rgb(240, 107, 255)",
-
     "social": "rgb(188, 128, 189)",
     "social_online": "rgb(252, 205, 229)",
-
     "chores": "rgb(255, 243, 185)",
     "chores_self_rest": "rgb(255, 237, 111)",
     "chores_others": "rgb(221, 255, 173)",
     "chores_self_commute": "rgb(170, 28, 59)",
-
     "wasted": "rgb(255, 0, 41)",
-
     # 'outdoors' : 'rgb(0, 255, 185)',
-
     "exploration_gathering_fiction": "rgb(255, 100, 100)",
     "entertainment": "rgb(251, 128, 114)",
-
     "nonfiction": "rgb(255, 127, 0)",
     "nonfiction_technical": "rgb(132, 166, 30)",
-
     # 'consciously untracked' : 'rgb(247, 249, 226)',
     "consciously untracked": "rgb(0,0,0)",
-
     # 'sleep' : 'rgb(255,255,255)',
     # 'sleep' : 'rgb(221, 243, 250)',
     "sleep": "rgb(142, 200, 239)",
-
     # '' : 'rgb()',
 }
+
+
 ##
 def get_acts(root: ActivityDuration, skip_acts=["sleep"], dict_mode=False):
     # mutates its input! is not idempotent!
@@ -744,7 +748,13 @@ def visualize_plotly(acts, title=None, treemap=True, sunburst=True, icicle=True)
 
         is_local and fig.show()
         l, f = fig_export(
-            fig, "icicle", width=400, height=400, svg_export=False, pdf_export=False, html_export=True
+            fig,
+            "icicle",
+            width=400,
+            height=400,
+            svg_export=False,
+            pdf_export=False,
+            html_export=True,
         )
         out_links += l  # is list
         out_files += f
@@ -794,14 +804,18 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
             return 0
 
     def get_y(act_root_all, category):
-        sub_categories = [sub_category for sub_category in categories.keys() if sub_category.startswith(f"{category}_")]
+        sub_categories = [
+            sub_category
+            for sub_category in categories.keys()
+            if sub_category.startswith(f"{category}_")
+        ]
         if len(sub_categories) == 0:
             return get_dur(act_root_all, category)
         else:
             return get_dur(act_root_all, category) - sum(
                 get_y(act_root_all, sub_category) for sub_category in sub_categories
             )
-        
+
     def get_ys(category):
         return [get_y(act_root_all, category) for act_root_all in act_roots_all]
 
@@ -830,7 +844,10 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
                 y=get_ys(category),
                 hoverinfo="x+y",
                 mode="lines",
-                line=dict(width=0.5, color=color,),
+                line=dict(
+                    width=0.5,
+                    color=color,
+                ),
                 stackgroup="one",
                 # groupnorm='percent' # sets the normalization for the sum of the stackgroup
             )
@@ -840,12 +857,13 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
     # https://github.com/plotly/plotly.py/issues/2922#issuecomment-922461952
     # I am trying to fit a large legend on a small image; Setting the font size to a small value doesn't help, as the freed up space just goes to become vertical margin.
     fig.update_layout(
-        yaxis_range=(0, 24), # since we are only including a subset of all the sub acts of the root, we should always be <= 24 hours
-
+        yaxis_range=(
+            0,
+            24,
+        ),  # since we are only including a subset of all the sub acts of the root, we should always be <= 24 hours
         # yaxis={'tickfont_size':8}, # sets the font size of the y axis, the default is good
-
         ## the legend (the color guide): https://plotly.com/python/reference/layout/#layout-showlegend
-        legend = dict(
+        legend=dict(
             # orientation = "h",
             ##
             # y          = 1.03,
@@ -854,24 +872,21 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
             # traceorder = "grouped",
             # traceorder = "grouped+reversed",
             # traceorder = "reversed",
-            traceorder = "normal",
+            traceorder="normal",
             ##
-            font       = dict(
+            font=dict(
                 # family = "sans-serif",
-                size   = 11,
+                size=11,
                 # color  = "black"
             ),
-
             # itemwidth=30, # An int or float in the interval [30, inf]
-
-            tracegroupgap=0, # the amount of vertical space (in px) between legend groups.
-
+            tracegroupgap=0,  # the amount of vertical space (in px) between legend groups.
             # title = dict(
             #     font = dict(
             #         size = 5,
             #         color = "green"
             #     )
-            )
+        ),
     )
     fig.update_layout(margin=dict(t=0, l=0, r=0, b=0))
     l, f = fig_export(

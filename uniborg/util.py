@@ -43,6 +43,7 @@ try:
 except ImportError:
     PIL = None
 
+
 ##
 def _resize_photo_if_needed(
     file,
@@ -85,7 +86,7 @@ def _resize_photo_if_needed(
             image = PIL.ImageOps.pad(
                 image,
                 (max(image.width, min_width), max(image.height, min_height)),
-                color='white',
+                color="white",
             )
         else:
             if image.width <= width and image.height <= height:
@@ -139,15 +140,16 @@ if admins_injected:
     for admin in admins_injected:
         try:
             admin = int(admin)
-        except: pass
+        except:
+            pass
         print(f"Admin added: {admin}", file=sys.stderr)
         admins.append(admin)
 
 # Use chatids instead. Might need to prepend -100.
 adminChats = [
     "1353500128",
-    "1185370891", # HEART
-    "1600457131", # This Anime Does not Exist
+    "1185370891",  # HEART
+    "1600457131",  # This Anime Does not Exist
 ]
 ##
 brish_count = int(os.environ.get("borg_brish_count", 16))
@@ -330,7 +332,9 @@ def embeda(locals_=None):
         IPython.start_ipython(user_ns=locals_)
 
 
-async def isAdmin(event, admins=admins, adminChats=adminChats, additional_admins=[], msg=None):
+async def isAdmin(
+    event, admins=admins, adminChats=adminChats, additional_admins=[], msg=None
+):
     try:
         if additional_admins:
             admins = admins + additional_admins
@@ -338,13 +342,10 @@ async def isAdmin(event, admins=admins, adminChats=adminChats, additional_admins
         msg = msg or getattr(event, "message", None)
         assert msg != None
         sender = getattr(msg, "sender", getattr(event, "sender", None))
-        sender_is_admin = (
-            sender is not None
-            and (
-                getattr(sender, "is_self", False)
-                or (sender.id) in admins
-                or (sender).username in admins
-            )
+        sender_is_admin = sender is not None and (
+            getattr(sender, "is_self", False)
+            or (sender.id) in admins
+            or (sender).username in admins
         )
 
         if event:
@@ -439,7 +440,7 @@ async def send_files(chat, files, **kwargs):
     f2ext = lambda p: p.suffix
     files = [Path(f) for f in files]  # idempotent
     files = sorted(files, key=f2ext)
-    for (ext, fs) in itertools.groupby(files, f2ext):  # groupby assumes sorted
+    for ext, fs in itertools.groupby(files, f2ext):  # groupby assumes sorted
         print(f"Sending files of '{ext}':")
         async with borg.action(chat, "document") as action:
             try:
@@ -447,7 +448,7 @@ async def send_files(chat, files, **kwargs):
                 fs.sort()
                 [print(f) for f in fs]
                 print()
-                if ext == '.gif':
+                if ext == ".gif":
                     # @upstreamBug on GIF files
                     for f in fs:
                         await borg.send_file(chat, f, allow_cache=False, **kwargs)
@@ -594,15 +595,12 @@ async def discreet_send(event, message, reply_to=None, quiet=False, link_preview
 def postproccesor_json(file_path):
     (z("cat {file_path}").out)
 
-    return (z("cat {file_path} | command jq . | sponge {file_path}").assert_zero)
+    return z("cat {file_path} | command jq . | sponge {file_path}").assert_zero
 
 
-async def send_text_as_file(text: str,
-                            *,
-                            suffix: str = ".txt",
-                            chat,
-                            postproccesors=[],
-                            **kwargs):
+async def send_text_as_file(
+    text: str, *, suffix: str = ".txt", chat, postproccesors=[], **kwargs
+):
     f = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
     try:
         f_path = f.name
@@ -662,6 +660,7 @@ async def aget(event, command="", shell=True, match=None, album_mode=True):
         album_mode=album_mode,
     )
 
+
 async def aget_brishz(event, cmd, fork=True, album_mode=True):
     # cmd: an argument array
     ##
@@ -720,7 +719,7 @@ def humanbytes(size):
     if not size:
         return ""
     # 2 ** 10 = 1024
-    power = 2 ** 10
+    power = 2**10
     raised_to_pow = 0
     dict_power_n = {0: "", 1: "Ki", 2: "Mi", 3: "Gi", 4: "Ti"}
     while size > power:

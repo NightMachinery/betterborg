@@ -38,7 +38,9 @@ async def borg_init(background_mode=True):
         proxy=proxy,
         log_chat=log_chat,
     )
-    print(f"""Borg created!\nme: {borg.me.first_name or ""} {borg.me.last_name or ""} (@{borg.me.username or "NA"})""")
+    print(
+        f"""Borg created!\nme: {borg.me.first_name or ""} {borg.me.last_name or ""} (@{borg.me.username or "NA"})"""
+    )
     # zp("((${{+functions[bella-magic]}})) && bella-magic")
     zp("((${{+functions[bell-batman-cave-open]}})) && bell-batman-cave-open")
 

@@ -26,7 +26,7 @@ async def on_pat(event):
         return
 
     # user = borg.me.username
-    m = re.match(fr"(?i)^\.headpat@?(.*)", event.raw_text)
+    m = re.match(rf"(?i)^\.headpat@?(.*)", event.raw_text)
     if not m:
         return
 

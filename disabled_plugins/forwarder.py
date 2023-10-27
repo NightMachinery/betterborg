@@ -5,7 +5,6 @@ from uniborg.util import embed2, admins
 
 @borg.on(events.NewMessage())
 async def _(event):
-
     m = event.message
     for admin in admins:
         try:

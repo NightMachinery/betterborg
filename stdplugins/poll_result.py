@@ -7,16 +7,16 @@ from brish import z, zp
 
 
 def vote_to_output(vote):
-    user = vote['user']
+    user = vote["user"]
 
     res = dict()
 
-    if hasattr(user, 'username') and user.username:
-        res['username'] = user.username
+    if hasattr(user, "username") and user.username:
+        res["username"] = user.username
 
-    res['first_name'] = user.first_name
-    res['last_name'] = user.last_name
-    res['user_id'] = user.id
+    res["first_name"] = user.first_name
+    res["last_name"] = user.last_name
+    res["user_id"] = user.id
 
     return res
 
@@ -41,11 +41,13 @@ async def _(event):
             postproccesors=[util.postproccesor_json],
         )
 
-    result = await borg(functions.messages.GetPollVotesRequest(
-        peer=r.peer_id,
-        id=r.id,
-        limit=99999,
-    ))
+    result = await borg(
+        functions.messages.GetPollVotesRequest(
+            peer=r.peer_id,
+            id=r.id,
+            limit=99999,
+        )
+    )
 
     poll = r.poll.poll
 
@@ -59,12 +61,13 @@ async def _(event):
         await r.reply(question_str)
         await r.reply(str(option_ids_to_str))
 
-
-    votes_res = await borg(functions.messages.GetPollVotesRequest(
-        peer=r.peer_id,
-        id=r.id,
-        limit=99999,
-    ))
+    votes_res = await borg(
+        functions.messages.GetPollVotesRequest(
+            peer=r.peer_id,
+            id=r.id,
+            limit=99999,
+        )
+    )
 
     votes = votes_res.votes
 
@@ -78,12 +81,12 @@ async def _(event):
         option_id_to_votes.setdefault(vote.option, [])
         votes_curr = option_id_to_votes[vote.option]
         votes_curr.append(
-            dict(user=user_ids_to_users[vote.user_id],
-                 # option=vote.option,
-                 date=vote.date,
-                 )
+            dict(
+                user=user_ids_to_users[vote.user_id],
+                # option=vote.option,
+                date=vote.date,
+            )
         )
-
 
     option_id_to_summary = dict()
     for option_id, votes in option_id_to_votes.items():
@@ -97,17 +100,18 @@ async def _(event):
         if dbg_p:
             await r.reply(f"{option_str}\n\n{votes[:3]}")
 
-
     option_id_to_output = dict()
     for option_id, summary in option_id_to_summary.items():
         option_id = int(option_id)
         option_id_to_output[option_id] = dict(
-            option_str=summary['option_str'],
-            votes=list(map(vote_to_output, summary['votes'])),
+            option_str=summary["option_str"],
+            votes=list(map(vote_to_output, summary["votes"])),
         )
 
     option_id_to_output_json = json.dumps(option_id_to_output)
-    option_id_to_output_json = z("jq .", cmd_stdin=option_id_to_output_json).assert_zero.out
+    option_id_to_output_json = z(
+        "jq .", cmd_stdin=option_id_to_output_json
+    ).assert_zero.out
 
     last_msg = await util.send_text_as_file(
         text=option_id_to_output_json,
@@ -117,4 +121,3 @@ async def _(event):
         caption=f"{question_str}.json",
         postproccesors=[util.postproccesor_json],
     )
-

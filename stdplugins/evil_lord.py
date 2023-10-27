@@ -39,6 +39,7 @@ pexpect_ai = aioify(pexpect)
 os_aio = aioify(os)
 eyed3_aio = aioify(eyed3)
 
+
 ######################
 async def get_music(name="Halsey Control", cwd="./dls/BAD/", tg_event=None):
     # Be sure to set cwd again. It is only set once.
@@ -64,12 +65,10 @@ async def get_music(name="Halsey Control", cwd="./dls/BAD/", tg_event=None):
     child.expect(["Download*", "\(y/n\)*"])
     child.sendline("y")
     # print(name + " cwd1: \n" + cwd)
-    await (
-        aioify(child.expect)(
-            # ['Fixed*', 'couldnt get album art*'], timeout=3000))
-            ["Deleting*(pass -k to keep)*", pexpect.EOF],
-            timeout=3000,
-        )
+    await aioify(child.expect)(
+        # ['Fixed*', 'couldnt get album art*'], timeout=3000))
+        ["Deleting*(pass -k to keep)*", pexpect.EOF],
+        timeout=3000,
     )
     # print(name + " cwd2: \n" + cwd)
     mp3_file_add = (
@@ -81,7 +80,7 @@ async def get_music(name="Halsey Control", cwd="./dls/BAD/", tg_event=None):
     # embed()
     mp3_file = await eyed3_aio.load(mp3_file_add)
     mp3_file.tag.title = str(await os_aio.path.basename(mp3_file_add))[:-4]
-    await (aioify(mp3_file.tag.save))()
+    await aioify(mp3_file.tag.save)()
     return mp3_file_add
 
 

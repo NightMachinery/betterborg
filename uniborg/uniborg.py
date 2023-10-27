@@ -97,9 +97,11 @@ class Uniborg(TelegramClient):
         path = Path(path)
         shortname = path.stem  # removes extension and dirname
 
-        if shortname == 'timetracker':
+        if shortname == "timetracker":
             if self.me.bot == False:
-                self._logger.info(f"{shortname}: skipped loading (the logged-in user is not a bot)")
+                self._logger.info(
+                    f"{shortname}: skipped loading (the logged-in user is not a bot)"
+                )
                 return
 
         name = f"_UniborgPlugins.{self._name}.{shortname}"
@@ -143,7 +145,9 @@ class Uniborg(TelegramClient):
                 self.remove_plugin(shortname)
             self.load_plugin(shortname)
 
-            await self.send_message(chat, f"# Successfully (re)loaded plugin {shortname}")
+            await self.send_message(
+                chat, f"# Successfully (re)loaded plugin {shortname}"
+            )
         except Exception as e:
             tb = traceback.format_exc()
             logger.warn(f"Failed to (re)load plugin '{shortname}': {tb}")

@@ -4,6 +4,7 @@ from functools import partial
 from uniborg.util import embed2, brishz
 from brish import zs
 
+
 @borg.on(events.NewMessage(pattern=r"^\.tex\s+(.+)$"))
 async def _(event):
     if event.message.forward == None and event.sender:
