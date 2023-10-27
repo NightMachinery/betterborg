@@ -4,6 +4,7 @@ from uniborg.util import force_async
 import logging
 import re
 from collections import OrderedDict
+from pynight.common_iterable import to_iterable
 
 
 try:
@@ -22,6 +23,10 @@ activity_child_separator = (
 )
 is_local = bool(z("isLocal"))
 # is_linux = bool(z("isLinux"))
+
+skip_acts_default = [
+    "sleep",
+]
 ##
 from peewee import *
 import os
@@ -186,6 +191,43 @@ class ActivityDuration:
 
 
 ##
+def should_skip_act_p(
+    act,
+    exclude=None,
+    include=None,
+):
+    exclude = to_iterable(exclude)
+    include = to_iterable(include)
+
+    name = act.name
+
+    if include:
+        included = False
+        for i in include:
+            if isinstance(i, re.Pattern):
+                if i.search(name):
+                    included = True
+                    break
+            else:
+                if name == i:
+                    included = True
+                    break
+
+        if not included:
+            return True
+
+    for skippable in exclude:
+        if isinstance(skippable, re.Pattern):
+            if skippable.search(name):
+                return True
+        else:
+            if name == skippable:
+                return True
+
+    return False
+
+
+##
 def activity_list_to_str_now(
     delta=datetime.timedelta(hours=24),
     received_at=None,
@@ -203,10 +245,12 @@ def activity_list_to_str_now(
 def activity_list_to_str(
     low,
     high,
-    skip_acts=[
-        "sleep",
-    ],
+    skip_acts=None,
+    include_acts=None,
 ):
+    if skip_acts is None:
+        skip_acts = skip_acts_default
+
     acts = Activity.select().where(
         (Activity.start.between(low, high)) | (Activity.end.between(low, high))
     )
@@ -218,7 +262,11 @@ def activity_list_to_str(
         act_end = min(act.end, high)
         dur = timedelta_dur(act_end, act_start)
         path = list(reversed(act_name.split(activity_child_separator)))
-        if act_name in skip_acts:
+        if should_skip_act_p(
+            act,
+            exclude=skip_acts,
+            include=include_acts,
+        ):
             acts_skipped.add(dur, path)
         else:
             acts_agg.add(dur, path)
@@ -564,7 +612,15 @@ categories = {
 
 
 ##
-def get_acts(root: ActivityDuration, skip_acts=["sleep"], dict_mode=False):
+def get_acts(
+    root: ActivityDuration,
+    skip_acts=None,
+    include_acts=None,
+    dict_mode=False,
+):
+    if skip_acts is None:
+        skip_acts = skip_acts_default
+
     # mutates its input! is not idempotent!
     if dict_mode == False:
         acts = [root]
@@ -581,20 +637,35 @@ def get_acts(root: ActivityDuration, skip_acts=["sleep"], dict_mode=False):
     act: ActivityDuration
     for act in root.sub_acts.values():
         act.parent = root
-        if act.name in skip_acts:
-            act.parent.total_duration -= act.total_duration
-            continue
 
         act.shortname = act.name
         if act.parent.name != "Total":
             act.name = f"{act.parent.name}_{act.name}"
 
+        if should_skip_act_p(
+            act,
+            exclude=skip_acts,
+            include=include_acts,
+        ):
+            act.parent.total_duration -= act.total_duration
+            continue
+
         # print(f"{act.shortname} -> {act.name} via parent {act.parent.name}")
         if dict_mode:
             dict_mode[act.name] = act
-            get_acts(act, skip_acts=skip_acts, dict_mode=dict_mode)
+            get_acts(
+                act,
+                skip_acts=skip_acts,
+                include_acts=include_acts,
+                dict_mode=dict_mode,
+            )
         else:
-            acts += get_acts(act, skip_acts=skip_acts, dict_mode=dict_mode)
+            acts += get_acts(
+                act,
+                skip_acts=skip_acts,
+                include_acts=include_acts,
+                dict_mode=dict_mode,
+            )
 
     if dict_mode:
         return dict_mode
@@ -612,7 +683,15 @@ def local_helper_visualize_plotly():
 
 
 @force_async
-def visualize_plotly(acts, title=None, treemap=True, sunburst=True, icicle=True):
+def visualize_plotly(
+    acts,
+    title=None,
+    treemap=True,
+    sunburst=True,
+    icicle=True,
+    skip_acts=None,
+    include_acts=None,
+):
     # @warn this is not async, and it takes rather long to complete
     ##
     out_links = []
@@ -620,7 +699,11 @@ def visualize_plotly(acts, title=None, treemap=True, sunburst=True, icicle=True)
     if timedelta_total_seconds(acts.total_duration) == 0:
         return out_links, out_files
 
-    all_acts = get_acts(acts)
+    all_acts = get_acts(
+        acts,
+        skip_acts=skip_acts,
+        include_acts=include_acts,
+    )
     acts_agg = all_acts[0]
     # print(acts_agg)
 

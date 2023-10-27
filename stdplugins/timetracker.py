@@ -14,6 +14,7 @@ from icecream import ic
 # from pathlib import Path
 # from peewee import *
 from uniborg.util import embed2, send_files, za
+import uniborg.timetracker_util as timetracker_util
 from uniborg.timetracker_util import *
 import json
 import yaml
@@ -628,7 +629,7 @@ def chooseAct(fuzzyChoice: str):
 del_pat = re.compile(r"^\.\.?del\s*(\d*\.?\d*)$")
 rename_pat = re.compile(r"^\.\.?re(?:name)?\s+(.+)$")
 out_pat = re.compile(
-    r"^(?:\.\.?)?o(?:ut)?\s*(?P<t>\d*\.?\d*)?\s*(?:m=(?P<mode>\d+))?\s*(?:r=(?P<repeat>\d+))?\s*(?:cmap=(?P<cmap>\S+))?\s*(?:treemap=(?P<treemap>\d+))?$"
+    r"^(?:\.\.?)?o(?:ut)?\s*(?P<t>\d*\.?\d*)?\s*(?:m=(?P<mode>\d+))?\s*(?:include=(?P<include_acts>\S*))?(?:exclude=(?P<skip_acts>\S*))?\s*(?:r=(?P<repeat>\d+))?\s*(?:cmap=(?P<cmap>\S+))?\s*(?:treemap=(?P<treemap>\d+))?$"
 )
 back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(?P<eq>=)?(?P<val>\-?\d*\.?\d*)$")
 habit_pat = re.compile(
@@ -1011,6 +1012,21 @@ async def _process_msg(
             treemap_enabled = bool(int(m.group("treemap") or 1))
             repeat = int(m.group("repeat") or 0)
             cmap = m.group("cmap")
+
+            include_acts = m.group("include_acts")
+            if include_acts is not None:
+                if include_acts:
+                    include_acts = [re.compile(include_acts)]
+                else:
+                    include_acts = []
+
+            skip_acts = m.group("skip_acts")
+            if skip_acts is not None:
+                if skip_acts:
+                    skip_acts = [re.compile(skip_acts)]
+                else:
+                    skip_acts = []
+
             hours = m.group("t")
             res = None
 
@@ -1026,7 +1042,22 @@ async def _process_msg(
                         await send_file(f)
                 ##
 
-            async def report(hours=None, output_mode=1, received_at=None, title=None):
+            async def report(
+                hours=None,
+                output_mode=1,
+                received_at=None,
+                title=None,
+                skip_acts=None,
+                include_acts=None,
+            ):
+                if skip_acts is None:
+                    skip_acts = timetracker_util.skip_acts_default
+                else:
+                    out_add(f"skip_acts: {skip_acts}")
+
+                if include_acts:
+                    out_add(f"include_acts: {include_acts}")
+
                 if not received_at:
                     out_add("report: received_at is empty")
                     await edit(f"{out}", parse_mode="markdown")
@@ -1054,6 +1085,8 @@ async def _process_msg(
                     res = activity_list_to_str_now(
                         delta=datetime.timedelta(hours=float(hours)),
                         received_at=received_at,
+                        skip_acts=skip_acts,
+                        include_acts=include_acts,
                     )
                 else:
                     low = received_at.replace(
@@ -1061,7 +1094,12 @@ async def _process_msg(
                     )
                     if low > received_at:
                         low = low - datetime.timedelta(days=1)
-                    res = activity_list_to_str(low, received_at)
+                    res = activity_list_to_str(
+                        low,
+                        received_at,
+                        skip_acts=skip_acts,
+                        include_acts=include_acts,
+                    )
                     if timedelta_total_seconds(res["acts_agg"].total_duration) == 0:
                         out_add("report: acts_agg is zero.")
                         await edit(f"{out}", parse_mode="markdown")
@@ -1078,7 +1116,11 @@ async def _process_msg(
                     try:
                         lock_tt.release()
                         out_links, out_files = await visualize_plotly(
-                            res["acts_agg"], title=title, treemap=treemap_enabled
+                            res["acts_agg"],
+                            title=title,
+                            treemap=treemap_enabled,
+                            skip_acts=skip_acts,
+                            include_acts=include_acts,
                         )
                         await send_plots(out_links, out_files)
                     finally:
@@ -1099,6 +1141,8 @@ async def _process_msg(
                     output_mode=output_mode,
                     received_at=fake_received_at,
                     title=title,
+                    skip_acts=skip_acts,
+                    include_acts=include_acts,
                 )
                 if output_mode in (3,):
                     break
