@@ -146,6 +146,8 @@ subs = {
 
     "eng": "study_languages_english",
     "english": "study_languages_english",
+    "speak": "study_languages_english_speaking",
+    "write": "study_languages_english_writing",
     "ielts": "study_languages_english_ielts",
     "toefl": "study_languages_english_toefl",
     "tofl": "study_languages_english_toefl",
