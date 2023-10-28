@@ -30,6 +30,13 @@ except ImportError:
 timetracker_chat = -1001179162919
 # borg.send_message(timetracker_chat, "New timetracker instance initiated")
 starting_anchor = None
+aliases = {
+    #: The keys are regexes.
+    #: Add =\b= (or =\s=) if you want the alias to break on word boundary.
+    ##
+    r"/o": r"out include=^sa($|_)|(^|_)study($|_) ",
+}
+
 subs_commands = {
     "👀": "w",
     "dot": ".",
@@ -629,7 +636,7 @@ def chooseAct(fuzzyChoice: str):
 del_pat = re.compile(r"^\.\.?del\s*(\d*\.?\d*)$")
 rename_pat = re.compile(r"^\.\.?re(?:name)?\s+(.+)$")
 out_pat = re.compile(
-    r"^(?:\.\.?)?o(?:ut)?\s*(?P<t>\d*\.?\d*)?\s*(?:m=(?P<mode>\d+))?\s*(?:include=(?P<include_acts>\S*))?(?:exclude=(?P<skip_acts>\S*))?\s*(?:r=(?P<repeat>\d+))?\s*(?:cmap=(?P<cmap>\S+))?\s*(?:treemap=(?P<treemap>\d+))?$"
+    r"^(?:\.\.?)?o(?:ut)?\s*(?P<t>\d*\.?\d*)?\s*(?:m=(?P<mode>\d+))?\s*(?:include=(?P<include_acts>\S*))?(?:exclude=(?P<skip_acts>\S*))?\s*(?:r=(?P<repeat>\d+))?\s*(?:cmap=(?P<cmap>\S+))?\s*(?:treemap=(?P<treemap>\d+))?\s*(?:(?:h(?:ours?)?=)?(?P<hours>\d+\.?\d*))?\s*$"
 )
 back_pat = re.compile(r"^(?:\.\.?)?b(?:ack)?\s*(?P<eq>=)?(?P<val>\-?\d*\.?\d*)$")
 habit_pat = re.compile(
@@ -765,6 +772,12 @@ async def _process_msg(
 
         if not text.startswith("."):
             text = text.lower()  # iOS capitalizes the first letter
+
+        for alias in aliases:
+            m = re.match(alias, text)
+            if m:
+                length_of_match = m.end() - m.start()
+                text = f"{aliases[alias]}{text[length_of_match:]}"
 
         if text in subs:
             choiceConfirmed = True
@@ -1028,6 +1041,10 @@ async def _process_msg(
                     skip_acts = []
 
             hours = m.group("t")
+            if not hours:
+                hours = m.group("hours")
+                #: This allows us to input this argument in two different positions.
+
             res = None
 
             async def send_plots(out_links, out_files):

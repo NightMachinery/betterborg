@@ -88,9 +88,15 @@ def timedelta_total_seconds(td: timedelta):
     return td.total_seconds()
 
 
-def timedelta_str(td: timedelta, **kwargs):
+def timedelta_str(
+    td: timedelta,
+    **kwargs,
+):
     s = timedelta_total_seconds(td)
-    return seconds_str(s, **kwargs)
+    return seconds_str(
+        s,
+        **kwargs,
+    )
 
 
 def gen_s(num):
@@ -99,7 +105,12 @@ def gen_s(num):
     return ""
 
 
-def seconds_str(s, only_hours=False, scale=True):
+def seconds_str(
+    s,
+    only_hours=True,
+    # only_hours=False,
+    scale=True,
+):
     res = ""
     sleep = 9.5
     if scale:
@@ -689,8 +700,8 @@ def visualize_plotly(
     treemap=True,
     sunburst=True,
     icicle=True,
-    skip_acts=None,
-    include_acts=None,
+    skip_acts=None,  #: @ignored
+    include_acts=None,  #: @ignored
 ):
     # @warn this is not async, and it takes rather long to complete
     ##
@@ -701,8 +712,11 @@ def visualize_plotly(
 
     all_acts = get_acts(
         acts,
-        skip_acts=skip_acts,
-        include_acts=include_acts,
+        skip_acts=[],
+        include_acts=[],
+        #: =get_acts= will NOT pick up =chores_study= by =_study$= as =chores= will NOT match and its children will not be considered at all.
+        # skip_acts=skip_acts,
+        # include_acts=include_acts,
     )
     acts_agg = all_acts[0]
     # print(acts_agg)
