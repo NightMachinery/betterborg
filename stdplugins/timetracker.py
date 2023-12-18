@@ -133,7 +133,7 @@ subs = {
     "soal": "study_ra_soal",
     ##
     "drive": "study_driving_car",
-    ##
+    ###
     "sc": "chores_self_study",
     # "sc": "study_chore",
     "scth": "chores_self_study_thinking",
@@ -141,7 +141,8 @@ subs = {
     "hw": "chores_self_study_homework",
     "scm": "chores_self_study_communication",
     "sm": "chores_self_study_management",
-    ##
+    "review": "chores_self_study_paper review",
+    ###
     "sv": "study_video",
     "sp": "study_peripheral",  # prerequisites, etc
     "eng": "study_languages_english",
@@ -263,9 +264,14 @@ subs = {
     "llm": "study_cs_ai_nlp_llm",
     "ir": "study_cs_ai_nlp_information retrieval",
     "irui": "study_cs_ai_nlp_information retrieval_output ui",
+    ##
     "thesis": "study_cs_ai_thesis",
     "th": "study_cs_ai_thesis",
     "thp": "study_cs_ai_thesis_practical",
+    "thesisw": "study_cs_ai_thesis_writing",
+    "seminar": "study_cs_ai_thesis_writing_seminar",
+    "sem": "study_cs_ai_thesis_writing_seminar",
+
     "attr": "study_cs_ai_thesis_attribution",
     "attrs": "study_cs_ai_thesis_attribution_survey",
     "contrastive": "study_cs_ai_thesis_attribution_contrastive",
@@ -327,6 +333,7 @@ subs = {
     "creative": "creative",
     "cr": "creative",
     "crai": "creative_ai",
+    "crllm": "creative_ai_llm",
     "crl": "creative_ai_llm",
     "crv": "creative_ai_visual",
     # "crv": "creative_visual",
@@ -491,6 +498,7 @@ subs = {
     "walking": "outdoors_walking",
     "park": "outdoors_walking_park",
     ##
+    "exp": "exploration",
     "expl": "exploration",
     "xbuy": "exploration_buying",
     "🌐": "exploration_targetedLearning",
@@ -498,20 +506,23 @@ subs = {
     ##
     "gath": "exploration_gathering",  # <- outreach
     "ga": "exploration_gathering",
-    "gathmu": "exploration_gathering_music",
+    # "gathmu": "exploration_gathering_music",
     "gamu": "exploration_gathering_music",
-    "gathg": "exploration_gathering_games",
-    "gag": "exploration_gathering_games",
-    "gathf": "exploration_gathering_fiction",
+    # "gathg": "exploration_gathering_games",
+    "gavg": "exploration_gathering_games",
+    "gafi": "exploration_gathering_fiction",
+    # "gathf": "exploration_gathering_fiction",
     "gaf": "exploration_gathering_fiction",
     "ganf": "exploration_gathering_nonfiction",
-    "gatha": "exploration_gathering_anime",
+    # "gatha": "exploration_gathering_anime",
     "gaa": "exploration_gathering_anime",
     "gaanim": "exploration_gathering_anime",
-    "gathmo": "exploration_gathering_movies",
+    "gaanime": "exploration_gathering_anime",
+    # "gathmo": "exploration_gathering_movies",
     "gamo": "exploration_gathering_movies",
     "gamov": "exploration_gathering_movies",
-    "gaths": "exploration_gathering_series",
+    "gaseries": "exploration_gathering_series",
+    # "gaths": "exploration_gathering_series",
     "gas": "exploration_gathering_series",
     "nos": "exploration_gathering_nostalgia",
     ##
