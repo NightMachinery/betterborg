@@ -1,6 +1,10 @@
 from __future__ import annotations
 from brish import z
-from uniborg.util import force_async
+from uniborg.util import (
+    embed2,
+    send_files,
+    force_async,
+)
 import logging
 import re
 from collections import OrderedDict
@@ -17,6 +21,8 @@ import asyncio
 lock_tt = asyncio.Lock()
 msg2act = dict()
 ##
+timetracker_chat = -1001179162919
+
 DAY_START = 5
 activity_child_separator = (
     "_"  # I am not sure if I got the refactoring to use this perfectly
@@ -27,6 +33,13 @@ is_local = bool(z("isLocal"))
 skip_acts_default = [
     "sleep",
 ]
+##
+async def send_file(file, **kwargs):
+    if file:
+        # await borg.send_file(timetracker_chat, file, allow_cache=False, **kwargs)
+        await send_files(timetracker_chat, file, **kwargs)
+
+
 ##
 from peewee import *
 import os
@@ -141,6 +154,17 @@ def seconds_str(
     return res
 
 
+def format_hours(decimal_hours):
+    """Convert decimal hours into hours and minutes."""
+
+    hours = int(decimal_hours)
+    minutes = int((decimal_hours - hours) * 60)
+    # return f"{hours:02d}:{minutes:02d}"
+    return f"{hours:2d}:{minutes:2d}"
+    #: `:2d` space-pads to two digits
+
+
+##
 @total_ordering
 @dataclass()
 class ActivityDuration:

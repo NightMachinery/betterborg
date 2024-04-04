@@ -4,6 +4,7 @@ from telethon import events
 import telethon
 import traceback
 import datetime
+import jdatetime
 from brish import z
 import re
 import os
@@ -27,7 +28,6 @@ try:
 except ImportError:
     from fuzzyset import FuzzySet
 
-timetracker_chat = -1001179162919
 # borg.send_message(timetracker_chat, "New timetracker instance initiated")
 starting_anchor = None
 aliases = {
@@ -729,11 +729,6 @@ async def _process_msg(
         else:
             await m0.reply(text, **kwargs)
 
-    async def send_file(file, **kwargs):
-        if file:
-            # await borg.send_file(timetracker_chat, file, allow_cache=False, **kwargs)
-            await send_files(timetracker_chat, file, **kwargs)
-
     async def warn_empty():
         await m0.reply("The empty database has no last act.")
 
@@ -1257,7 +1252,26 @@ async def _process_msg(
             if habit_mode == 2:
                 habit_data = raw_acts_to_start_offset(habit_data)
 
-            out_add(f"{yaml.dump(dict(habit_data))}")
+            ##
+            jalali_p = True
+            habit_data_str = []
+            for gregorian_date, value in habit_data.items():
+                jalali_date = jdatetime.date.fromgregorian(date=gregorian_date)
+
+                if jalali_p:
+                    date_str = f"""{jalali_date.strftime("%a, %d %b %Y")}"""
+                else:
+                    date_str = f"""{gregorian_date.strftime("%a, %d %b %Y")}"""
+
+                value_str = format_hours(value)
+
+                habit_data_str.append(f"{date_str}: {value_str}")
+
+            habit_data_str = "\n".join(reversed(habit_data_str))
+            # ic(habit_data_str)
+            #: somehow, we do not need to add newlines before/after =```=s.
+            out_add(f"```{habit_data_str}```")
+            ##
 
             def mean(numbers):
                 numbers = list(numbers)
@@ -1278,7 +1292,7 @@ async def _process_msg(
 
             average = mean(v for k, v in habit_data.items())
             out_add(
-                f"average: {round(average, 1)}\naverage (including today): {round(average_with_current_day, 1)}",
+                f"average: {format_hours(average)}\naverage (including today): {format_hours(average_with_current_day)}",
                 prefix="\n",
             )
             await edit(out)

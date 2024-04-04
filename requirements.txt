@@ -1,4 +1,5 @@
 telethon
+jdatetime
 aiohttp[speedups]
 cryptg
 tgcrypto
