@@ -251,6 +251,9 @@ subs = {
     "mlc": "study_cs_ai_ml",  #: ML Classic, ML Course
     "mlv": "study_cs_ai_video",
     "mlp": "study_cs_ai_practical",
+    "deep": "study_cs_ai_deep learning",
+    "dl": "study_cs_ai_deep learning",
+    "ip": "study_cs_ai_image processing",
     "dataproc": "study_cs_data_procurement",
     "mli": "study_cs_ai_practical_ideation",
     "mlt": "study_cs_ai_ml_theory",
@@ -332,11 +335,23 @@ subs = {
     ##
     "creative": "creative",
     "cr": "creative",
+
+    "photography": "creative_photography",
+    "camera": "creative_photography",
+    "cam": "creative_photography",
+
     "crai": "creative_ai",
     "crllm": "creative_ai_llm",
     "crl": "creative_ai_llm",
     "crv": "creative_ai_visual",
-    # "crv": "creative_visual",
+
+    "vis": "creative_visual",
+
+    "crw": "creative_writing",
+
+    "memory": "creative_writing_memorial",
+    "mem": "creative_writing_memorial",
+
     "fiw": "creative_writing_fiction",
     "fim": "creative_mentalWriting_fiction",
     "journal": "creative_writing_journal",
@@ -392,6 +407,7 @@ subs = {
     "di": "chores_self_rest_eat_dinner",
     "cook": "chores_self_food_cook",
     "dish": "chores_self_food_dishes",
+    "clothes": "chores_self_clothes",
     "setup": "chores_self_setup",
     ##
     "brush": "chores_self_health_teeth_brush",
@@ -418,8 +434,11 @@ subs = {
     "soc": "social_others",
     "sov": "social_online_videocall",
     "soa": "social_online_audiocall",
+    ##
     "tlg": "social_online_telegram",
     "chat": "social_online_telegram_chat",
+    "tlgc": "social_online_telegram_channel",
+    ##
     "insta": "social_online_instagram",
     "linkedin": "social_online_linkedin",
     "family": "social_family",
@@ -524,6 +543,8 @@ subs = {
     "gaseries": "exploration_gathering_series",
     # "gaths": "exploration_gathering_series",
     "gas": "exploration_gathering_series",
+
+    "nostalgia": "exploration_gathering_nostalgia",
     "nos": "exploration_gathering_nostalgia",
     ##
 }
