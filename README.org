@@ -12,6 +12,9 @@ Simply clone the repository and run the main file:
 #+begin_example zsh
 sudo apt-get install -y coreutils fzf zsh python3
 
+mkdir -p ~/code
+cd ~/code
+
 git clone 'https://github.com/NightMachinary/betterborg.git'
 cd betterborg
 
