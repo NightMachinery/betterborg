@@ -513,6 +513,7 @@ subs = {
     ##
     "go": "outdoors",
     "going out": "outdoors",
+    "sit": "outdoors_sitting",
     "walk": "outdoors_walking",
     "walking": "outdoors_walking",
     "park": "outdoors_walking_park",
