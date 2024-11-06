@@ -792,8 +792,11 @@ async def _process_msg(
             choiceConfirmed = True
             return out
 
-        ##
+        ###
         #: @badDesign @todo3 these suffixes are only relevant for adding new acts and renaming them, but they are acted on globally ...
+
+        delayed_actions_ = []
+        delayed_actions_special_ = []
 
         sorted_suffixes = sorted(suffixes.keys(), key=len, reverse=True)
         #: Sort suffixes by length in descending order
@@ -811,15 +814,22 @@ async def _process_msg(
 
             action = suffixes[matching_suffix]
             if action:
-                delayed_actions.append(action)
+                delayed_actions_.append(action)
             else:
-                delayed_actions_special.append(matching_suffix)
+                delayed_actions_special_.append(matching_suffix)
 
             text = text[:-len(matching_suffix)]
             if not text:
                 choiceConfirmed = True
                 return out
 
+        #: Reverse and add the actions to the main lists.
+        #: This way, using suffixes remains intuitive for the user.
+        delayed_actions.extend(reversed(delayed_actions_))
+        delayed_actions_special.extend(reversed(delayed_actions_special_))
+        del delayed_actions_
+        del delayed_actions_special_
+        ###
         if not text.startswith("."):
             text = text.lower()  #: iOS capitalizes the first letter
 
