@@ -84,6 +84,8 @@ suffixes = {
     "P": [1, "practical"],
     "M": [1, "meeting"],
     "T": [1, "technical"],
+    "Th": [1, "thinking"],
+    "W": [1, "writing"],
     # "S": [1, "soallab"],
     "+": None,
 }
@@ -790,24 +792,36 @@ async def _process_msg(
             choiceConfirmed = True
             return out
 
-        # @badDesign @todo3 these suffixes are only relevant for adding new acts and renaming them, but they are acted on globally ...
-        while (
-            len(text) >= 2 and text[-1] in suffixes
-        ):  # suffixes should leave some prefix behind, hence the length check
-            suffix = text[-1]
-            action = suffixes[suffix]
+        ##
+        #: @badDesign @todo3 these suffixes are only relevant for adding new acts and renaming them, but they are acted on globally ...
+
+        sorted_suffixes = sorted(suffixes.keys(), key=len, reverse=True)
+        #: Sort suffixes by length in descending order
+
+        while len(text) >= 2:
+            #: Find matching suffix, checking longest first
+            matching_suffix = None
+            for suffix in sorted_suffixes:
+                if text.endswith(suffix):
+                    matching_suffix = suffix
+                    break
+
+            if not matching_suffix:
+                break
+
+            action = suffixes[matching_suffix]
             if action:
                 delayed_actions.append(action)
             else:
-                delayed_actions_special.append(suffix)
+                delayed_actions_special.append(matching_suffix)
 
-            text = text[:-1]
+            text = text[:-len(matching_suffix)]
             if not text:
                 choiceConfirmed = True
                 return out
 
         if not text.startswith("."):
-            text = text.lower()  # iOS capitalizes the first letter
+            text = text.lower()  #: iOS capitalizes the first letter
 
         for alias in aliases:
             m = re.match(alias, text)
