@@ -805,7 +805,7 @@ async def _process_msg(
             #: Find matching suffix, checking longest first
             matching_suffix = None
             for suffix in sorted_suffixes:
-                if text.endswith(suffix):
+                if text.endswith(suffix) and len(text[:-len(suffix)]) >= 1:
                     matching_suffix = suffix
                     break
 
