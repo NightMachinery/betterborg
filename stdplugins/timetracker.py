@@ -34,7 +34,7 @@ aliases = {
     #: The keys are regexes.
     #: Add =\b= (or =\s=) if you want the alias to break on word boundary.
     ##
-    r"/o": r"out include=^sa($|_)|(^|_)study($|_) ",
+    r"/o": r"out include=^(?:sa|career)($|_)|(^|_)study($|_) ",
 }
 
 subs_commands = {
@@ -51,7 +51,7 @@ subs_commands = {
     "/dummy": ".habit 8 m=0 max=10 dummy",
     "/s": ".habit 8 m=0 max=12 study$",
     "/u": ".habit 8 m=0 max=12 STUDY_SA_NX",
-    "/ssa": r".habit 8 m=0 max=12 RE:^sa($|_)|(^|_)study($|_)",
+    "/ssa": r".habit 8 m=0 max=12 RE:^(?:sa|career)($|_)|(^|_)study($|_)",
     "/sa": ".habit 8 m=0 max=9 sa",
     "/x": r".habit 8 m=0 max=12 RE:(^|_)exploration($|_)",
     "/sl": ".habit 8 m=0 max=12 sleep",
