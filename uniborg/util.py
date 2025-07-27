@@ -393,7 +393,6 @@ async def run_and_get(event, to_await, cwd=None):
         cwd = dl_base + str(uuid.uuid4()) + "/"
     Path(cwd).mkdir(parents=True, exist_ok=True)
     a = borg
-    todl = [event.message]
     dled_files = []
 
     async def dl(z):
@@ -405,13 +404,43 @@ async def run_and_get(event, to_await, cwd=None):
             mdate = os.path.getmtime(dled_path)
             dled_files.append((dled_path, mdate, dled_file_name))
 
+    #: Use a dictionary to store unique messages, with message.id as the key.
+    todl_map = {event.message.id: event.message}
+    inspection_list = [event.message]
+    processed_group_ids = set()
+    k = 30
+
     rep_id = event.message.reply_to_msg_id
-    if rep_id != None:
-        z = await a.get_messages(event.chat, ids=rep_id)
-        todl.append(z)
-    for msg in todl:
+    if rep_id:
+        replied_message = await a.get_messages(event.chat, ids=rep_id)
+        if replied_message:
+            todl_map[replied_message.id] = replied_message
+            inspection_list.append(replied_message)
+
+    for message_to_inspect in inspection_list:
+        if message_to_inspect and message_to_inspect.grouped_id:
+            group_id = message_to_inspect.grouped_id
+            if group_id in processed_group_ids:
+                continue
+
+            search_ids = range(message_to_inspect.id - k, message_to_inspect.id + k)
+            messages_in_vicinity = await a.get_messages(event.chat, ids=list(search_ids))
+
+            for msg in messages_in_vicinity:
+                if msg and msg.grouped_id == group_id:
+                    #: Add message to the map; duplicates are automatically handled by the key.
+                    todl_map[msg.id] = msg
+
+            processed_group_ids.add(group_id)
+
+    #: Iterate over the values of the dictionary to get the unique Message objects.
+    for msg in todl_map.values():
         await dl(msg)
+
+    # ic(cwd, dled_files)
+
     await to_await(cwd=cwd, event=event)
+
     for dled_path, mdate, _ in dled_files:
         if os.path.exists(dled_path) and mdate == os.path.getmtime(dled_path):
             await remove_potential_file(dled_path, event)
