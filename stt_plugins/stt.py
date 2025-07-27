@@ -206,6 +206,7 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
 
 # --- Telethon Event Handlers ---
 
+PROCESSED_GROUP_IDS = set()
 
 @borg.on(events.NewMessage(pattern=r"/setGeminiKey\s+(.+)"))
 async def set_key_handler(event):
@@ -222,14 +223,29 @@ async def set_key_handler(event):
 @borg.on(events.NewMessage())
 async def media_handler(event):
     """
-    Handles incoming messages with media, triggering the transcription process.
+    Handles incoming messages with media, ensuring grouped media is processed only once.
     """
-    if (
-            not event.sender
-        or not event.media
-        # or event.message.forward is not None
-        # or event.reply_to_msg_id is not None
-    ):
+    if not event.sender or not event.media:
         return
 
-    await util.run_and_upload(event=event, to_await=llm_stt)
+    group_id = event.grouped_id
+    # If the message is part of a group...
+    if group_id:
+        # ...and we are already processing this group, stop.
+        if group_id in PROCESSED_GROUP_IDS:
+            return
+
+        # ...otherwise, "lock" this group and process it.
+        PROCESSED_GROUP_IDS.add(group_id)
+        try:
+            # Rely on the framework to handle downloading all media in the group.
+            await util.run_and_upload(event=event, to_await=llm_stt)
+        finally:
+            # Wait for a few seconds before unlocking the group to prevent race conditions.
+            await asyncio.sleep(5)
+
+            # Once done (or if an error occurs), "unlock" the group.
+            PROCESSED_GROUP_IDS.remove(group_id)
+    else:
+        # If it's not a grouped message, process it directly.
+        await util.run_and_upload(event=event, to_await=llm_stt)
