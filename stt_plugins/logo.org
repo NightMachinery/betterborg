@@ -1,0 +1,75 @@
+#+TITLE: stt_plugins/logo
+
+* Bot Description
+#+BEGIN_SRC markdown
+Send media and get their transcriptions!
+
+You need to provide your own Gemini API key by sending a message with this format: `/setGeminiKey YOUR_KEY`.
+
+You can get a free Gemini API key by going to: https://aistudio.google.com/app/apikey
+
+Dev: @Arstar
+#+END_SRC
+
+* G25
+#+begin_verse
+now give a text2image prompt to generate a great profile picture for this bot
+#+end_verse
+
+** _
+#+begin_verse
+A minimalist and modern logo for an AI bot. A stylized soundwave smoothly transforms into clean, readable lines of text. The soundwave starts with vibrant blues and purples, shifting to a calm, intelligent green where the text forms. The entire design is enclosed within a soft-edged circle, set against a dark, subtly textured background. The overall aesthetic is clean, high-tech, and friendly. Digital art, smooth gradients, vector style.
+#+end_verse
+
+** _
+#+begin_verse
+I want a white background, with a scifi feel. I also want to utilize the artistic capabilities of the text2img AI, so high detail and wowly.
+#+end_verse
+
+*** _
+Excellent request. Moving from a minimalist logo to a "wowly," high-detail, sci-fi piece for a profile picture requires a completely different approach to prompting. We need to give the AI rich, descriptive scenes to work with.
+
+The key is to describe a dynamic /scene/ or a highly detailed /object/ rather than just a simple logo. Here are three distinct prompts, each with a different sci-fi interpretation, designed to produce a stunning and intricate profile picture on a white background.
+
+--------------
+
+**** Prompt 1: The Crystalline Refractor
+This prompt focuses on the idea of light, data, and crystal, creating a clean but complex and beautiful image.
+
+*Text-to-Image Prompt:* "*An epic, photorealistic, hyper-detailed macro shot of a complex crystalline sculpture shaped like a soundwave. The crystal is made of a clear, bismuth-like material with iridescent rainbow refractions on its geometric facets. It rests on an infinite, luminous white studio background. A brilliant beam of light shines through the crystal, projecting a focused, glowing cyan hologram of intricate, flowing text (a mix of English and Farsi script) into the air in front of it. The scene is filled with sharp caustics and refractions. Unreal Engine 5, Octane render, 8K, cinematic lighting, stunningly intricate.*"
+
+*Why it works:*
+
+- *Sci-Fi Feel:* =Hologram=, =bismuth-like material=, =glowing cyan=, =crystalline sculpture= create a futuristic, high-tech vibe.
+- *High Detail & "Wowly":* Keywords like =hyper-detailed macro shot=, =geometric facets=, =sharp caustics=, =iridescent refractions=, and =stunningly intricate= push the AI to generate complex textures and light interactions.
+- *White Background:* =Infinite, luminous white studio background= provides the clean base you want while allowing for soft, realistic shadows to give the object depth.
+- *Artistic:* =Unreal Engine 5=, =Octane render=, and =cinematic lighting= are terms that guide the AI toward a high-end, artistically rendered result.
+
+--------------
+
+**** Prompt 2: The Ethereal Data-Weaver
+This prompt is more abstract and energetic, focusing on the flow of information itself as an awe-inspiring visual.
+
+*Text-to-Image Prompt:* "*A breathtaking science fiction scene on a stark white background. A vibrant, multi-layered soundwave, made of millions of flowing, glowing blue and purple data filaments and ethereal energy, is captured in mid-air. The wave of light and particles is dynamically transforming and weaving itself into elegant, three-dimensional calligraphic text. Wisps of digital smoke and bright motes of light float around the transformation. The image is hyper-realistic yet magical, conveying immense processing power and intelligence. Extreme detail, concept art, cinematic, volumetric lighting.*"
+
+*Why it works:*
+
+- *Sci-Fi Feel:* The concept of data as a physical, glowing substance (=data filaments=, =ethereal energy=, =digital smoke=) is classic sci-fi.
+- *High Detail & "Wowly":* =Millions of flowing filaments=, =multi-layered=, and =dynamically transforming= suggest a complex, moving scene frozen in time, creating a "wow" factor.
+- *White Background:* =Stark white background= provides high contrast to make the vibrant colors pop.
+- *Artistic:* =Concept art=, =cinematic=, and =volumetric lighting= encourage a dramatic and painterly style full of depth and atmosphere.
+
+--------------
+
+**** Prompt 3: The Biomechanical Artifact
+This prompt takes a more "hard sci-fi" approach, imagining the bot's function as a physical, high-tech artifact.
+
+*Text-to-Image Prompt:* "*An intricate, biomechanical artifact, shaped like an audio waveform, floats in a white void. The object is made of polished white ceramic and chrome, with seams of glowing orange light pulsing through its micro-circuitry patterns. Panels on the artifact are articulating and unfolding, meticulously rearranging themselves to form sleek, three-dimensional text. The craftsmanship is flawless, evoking super-advanced alien technology. Photorealistic, studio product shot, extreme detail, sci-fi industrial design, subtle ambient occlusion, soft clean lighting.*"
+
+*Why it works:*
+
+- *Sci-Fi Feel:* =Biomechanical=, =micro-circuitry=, =articulating panels=, and =alien technology= create a tangible, advanced-tech feeling.
+- *High Detail & "Wowly":* =Intricate=, =flawless craftsmanship=, and =extreme detail= will focus the AI on the fine mechanics and textures of the object. The "wow" comes from the complexity of the imagined machine.
+- *White Background:* =Floats in a white void= and =studio product shot= sets a clean, professional scene. =Subtle ambient occlusion= is key for realism on white.
+- *Artistic:* =Sci-fi industrial design= gives the AI a clear and sophisticated design language to follow.
+

@@ -3,6 +3,19 @@ The crust of this fork is the advanced_get plugin, which gives you a unix shell 
 
 Needs Python 3.7.2+.
 
+* llm-stt
+#+begin_src zsh :eval never
+borgdir=~/code/betterborg/
+# set this the directory containing betterborg
+##
+tmuxnew () {
+    tmux kill-session -t "$1" &> /dev/null
+    tmux new -d -s "$@"
+}
+
+tmuxnew betterborg_stt "dash -c 'cd $(gq $borgdir) && borg_session=session_stt borg_plugin_path=stt_plugins borg_brish_count=1 $(gq "$(realpath2 python3)") $(gq $borgdir/stdborg.py)'"
+#+end_src
+
 * uniborg
 Pluggable [[https://docs.python.org/3/library/asyncio.html][=asyncio=]] [[https://telegram.org][Telegram]] userbot based on [[https://github.com/LonamiWebs/Telethon][Telethon]].
 

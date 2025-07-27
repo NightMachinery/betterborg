@@ -48,6 +48,10 @@ async def borg_init(background_mode=True):
         async for changes in awatch(plugin_path, normal_sleep=5000):
             for change_type, path in changes:
                 bname = os.path.basename(path)
+                _, ext = os.path.splitext(path)
+                if ext != '.py':
+                        continue
+
                 if not (bname.startswith("#") or bname.startswith(".")):
                     if change_type == Change.modified:
                         # if change_type == Change.modified or change_type == Change.added:
