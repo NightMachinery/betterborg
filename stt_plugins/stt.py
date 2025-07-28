@@ -1,3 +1,4 @@
+from icecream import ic
 from uniborg import util
 import os
 import traceback
@@ -5,6 +6,7 @@ import atexit
 import llm
 import time
 import uuid
+import asyncio
 from datetime import datetime
 from telethon import events
 from sqlalchemy import create_engine, Column, Integer, String
@@ -19,15 +21,12 @@ from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
 
-
 class UserApiKey(Base):
     """SQLAlchemy model to store user-specific API keys for various services."""
-
     __tablename__ = "user_api_keys"
     user_id = Column(Integer, primary_key=True, autoincrement=False)
     service = Column(String, primary_key=True)
     api_key = Column(String, nullable=False)
-
 
 # Create an SQLite database engine and session
 db_path = os.path.expanduser("~/.borg/llm_api_keys.db")
@@ -39,6 +38,8 @@ Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 session = Session()
 
+# --- State Management for API Key Flow ---
+AWAITING_KEY_FROM_USERS = set()
 
 def set_api_key(*, user_id, service, key):
     """Saves or updates a user's API key for a given service."""
@@ -54,7 +55,6 @@ def set_api_key(*, user_id, service, key):
         session.add(user_key)
     session.commit()
 
-
 def get_api_key(*, user_id, service):
     """Retrieves a user's API key for a given service."""
     result = (
@@ -64,12 +64,10 @@ def get_api_key(*, user_id, service):
     )
     return result.api_key if result else None
 
-
 @atexit.register
 def close_db_session():
     """Ensures the database session is closed when the bot stops."""
     session.close()
-
 
 # --- Core Transcription Logic ---
 
@@ -78,6 +76,7 @@ TRANSCRIPTION_PROMPT = """Transcribe this audio word-for-word, following these r
 1. Language will be either:
   - Farsi/Persian, or
   - English with an Iranian accent
+  - If you are SURE the language is something else, you can transcribe it. In this case, also provide an English translation in addition to the original.
 
 2. Include only meaningful speech content:
   - Skip filler words and hesitation markers (um, uh, er, like, you know, "P", etc.)
@@ -91,17 +90,50 @@ TRANSCRIPTION_PROMPT = """Transcribe this audio word-for-word, following these r
     - Add appropriate punctuation marks to make the transcription easier to read
   - No comments
   - No timestamps
-  - No explanatory notes"""
+  - No explanatory notes
 
+4. Valid Inputs:
+  - Audio: directly transcribe.
+  - Songs: transcribe the lyrics. Note that if the song is only being played as background music and people are speaking, you should ignore the music. Only transcribe the lyrics if the input is only a song.
+  - Video: only transcribe what is said. Ignore the visuals.
+  - Photo and images: OCR.
+"""
+
+async def request_api_key(event):
+    """
+    Initiates the flow to ask a user for their API key.
+    Sends a message with instructions and adds the user's ID to the awaiting set.
+    """
+    user_id = event.sender_id
+    AWAITING_KEY_FROM_USERS.add(user_id)
+
+    # The message now includes the link to get a key.
+    key_request_message = (
+        "**Welcome! To use the transcription service, I need a Gemini API key.**\n\n"
+        "You can get a free API key from Google AI Studio:\n"
+        "➡️ **https://aistudio.google.com/app/apikey** ⬅️\n\n"
+        "Once you have your key, please send it to me in the next message."
+    )
+
+    try:
+        # It's best practice to send sensitive setup instructions via private message.
+        await borg.send_message(user_id, key_request_message, link_preview=False)
+        if not event.is_private:
+            await event.reply("I've sent you a private message for setup.")
+    except Exception as e:
+        print(f"Could not send PM to {user_id}. Error: {e}")
+        await event.reply(
+            "I couldn't send you a private message. Please check your privacy settings, "
+            "send me a `/start` to me."
+        )
 
 async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
     """
-    Performs speech-to-text on media files using the llm library and Gemini,
-    replying with the result or an error message.
+    Performs speech-to-text on media files using the llm library and Gemini.
     """
     api_key = get_api_key(user_id=event.sender_id, service="gemini")
     if not api_key:
-        await event.reply("Your Gemini API key is not set. Please use `/setGeminiKey YOUR_KEY`.")
+        await request_api_key(event)
         return
 
     try:
@@ -145,6 +177,7 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
         return
 
     status_message = await event.reply("Transcribing...")
+    ic(TRANSCRIPTION_PROMPT)
     try:
         response = await model.prompt(
             prompt=TRANSCRIPTION_PROMPT,
@@ -201,33 +234,76 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
         print(e)
         print(traceback.format_exc())
 
-        await status_message.edit(f"An error occurred during the API call.")
+        if "api key not valid" in str(e).lower():
+            await status_message.delete()
+            await request_api_key(event)
+        else:
+            await status_message.edit(f"An error occurred during the API call.")
 
 
 # --- Telethon Event Handlers ---
 
 PROCESSED_GROUP_IDS = set()
 
+@borg.on(events.NewMessage(pattern="/start", func=lambda e: e.is_private))
+async def start_handler(event):
+    """
+    Handles the /start command in private messages to onboard new users.
+    """
+    user_id = event.sender_id
+    api_key = get_api_key(user_id=user_id, service="gemini")
+
+    if api_key:
+        await event.reply(
+            "Welcome back! Your Gemini API key is already configured. "
+            "You can send me an audio or video file to transcribe."
+        )
+    else:
+        # If no key is found, initiate the key request flow.
+        await request_api_key(event)
+
 @borg.on(events.NewMessage(pattern=r"/setGeminiKey\s+(.+)"))
 async def set_key_handler(event):
     """Handles the /setGeminiKey command to save the user's API key."""
     api_key = event.pattern_match.group(1).strip()
-    set_api_key(user_id=event.sender_id, service="gemini", key=api_key)
+    user_id = event.sender_id
+    set_api_key(user_id=user_id, service="gemini", key=api_key)
+
+    if user_id in AWAITING_KEY_FROM_USERS:
+        AWAITING_KEY_FROM_USERS.remove(user_id)
+
     await event.delete()
-    await borg.send_message(
-        event.chat_id,
-        "Your Gemini API key has been saved. Your message was deleted for security.",
+    try:
+        await borg.send_message(user_id, "Your Gemini API key has been saved. Your message was deleted for security.")
+    except Exception:
+        await event.respond("Your Gemini API key has been saved. Your message was deleted for security.")
+
+@borg.on(events.NewMessage(incoming=True, func=lambda e: e.is_private and e.sender_id in AWAITING_KEY_FROM_USERS and not e.text.startswith('/')))
+async def key_submission_handler(event):
+    """
+    Handles a plain-text message from a user who has been prompted for their API key.
+    """
+    user_id = event.sender_id
+    api_key = event.text.strip()
+
+    if len(api_key) < 35 or ' ' in api_key:
+        await event.reply("This does not look like a valid API key. Please try again.")
+        return
+
+    set_api_key(user_id=user_id, service="gemini", key=api_key)
+    AWAITING_KEY_FROM_USERS.remove(user_id)
+
+    await event.delete()
+    await event.respond(
+        "✅ Your Gemini API key has been saved. Your message was deleted for security.\n"
+        "You can now send an audio or video file to transcribe."
     )
 
-
-@borg.on(events.NewMessage())
+@borg.on(events.NewMessage(func=lambda e: e.media is not None and e.sender and e.sender_id not in AWAITING_KEY_FROM_USERS))
 async def media_handler(event):
     """
     Handles incoming messages with media, ensuring grouped media is processed only once.
     """
-    if not event.sender or not event.media:
-        return
-
     group_id = event.grouped_id
     # If the message is part of a group...
     if group_id:
