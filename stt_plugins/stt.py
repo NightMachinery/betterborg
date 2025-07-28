@@ -180,6 +180,7 @@ def cancel_key_flow(user_id):
 MIME_TYPE_MAP = {
     ".ogg": "audio/ogg",
     ".oga": "audio/ogg",
+    ".mp4": "video/mp4",
     ".m4a": "audio/aac",
 }
 
