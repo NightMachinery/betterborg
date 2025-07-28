@@ -7,6 +7,7 @@ import llm
 import time
 import uuid
 import asyncio
+import re
 from datetime import datetime
 from telethon import events
 from telethon.tl.functions.bots import SetBotCommandsRequest
@@ -42,6 +43,8 @@ session = Session()
 
 # --- State Management for API Key Flow ---
 AWAITING_KEY_FROM_USERS = set()
+API_KEY_ATTEMPTS = {}
+GEMINI_API_KEY_REGEX = r"^(?P<gemini_key>AIza[0-9A-Za-z_-]{30,50})$"
 
 def set_api_key(*, user_id, service, key):
     """Saves or updates a user's API key for a given service."""
@@ -108,17 +111,17 @@ async def request_api_key(event):
     """
     user_id = event.sender_id
     AWAITING_KEY_FROM_USERS.add(user_id)
+    API_KEY_ATTEMPTS[user_id] = 0
 
-    # The message now includes the link to get a key.
     key_request_message = (
         "**Welcome! To use the transcription service, I need a Gemini API key.**\n\n"
         "You can get a free API key from Google AI Studio:\n"
         "➡️ **https://aistudio.google.com/app/apikey** ⬅️\n\n"
-        "Once you have your key, please send it to me in the next message."
+        "Once you have your key, please send it to me in the next message.\n\n"
+        "(Type `cancel` to stop this process.)"
     )
 
     try:
-        # It's best practice to send sensitive setup instructions via private message.
         await borg.send_message(user_id, key_request_message, link_preview=False)
         if not event.is_private:
             await event.reply("I've sent you a private message for setup.")
@@ -128,6 +131,12 @@ async def request_api_key(event):
             "I couldn't send you a private message. Please check your privacy settings, "
             "then send `/start` to me."
         )
+
+def cancel_key_flow(user_id):
+    """Removes a user from the API key waiting flow and resets their attempts."""
+    AWAITING_KEY_FROM_USERS.discard(user_id)
+    API_KEY_ATTEMPTS.pop(user_id, None)
+
 
 async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
     """
@@ -159,7 +168,6 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
             if not os.path.isfile(filepath):
                 continue
 
-            # Handle mime-type for ogg/oga specifically
             if filename.lower().endswith((".ogg", ".oga")):
                 with open(filepath, "rb") as f:
                     attachments.append(llm.Attachment(content=f.read(), type="audio/ogg"))
@@ -187,10 +195,8 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
         transcription = await response.text()
         await status_message.edit(transcription)
 
-        # --- Logging Logic ---
         if log:
             try:
-                # Generate a unique filename with timestamp and UUID
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 unique_id = str(uuid.uuid4())
                 log_filename = f"{timestamp}_{unique_id}.txt"
@@ -245,9 +251,7 @@ async def set_bot_menu_commands():
     """
     print("STT: setting bot commands ...")
     try:
-        # A small delay to ensure the client is fully connected and ready.
         await asyncio.sleep(5)
-        # Corrected function call for modern Telethon versions
         await borg(SetBotCommandsRequest(
             scope=BotCommandScopeDefault(),
             lang_code='en',
@@ -271,8 +275,11 @@ async def start_handler(event):
     Handles the /start command in private messages to onboard new users.
     """
     user_id = event.sender_id
-    api_key = get_api_key(user_id=user_id, service="gemini")
+    if user_id in AWAITING_KEY_FROM_USERS:
+        cancel_key_flow(user_id)
+        await event.reply("API key setup cancelled.")
 
+    api_key = get_api_key(user_id=user_id, service="gemini")
     if api_key:
         await event.reply(
             "Welcome back! Your Gemini API key is already configured. "
@@ -284,6 +291,11 @@ async def start_handler(event):
 @borg.on(events.NewMessage(pattern="/help"))
 async def help_handler(event):
     """Provides help information about the bot."""
+    user_id = event.sender_id
+    if user_id in AWAITING_KEY_FROM_USERS:
+        cancel_key_flow(user_id)
+        await event.reply("API key setup cancelled.")
+
     help_text = """
 **Hello! I am a transcription bot powered by Google's Gemini.**
 
@@ -315,15 +327,16 @@ async def set_key_handler(event):
     otherwise initiates the interactive key setting flow.
     """
     api_key_match = event.pattern_match.group(1)
+    user_id = event.sender_id
 
     if api_key_match and api_key_match.strip():
-        # A key was provided as an argument.
         api_key = api_key_match.strip()
-        user_id = event.sender_id
-        set_api_key(user_id=user_id, service="gemini", key=api_key)
+        if not re.match(GEMINI_API_KEY_REGEX, api_key):
+            await event.reply("The provided API key has an invalid format. Please check and try again.")
+            return
 
-        if user_id in AWAITING_KEY_FROM_USERS:
-            AWAITING_KEY_FROM_USERS.remove(user_id)
+        set_api_key(user_id=user_id, service="gemini", key=api_key)
+        cancel_key_flow(user_id)
 
         await event.delete()
         confirmation_message = "✅ Your Gemini API key has been saved. Your message was deleted for security."
@@ -334,7 +347,6 @@ async def set_key_handler(event):
         except Exception:
             await event.respond(confirmation_message)
     else:
-        # No key was provided, initiate the interactive flow.
         await request_api_key(event)
 
 @borg.on(events.NewMessage(incoming=True, func=lambda e: e.is_private and e.sender_id in AWAITING_KEY_FROM_USERS and not e.text.startswith('/')))
@@ -343,14 +355,25 @@ async def key_submission_handler(event):
     Handles a plain-text message from a user who has been prompted for their API key.
     """
     user_id = event.sender_id
-    api_key = event.text.strip()
+    text = event.text.strip()
 
-    if len(api_key) < 35 or ' ' in api_key:
-        await event.reply("This does not look like a valid API key. Please try again.")
+    if text.lower() == 'cancel':
+        cancel_key_flow(user_id)
+        await event.reply("API key setup has been cancelled. You can start again with /setgeminikey.")
         return
 
-    set_api_key(user_id=user_id, service="gemini", key=api_key)
-    AWAITING_KEY_FROM_USERS.remove(user_id)
+    if not re.match(GEMINI_API_KEY_REGEX, text):
+        API_KEY_ATTEMPTS[user_id] = API_KEY_ATTEMPTS.get(user_id, 0) + 1
+        if API_KEY_ATTEMPTS[user_id] >= 3:
+            cancel_key_flow(user_id)
+            await event.reply("Too many invalid attempts. The API key setup has been cancelled. You can try again later with /setgeminikey.")
+        else:
+            remaining = 3 - API_KEY_ATTEMPTS[user_id]
+            await event.reply(f"This does not look like a valid API key. Please try again. You have {remaining} attempt(s) left.")
+        return
+
+    set_api_key(user_id=user_id, service="gemini", key=text)
+    cancel_key_flow(user_id)
 
     await event.delete()
     await event.respond(
@@ -363,6 +386,11 @@ async def media_handler(event):
     """
     Handles incoming messages with media, ensuring grouped media is processed only once.
     """
+    user_id = event.sender_id
+    if user_id in AWAITING_KEY_FROM_USERS:
+        cancel_key_flow(user_id)
+        await event.reply("API key setup cancelled. Processing your media instead.")
+
     group_id = event.grouped_id
     if group_id:
         if group_id in PROCESSED_GROUP_IDS:
