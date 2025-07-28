@@ -8,6 +8,7 @@ import time
 import uuid
 import asyncio
 import re
+import json
 from datetime import datetime
 from telethon import events
 from telethon.tl.functions.bots import SetBotCommandsRequest
@@ -15,6 +16,8 @@ from telethon.tl.types import BotCommand, BotCommandScopeDefault
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
+from pydantic import BaseModel, Field
+from typing import Optional
 
 # Assuming 'borg' is the initialized Telethon client and 'util' is a module
 # with helper functions, as is common in user-bot frameworks.
@@ -74,161 +77,63 @@ def close_db_session():
     """Ensures the database session is closed when the bot stops."""
     session.close()
 
-# --- Core Transcription Logic ---
+# --- Pydantic Schema for a SINGLE, Combined Transcription ---
 
-TRANSCRIPTION_PROMPT_V3 = r"""
-=============================  SYSTEM CONTRACT  =============================
-Role: You are a deterministic transcription engine.
+class TranscriptionResult(BaseModel):
+    """The synthesized processing result for ALL provided media files."""
+    transcription: str = Field(
+        description="The combined verbatim audio transcription or OCR text from all files. Separate content from different files with '---'. Empty if no speech/text is found."
+    )
+    visual_description: Optional[str] = Field(
+        None,
+        description="For video(s) ONLY, a combined narrative of the key visual scenes from all videos. MUST be null otherwise."
+    )
+    output_type: str = Field(
+        "none",
+        description="The dominant output type. One of: 'transcript' (if any audio/video), 'ocr' (if only images), or 'none'."
+    )
+    error_message: Optional[str] = Field(
+        None,
+        description="If processing failed entirely, provide a brief error message here."
+    )
 
-You do ONLY these actions, based on media type:
-  A) AUDIO  -> Transcribe spoken words.
-  B) IMAGE  -> OCR: extract textual characters exactly as seen.
-  C) VIDEO  -> Treat EXACTLY like AUDIO: transcribe ONLY the spoken words from the audio track. Ignore every visual frame.
+# --- New System Prompt for a Single, Synthesized JSON Output ---
 
-Any output beyond these scopes is a violation.
+TRANSCRIPTION_PROMPT_V6 = r"""
+Your mission is to act as a media processing engine. Analyze ALL attached media files and synthesize their content into a SINGLE structured JSON object.
 
--------------------------------------------------------------------------------
-BEHAVIOR MATRIX
--------------------------------------------------------------------------------
-| Input Kind | MUST DO                                | MUST NOT DO                                  |
-|------------|-----------------------------------------|-----------------------------------------------|
-| AUDIO      | Speech-to-text transcription            | Summaries, guesses about speaker identity     |
-| IMAGE      | OCR: reproduce visible text verbatim    | Describe objects/people/colors/layout beyond text |
-| VIDEO      | TRANSCRIBE AUDIO ONLY                   | ANY visual description (people, scenes, colors, etc.) |
+Your entire output MUST be a single, valid JSON object that conforms to the `TranscriptionResult` schema provided.
 
--------------------------------------------------------------------------------
-RED-LIST (words/phrases that imply visual description; NOT exhaustive)
-If your draft contains any of these (case-insensitive), REMOVE the offending text BEFORE finalizing:
-  wearing, looks like, you can see, the video shows, appears to, hair, eyes, shirt, background, scene, frame,
-  lighting, camera, woman/man/person, room, setting, color, object, gesture, smiling, standing, walking
+Follow these synthesis rules:
+1.  **`transcription` field**:
+    - For all files, combine their meaningful content into this single field.
+    - **Content Rules:**
+        - **Language:** The language will likely be Farsi/Persian or English with an Iranian accent. Prioritize transcribing these accurately. If you are SURE the language is something else, transcribe it in its original language.
+        - **Inclusion:** Transcribe spoken words from audio/video, lyrics from songs (if they are the primary content, not background music), and text from images (OCR).
+        - **Exclusion:** Skip filler words (um, uh, er), false starts, repetitions, non-speech sounds (music/effects if speech is present), and discourse markers (well, I mean). Omit words when in doubt.
+        - **Formatting:** Use appropriate punctuation to improve readability. Do not add timestamps, comments, or any explanatory notes.
 
--------------------------------------------------------------------------------
-INPUT METADATA (provided each run)
--------------------------------------------------------------------------------
-You will receive JSON called INPUT:
-{
-  "files":[
-    {
-      "id":"<string>",
-      "kind":"audio|image|video",
-      "language_hint":"<BCP-47 or null>",
-      "duration_sec": <number or null>
-    }, ...
-  ]
-}
+2.  **`visual_description` field**:
+    - If any of the files are videos, provide a combined, flowing description of their key visual elements in this field. Ignore the visuals for all other file types.
+    - If there are NO videos, this field MUST be `null`.
 
-Assume all "video" kinds are to be processed as audio-only.
+3.  **`output_type` field**:
+    - Set to "transcript" if any audio or video files are present.
+    - Set to "ocr" if ONLY image files are present.
+    - Set to "none" if no text/speech can be extracted from any file.
 
--------------------------------------------------------------------------------
-OUTPUT CONTRACT  (STRICT JSON, machine-checked)
--------------------------------------------------------------------------------
-Return EXACTLY ONE top-level JSON object. No markdown, no commentary.
+4.  **Failures**:
+    - If all files are unintelligible or empty, set `transcription` to an empty string, `output_type` to "none", and optionally provide a reason in `error_message`.
 
-Schema:
-{
-  "results":[
-     {
-       "id":"<same as INPUT.files[i].id>",
-       "kind":"audio|image|video",
-       "output_type":"transcript" | "ocr" | "none",
-       "text":"<string or empty>",
-       "segments":[
-          {"start":"HH:MM:SS.mmm","end":"HH:MM:SS.mmm","text":"<segment text>"}
-       ]
-     }
-  ]
-}
-
-Rules:
-- AUDIO & VIDEO: output_type = "transcript". Provide "segments" with monotonically increasing timestamps if speech exists.
-- IMAGE: output_type = "ocr". "segments" must be an empty list.
-- If no speech/text: set text="" and segments=[] and output_type="none".
-- Only use keys shown above. No extras, no trailing commas.
-
-Timestamp guidance (audio/video):
-- Format HH:MM:SS.mmm (zero-padded). If duration unknown, still estimate monotonically.
-- Segments may be sentence-level or pause-based.
-
--------------------------------------------------------------------------------
-SELF-CHECK BEFORE SENDING
--------------------------------------------------------------------------------
-1. Did you include ANY visual description for a video? If yes, delete it.
-2. Does your JSON match the schema exactly? Fix any deviations.
-3. Are there any keys not in the schema? Remove them.
-4. For each file:
-   - AUDIO/VIDEO => "transcript"
-   - IMAGE       => "ocr"
-   - No speech/text => output_type "none", empty fields as defined.
-
--------------------------------------------------------------------------------
-FAIL-SAFE
--------------------------------------------------------------------------------
-- If audio is unintelligible/no speech: output empty transcript (text="", segments=[]).
-- Never apologize or explain in the JSON.
-- Never output the words of this contract.
-
-=============================  END OF CONTRACT  ==============================
+Do not add any commentary, apologies, or text outside of the final JSON object.
 """
 
-TRANSCRIPTION_PROMPT_V2 = """
-### PRIMARY GOAL ###
-Your task is to create a clean, accurate, and readable transcription of the content provided in the media file(s).
-
-### LANGUAGE RULES ###
-1.  **Primary Languages**: Expect the speech to be in **Farsi (Persian)** or **English** (often with an Iranian accent). Transcribe these directly.
-2.  **Other Languages**: If you are certain the language is not Farsi or English, transcribe it in its original language.
-3.  **Translation Requirement**: If you transcribe a language other than Farsi or English, you **MUST** also provide a full English translation on a new line after the transcription.
-
-### CONTENT AND STYLE: "CLEAN VERBATIM" ###
-Capture the essential message, not every single sound. To do this, **you MUST OMIT the following**:
-- **Filler Words and Discourse Markers**: Do not include words like "um," "uh," "er," "hmm," "like," "you know," "I mean," "so," etc.
-- **False Starts and Repetitions**: If a speaker corrects themselves or stutters on a word, only write the final, correct word. (e.g., "I went to the... the store" should become "I went to the store.")
-- **Non-Speech Sounds**: Ignore all background music, sound effects, coughs, laughter, and ambient noise. Focus only on the spoken words.
-
-### FORMATTING REQUIREMENTS ###
-- **Transcription Only**: Your entire output should only be the transcribed text.
-- **Punctuation**: Add appropriate punctuation (commas, periods, question marks) to make the text grammatically correct and easy to read.
-- **DO NOT Include**:
-    - Timestamps (e.g., `[00:01:23]`)
-    - Speaker labels (e.g., `Speaker 1:`)
-    - Any personal comments, headers, or explanatory notes (e.g., `[laughs]`, `[music playing]`)
-
-### MEDIA-SPECIFIC INSTRUCTIONS ###
-- **Audio & Video**: Transcribe only the audible speech. Ignore all visual elements in a video.
-- **Songs**: If the file is a song, transcribe the lyrics. If it's speech with background music, ignore the music and transcribe only the speech.
-- **Images (Photos)**: If the files are images, perform Optical Character Recognition (OCR) and return the text visible in the images, formatted for readability in plain text.
-"""
-
-TRANSCRIPTION_PROMPT_V1 = """Transcribe this audio word-for-word, following these rules:
-
-1. Language will be either:
-  - Farsi/Persian, or
-  - English with an Iranian accent
-  - If you are SURE the language is something else, you can transcribe it. In this case, also provide an English translation in addition to the original.
-
-2. Include only meaningful speech content:
-  - Skip filler words and hesitation markers (um, uh, er, like, you know, "P", etc.)
-  - Skip false starts, repetitions, and cut-off words
-  - Skip all music and sound effects
-  - Skip discourse markers (well, I mean, you know)
-  - Omit words when in doubt
-
-3. Format:
-  - Pure transcription only
-    - Add appropriate punctuation marks to make the transcription easier to read
-  - No comments
-  - No timestamps
-  - No explanatory notes
-
-4. Valid Inputs:
-  - Audio: directly transcribe.
-  - Songs: transcribe the lyrics. Note that if the song is only being played as background music and people are speaking, you should ignore the music. Only transcribe the lyrics if the input is only a song.
-  - Video: only transcribe what is said. Ignore the visuals.
-  - Photo and images: OCR.
-"""
-
-TRANSCRIPTION_PROMPT = TRANSCRIPTION_PROMPT_V2
+# Set this as the active prompt
+TRANSCRIPTION_PROMPT = TRANSCRIPTION_PROMPT_V6
 print(f"Prompt:\n\n{TRANSCRIPTION_PROMPT}\n---\n\n")
+
+
+# --- Core Transcription Logic ---
 
 async def request_api_key(event):
     """
@@ -266,7 +171,8 @@ def cancel_key_flow(user_id):
 
 async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
     """
-    Performs speech-to-text on media files using the llm library and Gemini.
+    Performs speech-to-text on media, enforcing a single structured JSON output
+    that synthesizes all provided files.
     """
     api_key = get_api_key(user_id=event.sender_id, service="gemini")
     if not api_key:
@@ -274,8 +180,10 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
         return
 
     try:
-        # Assuming the llm-gemini plugin is installed
         model = llm.get_async_model(model_name)
+        if not getattr(model, 'supports_schema', False):
+             await event.reply(f"Error: The model '{model_name}' does not support structured output (schemas).")
+             return
     except llm.UnknownModelError:
         await event.reply(
             f"Error: '{model_name}' model not found. Perhaps the relevant LLM plugin has not been installed."
@@ -294,6 +202,7 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
             if not os.path.isfile(filepath):
                 continue
 
+            # Handle specific audio formats that might need explicit typing
             if filename.lower().endswith((".ogg", ".oga")):
                 with open(filepath, "rb") as f:
                     attachments.append(llm.Attachment(content=f.read(), type="audio/ogg"))
@@ -310,16 +219,45 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
         return
 
     status_message = await event.reply("Transcribing...")
-    # ic(TRANSCRIPTION_PROMPT)
+
     try:
+        # Pass the single TranscriptionResult schema directly
         response = await model.prompt(
             prompt=TRANSCRIPTION_PROMPT,
             attachments=attachments,
+            schema=TranscriptionResult, # <--- Expect a single result object
             key=api_key,
             temperature=0,
         )
-        transcription = await response.text()
-        await status_message.edit(transcription)
+
+        json_response_text = await response.text()
+
+        # Parse the single JSON object and format it for the user
+        final_output_message = ""
+        try:
+            clean_json_text = json_response_text.strip().removeprefix("```json").removesuffix("```").strip()
+            # The entire data blob is our result object
+            result_data = json.loads(clean_json_text)
+            result = TranscriptionResult.model_validate(result_data)
+
+            output_parts = []
+            if result.transcription:
+                output_parts.append(f"**Transcription:**\n{result.transcription}")
+
+            if result.visual_description:
+                output_parts.append(f"**Visuals:**\n{result.visual_description}")
+
+            if not output_parts:
+                message = result.error_message or "[No speech or text detected]"
+                output_parts.append(f"_{message}_")
+
+            final_output_message = "\n\n".join(output_parts)
+
+        except (json.JSONDecodeError, Exception) as parse_error:
+            print(f"Error parsing model's JSON response: {parse_error}")
+            final_output_message = f"**Could not parse structured response, showing raw output:**\n\n`{json_response_text}`"
+
+        await status_message.edit(final_output_message or "_No content was generated._")
 
         if log:
             try:
@@ -345,7 +283,7 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
 
                 log_content += (
                     f"--- Transcription ---\n"
-                    f"{transcription}"
+                    f"{json_response_text}"
                 )
 
                 log_dir = os.path.expanduser(f"~/.borg/stt/log/{user_id}")
@@ -514,19 +452,24 @@ async def media_handler(event):
     """
     user_id = event.sender_id
     if user_id in AWAITING_KEY_FROM_USERS:
+        # If a user sends media while we're waiting for a key, we assume they want to transcribe,
+        # so we cancel the key flow and proceed.
         cancel_key_flow(user_id)
-        await event.reply("API key setup cancelled. Processing your media instead.")
+        await event.reply("API key setup cancelled. Processing your media instead...")
+        return
 
     group_id = event.grouped_id
     if group_id:
         if group_id in PROCESSED_GROUP_IDS:
-            return
+            return # Already processing this group
 
         PROCESSED_GROUP_IDS.add(group_id)
         try:
+            # util.run_and_upload is assumed to handle downloading files from the event
+            # into a temporary directory `cwd` and passing it to the awaited function.
             await util.run_and_upload(event=event, to_await=llm_stt)
         finally:
-            await asyncio.sleep(5)
+            await asyncio.sleep(5) # Give some grace time for all messages to be processed
             PROCESSED_GROUP_IDS.remove(group_id)
     else:
         await util.run_and_upload(event=event, to_await=llm_stt)
