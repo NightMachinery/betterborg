@@ -9,6 +9,8 @@ import uuid
 import asyncio
 from datetime import datetime
 from telethon import events
+from telethon.tl.functions.bots import SetBotCommandsRequest
+from telethon.tl.types import BotCommand, BotCommandScopeDefault
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
@@ -124,7 +126,7 @@ async def request_api_key(event):
         print(f"Could not send PM to {user_id}. Error: {e}")
         await event.reply(
             "I couldn't send you a private message. Please check your privacy settings, "
-            "send me a `/start` to me."
+            "then send `/start` to me."
         )
 
 async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
@@ -147,7 +149,6 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
     except Exception as e:
         print(traceback.format_exc())
         print(e)
-
         await event.reply(f"An unexpected error occurred while loading the model.")
         return
 
@@ -167,12 +168,10 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
     except Exception as e:
         print(e)
         print(traceback.format_exc())
-
         await event.reply(f"Error while preparing media files for transcription")
         return
 
     if not attachments:
-        # This case is unlikely if the media handler triggers only on media, but it's good practice
         await event.reply("No valid media files found to transcribe.")
         return
 
@@ -219,27 +218,48 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
 
                 log_dir = os.path.expanduser(f"~/.borg/stt/log/{user_id}")
                 os.makedirs(log_dir, exist_ok=True)
-
                 log_file_path = os.path.join(log_dir, log_filename)
 
                 with open(log_file_path, "w", encoding="utf-8") as f:
                     f.write(log_content)
 
             except Exception as log_e:
-                # Log the logging error to stderr to not disturb the user flow
                 print(f"Failed to write transcription log: {log_e}")
                 print(traceback.format_exc())
 
     except Exception as e:
         print(e)
         print(traceback.format_exc())
-
         if "api key not valid" in str(e).lower():
             await status_message.delete()
             await request_api_key(event)
         else:
             await status_message.edit(f"An error occurred during the API call.")
 
+# --- Bot Command Setup ---
+
+async def set_bot_menu_commands():
+    """
+    Sets the bot's command menu in Telegram's UI.
+    This should be called once after the client has started.
+    """
+    print("STT: setting bot commands ...")
+    try:
+        # A small delay to ensure the client is fully connected and ready.
+        await asyncio.sleep(5)
+        # Corrected function call for modern Telethon versions
+        await borg(SetBotCommandsRequest(
+            scope=BotCommandScopeDefault(),
+            lang_code='en',
+            commands=[
+                BotCommand('start', 'Onboard and set API key'),
+                BotCommand('help', 'Show help and instructions'),
+                BotCommand('setgeminikey', 'Set or update your Gemini API key')
+            ]
+        ))
+        print("Bot command menu has been updated.")
+    except Exception as e:
+        print(f"Failed to set bot commands: {e}")
 
 # --- Telethon Event Handlers ---
 
@@ -259,24 +279,63 @@ async def start_handler(event):
             "You can send me an audio or video file to transcribe."
         )
     else:
-        # If no key is found, initiate the key request flow.
         await request_api_key(event)
 
-@borg.on(events.NewMessage(pattern=r"/setGeminiKey\s+(.+)"))
+@borg.on(events.NewMessage(pattern="/help"))
+async def help_handler(event):
+    """Provides help information about the bot."""
+    help_text = """
+**Hello! I am a transcription bot powered by Google's Gemini.**
+
+Here's how to use me:
+
+1.  **Get a Gemini API Key:**
+    You need a free API key to use my services. You can get one from Google AI Studio:
+    ➡️ **https://aistudio.google.com/app/apikey**
+
+2.  **Set Your API Key:**
+    Use the /setGeminiKey command to save your key.
+    - You can provide the key directly: `/setGeminiKey YOUR_API_KEY`
+    - Or, just type /setGeminiKey and I will guide you through the setup.
+
+3.  **Transcribe Media:**
+    Simply send me any audio file, voice message, or video. I will transcribe the speech for you. If you send multiple files together (as an album), I will process them as a single request.
+
+**Available Commands:**
+- `/start`: Onboard and set up your API key for the first time.
+- `/help`: Shows this help message.
+- `/setGeminiKey [API_KEY]`: Sets or updates your Gemini API key.
+"""
+    await event.reply(help_text, link_preview=False)
+
+@borg.on(events.NewMessage(pattern=r"(?i)/setGeminiKey(?:\s+(.*))?"))
 async def set_key_handler(event):
-    """Handles the /setGeminiKey command to save the user's API key."""
-    api_key = event.pattern_match.group(1).strip()
-    user_id = event.sender_id
-    set_api_key(user_id=user_id, service="gemini", key=api_key)
+    """
+    Handles the /setGeminiKey command. Saves the user's API key if provided,
+    otherwise initiates the interactive key setting flow.
+    """
+    api_key_match = event.pattern_match.group(1)
 
-    if user_id in AWAITING_KEY_FROM_USERS:
-        AWAITING_KEY_FROM_USERS.remove(user_id)
+    if api_key_match and api_key_match.strip():
+        # A key was provided as an argument.
+        api_key = api_key_match.strip()
+        user_id = event.sender_id
+        set_api_key(user_id=user_id, service="gemini", key=api_key)
 
-    await event.delete()
-    try:
-        await borg.send_message(user_id, "Your Gemini API key has been saved. Your message was deleted for security.")
-    except Exception:
-        await event.respond("Your Gemini API key has been saved. Your message was deleted for security.")
+        if user_id in AWAITING_KEY_FROM_USERS:
+            AWAITING_KEY_FROM_USERS.remove(user_id)
+
+        await event.delete()
+        confirmation_message = "✅ Your Gemini API key has been saved. Your message was deleted for security."
+        try:
+            await borg.send_message(user_id, confirmation_message)
+            if not event.is_private:
+                await event.reply("I've confirmed your key update in a private message.")
+        except Exception:
+            await event.respond(confirmation_message)
+    else:
+        # No key was provided, initiate the interactive flow.
+        await request_api_key(event)
 
 @borg.on(events.NewMessage(incoming=True, func=lambda e: e.is_private and e.sender_id in AWAITING_KEY_FROM_USERS and not e.text.startswith('/')))
 async def key_submission_handler(event):
@@ -305,23 +364,18 @@ async def media_handler(event):
     Handles incoming messages with media, ensuring grouped media is processed only once.
     """
     group_id = event.grouped_id
-    # If the message is part of a group...
     if group_id:
-        # ...and we are already processing this group, stop.
         if group_id in PROCESSED_GROUP_IDS:
             return
 
-        # ...otherwise, "lock" this group and process it.
         PROCESSED_GROUP_IDS.add(group_id)
         try:
-            # Rely on the framework to handle downloading all media in the group.
             await util.run_and_upload(event=event, to_await=llm_stt)
         finally:
-            # Wait for a few seconds before unlocking the group to prevent race conditions.
             await asyncio.sleep(5)
-
-            # Once done (or if an error occurs), "unlock" the group.
             PROCESSED_GROUP_IDS.remove(group_id)
     else:
-        # If it's not a grouped message, process it directly.
         await util.run_and_upload(event=event, to_await=llm_stt)
+
+# Schedule the command menu setup to run on the bot's event loop upon loading.
+borg.loop.create_task(set_bot_menu_commands())
