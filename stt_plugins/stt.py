@@ -108,11 +108,16 @@ Follow these synthesis rules:
 1.  **`transcription` field**:
     - For all files, combine their meaningful content into this single field.
     - **Content Rules:**
-        - **Language:** The language will likely be Farsi/Persian or English with an Iranian accent. Prioritize transcribing these accurately. If you are SURE the language is something else, transcribe it in its original language and translate it to English. (Farsi does not need translation.)
-        - **Inclusion:** Transcribe spoken words from audio/video, lyrics from songs (if they are the primary content, not background music), and text from images (OCR).
+        - **Language:**
+            - **Farsi/English:** Transcribe these languages accurately as you hear them.
+            - **Other Languages & Translation:** If you are SURE the language is not Farsi or English, you **MUST** provide two things:
+                1. The transcription in the original language.
+                2. The English translation of that transcription. Separate the translation from the original using clear formatting.
+            - **CRITICAL:** You **MUST NOT** translate Farsi transcriptions.
+        - **Inclusion:** Transcribe spoken words from audio/video, formatted lyrics from songs (if they are the primary content, not background music), and text from images (OCR).
         - **Exclusion:** Skip filler words (um, uh, er), false starts, repetitions, non-speech sounds (music/effects if speech is present), and discourse markers (well, I mean). Omit words when in doubt.
         - **Formatting:**
-            - **Readability:** Use standard punctuation (commas, periods) and create new paragraphs for different topics or speakers to make the text easy to read. Maintain the spatial structure of the text when doing OCR using appropriate whitespace etc.
+            - **Readability:** Use standard punctuation (commas, periods) and create new paragraphs for different topics or speakers to make the text easy to read. Maintain the spatial structure of the text when doing OCR or transcribing lyrics using appropriate whitespace etc. You can use simple markdown markup like bold text, italic text, etc.
             - **Separators:** If you process multiple files, you MUST place `---` on its own line to separate the content from each distinct file.
             - **Prohibited Content:** You MUST NOT include timestamps, explanatory notes (e.g., "[music playing]"), or any commentary in the transcription text.
 
@@ -172,6 +177,12 @@ def cancel_key_flow(user_id):
     API_KEY_ATTEMPTS.pop(user_id, None)
 
 
+MIME_TYPE_MAP = {
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".m4a": "audio/aac",
+}
+
 async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
     """
     Performs speech-to-text on media, enforcing a single structured JSON output
@@ -205,11 +216,18 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
             if not os.path.isfile(filepath):
                 continue
 
-            # Handle specific audio formats that might need explicit typing
-            if filename.lower().endswith((".ogg", ".oga")):
-                with open(filepath, "rb") as f:
-                    attachments.append(llm.Attachment(content=f.read(), type="audio/ogg"))
-            else:
+            lower_filename = filename.lower()
+            handled_explicitly = False
+
+            for extension, mime_type in MIME_TYPE_MAP.items():
+                if lower_filename.endswith(extension):
+                    with open(filepath, "rb") as f:
+                        attachments.append(llm.Attachment(content=f.read(), type=mime_type))
+                    handled_explicitly = True
+                    break # Exit the inner loop once a match is found
+
+            if not handled_explicitly:
+                # Default case: let the llm library infer the MIME type from the path
                 attachments.append(llm.Attachment(path=filepath))
     except Exception as e:
         print(e)
