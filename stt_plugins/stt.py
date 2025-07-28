@@ -111,7 +111,7 @@ Follow these synthesis rules:
         - **Language:** The language will likely be Farsi/Persian or English with an Iranian accent. Prioritize transcribing these accurately. If you are SURE the language is something else, transcribe it in its original language.
         - **Inclusion:** Transcribe spoken words from audio/video, lyrics from songs (if they are the primary content, not background music), and text from images (OCR).
         - **Exclusion:** Skip filler words (um, uh, er), false starts, repetitions, non-speech sounds (music/effects if speech is present), and discourse markers (well, I mean). Omit words when in doubt.
-        - **Formatting:** Use appropriate punctuation to improve readability. Do not add timestamps, comments, or any explanatory notes.
+        - **Formatting:** Use appropriate punctuation to improve readability. Format the output to be readable for humans in plain text. Add appropriate whitespace (including new lines) and formatting noise (e.g., `---`). Do not add timestamps, comments, or any explanatory notes.
 
 2.  **`visual_description` field**:
     - If any of the files are videos, provide a combined, flowing description of their key visual elements in this field. Ignore the visuals for all other file types.
