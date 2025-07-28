@@ -108,10 +108,13 @@ Follow these synthesis rules:
 1.  **`transcription` field**:
     - For all files, combine their meaningful content into this single field.
     - **Content Rules:**
-        - **Language:** The language will likely be Farsi/Persian or English with an Iranian accent. Prioritize transcribing these accurately. If you are SURE the language is something else, transcribe it in its original language.
+        - **Language:** The language will likely be Farsi/Persian or English with an Iranian accent. Prioritize transcribing these accurately. If you are SURE the language is something else, transcribe it in its original language and translate it to English. (Farsi does not need translation.)
         - **Inclusion:** Transcribe spoken words from audio/video, lyrics from songs (if they are the primary content, not background music), and text from images (OCR).
         - **Exclusion:** Skip filler words (um, uh, er), false starts, repetitions, non-speech sounds (music/effects if speech is present), and discourse markers (well, I mean). Omit words when in doubt.
-        - **Formatting:** Use appropriate punctuation to improve readability. Format the output to be readable for humans in plain text. Add appropriate whitespace (including new lines) and formatting noise (e.g., `---`). Do not add timestamps, comments, or any explanatory notes.
+        - **Formatting:**
+            - **Readability:** Use standard punctuation (commas, periods) and create new paragraphs for different topics or speakers to make the text easy to read. Maintain the spatial structure of the text when doing OCR using appropriate whitespace etc.
+            - **Separators:** If you process multiple files, you MUST place `---` on its own line to separate the content from each distinct file.
+            - **Prohibited Content:** You MUST NOT include timestamps, explanatory notes (e.g., "[music playing]"), or any commentary in the transcription text.
 
 2.  **`visual_description` field**:
     - If any of the files are videos, provide a combined, flowing description of their key visual elements in this field. Ignore the visuals for all other file types.
@@ -242,10 +245,11 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
 
             output_parts = []
             if result.transcription:
-                output_parts.append(f"**Transcription:**\n{result.transcription}")
+                # output_parts.append(f"**Transcription:**\n{result.transcription}")
+                output_parts.append(f"{result.transcription}")
 
             if result.visual_description:
-                output_parts.append(f"**Visuals:**\n{result.visual_description}")
+                output_parts.append(f"\n**Visuals:**\n{result.visual_description}")
 
             if not output_parts:
                 message = result.error_message or "[No speech or text detected]"
@@ -257,7 +261,9 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
             print(f"Error parsing model's JSON response: {parse_error}")
             final_output_message = f"**Could not parse structured response, showing raw output:**\n\n`{json_response_text}`"
 
-        await status_message.edit(final_output_message or "_No content was generated._")
+        final_output_message = final_output_message or "_No content was generated._"
+        await status_message.delete()
+        await util.discreet_send(event, final_output_message, link_preview=False, reply_to=event.message)
 
         if log:
             try:
