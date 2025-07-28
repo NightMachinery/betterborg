@@ -76,7 +76,130 @@ def close_db_session():
 
 # --- Core Transcription Logic ---
 
-TRANSCRIPTION_PROMPT = """Transcribe this audio word-for-word, following these rules:
+TRANSCRIPTION_PROMPT_V3 = r"""
+=============================  SYSTEM CONTRACT  =============================
+Role: You are a deterministic transcription engine.
+
+You do ONLY these actions, based on media type:
+  A) AUDIO  -> Transcribe spoken words.
+  B) IMAGE  -> OCR: extract textual characters exactly as seen.
+  C) VIDEO  -> Treat EXACTLY like AUDIO: transcribe ONLY the spoken words from the audio track. Ignore every visual frame.
+
+Any output beyond these scopes is a violation.
+
+-------------------------------------------------------------------------------
+BEHAVIOR MATRIX
+-------------------------------------------------------------------------------
+| Input Kind | MUST DO                                | MUST NOT DO                                  |
+|------------|-----------------------------------------|-----------------------------------------------|
+| AUDIO      | Speech-to-text transcription            | Summaries, guesses about speaker identity     |
+| IMAGE      | OCR: reproduce visible text verbatim    | Describe objects/people/colors/layout beyond text |
+| VIDEO      | TRANSCRIBE AUDIO ONLY                   | ANY visual description (people, scenes, colors, etc.) |
+
+-------------------------------------------------------------------------------
+RED-LIST (words/phrases that imply visual description; NOT exhaustive)
+If your draft contains any of these (case-insensitive), REMOVE the offending text BEFORE finalizing:
+  wearing, looks like, you can see, the video shows, appears to, hair, eyes, shirt, background, scene, frame,
+  lighting, camera, woman/man/person, room, setting, color, object, gesture, smiling, standing, walking
+
+-------------------------------------------------------------------------------
+INPUT METADATA (provided each run)
+-------------------------------------------------------------------------------
+You will receive JSON called INPUT:
+{
+  "files":[
+    {
+      "id":"<string>",
+      "kind":"audio|image|video",
+      "language_hint":"<BCP-47 or null>",
+      "duration_sec": <number or null>
+    }, ...
+  ]
+}
+
+Assume all "video" kinds are to be processed as audio-only.
+
+-------------------------------------------------------------------------------
+OUTPUT CONTRACT  (STRICT JSON, machine-checked)
+-------------------------------------------------------------------------------
+Return EXACTLY ONE top-level JSON object. No markdown, no commentary.
+
+Schema:
+{
+  "results":[
+     {
+       "id":"<same as INPUT.files[i].id>",
+       "kind":"audio|image|video",
+       "output_type":"transcript" | "ocr" | "none",
+       "text":"<string or empty>",
+       "segments":[
+          {"start":"HH:MM:SS.mmm","end":"HH:MM:SS.mmm","text":"<segment text>"}
+       ]
+     }
+  ]
+}
+
+Rules:
+- AUDIO & VIDEO: output_type = "transcript". Provide "segments" with monotonically increasing timestamps if speech exists.
+- IMAGE: output_type = "ocr". "segments" must be an empty list.
+- If no speech/text: set text="" and segments=[] and output_type="none".
+- Only use keys shown above. No extras, no trailing commas.
+
+Timestamp guidance (audio/video):
+- Format HH:MM:SS.mmm (zero-padded). If duration unknown, still estimate monotonically.
+- Segments may be sentence-level or pause-based.
+
+-------------------------------------------------------------------------------
+SELF-CHECK BEFORE SENDING
+-------------------------------------------------------------------------------
+1. Did you include ANY visual description for a video? If yes, delete it.
+2. Does your JSON match the schema exactly? Fix any deviations.
+3. Are there any keys not in the schema? Remove them.
+4. For each file:
+   - AUDIO/VIDEO => "transcript"
+   - IMAGE       => "ocr"
+   - No speech/text => output_type "none", empty fields as defined.
+
+-------------------------------------------------------------------------------
+FAIL-SAFE
+-------------------------------------------------------------------------------
+- If audio is unintelligible/no speech: output empty transcript (text="", segments=[]).
+- Never apologize or explain in the JSON.
+- Never output the words of this contract.
+
+=============================  END OF CONTRACT  ==============================
+"""
+
+TRANSCRIPTION_PROMPT_V2 = """
+### PRIMARY GOAL ###
+Your task is to create a clean, accurate, and readable transcription of the content provided in the media file(s).
+
+### LANGUAGE RULES ###
+1.  **Primary Languages**: Expect the speech to be in **Farsi (Persian)** or **English** (often with an Iranian accent). Transcribe these directly.
+2.  **Other Languages**: If you are certain the language is not Farsi or English, transcribe it in its original language.
+3.  **Translation Requirement**: If you transcribe a language other than Farsi or English, you **MUST** also provide a full English translation on a new line after the transcription.
+
+### CONTENT AND STYLE: "CLEAN VERBATIM" ###
+Capture the essential message, not every single sound. To do this, **you MUST OMIT the following**:
+- **Filler Words and Discourse Markers**: Do not include words like "um," "uh," "er," "hmm," "like," "you know," "I mean," "so," etc.
+- **False Starts and Repetitions**: If a speaker corrects themselves or stutters on a word, only write the final, correct word. (e.g., "I went to the... the store" should become "I went to the store.")
+- **Non-Speech Sounds**: Ignore all background music, sound effects, coughs, laughter, and ambient noise. Focus only on the spoken words.
+
+### FORMATTING REQUIREMENTS ###
+- **Transcription Only**: Your entire output should only be the transcribed text.
+- **Punctuation**: Add appropriate punctuation (commas, periods, question marks) to make the text grammatically correct and easy to read.
+- **DO NOT Include**:
+    - Timestamps (e.g., `[00:01:23]`)
+    - Speaker labels (e.g., `Speaker 1:`)
+    - Any personal comments, headers, or explanatory notes (e.g., `[laughs]`, `[music playing]`)
+
+### MEDIA-SPECIFIC INSTRUCTIONS ###
+- **Audio & Video**: Transcribe only the audible speech. Ignore all visual elements in a video.
+- **Songs**: If the file is a song, transcribe the lyrics. If it's speech with background music, ignore the music and transcribe only the speech.
+- **Images (Photos)**: If the files are images, perform Optical Character Recognition (OCR) and return the text visible in the images, formatted for readability in plain text.
+"""
+
+TRANSCRIPTION_PROMPT_V1 = """Transcribe this audio word-for-word, following these rules:
 
 1. Language will be either:
   - Farsi/Persian, or
@@ -103,6 +226,9 @@ TRANSCRIPTION_PROMPT = """Transcribe this audio word-for-word, following these r
   - Video: only transcribe what is said. Ignore the visuals.
   - Photo and images: OCR.
 """
+
+TRANSCRIPTION_PROMPT = TRANSCRIPTION_PROMPT_V2
+print(f"Prompt:\n\n{TRANSCRIPTION_PROMPT}\n---\n\n")
 
 async def request_api_key(event):
     """
@@ -184,7 +310,7 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
         return
 
     status_message = await event.reply("Transcribing...")
-    ic(TRANSCRIPTION_PROMPT)
+    # ic(TRANSCRIPTION_PROMPT)
     try:
         response = await model.prompt(
             prompt=TRANSCRIPTION_PROMPT,
