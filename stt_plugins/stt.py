@@ -129,9 +129,11 @@ Follow these synthesis rules:
         - **Formatting:**
             - **Readability:** Use standard punctuation (commas, periods, new lines) and create new paragraphs for different topics or speakers to make the text easy to read. Maintain the spatial structure of the text when doing OCR or transcribing lyrics or dialogue using appropriate whitespace etc. You can use custom markdown markup: `**bold**`, `` `code` ``, or `__italic__` are available. In addition you can send `[links](https://example.com)` and ```` ```pre``` ```` blocks with three backticks.
 
-            - **Emotional Context:** Use emojis to show tone and emotion when appropriate, such as for singing, playful dialogue, or strongly expressive content. For videos, also add emojis if body language or facial expressions convey an emotion. In short: If there are strong emotions or visual emotional cues, include a relevant emoji!
+            - **Emoji Use:**
+              - **For Audio-Only Input:** Sparingly, use emojis to show tone and emotion when appropriate, such as for singing, playful dialogue, expressive content, or emotional tone.
+              - **For Video Input:** Be more liberal with emojis. Use them to mirror the visible facial expressions and body language of the speakers. YOU SHOULD ALWAYS USE AT LEAST ONE EMOJI FOR VIDEO INPUTS.
 
-            - **Speaker Identification:** When multiple people are speaking, each speaker label must be on its own line (after a line break) in bold, followed by a colon, then their dialogue (either on the same line or after a line break, depending on your own judgement). Use the original language of the dialogue for all labels.
+            - **Speaker Identification:** When MULTIPLE people are speaking, each speaker label must be on its own line (after a line break) in bold, followed by a colon, then their dialogue (either on the same line or after a line break, depending on your own judgement). Use the original language of the dialogue for all labels.
 
               Choose appropriate labels based on context:
               • Person's name: "**María:**", "**سپیده:**"
