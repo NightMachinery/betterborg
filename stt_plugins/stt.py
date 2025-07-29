@@ -27,12 +27,15 @@ from typing import Optional
 
 Base = declarative_base()
 
+
 class UserApiKey(Base):
     """SQLAlchemy model to store user-specific API keys for various services."""
+
     __tablename__ = "user_api_keys"
     user_id = Column(Integer, primary_key=True, autoincrement=False)
     service = Column(String, primary_key=True)
     api_key = Column(String, nullable=False)
+
 
 # Create an SQLite database engine and session
 db_path = os.path.expanduser("~/.borg/llm_api_keys.db")
@@ -49,6 +52,7 @@ AWAITING_KEY_FROM_USERS = set()
 API_KEY_ATTEMPTS = {}
 GEMINI_API_KEY_REGEX = r"^(?P<gemini_key>AIza[0-9A-Za-z_-]{30,50})$"
 
+
 def set_api_key(*, user_id, service, key):
     """Saves or updates a user's API key for a given service."""
     user_key = (
@@ -63,6 +67,7 @@ def set_api_key(*, user_id, service, key):
         session.add(user_key)
     session.commit()
 
+
 def get_api_key(*, user_id, service):
     """Retrieves a user's API key for a given service."""
     result = (
@@ -72,30 +77,35 @@ def get_api_key(*, user_id, service):
     )
     return result.api_key if result else None
 
+
 @atexit.register
 def close_db_session():
     """Ensures the database session is closed when the bot stops."""
     session.close()
 
+
 # --- Pydantic Schema for a SINGLE, Combined Transcription ---
+
 
 class TranscriptionResult(BaseModel):
     """The synthesized processing result for ALL provided media files."""
+
     transcription: str = Field(
         description="The combined verbatim audio transcription or OCR text from all files. Separate content from different files with '---'. Empty if no speech/text is found."
     )
     visual_description: Optional[str] = Field(
         None,
-        description="For video(s) ONLY, a combined narrative of the key visual scenes from all videos. MUST be null otherwise."
+        description="For video(s) ONLY, a combined narrative of the key visual scenes from all videos. MUST be null otherwise.",
     )
     output_type: str = Field(
         "none",
-        description="The dominant output type. One of: 'transcript' (if any audio/video), 'ocr' (if only images), or 'none'."
+        description="The dominant output type. One of: 'transcript' (if any audio/video), 'ocr' (if only images), or 'none'.",
     )
     error_message: Optional[str] = Field(
         None,
-        description="If processing failed entirely, provide a brief error message here."
+        description="If processing failed entirely, provide a brief error message here.",
     )
+
 
 # --- New System Prompt for a Single, Synthesized JSON Output ---
 
@@ -117,7 +127,8 @@ Follow these synthesis rules:
         - **Inclusion:** Transcribe spoken words from audio/video, formatted lyrics from songs (if they are the primary content, not background music), and text from images (OCR).
         - **Exclusion:** Skip filler words (um, uh, er), false starts, repetitions, non-speech sounds (music/effects if speech is present), and discourse markers (well, I mean). Omit words when in doubt.
         - **Formatting:**
-            - **Readability:** Use standard punctuation (commas, periods) and create new paragraphs for different topics or speakers to make the text easy to read. Maintain the spatial structure of the text when doing OCR or transcribing lyrics using appropriate whitespace etc. You can use simple markdown markup like bold text, italic text, etc.
+            - **Readability:** Use standard punctuation (commas, periods, new lines) and create new paragraphs for different topics or speakers to make the text easy to read. Maintain the spatial structure of the text when doing OCR or transcribing lyrics or dialogue using appropriate whitespace etc. You can use custom markdown markup: `**bold**`, `` `code` ``, or `__italic__` are available. In addition you can send `[links](https://example.com)` and ```` ```pre``` ```` blocks with three backticks.
+             - **Speaker Identification:** When multiple people are speaking, identify each with a bold label on its own line followed by a colon. This label must always be in the original language of the dialogue. Intelligently determine the most appropriate label from the context, such as a person's name (e.g., "**María:**", "**سپیده:**") or title (e.g., "**Detective:**", "**آرایشگر:**"). IMPORTANT: Any guessed or inferred labels must also be in **the original language**. If a specific identifier cannot be determined, use a consistent, generic label in that same language (e.g., "**Speaker 1:**", "**گوینده ۱:**", etc.).
             - **Separators:** If you process multiple files, you MUST place `---` on its own line to separate the content from each distinct file.
             - **Prohibited Content:** You MUST NOT include timestamps, explanatory notes (e.g., "[music playing]"), or any commentary in the transcription text.
 
@@ -142,6 +153,7 @@ print(f"Prompt:\n\n{TRANSCRIPTION_PROMPT}\n---\n\n")
 
 
 # --- Core Transcription Logic ---
+
 
 async def request_api_key(event):
     """
@@ -171,6 +183,7 @@ async def request_api_key(event):
             "then send `/start` to me."
         )
 
+
 def cancel_key_flow(user_id):
     """Removes a user from the API key waiting flow and resets their attempts."""
     AWAITING_KEY_FROM_USERS.discard(user_id)
@@ -184,11 +197,15 @@ MIME_TYPE_MAP = {
     ".m4a": "audio/aac",
 }
 
+
 async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
     """
     Performs speech-to-text on media, enforcing a single structured JSON output
     that synthesizes all provided files.
     """
+    parse_mode = "md"
+    italics_marker = "__"
+
     api_key = get_api_key(user_id=event.sender_id, service="gemini")
     if not api_key:
         await request_api_key(event)
@@ -196,9 +213,11 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
 
     try:
         model = llm.get_async_model(model_name)
-        if not getattr(model, 'supports_schema', False):
-             await event.reply(f"Error: The model '{model_name}' does not support structured output (schemas).")
-             return
+        if not getattr(model, "supports_schema", False):
+            await event.reply(
+                f"Error: The model '{model_name}' does not support structured output (schemas)."
+            )
+            return
     except llm.UnknownModelError:
         await event.reply(
             f"Error: '{model_name}' model not found. Perhaps the relevant LLM plugin has not been installed."
@@ -223,9 +242,11 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
             for extension, mime_type in MIME_TYPE_MAP.items():
                 if lower_filename.endswith(extension):
                     with open(filepath, "rb") as f:
-                        attachments.append(llm.Attachment(content=f.read(), type=mime_type))
+                        attachments.append(
+                            llm.Attachment(content=f.read(), type=mime_type)
+                        )
                     handled_explicitly = True
-                    break # Exit the inner loop once a match is found
+                    break  # Exit the inner loop once a match is found
 
             if not handled_explicitly:
                 # Default case: let the llm library infer the MIME type from the path
@@ -247,7 +268,7 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
         response = await model.prompt(
             prompt=TRANSCRIPTION_PROMPT,
             attachments=attachments,
-            schema=TranscriptionResult, # <--- Expect a single result object
+            schema=TranscriptionResult,  # <--- Expect a single result object
             key=api_key,
             temperature=0,
         )
@@ -257,7 +278,12 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
         # Parse the single JSON object and format it for the user
         final_output_message = ""
         try:
-            clean_json_text = json_response_text.strip().removeprefix("```json").removesuffix("```").strip()
+            clean_json_text = (
+                json_response_text.strip()
+                .removeprefix("```json")
+                .removesuffix("```")
+                .strip()
+            )
             # The entire data blob is our result object
             result_data = json.loads(clean_json_text)
             result = TranscriptionResult.model_validate(result_data)
@@ -272,7 +298,7 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
 
             if not output_parts:
                 message = result.error_message or "[No speech or text detected]"
-                output_parts.append(f"_{message}_")
+                output_parts.append(f"{italics_marker}{message}{italics_marker}")
 
             final_output_message = "\n\n".join(output_parts)
 
@@ -280,9 +306,14 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
             print(f"Error parsing model's JSON response: {parse_error}")
             final_output_message = f"**Could not parse structured response, showing raw output:**\n\n`{json_response_text}`"
 
-        final_output_message = final_output_message or "_No content was generated._"
-        await status_message.delete()
-        await util.discreet_send(event, final_output_message, link_preview=False, reply_to=event.message)
+        final_output_message = final_output_message or "{italics_marker}No content was generated.{italics_marker}"
+        await util.discreet_send(
+            event,
+            final_output_message,
+            link_preview=False,
+            reply_to=event.message,
+            parse_mode=parse_mode,
+        )
 
         if log:
             try:
@@ -306,10 +337,7 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
                 )
                 print(f"\n{log_content}\n---")
 
-                log_content += (
-                    f"--- Transcription ---\n"
-                    f"{json_response_text}"
-                )
+                log_content += f"--- Transcription ---\n" f"{json_response_text}"
 
                 log_dir = os.path.expanduser(f"~/.borg/stt/log/{user_id}")
                 os.makedirs(log_dir, exist_ok=True)
@@ -318,9 +346,12 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
                 with open(log_file_path, "w", encoding="utf-8") as f:
                     f.write(log_content)
 
+
             except Exception as log_e:
                 print(f"Failed to write transcription log: {log_e}")
                 print(traceback.format_exc())
+
+        await status_message.delete()
 
     except Exception as e:
         print(e)
@@ -331,7 +362,9 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
         else:
             await status_message.edit(f"An error occurred during the API call.")
 
+
 # --- Bot Command Setup ---
+
 
 async def set_bot_menu_commands():
     """
@@ -341,22 +374,26 @@ async def set_bot_menu_commands():
     print("STT: setting bot commands ...")
     try:
         await asyncio.sleep(5)
-        await borg(SetBotCommandsRequest(
-            scope=BotCommandScopeDefault(),
-            lang_code='en',
-            commands=[
-                BotCommand('start', 'Onboard and set API key'),
-                BotCommand('help', 'Show help and instructions'),
-                BotCommand('setgeminikey', 'Set or update your Gemini API key')
-            ]
-        ))
+        await borg(
+            SetBotCommandsRequest(
+                scope=BotCommandScopeDefault(),
+                lang_code="en",
+                commands=[
+                    BotCommand("start", "Onboard and set API key"),
+                    BotCommand("help", "Show help and instructions"),
+                    BotCommand("setgeminikey", "Set or update your Gemini API key"),
+                ],
+            )
+        )
         print("Bot command menu has been updated.")
     except Exception as e:
         print(f"Failed to set bot commands: {e}")
 
+
 # --- Telethon Event Handlers ---
 
 PROCESSED_GROUP_IDS = set()
+
 
 @borg.on(events.NewMessage(pattern="/start", func=lambda e: e.is_private))
 async def start_handler(event):
@@ -376,6 +413,7 @@ async def start_handler(event):
         )
     else:
         await request_api_key(event)
+
 
 @borg.on(events.NewMessage(pattern="/help"))
 async def help_handler(event):
@@ -409,6 +447,7 @@ Here's how to use me:
 """
     await event.reply(help_text, link_preview=False)
 
+
 @borg.on(events.NewMessage(pattern=r"(?i)/setGeminiKey(?:\s+(.*))?"))
 async def set_key_handler(event):
     """
@@ -421,7 +460,9 @@ async def set_key_handler(event):
     if api_key_match and api_key_match.strip():
         api_key = api_key_match.strip()
         if not re.match(GEMINI_API_KEY_REGEX, api_key):
-            await event.reply("The provided API key has an invalid format. Please check and try again.")
+            await event.reply(
+                "The provided API key has an invalid format. Please check and try again."
+            )
             return
 
         set_api_key(user_id=user_id, service="gemini", key=api_key)
@@ -432,13 +473,23 @@ async def set_key_handler(event):
         try:
             await borg.send_message(user_id, confirmation_message)
             if not event.is_private:
-                await event.reply("I've confirmed your key update in a private message.")
+                await event.reply(
+                    "I've confirmed your key update in a private message."
+                )
         except Exception:
             await event.respond(confirmation_message)
     else:
         await request_api_key(event)
 
-@borg.on(events.NewMessage(incoming=True, func=lambda e: e.is_private and e.sender_id in AWAITING_KEY_FROM_USERS and not e.text.startswith('/')))
+
+@borg.on(
+    events.NewMessage(
+        incoming=True,
+        func=lambda e: e.is_private
+        and e.sender_id in AWAITING_KEY_FROM_USERS
+        and not e.text.startswith("/"),
+    )
+)
 async def key_submission_handler(event):
     """
     Handles a plain-text message from a user who has been prompted for their API key.
@@ -446,19 +497,25 @@ async def key_submission_handler(event):
     user_id = event.sender_id
     text = event.text.strip()
 
-    if text.lower() == 'cancel':
+    if text.lower() == "cancel":
         cancel_key_flow(user_id)
-        await event.reply("API key setup has been cancelled. You can start again with /setgeminikey.")
+        await event.reply(
+            "API key setup has been cancelled. You can start again with /setgeminikey."
+        )
         return
 
     if not re.match(GEMINI_API_KEY_REGEX, text):
         API_KEY_ATTEMPTS[user_id] = API_KEY_ATTEMPTS.get(user_id, 0) + 1
         if API_KEY_ATTEMPTS[user_id] >= 3:
             cancel_key_flow(user_id)
-            await event.reply("Too many invalid attempts. The API key setup has been cancelled. You can try again later with /setgeminikey.")
+            await event.reply(
+                "Too many invalid attempts. The API key setup has been cancelled. You can try again later with /setgeminikey."
+            )
         else:
             remaining = 3 - API_KEY_ATTEMPTS[user_id]
-            await event.reply(f"This does not look like a valid API key. Please try again. You have {remaining} attempt(s) left.")
+            await event.reply(
+                f"This does not look like a valid API key. Please try again. You have {remaining} attempt(s) left."
+            )
         return
 
     set_api_key(user_id=user_id, service="gemini", key=text)
@@ -470,7 +527,14 @@ async def key_submission_handler(event):
         "You can now send an audio or video file to transcribe."
     )
 
-@borg.on(events.NewMessage(func=lambda e: e.media is not None and e.sender and e.sender_id not in AWAITING_KEY_FROM_USERS))
+
+@borg.on(
+    events.NewMessage(
+        func=lambda e: e.media is not None
+        and e.sender
+        and e.sender_id not in AWAITING_KEY_FROM_USERS
+    )
+)
 async def media_handler(event):
     """
     Handles incoming messages with media, ensuring grouped media is processed only once.
@@ -486,7 +550,7 @@ async def media_handler(event):
     group_id = event.grouped_id
     if group_id:
         if group_id in PROCESSED_GROUP_IDS:
-            return # Already processing this group
+            return  # Already processing this group
 
         PROCESSED_GROUP_IDS.add(group_id)
         try:
@@ -494,10 +558,13 @@ async def media_handler(event):
             # into a temporary directory `cwd` and passing it to the awaited function.
             await util.run_and_upload(event=event, to_await=llm_stt)
         finally:
-            await asyncio.sleep(5) # Give some grace time for all messages to be processed
+            await asyncio.sleep(
+                5
+            )  # Give some grace time for all messages to be processed
             PROCESSED_GROUP_IDS.remove(group_id)
     else:
         await util.run_and_upload(event=event, to_await=llm_stt)
+
 
 # Schedule the command menu setup to run on the bot's event loop upon loading.
 borg.loop.create_task(set_bot_menu_commands())

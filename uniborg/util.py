@@ -592,7 +592,7 @@ async def remove_potential_file(file, event=None):
             )
 
 
-async def discreet_send(event, message, reply_to=None, quiet=False, link_preview=False):
+async def discreet_send(event, message, reply_to=None, quiet=False, link_preview=False, parse_mode=None,):
     message = message.strip()
     if quiet or len(message) == 0:
         return reply_to
@@ -607,6 +607,7 @@ async def discreet_send(event, message, reply_to=None, quiet=False, link_preview
                     message[s:e],
                     link_preview=link_preview,
                     reply_to=(reply_to if s == 0 else last_msg),
+                    parse_mode=parse_mode,
                 )
                 s = e
                 e = s + 4000
