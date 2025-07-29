@@ -277,6 +277,7 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
 
     status_message = await event.reply("Transcribing...")
 
+    json_response_text = None
     try:
         # Pass the single TranscriptionResult schema directly
         response = await model.prompt(
@@ -318,7 +319,7 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
 
         except (json.JSONDecodeError, Exception) as parse_error:
             print(f"Error parsing model's JSON response: {parse_error}")
-            final_output_message = f"**Could not parse structured response, showing raw output:**\n\n`{json_response_text}`"
+            final_output_message = f"**Could not parse structured response, showing raw output:**\n\n```json\n{json_response_text}\n```"
 
         final_output_message = final_output_message or "{italics_marker}No content was generated.{italics_marker}"
         await util.discreet_send(
@@ -370,11 +371,18 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
     except Exception as e:
         print(e)
         print(traceback.format_exc())
-        if "api key not valid" in str(e).lower():
+
+        msg = f"An error occurred during the API call."
+
+        if "exceeded your current quota" in str(e).lower():
+            await status_message.edit(f"{msg}\n\n{str(e)}")
+
+        elif "api key not valid" in str(e).lower():
             await status_message.delete()
             await request_api_key(event)
+
         else:
-            await status_message.edit(f"An error occurred during the API call.")
+            await status_message.edit(msg)
 
 
 # --- Bot Command Setup ---
@@ -417,7 +425,7 @@ async def start_handler(event):
     user_id = event.sender_id
     if user_id in AWAITING_KEY_FROM_USERS:
         cancel_key_flow(user_id)
-        await event.reply("API key setup cancelled.")
+        # await event.reply("API key setup cancelled.")
 
     api_key = get_api_key(user_id=user_id, service="gemini")
     if api_key:
