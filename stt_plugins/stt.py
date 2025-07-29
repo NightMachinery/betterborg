@@ -128,8 +128,19 @@ Follow these synthesis rules:
         - **Exclusion:** Skip filler words (um, uh, er), false starts, repetitions, non-speech sounds (music/effects if speech is present), and discourse markers (well, I mean). Omit words when in doubt.
         - **Formatting:**
             - **Readability:** Use standard punctuation (commas, periods, new lines) and create new paragraphs for different topics or speakers to make the text easy to read. Maintain the spatial structure of the text when doing OCR or transcribing lyrics or dialogue using appropriate whitespace etc. You can use custom markdown markup: `**bold**`, `` `code` ``, or `__italic__` are available. In addition you can send `[links](https://example.com)` and ```` ```pre``` ```` blocks with three backticks.
-             - **Speaker Identification:** When multiple people are speaking, identify each with a bold label on its own line followed by a colon. This label must always be in the original language of the dialogue. Intelligently determine the most appropriate label from the context, such as a person's name (e.g., "**María:**", "**سپیده:**") or title (e.g., "**Detective:**", "**آرایشگر:**"). IMPORTANT: Any guessed or inferred labels must also be in **the original language**. If a specific identifier cannot be determined, use a consistent, generic label in that same language (e.g., "**Speaker 1:**", "**گوینده ۱:**", etc.).
+            - **Speaker Identification:** When multiple people are speaking, label each speaker on a separate line in bold, followed by a colon. Each speaker identifier needs to start on a fresh line. Use the original language of the dialogue for all labels.
+
+              Choose the most appropriate label based on context:
+              • Person's name: "**María:**", "**سپیده:**"
+              • Job title or role: "**Detective:**", "**آرایشگر:**"
+              • Generic labels when unsure: "**Speaker 1:**", "**گوینده ۱:**"
+
+              All labels must start at a new line. Each speaker identifier needs to start on a fresh line. Speaker labels must be placed on independent lines.
+
+              All labels must match the language being spoken, even when guessing names or roles. E.g., if the language is Farsi/Persian, the labels MUST ALSO BE PERSIAN.
+
             - **Separators:** If you process multiple files, you MUST place `---` on its own line to separate the content from each distinct file.
+            - When in doubt, use more whitespace and new lines.
             - **Prohibited Content:** You MUST NOT include timestamps, explanatory notes (e.g., "[music playing]"), or any commentary in the transcription text.
 
 2.  **`visual_description` field**:
