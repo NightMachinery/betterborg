@@ -388,7 +388,7 @@ async def is_read(borg, entity, message, is_out=None):
     return message_id <= max_id
 
 
-async def run_and_get(event, to_await, cwd=None):
+async def run_and_get(event, to_await, cwd=None, *, delete_p=True,):
     if cwd is None:
         cwd = dl_base + str(uuid.uuid4()) + "/"
     Path(cwd).mkdir(parents=True, exist_ok=True)
@@ -441,9 +441,10 @@ async def run_and_get(event, to_await, cwd=None):
 
     await to_await(cwd=cwd, event=event)
 
-    for dled_path, mdate, _ in dled_files:
-        if os.path.exists(dled_path) and mdate == os.path.getmtime(dled_path):
-            await remove_potential_file(dled_path, event)
+    if delete_p:
+        for dled_path, mdate, _ in dled_files:
+            if os.path.exists(dled_path) and mdate == os.path.getmtime(dled_path):
+                await remove_potential_file(dled_path, event)
     return cwd
 
 
