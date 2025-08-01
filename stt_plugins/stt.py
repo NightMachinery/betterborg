@@ -1,103 +1,20 @@
 from icecream import ic
 from uniborg import util
+from uniborg import llm_db
 import os
 import traceback
-import atexit
 import llm
-import time
 import uuid
 import asyncio
-import re
 import json
 from datetime import datetime
 from telethon import events
 from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.types import BotCommand, BotCommandScopeDefault
-from sqlalchemy import create_engine, event, Column, Integer, String
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
 from pydantic import BaseModel, Field
 from typing import Optional
 
-# Assuming 'borg' is the initialized Telethon client and 'util' is a module
-# with helper functions, as is common in user-bot frameworks.
-# from uniborg import util, borg
-
-# --- SQLAlchemy Database Setup for API Keys ---
-
-Base = declarative_base()
-
-
-class UserApiKey(Base):
-    """SQLAlchemy model to store user-specific API keys for various services."""
-
-    __tablename__ = "user_api_keys"
-    user_id = Column(Integer, primary_key=True, autoincrement=False)
-    service = Column(String, primary_key=True)
-    api_key = Column(String, nullable=False)
-
-
-# Create an SQLite database engine and session
-db_path = os.path.expanduser("~/.borg/llm_api_keys.db")
-if not os.path.exists(os.path.dirname(db_path)):
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-
-engine = create_engine(
-    f"sqlite:///{db_path}",
-    echo=False,
-    connect_args={"timeout": 15},
-)
-
-# Enable WAL mode upon first connect
-# This is a one-time setup per connection pool.
-@event.listens_for(engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.close()
-
-Base.metadata.create_all(engine)
-Session = sessionmaker(bind=engine)
-session = Session()
-
-# --- State Management for API Key Flow ---
-AWAITING_KEY_FROM_USERS = set()
-API_KEY_ATTEMPTS = {}
-GEMINI_API_KEY_REGEX = r"^(?P<gemini_key>AIza[0-9A-Za-z_-]{30,50})$"
-
-
-def set_api_key(*, user_id, service, key):
-    """Saves or updates a user's API key for a given service."""
-    user_key = (
-        session.query(UserApiKey)
-        .filter(UserApiKey.user_id == user_id, UserApiKey.service == service)
-        .first()
-    )
-    if user_key:
-        user_key.api_key = key
-    else:
-        user_key = UserApiKey(user_id=user_id, service=service, api_key=key)
-        session.add(user_key)
-    session.commit()
-
-
-def get_api_key(*, user_id, service):
-    """Retrieves a user's API key for a given service."""
-    result = (
-        session.query(UserApiKey)
-        .filter(UserApiKey.user_id == user_id, UserApiKey.service == service)
-        .first()
-    )
-    return result.api_key if result else None
-
-
-@atexit.register
-def close_db_session():
-    """Ensures the database session is closed when the bot stops."""
-    session.close()
-
-
-# --- Pydantic Schema for a SINGLE, Combined Transcription ---
+# --- Pydantic Schema and Prompt for Transcription ---
 
 
 class TranscriptionResult(BaseModel):
@@ -176,46 +93,10 @@ Do not add any commentary, apologies, or text outside of the final JSON object.
 
 # Set this as the active prompt
 TRANSCRIPTION_PROMPT = TRANSCRIPTION_PROMPT_V6
-print(f"Prompt:\n\n{TRANSCRIPTION_PROMPT}\n---\n\n")
+print(f"STT Prompt Loaded:\n\n{TRANSCRIPTION_PROMPT}\n---\n\n")
 
 
 # --- Core Transcription Logic ---
-
-
-async def request_api_key(event):
-    """
-    Initiates the flow to ask a user for their API key.
-    Sends a message with instructions and adds the user's ID to the awaiting set.
-    """
-    user_id = event.sender_id
-    AWAITING_KEY_FROM_USERS.add(user_id)
-    API_KEY_ATTEMPTS[user_id] = 0
-
-    key_request_message = (
-        "**Welcome! To use the transcription service, I need a Gemini API key.**\n\n"
-        "You can get a free API key from Google AI Studio:\n"
-        "➡️ **https://aistudio.google.com/app/apikey** ⬅️\n\n"
-        "Once you have your key, please send it to me in the next message.\n\n"
-        "(Type `cancel` to stop this process.)"
-    )
-
-    try:
-        await borg.send_message(user_id, key_request_message, link_preview=False)
-        if not event.is_private:
-            await event.reply("I've sent you a private message for setup.")
-    except Exception as e:
-        print(f"Could not send PM to {user_id}. Error: {e}")
-        await event.reply(
-            "I couldn't send you a private message. Please check your privacy settings, "
-            "then send `/start` to me."
-        )
-
-
-def cancel_key_flow(user_id):
-    """Removes a user from the API key waiting flow and resets their attempts."""
-    AWAITING_KEY_FROM_USERS.discard(user_id)
-    API_KEY_ATTEMPTS.pop(user_id, None)
-
 
 MIME_TYPE_MAP = {
     ".ogg": "audio/ogg",
@@ -233,9 +114,9 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
     parse_mode = "md"
     italics_marker = "__"
 
-    api_key = get_api_key(user_id=event.sender_id, service="gemini")
+    api_key = llm_db.get_api_key(user_id=event.sender_id, service="gemini")
     if not api_key:
-        await request_api_key(event)
+        await llm_db.request_api_key_message(event)
         return
 
     try:
@@ -250,10 +131,10 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
             f"Error: '{model_name}' model not found. Perhaps the relevant LLM plugin has not been installed."
         )
         return
-    except Exception as e:
+    except Exception:
         print(traceback.format_exc())
         print(e)
-        await event.reply(f"An unexpected error occurred while loading the model.")
+        await event.reply("An unexpected error occurred while loading the model.")
         return
 
     attachments = []
@@ -281,7 +162,7 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
     except Exception as e:
         print(e)
         print(traceback.format_exc())
-        await event.reply(f"Error while preparing media files for transcription")
+        await event.reply("Error while preparing media files for transcription")
         return
 
     if not attachments:
@@ -296,7 +177,7 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
         response = await model.prompt(
             prompt=TRANSCRIPTION_PROMPT,
             attachments=attachments,
-            schema=TranscriptionResult,  # <--- Expect a single result object
+            schema=TranscriptionResult,
             key=api_key,
             temperature=0,
         )
@@ -387,15 +268,12 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
         print(e)
         print(traceback.format_exc())
 
-        msg = f"An error occurred during the API call."
-
+        msg = "An error occurred during the API call."
         if "exceeded your current quota" in str(e).lower():
             await status_message.edit(f"{msg}\n\n{str(e)}")
-
         elif "api key not valid" in str(e).lower():
             await status_message.delete()
-            await request_api_key(event)
-
+            await llm_db.request_api_key_message(event)
         else:
             await status_message.edit(msg)
 
@@ -422,9 +300,9 @@ async def set_bot_menu_commands():
                 ],
             )
         )
-        print("Bot command menu has been updated.")
+        print("STT: Bot command menu has been updated.")
     except Exception as e:
-        print(f"Failed to set bot commands: {e}")
+        print(f"STT: Failed to set bot commands: {e}")
 
 
 # --- Telethon Event Handlers ---
@@ -434,30 +312,23 @@ PROCESSED_GROUP_IDS = set()
 
 @borg.on(events.NewMessage(pattern="/start", func=lambda e: e.is_private))
 async def start_handler(event):
-    """
-    Handles the /start command in private messages to onboard new users.
-    """
+    """Handles the /start command to onboard new users."""
     user_id = event.sender_id
-    if user_id in AWAITING_KEY_FROM_USERS:
-        cancel_key_flow(user_id)
-        # await event.reply("API key setup cancelled.")
-
-    api_key = get_api_key(user_id=user_id, service="gemini")
-    if api_key:
+    if llm_db.is_awaiting_key(user_id):
+        llm_db.cancel_key_flow(user_id)
+    if llm_db.get_api_key(user_id=user_id, service="gemini"):
         await event.reply(
-            "Welcome back! Your Gemini API key is already configured. "
-            "You can send me an audio or video file to transcribe."
+            "Welcome back! Your Gemini API key is already configured. You can send me media files to transcribe."
         )
     else:
-        await request_api_key(event)
+        await llm_db.request_api_key_message(event)
 
 
 @borg.on(events.NewMessage(pattern="/help"))
 async def help_handler(event):
-    """Provides help information about the bot."""
-    user_id = event.sender_id
-    if user_id in AWAITING_KEY_FROM_USERS:
-        cancel_key_flow(user_id)
+    """Provides help information."""
+    if llm_db.is_awaiting_key(event.sender_id):
+        llm_db.cancel_key_flow(event.sender_id)
         await event.reply("API key setup cancelled.")
 
     help_text = """
@@ -466,19 +337,17 @@ async def help_handler(event):
 Here's how to use me:
 
 1.  **Get a Gemini API Key:**
-    You need a free API key to use my services. You can get one from Google AI Studio:
+    You need a free API key to use my services. Get one from Google AI Studio:
     ➡️ **https://aistudio.google.com/app/apikey**
 
 2.  **Set Your API Key:**
     Use the /setGeminiKey command to save your key.
-    - You can provide the key directly: `/setGeminiKey YOUR_API_KEY`
-    - Or, just type /setGeminiKey and I will guide you through the setup.
-
+    - Provide the key directly: `/setGeminiKey YOUR_API_KEY`
+    - Or, just type /setGeminiKey and I will guide you.
 3.  **Transcribe Media:**
-    Simply send me any audio file, voice message, or video. I will transcribe the speech for you. If you send multiple files together (as an album), I will process them as a single request.
-
+    Simply send any audio file, voice message, or video. If you send multiple files as an album, I will process them in a single request.
 **Available Commands:**
-- `/start`: Onboard and set up your API key for the first time.
+- `/start`: Onboard and set up your API key.
 - `/help`: Shows this help message.
 - `/setGeminiKey [API_KEY]`: Sets or updates your Gemini API key.
 """
@@ -487,102 +356,34 @@ Here's how to use me:
 
 @borg.on(events.NewMessage(pattern=r"(?i)/setGeminiKey(?:\s+(.*))?"))
 async def set_key_handler(event):
-    """
-    Handles the /setGeminiKey command. Saves the user's API key if provided,
-    otherwise initiates the interactive key setting flow.
-    """
-    api_key_match = event.pattern_match.group(1)
-    user_id = event.sender_id
-
-    if api_key_match and api_key_match.strip():
-        api_key = api_key_match.strip()
-        if not re.match(GEMINI_API_KEY_REGEX, api_key):
-            await event.reply(
-                "The provided API key has an invalid format. Please check and try again."
-            )
-            return
-
-        set_api_key(user_id=user_id, service="gemini", key=api_key)
-        cancel_key_flow(user_id)
-
-        await event.delete()
-        confirmation_message = "✅ Your Gemini API key has been saved. Your message was deleted for security."
-        try:
-            await borg.send_message(user_id, confirmation_message)
-            if not event.is_private:
-                await event.reply(
-                    "I've confirmed your key update in a private message."
-                )
-        except Exception:
-            await event.respond(confirmation_message)
-    else:
-        await request_api_key(event)
+    """Delegates /setgeminikey command logic to the shared module."""
+    await llm_db.handle_set_key_command(event)
 
 
 @borg.on(
     events.NewMessage(
-        incoming=True,
         func=lambda e: e.is_private
-        and e.sender_id in AWAITING_KEY_FROM_USERS
-        and not e.text.startswith("/"),
+        and llm_db.is_awaiting_key(e.sender_id)
+        and not e.text.startswith("/")
     )
 )
 async def key_submission_handler(event):
-    """
-    Handles a plain-text message from a user who has been prompted for their API key.
-    """
-    user_id = event.sender_id
-    text = event.text.strip()
-
-    if text.lower() == "cancel":
-        cancel_key_flow(user_id)
-        await event.reply(
-            "API key setup has been cancelled. You can start again with /setgeminikey."
-        )
-        return
-
-    if not re.match(GEMINI_API_KEY_REGEX, text):
-        API_KEY_ATTEMPTS[user_id] = API_KEY_ATTEMPTS.get(user_id, 0) + 1
-        if API_KEY_ATTEMPTS[user_id] >= 3:
-            cancel_key_flow(user_id)
-            await event.reply(
-                "Too many invalid attempts. The API key setup has been cancelled. You can try again later with /setgeminikey."
-            )
-        else:
-            remaining = 3 - API_KEY_ATTEMPTS[user_id]
-            await event.reply(
-                f"This does not look like a valid API key. Please try again. You have {remaining} attempt(s) left."
-            )
-        return
-
-    set_api_key(user_id=user_id, service="gemini", key=text)
-    cancel_key_flow(user_id)
-
-    await event.delete()
-    await event.respond(
-        "✅ Your Gemini API key has been saved. Your message was deleted for security.\n"
-        "You can now send an audio or video file to transcribe."
-    )
+    """Delegates plain-text key submission logic to the shared module."""
+    await llm_db.handle_key_submission(event)
 
 
-@borg.on(
-    events.NewMessage(
-        func=lambda e: e.media is not None
-        and e.sender
-        and e.sender_id not in AWAITING_KEY_FROM_USERS
-    )
-)
+@borg.on(events.NewMessage(func=lambda e: e.media is not None and e.sender))
 async def media_handler(event):
     """
-    Handles incoming messages with media, ensuring grouped media is processed only once.
+    Handles incoming messages with media. If the user is being prompted for an
+    API key, this will cancel the prompt and attempt to process the media.
     """
     user_id = event.sender_id
-    if user_id in AWAITING_KEY_FROM_USERS:
-        # If a user sends media while we're waiting for a key, we assume they want to transcribe,
-        # so we cancel the key flow and proceed.
-        cancel_key_flow(user_id)
+
+    # If user sends media while being prompted for a key, cancel the flow.
+    if llm_db.is_awaiting_key(user_id):
+        llm_db.cancel_key_flow(user_id)
         await event.reply("API key setup cancelled. Processing your media instead...")
-        return
 
     group_id = event.grouped_id
     if group_id:
@@ -603,5 +404,6 @@ async def media_handler(event):
         await util.run_and_upload(event=event, to_await=llm_stt)
 
 
+# --- Initialization ---
 # Schedule the command menu setup to run on the bot's event loop upon loading.
 borg.loop.create_task(set_bot_menu_commands())
