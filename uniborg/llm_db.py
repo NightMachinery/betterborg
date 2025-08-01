@@ -26,12 +26,15 @@ MAX_KEY_ATTEMPTS = 3
 
 Base = declarative_base()
 
+
 class UserApiKey(Base):
     """SQLAlchemy model to store user-specific API keys for various services."""
+
     __tablename__ = "user_api_keys"
     user_id = Column(Integer, primary_key=True, autoincrement=False)
     service = Column(String, primary_key=True)
     api_key = Column(String, nullable=False)
+
 
 db_path = os.path.expanduser("~/.borg/llm_api_keys.db")
 if not os.path.exists(os.path.dirname(db_path)):
@@ -43,14 +46,22 @@ engine = create_engine(
     connect_args={"timeout": 15},
 )
 
+
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
-    """Enable WAL mode for multi-process concurrency."""
-    with dbapi_connection.cursor() as cursor:
+    """
+    Enable WAL mode for multi-process concurrency.
+    """
+    cursor = dbapi_connection.cursor()
+    try:
         cursor.execute("PRAGMA journal_mode=WAL")
+    finally:
+        cursor.close()
+
 
 Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
+
 
 def set_api_key(*, user_id: int, service: str, key: str):
     """
@@ -76,6 +87,7 @@ def set_api_key(*, user_id: int, service: str, key: str):
     finally:
         session.close()
 
+
 def get_api_key(*, user_id: int, service: str) -> str | None:
     """Retrieves a user's API key for a given service."""
     session = Session()
@@ -89,6 +101,7 @@ def get_api_key(*, user_id: int, service: str) -> str | None:
     finally:
         session.close()
 
+
 @atexit.register
 def close_db_engine():
     """Disposes of the database engine when the bot stops."""
@@ -97,9 +110,11 @@ def close_db_engine():
 
 # --- API Key Flow State Management (In-Memory) ---
 
+
 def is_awaiting_key(user_id: int) -> bool:
     """Checks if a user is currently in the API key submission flow."""
     return user_id in AWAITING_KEY_FROM_USERS
+
 
 def cancel_key_flow(user_id: int):
     """Cancels the API key flow for a user."""
@@ -108,6 +123,7 @@ def cancel_key_flow(user_id: int):
 
 
 # --- Reusable Handler Logic ---
+
 
 async def request_api_key_message(event):
     """Sends the instructional message to a user to ask for their API key."""
@@ -138,6 +154,7 @@ async def request_api_key_message(event):
                 "then send `/start` to me in a private chat."
             )
 
+
 async def _save_key_with_error_handling(event, user_id, service, key):
     """Wraps set_api_key with user-facing error handling."""
     try:
@@ -145,15 +162,22 @@ async def _save_key_with_error_handling(event, user_id, service, key):
         return True
     except OperationalError as e:
         if "database is locked" in str(e).lower():
-            await event.reply("The database is currently busy. Please try again in a moment.")
+            await event.reply(
+                "The database is currently busy. Please try again in a moment."
+            )
         else:
-            await event.reply("A database error occurred. Please report this to the developer.")
+            await event.reply(
+                "A database error occurred. Please report this to the developer."
+            )
             print(f"Database error for user {user_id}: {traceback.format_exc()}")
         return False
     except Exception:
         await event.reply("An unexpected error occurred while saving your key.")
-        print(f"Unexpected error saving key for user {user_id}: {traceback.format_exc()}")
+        print(
+            f"Unexpected error saving key for user {user_id}: {traceback.format_exc()}"
+        )
         return False
+
 
 async def handle_set_key_command(event):
     """High-level logic for the /setgeminikey command."""
@@ -163,7 +187,9 @@ async def handle_set_key_command(event):
     if api_key_match and api_key_match.strip():
         api_key = api_key_match.strip()
         if not re.match(GEMINI_API_KEY_REGEX, api_key):
-            await event.reply("The provided API key has an invalid format. Please check and try again.")
+            await event.reply(
+                "The provided API key has an invalid format. Please check and try again."
+            )
             return
 
         if await _save_key_with_error_handling(event, user_id, "gemini", api_key):
@@ -173,30 +199,43 @@ async def handle_set_key_command(event):
             try:
                 await borg.send_message(user_id, confirmation_message)
                 if not event.is_private:
-                    await event.reply("I've confirmed your key update in a private message.")
+                    await event.reply(
+                        "I've confirmed your key update in a private message."
+                    )
             except Exception:
                 await event.respond(confirmation_message)
     else:
         await request_api_key_message(event)
 
-async def handle_key_submission(event):
+
+async def handle_key_submission(
+    event,
+    *,
+    success_msg="You can now use this bot.",
+):
     """High-level logic for handling a plain-text API key submission."""
     user_id = event.sender_id
     text = event.text.strip()
 
     if text.lower() == "cancel":
         cancel_key_flow(user_id)
-        await event.reply("API key setup has been cancelled. You can start again with /setgeminikey.")
+        await event.reply(
+            "API key setup has been cancelled. You can start again with /setgeminikey."
+        )
         return
 
     if not re.match(GEMINI_API_KEY_REGEX, text):
         API_KEY_ATTEMPTS[user_id] = API_KEY_ATTEMPTS.get(user_id, 0) + 1
         if API_KEY_ATTEMPTS[user_id] >= MAX_KEY_ATTEMPTS:
             cancel_key_flow(user_id)
-            await event.reply("Too many invalid attempts. The API key setup has been cancelled. You can try again later with /setgeminikey.")
+            await event.reply(
+                "Too many invalid attempts. The API key setup has been cancelled. You can try again later with /setgeminikey."
+            )
         else:
             remaining = MAX_KEY_ATTEMPTS - API_KEY_ATTEMPTS[user_id]
-            await event.reply(f"This does not look like a valid API key. Please try again. You have {remaining} attempt(s) left.")
+            await event.reply(
+                f"This does not look like a valid API key. Please try again. You have {remaining} attempt(s) left."
+            )
         return
 
     if await _save_key_with_error_handling(event, user_id, "gemini", text):
@@ -204,5 +243,5 @@ async def handle_key_submission(event):
         await event.delete()
         await event.respond(
             "✅ Your Gemini API key has been saved. Your message was deleted for security.\n"
-            "You can now use this bot."
+            + success_msg
         )
