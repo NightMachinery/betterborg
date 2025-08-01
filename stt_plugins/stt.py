@@ -42,7 +42,10 @@ db_path = os.path.expanduser("~/.borg/llm_api_keys.db")
 if not os.path.exists(os.path.dirname(db_path)):
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
-engine = create_engine(f"sqlite:///{db_path}", echo=False)
+engine = create_engine(
+    f"sqlite:///{db_path}",
+    echo=False,
+)
 Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 session = Session()
@@ -321,7 +324,10 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
             print(f"Error parsing model's JSON response: {parse_error}")
             final_output_message = f"**Could not parse structured response, showing raw output:**\n\n```json\n{json_response_text}\n```"
 
-        final_output_message = final_output_message or "{italics_marker}No content was generated.{italics_marker}"
+        final_output_message = (
+            final_output_message
+            or "{italics_marker}No content was generated.{italics_marker}"
+        )
         await util.discreet_send(
             event,
             final_output_message,
@@ -360,7 +366,6 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
 
                 with open(log_file_path, "w", encoding="utf-8") as f:
                     f.write(log_content)
-
 
             except Exception as log_e:
                 print(f"Failed to write transcription log: {log_e}")
