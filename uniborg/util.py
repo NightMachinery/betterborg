@@ -449,6 +449,8 @@ async def run_and_get(event, to_await, cwd=None, *, delete_p=True,):
 
 
 async def handle_exc(event, reply_exc=True):
+    #: `reply_exc` should be False for bots facing random users (as opposed to admins).
+    ##
     exc = "Julia encountered an exception. :(\n" + traceback.format_exc()
     await send_output(event, exc, shell=(reply_exc), retcode=1)
 
