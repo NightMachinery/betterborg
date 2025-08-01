@@ -13,7 +13,7 @@ from datetime import datetime
 from telethon import events
 from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.types import BotCommand, BotCommandScopeDefault
-from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy import create_engine, event, Column, Integer, String
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from pydantic import BaseModel, Field
@@ -45,7 +45,17 @@ if not os.path.exists(os.path.dirname(db_path)):
 engine = create_engine(
     f"sqlite:///{db_path}",
     echo=False,
+    connect_args={"timeout": 15},
 )
+
+# Enable WAL mode upon first connect
+# This is a one-time setup per connection pool.
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.close()
+
 Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 session = Session()
