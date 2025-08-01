@@ -1,5 +1,6 @@
 from icecream import ic
 from uniborg import util
+from uniborg import llm_util
 from uniborg import llm_db
 import os
 import traceback
@@ -8,6 +9,7 @@ import uuid
 import asyncio
 import json
 from datetime import datetime
+from pathlib import Path
 from telethon import events
 from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.types import BotCommand, BotCommandScopeDefault
@@ -98,14 +100,6 @@ print(f"STT Prompt Loaded:\n\n{TRANSCRIPTION_PROMPT}\n---\n\n")
 
 # --- Core Transcription Logic ---
 
-MIME_TYPE_MAP = {
-    ".ogg": "audio/ogg",
-    ".oga": "audio/ogg",
-    ".mp4": "video/mp4",
-    ".m4a": "audio/aac",
-}
-
-
 async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
     """
     Performs speech-to-text on media, enforcing a single structured JSON output
@@ -137,33 +131,10 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
         await event.reply("An unexpected error occurred while loading the model.")
         return
 
-    attachments = []
-    try:
-        for filename in os.listdir(cwd):
-            filepath = os.path.join(cwd, filename)
-            if not os.path.isfile(filepath):
-                continue
-
-            lower_filename = filename.lower()
-            handled_explicitly = False
-
-            for extension, mime_type in MIME_TYPE_MAP.items():
-                if lower_filename.endswith(extension):
-                    with open(filepath, "rb") as f:
-                        attachments.append(
-                            llm.Attachment(content=f.read(), type=mime_type)
-                        )
-                    handled_explicitly = True
-                    break  # Exit the inner loop once a match is found
-
-            if not handled_explicitly:
-                # Default case: let the llm library infer the MIME type from the path
-                attachments.append(llm.Attachment(path=filepath))
-    except Exception as e:
-        print(e)
-        print(traceback.format_exc())
-        await event.reply("Error while preparing media files for transcription")
-        return
+    # --- Refactored Attachment Creation ---
+    # The complex logic of iterating files, checking MIME types, and reading
+    # content is now handled by the centralized utility function.
+    attachments = llm_util.create_attachments_from_dir(Path(cwd))
 
     if not attachments:
         await event.reply("No valid media files found to transcribe.")
