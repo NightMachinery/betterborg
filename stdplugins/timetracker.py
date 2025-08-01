@@ -438,6 +438,7 @@ subs = {
     ###
     "👥": "social_others",
     "soc": "social_others",
+    "soch": "social_chores",
     "sov": "social_online_videocall",
     "soa": "social_online_audiocall",
     ##
