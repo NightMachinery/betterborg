@@ -19,6 +19,7 @@ from uniborg import history_util
 from .storage import Storage
 from . import hacks
 from .util import admins
+from .constants import BOT_META_INFO_PREFIX
 
 class Uniborg(TelegramClient):
     # @warn this var can be None in which case send_message will fail and potentially crash the whole program
