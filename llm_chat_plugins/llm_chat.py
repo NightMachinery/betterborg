@@ -80,7 +80,11 @@ BOT_COMMANDS = [
     {"command": "setthink", "description": "Adjust model's reasoning effort"},
     {
         "command": "contextmode",
-        "description": "Change how conversation history is read",
+        "description": "Change how PRIVATE chat history is read",
+    },
+    {
+        "command": "groupcontextmode",
+        "description": "Change how GROUP chat history is read",
     },
     {"command": "tools", "description": "Enable or disable tools like search"},
     {"command": "json", "description": "Toggle JSON output mode"},
@@ -97,6 +101,7 @@ SAFETY_SETTINGS = [
 ]
 
 # --- State Management ---
+BOT_USERNAME = None
 PROCESSED_GROUP_IDS = set()
 AWAITING_INPUT_FROM_USERS = {}
 
@@ -118,6 +123,8 @@ class UserPrefs(BaseModel):
     enabled_tools: list[str] = Field(default_factory=lambda: DEFAULT_ENABLED_TOOLS)
     json_mode: bool = Field(default=False)
     context_mode: str = Field(default="reply_chain")
+    group_context_mode: str = Field(default="reply_chain")
+    metadata_mode: str = Field(default="ONLY_WHEN_NOT_PRIVATE")
 
 
 class UserManager:
@@ -165,8 +172,17 @@ class UserManager:
         return prefs.json_mode
 
     def set_context_mode(self, user_id: int, mode: str):
+        if mode not in CONTEXT_MODES:
+            return
         prefs = self.get_prefs(user_id)
         prefs.context_mode = mode
+        self._save_prefs(user_id, prefs)
+
+    def set_group_context_mode(self, user_id: int, mode: str):
+        if mode not in CONTEXT_MODES:
+            return
+        prefs = self.get_prefs(user_id)
+        prefs.group_context_mode = mode
         self._save_prefs(user_id, prefs)
 
 
@@ -333,6 +349,12 @@ async def _process_turns_to_history(
         return history
 
     bot_me = await event.client.get_me()
+    is_group_chat = not event.is_private
+    # The event.sender_id is the user who triggered the handler, so we get their prefs
+    user_prefs = user_manager.get_prefs(event.sender_id)
+    add_metadata = (
+        user_prefs.metadata_mode == "ONLY_WHEN_NOT_PRIVATE"
+    ) and is_group_chat
 
     # Group consecutive messages by sender to create "turns"
     for _, turn_messages_iter in groupby(message_list, key=lambda m: m.sender_id):
@@ -340,7 +362,10 @@ async def _process_turns_to_history(
         if not turn_messages:
             continue
 
-        role = "assistant" if turn_messages[0].sender_id == bot_me.id else "user"
+        # Get sender info once per turn
+        turn_sender_id = turn_messages[0].sender_id
+        turn_sender = await event.client.get_entity(turn_sender_id)
+        role = "assistant" if turn_sender_id == bot_me.id else "user"
 
         # Process all messages in this turn and consolidate into one history entry
         text_buffer, media_parts = [], []
@@ -354,7 +379,7 @@ async def _process_turns_to_history(
                 continue
 
             ##
-            #: @duplicateCode/6ac96cfacfd852f715e9e3307e7e2b2f
+            #: @seeAlso/6ac96cfacfd852f715e9e3307e7e2b2f
             if (
                 role == "user"
                 and turn_msg.text
@@ -363,8 +388,39 @@ async def _process_turns_to_history(
                 continue
             ##
 
-            if turn_msg.text:
-                text_buffer.append(turn_msg.text)
+            # Start with the original text
+            processed_text = turn_msg.text
+
+            # Strip prefix if in a group chat and the message is from a user
+            if is_group_chat and role == "user" and processed_text and BOT_USERNAME:
+                stripped = processed_text.strip()
+                if stripped.startswith(BOT_USERNAME):
+                    processed_text = stripped[len(BOT_USERNAME) :].strip()
+
+            # Add metadata if required (for user messages in groups)
+            if add_metadata and role == "user":
+                sender_name = turn_sender.first_name or "Unknown"
+                timestamp = turn_msg.date.isoformat()
+                metadata_prefix = (
+                    f"[User: {sender_name} ({turn_sender_id}) | Timestamp: {timestamp}]"
+                )
+                if turn_msg.forward:
+                    fwd_from = turn_msg.forward.sender or turn_msg.forward.chat
+                    if fwd_from:
+                        fwd_from_name = getattr(
+                            fwd_from, "title", None
+                        ) or getattr(fwd_from, "first_name", "Unknown")
+                        metadata_prefix += f" [Forwarded from: {fwd_from_name}]"
+
+                # Prepend metadata to the (potentially stripped) text
+                processed_text = (
+                    f"{metadata_prefix}\n{processed_text}"
+                    if processed_text
+                    else metadata_prefix
+                )
+
+            if processed_text:
+                text_buffer.append(processed_text)
             media_part = await _process_media(turn_msg, temp_dir)
             if media_part:
                 media_parts.append(media_part)
@@ -503,6 +559,16 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
 
 async def set_bot_menu_commands():
     """Sets the bot's command menu in Telegram's UI."""
+    global BOT_USERNAME
+    if BOT_USERNAME is None:
+        try:
+            me = await borg.get_me()
+            BOT_USERNAME = f"@{me.username}"
+        except Exception as e:
+            print(
+                f"LLM_Chat: Could not get bot username. Group functionality will be disabled. Error: {e}"
+            )
+
     await history_util.initialize_history_handler()
 
     print("LLM_Chat: setting bot commands ...")
@@ -556,13 +622,18 @@ To get started, you'll need a free Gemini API key. Send me /setgeminikey to help
 
 **How to Chat with Me**
 
+**▶️ In Private Chats**
+To continue a conversation, simply **reply** to my last message. I will remember our previous messages in that chain. To start a new, separate conversation, just send a message without replying to anything.
+
+**▶️ In Group Chats**
+To talk to me in a group, start your message with `{BOT_USERNAME or "(my username)"}`. Conversation history works the same way (e.g., reply to my last message in the group to continue a thread).
+
 **▶️ Understanding Conversation Context**
-I remember our conversations based on your chosen **Context Mode**.
+I remember our conversations based on your chosen **Context Mode**. You can set this separately for private and group chats.
 
 - **Reply Chain (Default):** To continue a conversation, simply **reply** to my last message. I will remember our previous messages in that chain.
 - **Until Separator:** I will read the reply chain until a message with only `{CONTEXT_SEPARATOR}` is found. This lets you manually define the context length.
 - **Last {LAST_N_MESSAGES_LIMIT} Messages:** I will use the last {LAST_N_MESSAGES_LIMIT} messages in our chat as context, regardless of replies.
-- **Starting Fresh:** To start a new, separate conversation in "Reply Chain" mode, just send a message without replying to anything.
 
 You can attach **images, audio, video, and text files**. Sending multiple files as an **album** is also supported, and I will see all items in the album.
 
@@ -574,7 +645,8 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setgeminikey: Sets or updates your Gemini API key.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
 - /setSystemPrompt: Change my core instructions or reset to default.
-- /contextMode: Change how conversation history is gathered.
+- /contextMode: Change how **private** chat history is gathered.
+- /groupContextMode: Change how **group** chat history is gathered.
 - /setthink: Adjust the model's reasoning effort for complex tasks.
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
@@ -599,11 +671,15 @@ async def status_handler(event):
     context_mode_name = CONTEXT_MODE_NAMES.get(
         prefs.context_mode, prefs.context_mode.replace("_", " ").title()
     )
+    group_context_mode_name = CONTEXT_MODE_NAMES.get(
+        prefs.group_context_mode, prefs.group_context_mode.replace("_", " ").title()
+    )
     thinking_level = prefs.thinking.capitalize() if prefs.thinking else "Default"
     status_message = (
         f"**Your Current Bot Settings**\n\n"
         f"∙ **Model:** `{prefs.model}`\n"
-        f"∙ **Context Mode:** `{context_mode_name}`\n"
+        f"∙ **Private Context Mode:** `{context_mode_name}`\n"
+        f"∙ **Group Context Mode:** `{group_context_mode_name}`\n"
         f"∙ **Reasoning Level:** `{thinking_level}`\n"
         f"∙ **Enabled Tools:** `{enabled_tools_str}`\n"
         f"∙ **JSON Mode:** `{'Enabled' if prefs.json_mode else 'Disabled'}`\n"
@@ -761,7 +837,28 @@ async def context_mode_handler(event):
         for mode in CONTEXT_MODES
     ]
     await event.reply(
-        f"{BOT_META_INFO_PREFIX}**Set Conversation Context Mode**\nChoose how I should remember our conversation history.",
+        f"{BOT_META_INFO_PREFIX}**Set Private Chat Context Mode**\nChoose how I should remember our conversation history in private chats.",
+        buttons=build_menu(buttons, n_cols=1),
+    )
+
+
+@borg.on(events.NewMessage(pattern=r"/groupcontextmode", func=lambda e: e.is_private))
+async def group_context_mode_handler(event):
+    """Displays buttons to set the GROUP conversation context mode."""
+    prefs = user_manager.get_prefs(event.sender_id)
+    buttons = [
+        KeyboardButtonCallback(
+            (
+                f"✅ {CONTEXT_MODE_NAMES[mode]}"
+                if prefs.group_context_mode == mode
+                else CONTEXT_MODE_NAMES[mode]
+            ),
+            data=f"groupcontext_{mode}",
+        )
+        for mode in CONTEXT_MODES
+    ]
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}**Set Group Chat Context Mode**\nChoose how I should remember our conversation history in groups.",
         buttons=build_menu(buttons, n_cols=1),
     )
 
@@ -895,7 +992,24 @@ async def callback_handler(event):
             for m in CONTEXT_MODES
         ]
         await event.edit(buttons=build_menu(buttons, n_cols=1))
-        await event.answer("Context mode updated.")
+        await event.answer("Private context mode updated.")
+    elif data_str.startswith("groupcontext_"):
+        mode = data_str.split("_", 1)[1]
+        user_manager.set_group_context_mode(user_id, mode)
+        prefs = user_manager.get_prefs(user_id)
+        buttons = [
+            KeyboardButtonCallback(
+                (
+                    f"✅ {CONTEXT_MODE_NAMES[m]}"
+                    if prefs.group_context_mode == m
+                    else CONTEXT_MODE_NAMES[m]
+                ),
+                data=f"groupcontext_{m}",
+            )
+            for m in CONTEXT_MODES
+        ]
+        await event.edit(buttons=build_menu(buttons, n_cols=1))
+        await event.answer("Group context mode updated.")
 
 
 @borg.on(
@@ -942,26 +1056,30 @@ def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     Determines if a message is a valid conversational message to be
     processed by the main chat handler.
     """
-    # Must be a private chat and not a forward
-    if not event.is_private or event.forward:
-        return False
-
     # Must have some content (text or media)
     if not (event.text or event.media):
         return False
 
-    # If it has text, check if it's a known command
-    if event.text:
-        text = event.text.strip()
-        ##
-        #: @duplicateCode/6ac96cfacfd852f715e9e3307e7e2b2f
-        first_word = event.text.split(" ", 1)[0]
-        if first_word in KNOWN_COMMAND_SET:
-            return False  # It's a command, so not a chat message
-        ##
+    # Not a forward
+    if event.forward:
+        return False
 
-    # Passes all checks
-    return True
+    # If it's a private chat
+    if event.is_private:
+        if event.text:
+            #: @seeAlso/6ac96cfacfd852f715e9e3307e7e2b2f
+            first_word = event.text.split(" ", 1)[0]
+            if first_word in KNOWN_COMMAND_SET:
+                return False  # It's a command, not a chat message
+            ##
+        return True  # Is a valid private chat message
+
+    # If it's a group chat, it must start with the bot's username
+    if not event.is_private:
+        if event.text and BOT_USERNAME and event.text.strip().startswith(BOT_USERNAME):
+            return True
+
+    return False
 
 
 @borg.on(events.NewMessage(func=is_valid_chat_message))
@@ -978,19 +1096,30 @@ async def chat_handler(event):
     if group_id:
         if group_id in PROCESSED_GROUP_IDS:
             return  # Already being processed
-
     else:
-        # If the message is only a separator and we are in `until_separator` context mode, reply that the context has been cleared.
+        # Check for context separator, now considering group chats
+        is_group_chat = not event.is_private
         prefs = user_manager.get_prefs(user_id)
-        if (
-            prefs.context_mode == "until_separator"
-            and event.text
-            and event.text.strip() == CONTEXT_SEPARATOR
-        ):
-            await event.reply(
-                f"{BOT_META_INFO_PREFIX}Context cleared. The conversation will now start fresh from your next message."
-            )
-            return
+
+        # Determine which context mode is active
+        active_context_mode = (
+            prefs.group_context_mode if is_group_chat else prefs.context_mode
+        )
+
+        if active_context_mode == "until_separator" and event.text:
+            text_to_check = event.text.strip()
+            if is_group_chat and BOT_USERNAME and text_to_check.startswith(BOT_USERNAME):
+                # For groups, check for the separator after the bot's name
+                text_to_check = text_to_check[len(BOT_USERNAME) :].strip()
+
+            if text_to_check == CONTEXT_SEPARATOR:
+                reply_text = "Context cleared. The conversation will now start fresh from your next message"
+                if is_group_chat:
+                    reply_text += " mentioning me."
+                else:
+                    reply_text += "."
+                await event.reply(f"{BOT_META_INFO_PREFIX}{reply_text}")
+                return
 
     api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
     if not api_key:
@@ -1009,7 +1138,14 @@ async def chat_handler(event):
         if group_id:
             await asyncio.sleep(0.1)  # Allow album messages to arrive
 
-        messages = await build_conversation_history(event, prefs.context_mode, temp_dir)
+        # Select context_mode based on chat type
+        context_mode_to_use = (
+            prefs.group_context_mode if not event.is_private else prefs.context_mode
+        )
+
+        messages = await build_conversation_history(
+            event, context_mode_to_use, temp_dir
+        )
         system_prompt_to_use = prefs.system_prompt or DEFAULT_SYSTEM_PROMPT
         messages.insert(0, {"role": "system", "content": system_prompt_to_use})
 

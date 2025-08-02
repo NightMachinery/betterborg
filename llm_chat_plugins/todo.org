@@ -10,6 +10,8 @@
 *** should add metadata of each message (user id, name, timestamp, forwarded from whom) at the start of each message
 Define a variable =metadata_mode=. Default to =ONLY_WHEN_NOT_PRIVATE= which means only add the metadata when used in groups.
 
+* add shortcuts =/sep=, =/replyChain=, =/lastN= for switching context mode directly
+
 * @retired
 :PROPERTIES:
 :visibility: folded
