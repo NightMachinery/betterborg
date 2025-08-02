@@ -649,8 +649,10 @@ async def edit_message(
     message_obj, new_text, link_preview=False, parse_mode=None, max_len=4096
 ):
     """
-    Intelligently edits a message chain to reflect new text content.
+    Intelligently edits a message chain to reflect new text content,
+    avoiding redundant API calls.
 
+    - Compares text content before sending an edit request.
     - Edits existing messages in the chain to match the new text.
     - Creates new messages if the new text is longer than the old chain.
     - Deletes surplus messages if the new text is shorter.
@@ -688,45 +690,51 @@ async def edit_message(
         EDIT_CHAINS.pop(message_id, None)
         try:
             # Edit the original message to be empty or show a placeholder
-            await message_obj.edit("__[empty]__")
+            if message_obj.text != "__[empty]__":
+                await message_obj.edit("__[empty]__")
         except Exception:
             pass
         return
 
     # Edit the primary message (the one the user replied to)
     try:
-        await message_obj.edit(
-            chunks[0], parse_mode=parse_mode, link_preview=link_preview
-        )
+        # --- OPTIMIZATION: Check text before editing ---
+        if message_obj.text != chunks[0]:
+            await message_obj.edit(
+                chunks[0], parse_mode=parse_mode, link_preview=link_preview
+            )
     except telethon.errors.rpcerrorlist.MessageNotModifiedError:
-        pass  # It's fine if the first part of the message is the same
+        pass  # Fallback for safety, though the check above should prevent this.
     except Exception as e:
         print(f"Error editing original message {message_id}: {e}")
         return  # If the head of the chain fails, abort
 
     # Now, handle the children (the rest of the chunks)
-    # We loop through the maximum range of what we have and what we need
     num_new_chunks = len(chunks) - 1
     num_existing_children = len(existing_children)
     last_message_in_chain = message_obj
 
     for i in range(max(num_new_chunks, num_existing_children)):
-        # Edit existing messages if we have a chunk for them
+        # --- Edit existing messages if we have a chunk for them ---
         if i < num_new_chunks and i < num_existing_children:
             child_to_edit = existing_children[i]
+            new_chunk = chunks[i + 1]
             try:
-                await child_to_edit.edit(chunks[i + 1], parse_mode=parse_mode)
+                # --- OPTIMIZATION: Check text before editing ---
+                if child_to_edit.text != new_chunk:
+                    await child_to_edit.edit(new_chunk, parse_mode=parse_mode)
+
                 new_children.append(child_to_edit)
                 last_message_in_chain = child_to_edit
             except telethon.errors.rpcerrorlist.MessageNotModifiedError:
-                new_children.append(child_to_edit)  # Still part of the new chain
+                # This is a fallback, but the check above should prevent it.
+                new_children.append(child_to_edit)
                 last_message_in_chain = child_to_edit
             except Exception:
-                # If editing a child fails, we stop trying to edit subsequent
-                # children in this chain to avoid breaking reply-chain logic.
+                # If editing a child fails, stop processing the chain to avoid errors.
                 break
 
-        # Create new messages if new text is longer
+        # --- Create new messages if new text is longer ---
         elif i < num_new_chunks:
             try:
                 new_child = await last_message_in_chain.reply(
@@ -737,7 +745,7 @@ async def edit_message(
             except Exception:
                 break  # Stop if we can't send a new reply
 
-        # Delete surplus messages if new text is shorter
+        # --- Delete surplus messages if new text is shorter ---
         elif i < num_existing_children:
             child_to_delete = existing_children[i]
             try:
@@ -745,7 +753,7 @@ async def edit_message(
             except Exception:
                 pass  # Ignore deletion errors
 
-    # Update the global state
+    # Update the global state with the new chain configuration
     if new_children:
         EDIT_CHAINS[message_id] = new_children
     else:
