@@ -15,6 +15,7 @@ import telethon.events
 
 from uniborg import util
 from uniborg import llm_db
+from uniborg import history_util
 from .storage import Storage
 from . import hacks
 from .util import admins
@@ -91,6 +92,7 @@ class Uniborg(TelegramClient):
         self.uid = telethon.utils.get_peer_id(self.me)
         util.borg = self
         llm_db.borg = self
+        history_util.borg = self
 
     def load_plugin(self, shortname):
         self.load_plugin_from_file(f"{self._plugin_path}/{shortname}.py")

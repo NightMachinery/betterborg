@@ -26,6 +26,7 @@ from typing import Optional, List
 from uniborg import util
 from uniborg import llm_db
 from uniborg import llm_util
+from uniborg import history_util
 from uniborg.storage import UserStorage
 from uniborg.llm_util import BOT_META_INFO_PREFIX
 
@@ -333,71 +334,82 @@ async def _get_initial_messages_for_reply_chain(event) -> List[Message]:
         return []
     messages = []
     try:
-        message = await event.client.get_messages(event.chat_id, ids=event.message.reply_to_msg_id)
+        message = await event.client.get_messages(
+            event.chat_id, ids=event.message.reply_to_msg_id
+        )
         while message:
             messages.append(message)
             if len(messages) >= HISTORY_MESSAGE_LIMIT:
                 break
             if not message.reply_to_msg_id:
                 break
-            message = await event.client.get_messages(event.chat_id, ids=message.reply_to_msg_id)
+            message = await event.client.get_messages(
+                event.chat_id, ids=message.reply_to_msg_id
+            )
     except Exception:
         pass
     messages.reverse()
     return messages
 
-async def _get_initial_messages_for_separator(event) -> List[Message]:
-    if not event.message.reply_to_msg_id:
-        return []
-    messages = []
-    try:
-        message = await event.client.get_messages(event.chat_id, ids=event.message.reply_to_msg_id)
-        while message:
-            if message.text and message.text.strip() == CONTEXT_SEPARATOR:
-                break
-            messages.append(message)
-            if len(messages) >= HISTORY_MESSAGE_LIMIT:
-                break
-            if not message.reply_to_msg_id:
-                break
-            message = await event.client.get_messages(event.chat_id, ids=message.reply_to_msg_id)
-    except Exception:
-        pass
-    messages.reverse()
-    return messages
-
-async def _get_initial_messages_for_last_n(event) -> List[Message]:
-    messages = []
-    try:
-        # Fetch one more to exclude the triggering message itself
-        limit = LAST_N_MESSAGES_LIMIT + 1
-        messages = await event.client.get_messages(event.chat_id, limit=limit)
-        messages = [m for m in messages if m.id != event.id]
-        if len(messages) > LAST_N_MESSAGES_LIMIT:
-            messages = messages[:LAST_N_MESSAGES_LIMIT]
-    except Exception as e:
-        print(f"Error fetching last {LAST_N_MESSAGES_LIMIT} messages: {e}")
-        return []
-    messages.reverse()
-    return messages
 
 async def build_conversation_history(event, context_mode: str, temp_dir: Path) -> list:
     """
     Orchestrates the construction of a conversation history based on the user's
-    selected context mode, including group expansion and global limits.
+    selected context mode, using the centralized history_util.
     """
-    initial_messages = []
+    messages_to_process = []
+
     if context_mode == "reply_chain":
-        initial_messages = await _get_initial_messages_for_reply_chain(event)
-    elif context_mode == "until_separator":
-        initial_messages = await _get_initial_messages_for_separator(event)
-    elif context_mode == "last_N":
-        initial_messages = await _get_initial_messages_for_last_n(event)
+        # This mode is special and doesn't use the history cache.
+        messages_to_process = await _get_initial_messages_for_reply_chain(event)
+        messages_to_process.append(event.message)
+    else:
+        # These modes use the history cache.
+        message_ids = []
+        if context_mode == "last_N":
+            message_ids = history_util.get_last_n_ids(
+                event.chat_id, LAST_N_MESSAGES_LIMIT
+            )
+        elif context_mode == "until_separator":
+            message_ids = history_util.get_all_ids(event.chat_id)
 
-    initial_messages += [event.message]
+        # Ensure current message is included, then make unique and sort
+        all_ids = sorted(list(set(message_ids + [event.id])))
 
+        if all_ids:
+            try:
+                # Fetch all relevant messages in one bot-friendly call.
+                fetched_messages = [
+                    m
+                    for m in await event.client.get_messages(event.chat_id, ids=all_ids)
+                    if m
+                ]
+
+                if context_mode == "until_separator":
+                    # Find the slice of messages after the last separator.
+                    context_slice = []
+                    # Iterate backwards from the most recent message.
+                    for msg in reversed(fetched_messages):
+                        if msg.text and msg.text.strip() == CONTEXT_SEPARATOR:
+                            break  # Found separator, stop collecting.
+                        context_slice.append(msg)
+                    # The slice is in reverse chronological order, so reverse it back.
+                    messages_to_process = list(reversed(context_slice))
+                else:  # last_N
+                    messages_to_process = fetched_messages
+            except Exception as e:
+                print(f"LLM_Chat: Could not fetch messages from history cache: {e}")
+                # Fallback to just the current message on error.
+                messages_to_process = [event.message]
+        else:
+            # If cache is empty, just use the current message.
+            messages_to_process = [event.message]
+
+    # The rest of the logic can now be unified.
     # Universally expand groups for the fetched messages
-    expanded_messages = await _expand_and_sort_messages_with_groups(event, initial_messages)
+    expanded_messages = await _expand_and_sort_messages_with_groups(
+        event, messages_to_process
+    )
 
     # Apply the global message limit as a final safeguard
     if len(expanded_messages) > HISTORY_MESSAGE_LIMIT:
@@ -410,8 +422,11 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
 
 # --- Bot Command Setup ---
 
+
 async def set_bot_menu_commands():
     """Sets the bot's command menu in Telegram's UI."""
+    history_util.initialize_history_handler()
+
     print("LLM_Chat: setting bot commands ...")
     try:
         await asyncio.sleep(5)
@@ -423,12 +438,16 @@ async def set_bot_menu_commands():
                     BotCommand("start", "Onboard and set API key"),
                     BotCommand("help", "Show detailed help and instructions"),
                     BotCommand("status", "Show your current settings"),
-                    BotCommand("log", f"Get your last {LOG_COUNT_LIMIT} conversation logs"),
+                    BotCommand(
+                        "log", f"Get your last {LOG_COUNT_LIMIT} conversation logs"
+                    ),
                     BotCommand("setgeminikey", "Set or update your Gemini API key"),
                     BotCommand("setmodel", "Set your preferred chat model"),
                     BotCommand("setsystemprompt", "Customize the bot's instructions"),
                     BotCommand("setthink", "Adjust model's reasoning effort"),
-                    BotCommand("contextmode", "Change how conversation history is read"),
+                    BotCommand(
+                        "contextmode", "Change how conversation history is read"
+                    ),
                     BotCommand("tools", "Enable or disable tools like search"),
                     BotCommand("json", "Toggle JSON output mode"),
                 ],
@@ -438,7 +457,9 @@ async def set_bot_menu_commands():
     except Exception as e:
         print(f"LLM_Chat: Failed to set bot commands: {e}")
 
+
 # --- Telethon Event Handlers ---
+
 
 @borg.on(events.NewMessage(pattern="/start", func=lambda e: e.is_private))
 async def start_handler(event):
@@ -454,6 +475,7 @@ async def start_handler(event):
         )
     else:
         await llm_db.request_api_key_message(event)
+
 
 @borg.on(events.NewMessage(pattern="/help", func=lambda e: e.is_private))
 async def help_handler(event):
@@ -480,7 +502,7 @@ I remember our conversations based on your chosen **Context Mode**.
 
 You can attach **images, audio, video, and text files**. Sending multiple files as an **album** is also supported, and I will see all items in the album.
 
-**Available Commands**
+**Available Commands:**
 - /start: Onboard and set up your API key.
 - /help: Shows this detailed help message.
 - /status: Shows a summary of your current settings.
@@ -493,19 +515,26 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
 """
-    await event.reply(f"{BOT_META_INFO_PREFIX}{help_text}", link_preview=False, parse_mode="md")
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}{help_text}", link_preview=False, parse_mode="md"
+    )
+
 
 @borg.on(events.NewMessage(pattern=r"/status", func=lambda e: e.is_private))
 async def status_handler(event):
     """Displays a summary of the user's current settings."""
     user_id = event.sender_id
     prefs = user_manager.get_prefs(user_id)
-    enabled_tools_str = ", ".join(prefs.enabled_tools) if prefs.enabled_tools else "None"
+    enabled_tools_str = (
+        ", ".join(prefs.enabled_tools) if prefs.enabled_tools else "None"
+    )
     system_prompt_status = "Default"
     if prefs.system_prompt and prefs.system_prompt != DEFAULT_SYSTEM_PROMPT:
         system_prompt_status = "Custom"
 
-    context_mode_name = CONTEXT_MODE_NAMES.get(prefs.context_mode, prefs.context_mode.replace('_', ' ').title())
+    context_mode_name = CONTEXT_MODE_NAMES.get(
+        prefs.context_mode, prefs.context_mode.replace("_", " ").title()
+    )
     thinking_level = prefs.thinking.capitalize() if prefs.thinking else "Default"
     status_message = (
         f"**Your Current Bot Settings**\n\n"
@@ -562,7 +591,11 @@ async def log_handler(event):
         )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/setGeminiKey(?:\s+(.*))?", func=lambda e: e.is_private))
+@borg.on(
+    events.NewMessage(
+        pattern=r"(?i)/setGeminiKey(?:\s+(.*))?", func=lambda e: e.is_private
+    )
+)
 async def set_key_handler(event):
     """Delegates /setgeminikey command logic to the shared module."""
     await llm_db.handle_set_key_command(event)
@@ -572,18 +605,20 @@ async def set_key_handler(event):
     events.NewMessage(
         func=lambda e: e.is_private
         and llm_db.is_awaiting_key(e.sender_id)
-        and e.text and not e.text.startswith("/")
+        and e.text
+        and not e.text.startswith("/")
     )
 )
 async def key_submission_handler(event):
     """Delegates plain-text key submission logic to the shared module."""
     await llm_db.handle_key_submission(
-        event,
-        success_msg="You can now start chatting with me."
+        event, success_msg="You can now start chatting with me."
     )
 
 
-@borg.on(events.NewMessage(pattern=r"/setModel(?:\s+(.*))?", func=lambda e: e.is_private))
+@borg.on(
+    events.NewMessage(pattern=r"/setModel(?:\s+(.*))?", func=lambda e: e.is_private)
+)
 async def set_model_handler(event):
     """Sets the user's preferred chat model, now with an interactive flow."""
     user_id = event.sender_id
@@ -593,7 +628,9 @@ async def set_model_handler(event):
         model_name = model_name_match.strip()
         user_manager.set_model(user_id, model_name)
         cancel_input_flow(user_id)
-        await event.reply(f"{BOT_META_INFO_PREFIX}Your chat model has been set to: `{model_name}`")
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}Your chat model has been set to: `{model_name}`"
+        )
     else:
         AWAITING_INPUT_FROM_USERS[user_id] = "model"
         await event.reply(
@@ -603,7 +640,11 @@ async def set_model_handler(event):
         )
 
 
-@borg.on(events.NewMessage(pattern=r"/setSystemPrompt(?:\s+([\s\S]+))?", func=lambda e: e.is_private))
+@borg.on(
+    events.NewMessage(
+        pattern=r"/setSystemPrompt(?:\s+([\s\S]+))?", func=lambda e: e.is_private
+    )
+)
 async def set_system_prompt_handler(event):
     """Sets the user's custom system prompt or resets it, now with an interactive flow."""
     user_id = event.sender_id
@@ -615,13 +656,20 @@ async def set_system_prompt_handler(event):
         if prompt.lower() == "reset":
             # Set the prompt to an empty string to signify using the default
             user_manager.set_system_prompt(user_id, "")
-            await event.reply(f"{BOT_META_INFO_PREFIX}Your system prompt has been reset to the default.")
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}Your system prompt has been reset to the default."
+            )
         else:
             user_manager.set_system_prompt(user_id, prompt)
-            await event.reply(f"{BOT_META_INFO_PREFIX}Your new system prompt has been saved.")
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}Your new system prompt has been saved."
+            )
     else:
         AWAITING_INPUT_FROM_USERS[user_id] = "system_prompt"
-        current_prompt = user_manager.get_prefs(user_id).system_prompt or "Default (no custom prompt set)"
+        current_prompt = (
+            user_manager.get_prefs(user_id).system_prompt
+            or "Default (no custom prompt set)"
+        )
         await event.reply(
             f"{BOT_META_INFO_PREFIX}**Your current system prompt is:**\n\n```\n{current_prompt}\n```"
             "\n\nPlease send the new system prompt in the next message."
@@ -634,55 +682,91 @@ async def set_system_prompt_handler(event):
 async def context_mode_handler(event):
     """Displays buttons to set the conversation context mode."""
     prefs = user_manager.get_prefs(event.sender_id)
-    buttons = [KeyboardButtonCallback(
-        f"✅ {CONTEXT_MODE_NAMES[mode]}" if prefs.context_mode == mode else CONTEXT_MODE_NAMES[mode],
-        data=f"context_{mode}"
-    ) for mode in CONTEXT_MODES]
+    buttons = [
+        KeyboardButtonCallback(
+            f"✅ {CONTEXT_MODE_NAMES[mode]}"
+            if prefs.context_mode == mode
+            else CONTEXT_MODE_NAMES[mode],
+            data=f"context_{mode}",
+        )
+        for mode in CONTEXT_MODES
+    ]
     await event.reply(
         f"{BOT_META_INFO_PREFIX}**Set Conversation Context Mode**\nChoose how I should remember our conversation history.",
-        buttons=build_menu(buttons, n_cols=1)
+        buttons=build_menu(buttons, n_cols=1),
     )
+
 
 @borg.on(events.NewMessage(pattern=r"/setthink", func=lambda e: e.is_private))
 async def set_think_handler(event):
     """Displays buttons to set the reasoning effort."""
     prefs = user_manager.get_prefs(event.sender_id)
-    buttons = [KeyboardButtonCallback(
-        f"✅ {lvl.capitalize()}" if prefs.thinking == lvl else lvl.capitalize(), data=f"think_{lvl}"
-    ) for lvl in REASONING_LEVELS]
+    buttons = [
+        KeyboardButtonCallback(
+            f"✅ {lvl.capitalize()}" if prefs.thinking == lvl else lvl.capitalize(),
+            data=f"think_{lvl}",
+        )
+        for lvl in REASONING_LEVELS
+    ]
     clear_text = "Clear (Default)"
-    buttons.append(KeyboardButtonCallback(f"✅ {clear_text}" if prefs.thinking is None else clear_text, data="think_clear"))
+    buttons.append(
+        KeyboardButtonCallback(
+            f"✅ {clear_text}" if prefs.thinking is None else clear_text,
+            data="think_clear",
+        )
+    )
     await event.reply(
         f"{BOT_META_INFO_PREFIX}**Set Reasoning Effort**\nChoose the level of thinking for the model. This may affect response time and cost.",
-        buttons=build_menu(buttons, n_cols=2)
+        buttons=build_menu(buttons, n_cols=2),
     )
+
 
 @borg.on(events.NewMessage(pattern=r"/tools", func=lambda e: e.is_private))
 async def tools_handler(event):
     """Displays buttons to toggle tools."""
     prefs = user_manager.get_prefs(event.sender_id)
-    buttons = [KeyboardButtonCallback(
-        f"{'✅' if tool in prefs.enabled_tools else '❌'} {tool}", data=f"tool_{tool}"
-    ) for tool in AVAILABLE_TOOLS]
-    await event.reply(f"{BOT_META_INFO_PREFIX}**Manage Tools**\nToggle available tools for the model.", buttons=build_menu(buttons, n_cols=1))
+    buttons = [
+        KeyboardButtonCallback(
+            f"{'✅' if tool in prefs.enabled_tools else '❌'} {tool}",
+            data=f"tool_{tool}",
+        )
+        for tool in AVAILABLE_TOOLS
+    ]
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}**Manage Tools**\nToggle available tools for the model.",
+        buttons=build_menu(buttons, n_cols=1),
+    )
 
-@borg.on(events.NewMessage(pattern=r"/(enable|disable)(?P<tool_name>\w+)", func=lambda e: e.is_private))
+
+@borg.on(
+    events.NewMessage(pattern=r"/(enable|disable)(?P<tool_name>\w+)", func=lambda e: e.is_private)
+)
 async def toggle_tool_handler(event):
     action = event.pattern_match.group(1)
     tool_name_req = event.pattern_match.group("tool_name").lower()
-    matched_tool = next((t for t in AVAILABLE_TOOLS if t.lower() == tool_name_req), None)
+    matched_tool = next(
+        (t for t in AVAILABLE_TOOLS if t.lower() == tool_name_req), None
+    )
     if matched_tool:
         is_enabled = action == "enable"
         user_manager.set_tool_state(event.sender_id, matched_tool, enabled=is_enabled)
-        await event.reply(f"{BOT_META_INFO_PREFIX}`{matched_tool}` has been **{action}d**.")
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}`{matched_tool}` has been **{action}d**."
+        )
     else:
-        await event.reply(f"{BOT_META_INFO_PREFIX}Unknown tool: `{tool_name_req}`. Available: {', '.join(AVAILABLE_TOOLS)}")
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}Unknown tool: `{tool_name_req}`. Available: {', '.join(AVAILABLE_TOOLS)}"
+        )
+
 
 @borg.on(events.NewMessage(pattern=r"/json", func=lambda e: e.is_private))
 async def json_mode_handler(event):
     """Toggles JSON mode."""
     is_enabled = user_manager.toggle_json_mode(event.sender_id)
-    await event.reply(f"{BOT_META_INFO_PREFIX}JSON response mode has been **{'enabled' if is_enabled else 'disabled'}**.")
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}JSON response mode has been **{'enabled' if is_enabled else 'disabled'}**."
+    )
+
 
 @borg.on(events.CallbackQuery())
 async def callback_handler(event):
@@ -693,11 +777,20 @@ async def callback_handler(event):
         level = data_str.split("_")[1]
         user_manager.set_thinking(user_id, None if level == "clear" else level)
         prefs = user_manager.get_prefs(user_id)
-        buttons = [KeyboardButtonCallback(
-            f"✅ {lvl.capitalize()}" if prefs.thinking == lvl else lvl.capitalize(), data=f"think_{lvl}"
-        ) for lvl in REASONING_LEVELS]
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {lvl.capitalize()}" if prefs.thinking == lvl else lvl.capitalize(),
+                data=f"think_{lvl}",
+            )
+            for lvl in REASONING_LEVELS
+        ]
         clear_text = "Clear (Default)"
-        buttons.append(KeyboardButtonCallback(f"✅ {clear_text}" if prefs.thinking is None else clear_text, data="think_clear"))
+        buttons.append(
+            KeyboardButtonCallback(
+                f"✅ {clear_text}" if prefs.thinking is None else clear_text,
+                data="think_clear",
+            )
+        )
         await event.edit(buttons=build_menu(buttons, n_cols=2))
         await event.answer("Thinking preference updated.")
     elif data_str.startswith("tool_"):
@@ -705,20 +798,29 @@ async def callback_handler(event):
         prefs = user_manager.get_prefs(user_id)
         is_enabled = tool_name not in prefs.enabled_tools
         user_manager.set_tool_state(user_id, tool_name, enabled=is_enabled)
-        prefs = user_manager.get_prefs(user_id) # Re-fetch
-        buttons = [KeyboardButtonCallback(
-            f"{'✅' if tool in prefs.enabled_tools else '❌'} {tool}", data=f"tool_{tool}"
-        ) for tool in AVAILABLE_TOOLS]
+        prefs = user_manager.get_prefs(user_id)  # Re-fetch
+        buttons = [
+            KeyboardButtonCallback(
+                f"{'✅' if tool in prefs.enabled_tools else '❌'} {tool}",
+                data=f"tool_{tool}",
+            )
+            for tool in AVAILABLE_TOOLS
+        ]
         await event.edit(buttons=build_menu(buttons, n_cols=1))
         await event.answer(f"{tool_name} {'enabled' if is_enabled else 'disabled'}.")
     elif data_str.startswith("context_"):
         mode = data_str.split("_", 1)[1]
         user_manager.set_context_mode(user_id, mode)
         prefs = user_manager.get_prefs(user_id)
-        buttons = [KeyboardButtonCallback(
-            f"✅ {CONTEXT_MODE_NAMES[m]}" if prefs.context_mode == m else CONTEXT_MODE_NAMES[m],
-            data=f"context_{m}"
-        ) for m in CONTEXT_MODES]
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {CONTEXT_MODE_NAMES[m]}"
+                if prefs.context_mode == m
+                else CONTEXT_MODE_NAMES[m],
+                data=f"context_{m}",
+            )
+            for m in CONTEXT_MODES
+        ]
         await event.edit(buttons=build_menu(buttons, n_cols=1))
         await event.answer("Context mode updated.")
 
@@ -727,7 +829,8 @@ async def callback_handler(event):
     events.NewMessage(
         func=lambda e: e.is_private
         and e.sender_id in AWAITING_INPUT_FROM_USERS
-        and e.text and not e.text.startswith("/")
+        and e.text
+        and not e.text.startswith("/")
     )
 )
 async def generic_input_handler(event):
@@ -743,19 +846,32 @@ async def generic_input_handler(event):
 
     if input_type == "model":
         user_manager.set_model(user_id, text)
-        await event.reply(f"{BOT_META_INFO_PREFIX}✅ Your chat model has been updated to: `{text}`")
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}✅ Your chat model has been updated to: `{text}`"
+        )
     elif input_type == "system_prompt":
         if text.lower() == "reset":
             user_manager.set_system_prompt(user_id, "")
-            await event.reply(f"{BOT_META_INFO_PREFIX}✅ Your system prompt has been reset to the default.")
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}✅ Your system prompt has been reset to the default."
+            )
         else:
             user_manager.set_system_prompt(user_id, text)
-            await event.reply(f"{BOT_META_INFO_PREFIX}✅ Your new system prompt has been saved.")
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}✅ Your new system prompt has been saved."
+            )
 
     cancel_input_flow(user_id)
 
 
-@borg.on(events.NewMessage(func=lambda e: e.is_private and (e.text or e.media) and not (e.text and e.text.startswith('/')) and not e.forward))
+@borg.on(
+    events.NewMessage(
+        func=lambda e: e.is_private
+        and (e.text or e.media)
+        and not (e.text and e.text.startswith("/"))
+        and not e.forward
+    )
+)
 async def chat_handler(event):
     """Main handler for all non-command messages in a private chat."""
     user_id = event.sender_id
@@ -783,7 +899,6 @@ async def chat_handler(event):
             )
             return
 
-
     api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
     if not api_key:
         await llm_db.request_api_key_message(event)
@@ -799,18 +914,20 @@ async def chat_handler(event):
         temp_dir.mkdir(exist_ok=True)
 
         if group_id:
-            await asyncio.sleep(0.1) # Allow album messages to arrive
+            await asyncio.sleep(0.1)  # Allow album messages to arrive
 
         messages = await build_conversation_history(event, prefs.context_mode, temp_dir)
         system_prompt_to_use = prefs.system_prompt or DEFAULT_SYSTEM_PROMPT
         messages.insert(0, {"role": "system", "content": system_prompt_to_use})
 
         # --- Construct API call arguments ---
-        is_gemini_model = re.search(r'\bgemini\b', prefs.model, re.IGNORECASE)
+        is_gemini_model = re.search(r"\bgemini\b", prefs.model, re.IGNORECASE)
         warnings = []
 
         api_kwargs = {
-            "model": prefs.model, "messages": messages, "api_key": api_key,
+            "model": prefs.model,
+            "messages": messages,
+            "api_key": api_key,
             "stream": True,
         }
 
@@ -846,7 +963,9 @@ async def chat_handler(event):
                 if (current_time - last_edit_time) > edit_interval:
                     try:
                         # Add a cursor to indicate the bot is still "typing"
-                        await util.edit_message(response_message, f"{response_text}▌", parse_mode="md")
+                        await util.edit_message(
+                            response_message, f"{response_text}▌", parse_mode="md"
+                        )
                         last_edit_time = current_time
                     except errors.rpcerrorlist.MessageNotModifiedError:
                         # This error is expected if the content hasn't changed
@@ -859,10 +978,14 @@ async def chat_handler(event):
         final_text = response_text.strip() or "__[No response]__"
 
         if warnings:
-            warning_text = "\n\n---\n**Note:**\n" + "\n".join(f"- {w}" for w in warnings)
+            warning_text = "\n\n---\n**Note:**\n" + "\n".join(
+                f"- {w}" for w in warnings
+            )
             # final_text += warning_text # No need to clutter the response
 
-        await util.edit_message(response_message, final_text, parse_mode="md", link_preview=False)
+        await util.edit_message(
+            response_message, final_text, parse_mode="md", link_preview=False
+        )
         await _log_conversation(event, prefs.model, messages, final_text)
 
     except Exception:
