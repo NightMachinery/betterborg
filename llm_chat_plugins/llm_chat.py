@@ -2,11 +2,13 @@ import asyncio
 import traceback
 import os
 import uuid
+import base64
+import mimetypes
 from datetime import datetime
 from pathlib import Path
 from shutil import rmtree
 
-import llm
+import litellm
 from telethon import events
 from pydantic import BaseModel, Field
 
@@ -17,7 +19,9 @@ from uniborg.storage import UserStorage
 
 # --- Constants and Configuration ---
 
-DEFAULT_MODEL = "gemini-2.5-flash"  # 2.5 is the latest model
+# Use the litellm model naming convention.
+# See https://docs.litellm.ai/docs/providers/gemini
+DEFAULT_MODEL = "gemini/gemini-2.5-flash"
 DEFAULT_SYSTEM_PROMPT = """
 You are a helpful and knowledgeable assistant. Your primary audience is advanced STEM postgraduate researchers, so be precise and technically accurate.
 
@@ -65,7 +69,7 @@ user_manager = UserManager()
 
 # --- Core Logic & Helpers ---
 
-async def _log_conversation(event, model_name: str, conversation_history: list, final_response: str):
+async def _log_conversation(event, model_name: str, messages: list, final_response: str):
     """Formats and writes the conversation log to a user-specific file."""
     try:
         user = await event.get_sender()
@@ -92,21 +96,21 @@ async def _log_conversation(event, model_name: str, conversation_history: list, 
             "--- Conversation ---"
         ]
 
-        for resp in conversation_history:
-            # A user turn has a prompt, an assistant turn has a response
-            if resp.prompt.prompt: # User Turn
-                log_parts.append("\n[User]:")
-                if resp.prompt.attachments:
-                    for att in resp.prompt.attachments:
-                        # Log a placeholder, not the content
-                        att_type = att.type or "file"
-                        log_parts.append(f"[Attachment: {att_type}]")
-                log_parts.append(resp.prompt.prompt)
-            elif resp.response: # Assistant Turn
-                log_parts.append("\n[Assistant]:")
-                log_parts.append(resp.response)
+        for msg in messages:
+            role = msg.get("role", "unknown").capitalize()
+            content = msg.get("content")
 
-        # Add the final response from the current interaction
+            log_parts.append(f"\n[{role}]:")
+            if isinstance(content, str):
+                log_parts.append(content)
+            elif isinstance(content, list):
+                # Handle multimodal content for logging
+                for part in content:
+                    if part.get("type") == "text":
+                        log_parts.append(part.get("text", ""))
+                    elif part.get("type") == "image_url":
+                        log_parts.append("[Attachment: Image]")
+
         log_parts.append("\n[Assistant]:")
         log_parts.append(final_response)
 
@@ -118,51 +122,67 @@ async def _log_conversation(event, model_name: str, conversation_history: list, 
         traceback.print_exc()
 
 
-async def build_conversation_history(event) -> list[llm.Response]:
+async def build_conversation_history(event) -> list:
     """
-    Constructs a conversation history from the reply chain, downloading attachments.
+    Constructs a conversation history for litellm from the reply chain,
+    downloading and encoding media. Excludes the current message.
     """
+    if not event.message.reply_to_msg_id:
+        return []
+
     history = []
-    message = event.message
+    message = await event.client.get_messages(event.chat_id, ids=event.message.reply_to_msg_id)
     bot_me = await event.client.get_me()
-    temp_dir = Path(f"./temp_llm_chat_{event.id}/")
+    temp_dir = Path(f"./temp_llm_chat_history_{event.id}/")
     temp_dir.mkdir(exist_ok=True)
 
+    messages_to_process = []
+    while message:
+        messages_to_process.append(message)
+        if not message.reply_to_msg_id:
+            break
+        message = await event.client.get_messages(event.chat_id, ids=message.reply_to_msg_id)
+
+    messages_to_process.reverse()  # Process from oldest to newest
+
     try:
-        fake_model = llm.get_model(DEFAULT_MODEL)
-        while message:
-            role = "assistant" if message.sender_id == bot_me.id else "user"
-            text_content = message.text or ""
-            attachments = []
-            if message.media:
-                try:
-                    file_path = await message.download_media(file=temp_dir)
-                    if file_path:
-                        attachments.append(llm.Attachment(path=file_path))
-                except Exception as e:
-                    print(f"Warning: Could not download media for message {message.id}. Error: {e}")
+        for msg in messages_to_process:
+            role = "assistant" if msg.sender_id == bot_me.id else "user"
+            text_content = msg.text or ""
 
-            prompt_obj = llm.Prompt(text_content, model=fake_model, attachments=attachments)
-            if role == "assistant":
-                response_obj = llm.Response.fake(model=fake_model, prompt=llm.Prompt("", model=fake_model), system="", response=text_content)
+            if not msg.media:
+                history.append({"role": role, "content": text_content})
             else:
-                response_obj = llm.Response.fake(model=fake_model, prompt=prompt_obj, system="", response="")
-            history.append(response_obj)
-
-            if not message.reply_to_msg_id:
-                break
-            message = await event.client.get_messages(event.chat_id, ids=message.reply_to_msg_id)
+                # Handle multimodal content in history
+                content_parts = [{"type": "text", "text": text_content}]
+                try:
+                    file_path_str = await msg.download_media(file=temp_dir)
+                    if file_path_str:
+                        file_path = Path(file_path_str)
+                        mime_type, _ = mimetypes.guess_type(file_path)
+                        if mime_type and mime_type.startswith("image/"):
+                            with open(file_path, "rb") as f:
+                                b64_content = base64.b64encode(f.read()).decode("utf-8")
+                            content_parts.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime_type};base64,{b64_content}"}
+                            })
+                    history.append({"role": role, "content": content_parts})
+                except Exception as e:
+                    print(f"Warning: Could not process media for history message {msg.id}. Error: {e}")
+                    # If media fails, just append the text content
+                    history.append({"role": role, "content": text_content})
     finally:
         if temp_dir.exists():
             rmtree(temp_dir, ignore_errors=True)
-    history.reverse()
+
     return history
 
 # --- Telethon Event Handlers ---
 
 @borg.on(util.admin_cmd(pattern=r"/setModel(?:\s+(.*))?"))
 async def set_model_handler(event):
-    # (This handler is unchanged)
+    """Sets the user's preferred chat model."""
     user_id = event.sender_id
     model_name_match = event.pattern_match.group(1)
     if model_name_match:
@@ -178,7 +198,7 @@ async def set_model_handler(event):
 
 @borg.on(util.admin_cmd(pattern=r"/setSystemPrompt(?:\s+([\s\S]+))?"))
 async def set_system_prompt_handler(event):
-    # (This handler is unchanged)
+    """Sets the user's custom system prompt."""
     user_id = event.sender_id
     prompt_match = event.pattern_match.group(1)
     if prompt_match:
@@ -209,43 +229,67 @@ async def chat_handler(event):
         return
 
     prefs = user_manager.get_prefs(user_id)
-    try:
-        model = llm.get_async_model(prefs.model)
-    except llm.UnknownModelError:
-        await event.reply(f"Error: Your configured model (`{prefs.model}`) was not found. Use `/setModel` to fix it.")
-        return
-
     thinking_message = await event.reply("...")
-    conversation = None # Define conversation here to access in finally block
-    try:
-        conversation = model.conversation()
-        history = await build_conversation_history(event)
-        conversation.responses = history
+    temp_dir = Path(f"./temp_llm_chat_{event.id}/")
 
+    try:
+        messages = await build_conversation_history(event)
+
+        # Add system prompt as the first message
+        if prefs.system_prompt:
+            messages.insert(0, {"role": "system", "content": prefs.system_prompt})
+
+        # Prepare and add the current user message
+        current_user_content = [{"type": "text", "text": event.message.text or ""}]
+        if event.message.media:
+            temp_dir.mkdir(exist_ok=True)
+            try:
+                file_path_str = await event.message.download_media(file=temp_dir)
+                if file_path_str:
+                    file_path = Path(file_path_str)
+                    mime_type, _ = mimetypes.guess_type(file_path)
+                    if mime_type and mime_type.startswith("image/"):
+                        with open(file_path, "rb") as f:
+                            b64_content = base64.b64encode(f.read()).decode("utf-8")
+                        current_user_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime_type};base64,{b64_content}"}
+                        })
+            except Exception as e:
+                 print(f"Failed to process media for current message: {e}")
+
+        messages.append({"role": "user", "content": current_user_content})
+
+        # Make the API call using litellm
         response_text = ""
         last_edit_time = asyncio.get_event_loop().time()
-        prompt_text = event.message.text or ""
 
-        async for chunk in conversation.prompt(
-            prompt_text,
-            system=prefs.system_prompt,
-            key=api_key
-        ):
-            response_text += chunk
-            current_time = asyncio.get_event_loop().time()
-            if (current_time - last_edit_time) > 1.5 and response_text.strip():
-                await thinking_message.edit(f"{response_text}▌")
-                last_edit_time = current_time
+        response_stream = await litellm.acompletion(
+            model=prefs.model,
+            messages=messages,
+            api_key=api_key,
+            stream=True
+        )
+
+        async for chunk in response_stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                response_text += delta
+                current_time = asyncio.get_event_loop().time()
+                if (current_time - last_edit_time) > 1.5 and response_text.strip():
+                    await thinking_message.edit(f"{response_text}...")
+                    last_edit_time = current_time
 
         final_text = response_text.strip() or "__[No response]__"
-        await util.discreet_send(
-            event, final_text, reply_to=event.message, parse_mode="md",
-        )
         await thinking_message.delete()
+        await util.discreet_send(event, final_text, reply_to=event.message, parse_mode="md")
 
         # Log the successful conversation
-        await _log_conversation(event, prefs.model, conversation.responses, final_text)
+        await _log_conversation(event, prefs.model, messages, final_text)
 
     except Exception:
         await util.handle_exc(event, reply_exc=False)
         await thinking_message.edit("An error occurred. The details have been logged to the console.")
+    finally:
+        if temp_dir.exists():
+            rmtree(temp_dir, ignore_errors=True)
