@@ -353,6 +353,16 @@ async def _process_turns_to_history(
             ):
                 continue
 
+            ##
+            #: @duplicateCode/6ac96cfacfd852f715e9e3307e7e2b2f
+            if (
+                role == "user"
+                and turn_msg.text
+                and turn_msg.text.split(" ", 1)[0] in KNOWN_COMMAND_SET
+            ):
+                continue
+            ##
+
             if turn_msg.text:
                 text_buffer.append(turn_msg.text)
             media_part = await _process_media(turn_msg, temp_dir)
@@ -943,9 +953,12 @@ def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     # If it has text, check if it's a known command
     if event.text:
         text = event.text.strip()
+        ##
+        #: @duplicateCode/6ac96cfacfd852f715e9e3307e7e2b2f
         first_word = event.text.split(" ", 1)[0]
         if first_word in KNOWN_COMMAND_SET:
             return False  # It's a command, so not a chat message
+        ##
 
     # Passes all checks
     return True
