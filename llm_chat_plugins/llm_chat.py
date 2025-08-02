@@ -1087,6 +1087,7 @@ async def callback_handler(event):
     if data_str.startswith("think_"):
         level = data_str.split("_")[1]
         user_manager.set_thinking(user_id, None if level == "clear" else level)
+        prefs = user_manager.get_prefs(user_id)  # update prefs
         think_options = {level: level.capitalize() for level in REASONING_LEVELS}
         think_options["clear"] = "Clear (Default)"
         buttons = [
@@ -1102,6 +1103,7 @@ async def callback_handler(event):
         tool_name = data_str.split("_")[1]
         is_enabled = tool_name not in prefs.enabled_tools
         user_manager.set_tool_state(user_id, tool_name, enabled=is_enabled)
+        prefs = user_manager.get_prefs(user_id)  # update prefs
         buttons = [
             KeyboardButtonCallback(
                 f"{'✅' if tool in prefs.enabled_tools else '❌'} {tool}",
@@ -1114,6 +1116,7 @@ async def callback_handler(event):
     elif data_str.startswith("context_"):
         mode = data_str.split("_", 1)[1]
         user_manager.set_context_mode(user_id, mode)
+        prefs = user_manager.get_prefs(user_id)  # update prefs
         buttons = [
             KeyboardButtonCallback(
                 f"✅ {name}" if key == prefs.context_mode else name,
@@ -1126,6 +1129,7 @@ async def callback_handler(event):
     elif data_str.startswith("groupcontext_"):
         mode = data_str.split("_", 1)[1]
         user_manager.set_group_context_mode(user_id, mode)
+        prefs = user_manager.get_prefs(user_id)  # update prefs
         buttons = [
             KeyboardButtonCallback(
                 f"✅ {name}" if key == prefs.group_context_mode else name,
@@ -1138,6 +1142,7 @@ async def callback_handler(event):
     elif data_str.startswith("groupactivation_"):
         mode = data_str.split("_", 1)[1]
         user_manager.set_group_activation_mode(user_id, mode)
+        prefs = user_manager.get_prefs(user_id)  # update prefs
         buttons = [
             KeyboardButtonCallback(
                 f"✅ {name}" if key == prefs.group_activation_mode else name,
