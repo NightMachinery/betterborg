@@ -425,7 +425,7 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
 
 async def set_bot_menu_commands():
     """Sets the bot's command menu in Telegram's UI."""
-    history_util.initialize_history_handler()
+    await history_util.initialize_history_handler()
 
     print("LLM_Chat: setting bot commands ...")
     try:

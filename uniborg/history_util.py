@@ -46,7 +46,7 @@ def get_all_ids(chat_id: int) -> List[int]:
 # --- Automatic History Population ---
 
 
-def initialize_history_handler():
+async def initialize_history_handler():
     """
     Initializes history tracking. It uses an event handler for userbots and
     monkey-patches the send methods for official bots to ensure all outgoing
