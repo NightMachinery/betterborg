@@ -7,6 +7,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 
+from uniborg.llm_util import BOT_META_INFO_PREFIX
+
 # --- Client Instance & In-Memory State ---
 # The borg client instance will be populated by `_async_init` in `uniborg/uniborg.py`.
 borg = None
@@ -136,7 +138,7 @@ async def request_api_key_message(event):
     API_KEY_ATTEMPTS[user_id] = 0
 
     key_request_message = (
-        "**Welcome! To use this service, I need a Gemini API key.**\n\n"
+        f"{BOT_META_INFO_PREFIX}**Welcome! To use this service, I need a Gemini API key.**\n\n"
         "You can get a free API key from Google AI Studio:\n"
         "➡️ **https://aistudio.google.com/app/apikey** ⬅️\n\n"
         "Once you have your key, please send it to me in the next message.\n\n"
@@ -145,12 +147,14 @@ async def request_api_key_message(event):
     try:
         await borg.send_message(user_id, key_request_message, link_preview=False)
         if hasattr(event, "reply") and not event.is_private:
-            await event.reply("I've sent you a private message for setup.")
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}I've sent you a private message for setup."
+            )
     except Exception as e:
         print(f"Could not send PM to {user_id}. Error: {e}")
         if hasattr(event, "reply"):
             await event.reply(
-                "I couldn't send you a private message. Please check your privacy settings, "
+                f"{BOT_META_INFO_PREFIX}I couldn't send you a private message. Please check your privacy settings, "
                 "then send `/start` to me in a private chat."
             )
 
@@ -163,16 +167,18 @@ async def _save_key_with_error_handling(event, user_id, service, key):
     except OperationalError as e:
         if "database is locked" in str(e).lower():
             await event.reply(
-                "The database is currently busy. Please try again in a moment."
+                f"{BOT_META_INFO_PREFIX}The database is currently busy. Please try again in a moment."
             )
         else:
             await event.reply(
-                "A database error occurred. Please report this to the developer."
+                f"{BOT_META_INFO_PREFIX}A database error occurred. Please report this to the developer."
             )
             print(f"Database error for user {user_id}: {traceback.format_exc()}")
         return False
     except Exception:
-        await event.reply("An unexpected error occurred while saving your key.")
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}An unexpected error occurred while saving your key."
+        )
         print(
             f"Unexpected error saving key for user {user_id}: {traceback.format_exc()}"
         )
@@ -188,19 +194,19 @@ async def handle_set_key_command(event):
         api_key = api_key_match.strip()
         if not re.match(GEMINI_API_KEY_REGEX, api_key):
             await event.reply(
-                "The provided API key has an invalid format. Please check and try again."
+                f"{BOT_META_INFO_PREFIX}The provided API key has an invalid format. Please check and try again."
             )
             return
 
         if await _save_key_with_error_handling(event, user_id, "gemini", api_key):
             cancel_key_flow(user_id)
             await event.delete()
-            confirmation_message = "✅ Your Gemini API key has been saved. Your message was deleted for security."
+            confirmation_message = f"{BOT_META_INFO_PREFIX}✅ Your Gemini API key has been saved. Your message was deleted for security."
             try:
                 await borg.send_message(user_id, confirmation_message)
                 if not event.is_private:
                     await event.reply(
-                        "I've confirmed your key update in a private message."
+                        f"{BOT_META_INFO_PREFIX}I've confirmed your key update in a private message."
                     )
             except Exception:
                 await event.respond(confirmation_message)
@@ -220,7 +226,7 @@ async def handle_key_submission(
     if text.lower() == "cancel":
         cancel_key_flow(user_id)
         await event.reply(
-            "API key setup has been cancelled. You can start again with /setgeminikey."
+            f"{BOT_META_INFO_PREFIX}API key setup has been cancelled. You can start again with /setgeminikey."
         )
         return
 
@@ -229,12 +235,12 @@ async def handle_key_submission(
         if API_KEY_ATTEMPTS[user_id] >= MAX_KEY_ATTEMPTS:
             cancel_key_flow(user_id)
             await event.reply(
-                "Too many invalid attempts. The API key setup has been cancelled. You can try again later with /setgeminikey."
+                f"{BOT_META_INFO_PREFIX}Too many invalid attempts. The API key setup has been cancelled. You can try again later with /setgeminikey."
             )
         else:
             remaining = MAX_KEY_ATTEMPTS - API_KEY_ATTEMPTS[user_id]
             await event.reply(
-                f"This does not look like a valid API key. Please try again. You have {remaining} attempt(s) left."
+                f"{BOT_META_INFO_PREFIX}This does not look like a valid API key. Please try again. You have {remaining} attempt(s) left."
             )
         return
 
@@ -242,6 +248,6 @@ async def handle_key_submission(
         cancel_key_flow(user_id)
         await event.delete()
         await event.respond(
-            "✅ Your Gemini API key has been saved. Your message was deleted for security.\n"
+            f"{BOT_META_INFO_PREFIX}✅ Your Gemini API key has been saved. Your message was deleted for security.\n"
             + success_msg
         )

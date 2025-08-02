@@ -27,6 +27,7 @@ from uniborg import util
 from uniborg import llm_db
 from uniborg import llm_util
 from uniborg.storage import UserStorage
+from uniborg.llm_util import BOT_META_INFO_PREFIX
 
 # --- Constants and Configuration ---
 
@@ -281,11 +282,19 @@ async def _process_turns_to_history(event, message_list: List[Message], temp_dir
         # Process all messages in this turn and consolidate into one history entry
         text_buffer, media_parts = [], []
         for turn_msg in turn_messages:
+            # --- NEW: Filter out bot's meta-info messages from history ---
+            if role == "assistant" and turn_msg.text and turn_msg.text.startswith(BOT_META_INFO_PREFIX):
+                continue
+
             if turn_msg.text:
                 text_buffer.append(turn_msg.text)
             media_part = await _process_media(turn_msg, temp_dir)
             if media_part:
                 media_parts.append(media_part)
+
+        # If the turn is empty after filtering, skip it
+        if not text_buffer and not media_parts:
+            continue
 
         content_parts = []
         if text_buffer:
@@ -439,7 +448,10 @@ async def start_handler(event):
         llm_db.cancel_key_flow(user_id)
     cancel_input_flow(user_id)
     if llm_db.get_api_key(user_id=user_id, service="gemini"):
-        await event.reply("Welcome back! Your Gemini API key is configured. You can start chatting with me.\n\nUse /help to see all available commands.")
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}Welcome back! Your Gemini API key is configured. You can start chatting with me.\n\n"
+            "Use /help to see all available commands."
+        )
     else:
         await llm_db.request_api_key_message(event)
 
@@ -448,7 +460,7 @@ async def help_handler(event):
     """Provides detailed help information about features and usage."""
     if llm_db.is_awaiting_key(event.sender_id):
         llm_db.cancel_key_flow(event.sender_id)
-        await event.reply("API key setup cancelled.")
+        await event.reply(f"{BOT_META_INFO_PREFIX}API key setup cancelled.")
     cancel_input_flow(event.sender_id)
     prefs = user_manager.get_prefs(event.sender_id)
     help_text = f"""
@@ -481,7 +493,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
 """
-    await event.reply(help_text, link_preview=False, parse_mode="md")
+    await event.reply(f"{BOT_META_INFO_PREFIX}{help_text}", link_preview=False, parse_mode="md")
 
 @borg.on(events.NewMessage(pattern=r"/status", func=lambda e: e.is_private))
 async def status_handler(event):
@@ -504,7 +516,7 @@ async def status_handler(event):
         f"∙ **JSON Mode:** `{'Enabled' if prefs.json_mode else 'Disabled'}`\n"
         f"∙ **System Prompt:** `{system_prompt_status}`"
     )
-    await event.reply(status_message, parse_mode="md")
+    await event.reply(f"{BOT_META_INFO_PREFIX}{status_message}", parse_mode="md")
 
 
 @borg.on(events.NewMessage(pattern="/log", func=lambda e: e.is_private))
@@ -514,7 +526,7 @@ async def log_handler(event):
     user_log_dir = LOG_DIR / str(user_id)
 
     if not user_log_dir.is_dir():
-        await event.reply("You have no conversation logs yet.")
+        await event.reply(f"{BOT_META_INFO_PREFIX}You have no conversation logs yet.")
         return
 
     try:
@@ -525,27 +537,29 @@ async def log_handler(event):
         )
 
         if not log_files:
-            await event.reply("You have no conversation logs yet.")
+            await event.reply(f"{BOT_META_INFO_PREFIX}You have no conversation logs yet.")
             return
 
         logs_to_send = log_files[:LOG_COUNT_LIMIT]
 
         await event.reply(
-            f"Sending your last {len(logs_to_send)} conversation log(s)..."
-            # of {len(log_files)}
+            f"{BOT_META_INFO_PREFIX}Sending your last {len(logs_to_send)} of {len(log_files)} conversation log(s)..."
         )
 
+        # Sending files doesn't need the prefix, but the caption does if we want it ignored
         for log_file in logs_to_send:
             await event.client.send_file(
                 event.chat_id,
                 file=log_file,
-                caption=f"Log: `{log_file.name}`",
+                caption=f"{BOT_META_INFO_PREFIX}Log: `{log_file.name}`",
                 reply_to=event.id,
             )
     except Exception as e:
         print(f"Error sending logs for user {user_id}: {e}")
         traceback.print_exc()
-        await event.reply("Sorry, an error occurred while retrieving your logs.")
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}Sorry, an error occurred while retrieving your logs."
+        )
 
 
 @borg.on(events.NewMessage(pattern=r"(?i)/setGeminiKey(?:\s+(.*))?", func=lambda e: e.is_private))
@@ -579,11 +593,11 @@ async def set_model_handler(event):
         model_name = model_name_match.strip()
         user_manager.set_model(user_id, model_name)
         cancel_input_flow(user_id)
-        await event.reply(f"Your chat model has been set to: `{model_name}`")
+        await event.reply(f"{BOT_META_INFO_PREFIX}Your chat model has been set to: `{model_name}`")
     else:
         AWAITING_INPUT_FROM_USERS[user_id] = "model"
         await event.reply(
-            f"Your current chat model is: `{user_manager.get_prefs(user_id).model}`."
+            f"{BOT_META_INFO_PREFIX}Your current chat model is: `{user_manager.get_prefs(user_id).model}`."
             "\n\nPlease send the new model ID in the next message."
             "\n(Type `cancel` to stop this process.)"
         )
@@ -601,15 +615,15 @@ async def set_system_prompt_handler(event):
         if prompt.lower() == "reset":
             # Set the prompt to an empty string to signify using the default
             user_manager.set_system_prompt(user_id, "")
-            await event.reply("Your system prompt has been reset to the default.")
+            await event.reply(f"{BOT_META_INFO_PREFIX}Your system prompt has been reset to the default.")
         else:
             user_manager.set_system_prompt(user_id, prompt)
-            await event.reply("Your new system prompt has been saved.")
+            await event.reply(f"{BOT_META_INFO_PREFIX}Your new system prompt has been saved.")
     else:
         AWAITING_INPUT_FROM_USERS[user_id] = "system_prompt"
         current_prompt = user_manager.get_prefs(user_id).system_prompt or "Default (no custom prompt set)"
         await event.reply(
-            f"**Your current system prompt is:**\n\n```\n{current_prompt}\n```"
+            f"{BOT_META_INFO_PREFIX}**Your current system prompt is:**\n\n```\n{current_prompt}\n```"
             "\n\nPlease send the new system prompt in the next message."
             "\n(You can also send `reset` to restore the default, or `cancel` to stop.)"
         )
@@ -625,7 +639,7 @@ async def context_mode_handler(event):
         data=f"context_{mode}"
     ) for mode in CONTEXT_MODES]
     await event.reply(
-        "**Set Conversation Context Mode**\nChoose how I should remember our conversation history.",
+        f"{BOT_META_INFO_PREFIX}**Set Conversation Context Mode**\nChoose how I should remember our conversation history.",
         buttons=build_menu(buttons, n_cols=1)
     )
 
@@ -639,7 +653,7 @@ async def set_think_handler(event):
     clear_text = "Clear (Default)"
     buttons.append(KeyboardButtonCallback(f"✅ {clear_text}" if prefs.thinking is None else clear_text, data="think_clear"))
     await event.reply(
-        "**Set Reasoning Effort**\nChoose the level of thinking for the model. This may affect response time and cost.",
+        f"{BOT_META_INFO_PREFIX}**Set Reasoning Effort**\nChoose the level of thinking for the model. This may affect response time and cost.",
         buttons=build_menu(buttons, n_cols=2)
     )
 
@@ -650,7 +664,7 @@ async def tools_handler(event):
     buttons = [KeyboardButtonCallback(
         f"{'✅' if tool in prefs.enabled_tools else '❌'} {tool}", data=f"tool_{tool}"
     ) for tool in AVAILABLE_TOOLS]
-    await event.reply("**Manage Tools**\nToggle available tools for the model.", buttons=build_menu(buttons, n_cols=1))
+    await event.reply(f"{BOT_META_INFO_PREFIX}**Manage Tools**\nToggle available tools for the model.", buttons=build_menu(buttons, n_cols=1))
 
 @borg.on(events.NewMessage(pattern=r"/(enable|disable)(?P<tool_name>\w+)", func=lambda e: e.is_private))
 async def toggle_tool_handler(event):
@@ -660,15 +674,15 @@ async def toggle_tool_handler(event):
     if matched_tool:
         is_enabled = action == "enable"
         user_manager.set_tool_state(event.sender_id, matched_tool, enabled=is_enabled)
-        await event.reply(f"`{matched_tool}` has been **{action}d**.")
+        await event.reply(f"{BOT_META_INFO_PREFIX}`{matched_tool}` has been **{action}d**.")
     else:
-        await event.reply(f"Unknown tool: `{tool_name_req}`. Available: {', '.join(AVAILABLE_TOOLS)}")
+        await event.reply(f"{BOT_META_INFO_PREFIX}Unknown tool: `{tool_name_req}`. Available: {', '.join(AVAILABLE_TOOLS)}")
 
 @borg.on(events.NewMessage(pattern=r"/json", func=lambda e: e.is_private))
 async def json_mode_handler(event):
     """Toggles JSON mode."""
     is_enabled = user_manager.toggle_json_mode(event.sender_id)
-    await event.reply(f"JSON response mode has been **{'enabled' if is_enabled else 'disabled'}**.")
+    await event.reply(f"{BOT_META_INFO_PREFIX}JSON response mode has been **{'enabled' if is_enabled else 'disabled'}**.")
 
 @borg.on(events.CallbackQuery())
 async def callback_handler(event):
@@ -724,19 +738,19 @@ async def generic_input_handler(event):
 
     if text.lower() == "cancel":
         cancel_input_flow(user_id)
-        await event.reply("Process cancelled.")
+        await event.reply(f"{BOT_META_INFO_PREFIX}Process cancelled.")
         return
 
     if input_type == "model":
         user_manager.set_model(user_id, text)
-        await event.reply(f"✅ Your chat model has been updated to: `{text}`")
+        await event.reply(f"{BOT_META_INFO_PREFIX}✅ Your chat model has been updated to: `{text}`")
     elif input_type == "system_prompt":
         if text.lower() == "reset":
             user_manager.set_system_prompt(user_id, "")
-            await event.reply("✅ Your system prompt has been reset to the default.")
+            await event.reply(f"{BOT_META_INFO_PREFIX}✅ Your system prompt has been reset to the default.")
         else:
             user_manager.set_system_prompt(user_id, text)
-            await event.reply("✅ Your new system prompt has been saved.")
+            await event.reply(f"{BOT_META_INFO_PREFIX}✅ Your new system prompt has been saved.")
 
     cancel_input_flow(user_id)
 
@@ -765,7 +779,7 @@ async def chat_handler(event):
             and event.text.strip() == CONTEXT_SEPARATOR
         ):
             await event.reply(
-                "Context cleared. The conversation will now start fresh from your next message."
+                f"{BOT_META_INFO_PREFIX}Context cleared. The conversation will now start fresh from your next message."
             )
             return
 
@@ -852,7 +866,7 @@ async def chat_handler(event):
         await _log_conversation(event, prefs.model, messages, final_text)
 
     except Exception:
-        error_text = "An error occurred. You can send the inputs that caused this error to the bot developer."
+        error_text = f"{BOT_META_INFO_PREFIX}An error occurred. You can send the inputs that caused this error to the bot developer."
         await response_message.edit(error_text)
         traceback.print_exc()
     finally:
