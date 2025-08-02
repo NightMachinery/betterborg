@@ -596,7 +596,9 @@ async def chat_handler(event):
 
         if warnings:
             warning_text = "\n\n---\n**Note:**\n" + "\n".join(f"- {w}" for w in warnings)
-            final_text += warning_text
+
+            #: no need to clutter the response in Telegram
+            # final_text += warning_text
 
         await util.edit_message(response_message, final_text, parse_mode="md", link_preview=False)
         await _log_conversation(event, prefs.model, messages, final_text)
