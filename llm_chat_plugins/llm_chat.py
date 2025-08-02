@@ -65,6 +65,23 @@ CONTEXT_MODE_NAMES = {
     "last_N": f"Last {LAST_N_MESSAGES_LIMIT} Messages",
 }
 
+# --- Single Source of Truth for Bot Commands ---
+BOT_COMMANDS = [
+    {"command": "start", "description": "Onboard and set API key"},
+    {"command": "help", "description": "Show detailed help and instructions"},
+    {"command": "status", "description": "Show your current settings"},
+    {"command": "log", "description": f"Get your last {LOG_COUNT_LIMIT} conversation logs"},
+    {"command": "setgeminikey", "description": "Set or update your Gemini API key"},
+    {"command": "setmodel", "description": "Set your preferred chat model"},
+    {"command": "setsystemprompt", "description": "Customize the bot's instructions"},
+    {"command": "setthink", "description": "Adjust model's reasoning effort"},
+    {"command": "contextmode", "description": "Change how conversation history is read"},
+    {"command": "tools", "description": "Enable or disable tools like search"},
+    {"command": "json", "description": "Toggle JSON output mode"},
+]
+# Create a set of command strings (e.g., {"/start", "/help"}) for efficient lookup
+KNOWN_COMMAND_SET = {f"/{cmd['command']}" for cmd in BOT_COMMANDS}
+
 
 SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -429,27 +446,13 @@ async def set_bot_menu_commands():
 
     print("LLM_Chat: setting bot commands ...")
     try:
-        # await asyncio.sleep(5)
+        # Use the new BOT_COMMANDS constant to build the list
         await borg(
             SetBotCommandsRequest(
                 scope=BotCommandScopeDefault(),
                 lang_code="en",
                 commands=[
-                    BotCommand("start", "Onboard and set API key"),
-                    BotCommand("help", "Show detailed help and instructions"),
-                    BotCommand("status", "Show your current settings"),
-                    BotCommand(
-                        "log", f"Get your last {LOG_COUNT_LIMIT} conversation logs"
-                    ),
-                    BotCommand("setgeminikey", "Set or update your Gemini API key"),
-                    BotCommand("setmodel", "Set your preferred chat model"),
-                    BotCommand("setsystemprompt", "Customize the bot's instructions"),
-                    BotCommand("setthink", "Adjust model's reasoning effort"),
-                    BotCommand(
-                        "contextmode", "Change how conversation history is read"
-                    ),
-                    BotCommand("tools", "Enable or disable tools like search"),
-                    BotCommand("json", "Toggle JSON output mode"),
+                    BotCommand(c["command"], c["description"]) for c in BOT_COMMANDS
                 ],
             )
         )
@@ -865,14 +868,29 @@ async def generic_input_handler(event):
     cancel_input_flow(user_id)
 
 
-@borg.on(
-    events.NewMessage(
-        func=lambda e: e.is_private
-        and (e.text or e.media)
-        and not (e.text and e.text.startswith("/"))
-        and not e.forward
-    )
-)
+def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
+    """
+    Determines if a message is a valid conversational message to be
+    processed by the main chat handler.
+    """
+    # Must be a private chat and not a forward
+    if not event.is_private or event.forward:
+        return False
+
+    # Must have some content (text or media)
+    if not (event.text or event.media):
+        return False
+
+    # If it has text, check if it's a known command
+    if event.text:
+        first_word = event.text.split(' ', 1)[0]
+        if first_word in KNOWN_COMMAND_SET:
+            return False # It's a command, so not a chat message
+
+    # Passes all checks
+    return True
+
+@borg.on(events.NewMessage(func=is_valid_chat_message))
 async def chat_handler(event):
     """Main handler for all non-command messages in a private chat."""
     user_id = event.sender_id
