@@ -1,0 +1,6 @@
+#+TITLE: llm_chat_plugins/todo
+
+* Make the bot work in groups
+** should only activate when the message starts with `@{bot_username}`
+*** should strip this prefix from messages when constructing the history
+*** should add metadata of each message (user id, name, timestamp, forwarded from where) at the start of each message
