@@ -34,7 +34,7 @@ from uniborg.constants import BOT_META_INFO_PREFIX
 
 # Use the litellm model naming convention.
 # See https://docs.litellm.ai/docs/providers/gemini
-DEFAULT_MODEL = "gemini/gemini-2.5-flash" #: Do NOT change the default model unless explicitly instructed to.
+DEFAULT_MODEL = "gemini/gemini-2.5-flash"  #: Do NOT change the default model unless explicitly instructed to.
 DEFAULT_SYSTEM_PROMPT = """
 You are a helpful and knowledgeable assistant. Your primary audience is advanced STEM postgraduate researchers, so be precise and technically accurate.
 
@@ -70,12 +70,18 @@ BOT_COMMANDS = [
     {"command": "start", "description": "Onboard and set API key"},
     {"command": "help", "description": "Show detailed help and instructions"},
     {"command": "status", "description": "Show your current settings"},
-    {"command": "log", "description": f"Get your last {LOG_COUNT_LIMIT} conversation logs"},
+    {
+        "command": "log",
+        "description": f"Get your last {LOG_COUNT_LIMIT} conversation logs",
+    },
     {"command": "setgeminikey", "description": "Set or update your Gemini API key"},
     {"command": "setmodel", "description": "Set your preferred chat model"},
     {"command": "setsystemprompt", "description": "Customize the bot's instructions"},
     {"command": "setthink", "description": "Adjust model's reasoning effort"},
-    {"command": "contextmode", "description": "Change how conversation history is read"},
+    {
+        "command": "contextmode",
+        "description": "Change how conversation history is read",
+    },
     {"command": "tools", "description": "Enable or disable tools like search"},
     {"command": "json", "description": "Toggle JSON output mode"},
 ]
@@ -94,6 +100,7 @@ SAFETY_SETTINGS = [
 PROCESSED_GROUP_IDS = set()
 AWAITING_INPUT_FROM_USERS = {}
 
+
 def cancel_input_flow(user_id: int):
     """Cancels any pending input requests for a user."""
     AWAITING_INPUT_FROM_USERS.pop(user_id, None)
@@ -101,8 +108,10 @@ def cancel_input_flow(user_id: int):
 
 # --- User Preference Management ---
 
+
 class UserPrefs(BaseModel):
     """Pydantic model for type-safe user preferences."""
+
     model: str = Field(default=DEFAULT_MODEL)
     system_prompt: str = Field(default=DEFAULT_SYSTEM_PROMPT)
     thinking: Optional[str] = Field(default=None)
@@ -110,8 +119,10 @@ class UserPrefs(BaseModel):
     json_mode: bool = Field(default=False)
     context_mode: str = Field(default="reply_chain")
 
+
 class UserManager:
     """High-level manager for user preferences, using the UserStorage class."""
+
     def __init__(self):
         self.storage = UserStorage(purpose="llm_chat")
 
@@ -164,9 +175,11 @@ user_manager = UserManager()
 
 # --- Core Logic & Helpers ---
 
+
 def build_menu(buttons, n_cols):
     """Helper to build a menu of inline buttons in a grid."""
-    return [buttons[i:i + n_cols] for i in range(0, len(buttons), n_cols)]
+    return [buttons[i : i + n_cols] for i in range(0, len(buttons), n_cols)]
+
 
 async def _process_media(message, temp_dir: Path) -> Optional[dict]:
     """Downloads media, encodes it, and returns a content part for litellm."""
@@ -174,18 +187,29 @@ async def _process_media(message, temp_dir: Path) -> Optional[dict]:
         return None
     try:
         file_path_str = await message.download_media(file=temp_dir)
-        if not file_path_str: return None
+        if not file_path_str:
+            return None
         file_path = Path(file_path_str)
         mime_type, _ = mimetypes.guess_type(file_path)
         # Fallback for some audio/video types
         if not mime_type:
-            for ext, m_type in llm_util.MIME_TYPE_MAP.items(): # Use imported map
+            for ext, m_type in llm_util.MIME_TYPE_MAP.items():  # Use imported map
                 if file_path.name.lower().endswith(ext):
                     mime_type = m_type
                     break
         # Fallback for common text file types
-        if not mime_type and file_path.suffix.lower() in ['.txt', '.md', '.py', '.js', '.html', '.css', '.json', '.xml', '.log']:
-             mime_type = "text/plain"
+        if not mime_type and file_path.suffix.lower() in [
+            ".txt",
+            ".md",
+            ".py",
+            ".js",
+            ".html",
+            ".css",
+            ".json",
+            ".xml",
+            ".log",
+        ]:
+            mime_type = "text/plain"
         if not mime_type or not (
             mime_type.startswith(("image/", "audio/", "video/", "text/"))
         ):
@@ -195,15 +219,24 @@ async def _process_media(message, temp_dir: Path) -> Optional[dict]:
             file_bytes = f.read()
         if mime_type.startswith("text/"):
             # For text, return a standard text part to be merged.
-            return {"type": "text", "text": f"\n--- Attachment: {file_path.name} ---\n{file_bytes.decode('utf-8', errors='ignore')}"}
+            return {
+                "type": "text",
+                "text": f"\n--- Attachment: {file_path.name} ---\n{file_bytes.decode('utf-8', errors='ignore')}",
+            }
         else:
             b64_content = base64.b64encode(file_bytes).decode("utf-8")
-            return {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_content}"}}
+            return {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{b64_content}"},
+            }
     except Exception as e:
         print(f"Error processing media from message {message.id}: {e}")
         return None
 
-async def _log_conversation(event, model_name: str, messages: list, final_response: str):
+
+async def _log_conversation(
+    event, model_name: str, messages: list, final_response: str
+):
     """Formats and writes the conversation log to a user-specific file."""
     try:
         user = await event.get_sender()
@@ -222,8 +255,12 @@ async def _log_conversation(event, model_name: str, messages: list, final_respon
         log_file_path = user_log_dir / log_filename
 
         log_parts = [
-            f"Date: {timestamp}", f"User ID: {user_id}", f"Name: {full_name}",
-            f"Username: @{username}", f"Model: {model_name}", "--- Conversation ---"
+            f"Date: {timestamp}",
+            f"User ID: {user_id}",
+            f"Name: {full_name}",
+            f"Username: @{username}",
+            f"Model: {model_name}",
+            "--- Conversation ---",
         ]
         for msg in messages:
             role = msg.get("role", "unknown").capitalize()
@@ -235,7 +272,7 @@ async def _log_conversation(event, model_name: str, messages: list, final_respon
                 for part in content:
                     if part.get("type") == "text":
                         log_parts.append(part.get("text", ""))
-                    else: # Handle media attachments in logs
+                    else:  # Handle media attachments in logs
                         log_parts.append("[Attachment: Media Content]")
         log_parts.append("\n[Assistant]:")
         log_parts.append(final_response)
@@ -245,7 +282,10 @@ async def _log_conversation(event, model_name: str, messages: list, final_respon
         print(f"Failed to write chat log for user {event.sender_id}: {e}")
         traceback.print_exc()
 
-async def _expand_and_sort_messages_with_groups(event, initial_messages: List[Message]) -> List[Message]:
+
+async def _expand_and_sort_messages_with_groups(
+    event, initial_messages: List[Message]
+) -> List[Message]:
     """
     Takes a list of messages and ensures all members of any represented media
     group are included in the final, sorted list.
@@ -267,7 +307,9 @@ async def _expand_and_sort_messages_with_groups(event, initial_messages: List[Me
                     event.chat_id, ids=list(search_ids)
                 )
 
-                group_messages = [m for m in messages_in_vicinity if m and m.grouped_id == group_id]
+                group_messages = [
+                    m for m in messages_in_vicinity if m and m.grouped_id == group_id
+                ]
                 for group_msg in group_messages:
                     final_messages_map[group_msg.id] = group_msg
 
@@ -278,7 +320,10 @@ async def _expand_and_sort_messages_with_groups(event, initial_messages: List[Me
     # Return a sorted, unique list of messages
     return sorted(final_messages_map.values(), key=lambda m: m.id)
 
-async def _process_turns_to_history(event, message_list: List[Message], temp_dir: Path) -> List[dict]:
+
+async def _process_turns_to_history(
+    event, message_list: List[Message], temp_dir: Path
+) -> List[dict]:
     """
     Processes a final, sorted list of messages into litellm history format,
     grouping consecutive messages from the same sender into 'turns'.
@@ -301,7 +346,11 @@ async def _process_turns_to_history(event, message_list: List[Message], temp_dir
         text_buffer, media_parts = [], []
         for turn_msg in turn_messages:
             # --- NEW: Filter out bot's meta-info messages from history ---
-            if role == "assistant" and turn_msg.text and turn_msg.text.startswith(BOT_META_INFO_PREFIX):
+            if (
+                role == "assistant"
+                and turn_msg.text
+                and turn_msg.text.startswith(BOT_META_INFO_PREFIX)
+            ):
                 continue
 
             if turn_msg.text:
@@ -327,7 +376,9 @@ async def _process_turns_to_history(event, message_list: List[Message], temp_dir
 
         if text_from_files:
             combined_file_text = "\n".join(text_from_files)
-            existing_text_part = next((p for p in content_parts if p["type"] == "text"), None)
+            existing_text_part = next(
+                (p for p in content_parts if p["type"] == "text"), None
+            )
             if existing_text_part:
                 existing_text_part["text"] += "\n" + combined_file_text
             else:
@@ -569,7 +620,9 @@ async def log_handler(event):
         )
 
         if not log_files:
-            await event.reply(f"{BOT_META_INFO_PREFIX}You have no conversation logs yet.")
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}You have no conversation logs yet."
+            )
             return
 
         logs_to_send = log_files[:LOG_COUNT_LIMIT]
@@ -688,9 +741,11 @@ async def context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     buttons = [
         KeyboardButtonCallback(
-            f"✅ {CONTEXT_MODE_NAMES[mode]}"
-            if prefs.context_mode == mode
-            else CONTEXT_MODE_NAMES[mode],
+            (
+                f"✅ {CONTEXT_MODE_NAMES[mode]}"
+                if prefs.context_mode == mode
+                else CONTEXT_MODE_NAMES[mode]
+            ),
             data=f"context_{mode}",
         )
         for mode in CONTEXT_MODES
@@ -743,7 +798,9 @@ async def tools_handler(event):
 
 
 @borg.on(
-    events.NewMessage(pattern=r"/(enable|disable)(?P<tool_name>\w+)", func=lambda e: e.is_private)
+    events.NewMessage(
+        pattern=r"/(enable|disable)(?P<tool_name>\w+)", func=lambda e: e.is_private
+    )
 )
 async def toggle_tool_handler(event):
     action = event.pattern_match.group(1)
@@ -818,9 +875,11 @@ async def callback_handler(event):
         prefs = user_manager.get_prefs(user_id)
         buttons = [
             KeyboardButtonCallback(
-                f"✅ {CONTEXT_MODE_NAMES[m]}"
-                if prefs.context_mode == m
-                else CONTEXT_MODE_NAMES[m],
+                (
+                    f"✅ {CONTEXT_MODE_NAMES[m]}"
+                    if prefs.context_mode == m
+                    else CONTEXT_MODE_NAMES[m]
+                ),
                 data=f"context_{m}",
             )
             for m in CONTEXT_MODES
@@ -883,12 +942,13 @@ def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
 
     # If it has text, check if it's a known command
     if event.text:
-        first_word = event.text.split(' ', 1)[0]
-        if first_word in KNOWN_COMMAND_SET:
-            return False # It's a command, so not a chat message
+        first_word = event.text.split(" ", 1)[0]
+        if first_word in KNOWN_COMMAND_SET or first_word in ("...",):
+            return False  # It's a command, so not a chat message
 
     # Passes all checks
     return True
+
 
 @borg.on(events.NewMessage(func=is_valid_chat_message))
 async def chat_handler(event):
