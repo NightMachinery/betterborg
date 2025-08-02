@@ -13,7 +13,7 @@ Dev: @Arstar
 
 * G25
 #+begin_verse
-now give a text2image prompt to generate a great profile picture for this bot
+Give a text2image prompt to generate a great profile picture for this bot.
 #+end_verse
 
 ** _

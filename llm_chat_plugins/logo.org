@@ -1,0 +1,14 @@
+#+TITLE: llm_chat_plugins/logo
+
+* G25
+#+begin_verse
+Draw:
+
+A central, glowing blue node on a pure white background. From this node, three distinct, elegant lines extend outwards: one transforms into a stylized DNA helix made of liquid chrome, one becomes a simple paperclip icon made of circuit board traces, and the third is a pair of code brackets `<>` made of bioluminescent filaments. Minimalist logo, symbolic, high-tech.
+#+end_verse
+
+#+begin_verse
+Draw:
+
+A perfect sphere floats in the center of a pure white void. The sphere's surface is a seamless, intricate mosaic of different textures: one segment is polished chrome reflecting glowing data points, another has the texture of a lush green circuit board, and a third is like a satellite map. Minimalist, photorealistic, studio lighting.
+#+end_verse
