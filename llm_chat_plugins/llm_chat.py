@@ -405,12 +405,51 @@ async def _process_turns_to_history(
                     f"[User: {sender_name} ({turn_sender_id}) | Timestamp: {timestamp}]"
                 )
                 if turn_msg.forward:
-                    fwd_from = turn_msg.forward.sender or turn_msg.forward.chat
-                    if fwd_from:
-                        fwd_from_name = getattr(
-                            fwd_from, "title", None
-                        ) or getattr(fwd_from, "first_name", "Unknown")
-                        metadata_prefix += f" [Forwarded from: {fwd_from_name}]"
+                    fwd_parts = []
+
+                    # 1. Get Forwarded-From Name
+                    fwd_from_name = None
+                    fwd_entity = turn_msg.forward.sender or turn_msg.forward.chat
+                    if fwd_entity:
+                        fwd_from_name = getattr(fwd_entity, 'title', getattr(fwd_entity, 'first_name', None))
+                    if not fwd_from_name:
+                        fwd_from_name = turn_msg.forward.from_name
+                    if fwd_from_name:
+                        fwd_parts.append(f"from: {fwd_from_name}")
+
+                    # 2. Get Forwarded-From ID
+                    if turn_msg.forward.from_id:
+                        fwd_peer_id = getattr(turn_msg.forward.from_id, 'user_id', None) \
+                                   or getattr(turn_msg.forward.from_id, 'chat_id', None) \
+                                   or getattr(turn_msg.forward.from_id, 'channel_id', None)
+                        if fwd_peer_id:
+                            fwd_parts.append(f"from_id: {fwd_peer_id}")
+
+                    # 3. Get Original Date
+                    if turn_msg.forward.date:
+                        fwd_parts.append(f"date: {turn_msg.forward.date.isoformat()}")
+
+                    # 4. Get Channel Post ID
+                    if turn_msg.forward.channel_post:
+                        fwd_parts.append(f"post_id: {turn_msg.forward.channel_post}")
+
+                    # 5. Get Post Author Signature
+                    if turn_msg.forward.post_author:
+                        fwd_parts.append(f"author: {turn_msg.forward.post_author}")
+
+                    # 6. Saved from info (for "Saved Messages")
+                    if turn_msg.forward.saved_from_peer:
+                        saved_peer_id = getattr(turn_msg.forward.saved_from_peer, 'user_id', None) \
+                                   or getattr(turn_msg.forward.saved_from_peer, 'chat_id', None) \
+                                   or getattr(turn_msg.forward.saved_from_peer, 'channel_id', None)
+                        if saved_peer_id:
+                            fwd_parts.append(f"saved_from_peer: {saved_peer_id}")
+                    if turn_msg.forward.saved_from_msg_id:
+                        fwd_parts.append(f"saved_msg_id: {turn_msg.forward.saved_from_msg_id}")
+
+                    # Assemble the final metadata string
+                    if fwd_parts:
+                        metadata_prefix += f" [Forwarded ({'; '.join(fwd_parts)})]"
 
                 # Prepend metadata to the (potentially stripped) text
                 processed_text = (
