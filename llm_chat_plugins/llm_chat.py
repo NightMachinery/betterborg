@@ -427,7 +427,7 @@ async def _process_turns_to_history(
 
                     # 3. Get Original Date
                     if turn_msg.forward.date:
-                        fwd_parts.append(f"date: {turn_msg.forward.date.isoformat()}")
+                        fwd_parts.append(f"original date: {turn_msg.forward.date.isoformat()}")
 
                     # 4. Get Channel Post ID
                     if turn_msg.forward.channel_post:
