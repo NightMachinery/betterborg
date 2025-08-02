@@ -405,7 +405,7 @@ async def run_and_get(
         if z is not None and getattr(z, "file", None) is not None:
             dled_file_name = getattr(z.file, "name", "")
             dled_file_name = dled_file_name or f"some_file_{uuid.uuid4().hex}"
-            dled_path = cwd + dled_file_name
+            dled_path = f"{cwd}{z.id}_{dled_file_name}"
             dled_path = await a.download_media(message=z, file=dled_path)
             mdate = os.path.getmtime(dled_path)
             dled_files.append((dled_path, mdate, dled_file_name))
@@ -442,7 +442,7 @@ async def run_and_get(
             processed_group_ids.add(group_id)
 
     #: Iterate over the values of the dictionary to get the unique Message objects.
-    for msg in todl_map.values():
+    for msg in todl_map.values().sort(key=lambda msg: msg.id):
         await dl(msg)
 
     # ic(cwd, dled_files)
