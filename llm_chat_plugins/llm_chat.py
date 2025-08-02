@@ -10,6 +10,8 @@ from shutil import rmtree
 
 import litellm
 from telethon import events, errors
+from telethon.tl.functions.bots import SetBotCommandsRequest
+from telethon.tl.types import BotCommand, BotCommandScopeDefault
 from pydantic import BaseModel, Field
 
 # Import uniborg utilities and storage
@@ -178,9 +180,113 @@ async def build_conversation_history(event) -> list:
 
     return history
 
+# --- Bot Command Setup ---
+
+async def set_bot_menu_commands():
+    """Sets the bot's command menu in Telegram's UI."""
+    print("LLM_Chat: setting bot commands ...")
+    try:
+        await asyncio.sleep(5)  # Delay to ensure client is ready
+        await borg(
+            SetBotCommandsRequest(
+                scope=BotCommandScopeDefault(),
+                lang_code="en",
+                commands=[
+                    BotCommand("start", "Onboard and set API key"),
+                    BotCommand("help", "Show detailed help and instructions"),
+                    BotCommand("setgeminikey", "Set or update your Gemini API key"),
+                    BotCommand("setmodel", "Set your preferred chat model"),
+                    BotCommand("setsystemprompt", "Customize the bot's instructions"),
+                ],
+            )
+        )
+        print("LLM_Chat: Bot command menu has been updated.")
+    except Exception as e:
+        print(f"LLM_Chat: Failed to set bot commands: {e}")
+
+
 # --- Telethon Event Handlers ---
 
-@borg.on(util.admin_cmd(pattern=r"/setModel(?:\s+(.*))?"))
+@borg.on(events.NewMessage(pattern="/start", func=lambda e: e.is_private))
+async def start_handler(event):
+    """Handles the /start command to onboard new users."""
+    user_id = event.sender_id
+    if llm_db.is_awaiting_key(user_id):
+        llm_db.cancel_key_flow(user_id)
+    if llm_db.get_api_key(user_id=user_id, service="gemini"):
+        await event.reply(
+            "Welcome back! Your Gemini API key is configured. You can start chatting with me.\n\nUse /help to see all available commands."
+        )
+    else:
+        await llm_db.request_api_key_message(event)
+
+
+@borg.on(events.NewMessage(pattern="/help", func=lambda e: e.is_private))
+async def help_handler(event):
+    """Provides detailed help information about features and usage."""
+    if llm_db.is_awaiting_key(event.sender_id):
+        llm_db.cancel_key_flow(event.sender_id)
+        await event.reply("API key setup cancelled.")
+
+    prefs = user_manager.get_prefs(event.sender_id)
+    help_text = f"""
+**Hello! I am a chat assistant powered by Google's Gemini.**
+
+To get started, you'll need a free Gemini API key.
+1.  **Get Your Key:** Go to **[Google AI Studio](https://aistudio.google.com/app/apikey)** to create one.
+2.  **Set Your Key:** Send me the command: `/setgeminikey YOUR_API_KEY_HERE`
+
+---
+
+### How to Chat with Me
+
+**▶️ Understanding Conversations (Reply Chains)**
+I remember our conversations by following the **reply chain**. This is the key to having a continuous, context-aware chat.
+
+- **Continuing the Chat:** To continue our conversation, simply **reply** to my last message.
+- **Adding More Detail:** You can also **reply to your OWN message** to add more thoughts, context, or files before I've even answered. I will see it all as part of the same turn.
+- **Starting Fresh:** To start a new, separate conversation, just send a new message without replying to anything.
+
+**▶️ Advanced Features**
+
+- **Working with Images:** Attach an image to any of your messages (in the initial message or in a reply), and I'll be able to see and discuss it.
+- **Discussing Forwarded Content:** Forward messages to our chat. Then, **reply** to your forwarded message(s) with your question or prompt, and I will analyze their content.
+
+---
+
+### Available Commands
+
+- `/start`: Onboard and set up your API key.
+- `/help`: Shows this detailed help message.
+- `/setgeminikey [API_KEY]`: Sets or updates your Gemini API key.
+- `/setModel [model_id]`: Change the AI model. Your current model is: `{prefs.model}`.
+- `/setSystemPrompt [prompt]`: Change my core instructions. Use `/setSystemPrompt reset` to go back to the default.
+"""
+    await event.reply(help_text, link_preview=False, parse_mode="md")
+
+
+@borg.on(events.NewMessage(pattern=r"(?i)/setGeminiKey(?:\s+(.*))?", func=lambda e: e.is_private))
+async def set_key_handler(event):
+    """Delegates /setgeminikey command logic to the shared module."""
+    await llm_db.handle_set_key_command(event)
+
+
+@borg.on(
+    events.NewMessage(
+        func=lambda e: e.is_private
+        and llm_db.is_awaiting_key(e.sender_id)
+        and e.text and not e.text.startswith("/")
+    )
+)
+async def key_submission_handler(event):
+    """Delegates plain-text key submission logic to the shared module."""
+    await llm_db.handle_key_submission(
+        event,
+        success_msg="You can now start chatting with me."
+    )
+
+
+@borg.on(events.NewMessage(pattern=r"/setModel(?:\s+(.*))?", func=lambda e: e.is_private))
 async def set_model_handler(event):
     """Sets the user's preferred chat model."""
     user_id = event.sender_id
@@ -196,33 +302,41 @@ async def set_model_handler(event):
             "To change it, use `/setModel <model_id>`."
         )
 
-@borg.on(util.admin_cmd(pattern=r"/setSystemPrompt(?:\s+([\s\S]+))?"))
+@borg.on(events.NewMessage(pattern=r"/setSystemPrompt(?:\s+([\s\S]+))?", func=lambda e: e.is_private))
 async def set_system_prompt_handler(event):
-    """Sets the user's custom system prompt."""
+    """Sets the user's custom system prompt or resets it to default."""
     user_id = event.sender_id
     prompt_match = event.pattern_match.group(1)
     if prompt_match:
         prompt = prompt_match.strip()
         if prompt.lower() == "reset":
-            user_manager.set_system_prompt(user_id, DEFAULT_SYSTEM_PROMPT)
+            # Set the prompt to an empty string to signify using the default
+            user_manager.set_system_prompt(user_id, "")
             await event.reply("Your system prompt has been reset to the default.")
         else:
             user_manager.set_system_prompt(user_id, prompt)
             await event.reply("Your new system prompt has been saved.")
     else:
         current_prefs = user_manager.get_prefs(user_id)
+        prompt_to_display = current_prefs.system_prompt or "Default (no custom prompt set)"
         await event.reply(
             "**Your current system prompt is:**\n\n"
-            f"```\n{current_prefs.system_prompt}\n```\n\n"
+            f"```\n{prompt_to_display}\n```\n\n"
             "To change it, use `/setSystemPrompt <your new prompt>` or `/setSystemPrompt reset`."
         )
 
 @borg.on(events.NewMessage(
-    func=lambda e: e.is_private and e.text and not e.text.startswith('/') and not e.forward,
+    func=lambda e: e.is_private and (e.text or e.media) and not (e.text and e.text.startswith('/')) and not e.forward,
 ))
 async def chat_handler(event):
     """Main handler for all non-command messages in a private chat."""
     user_id = event.sender_id
+
+    # If the user is in the middle of key setup, cancel it to chat instead.
+    if llm_db.is_awaiting_key(user_id):
+        llm_db.cancel_key_flow(user_id)
+        await event.reply("API key setup cancelled. Responding to your message instead...")
+
     api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
     if not api_key:
         await llm_db.request_api_key_message(event)
@@ -236,9 +350,9 @@ async def chat_handler(event):
     try:
         messages = await build_conversation_history(event)
 
-        # Add system prompt as the first message
-        if prefs.system_prompt:
-            messages.insert(0, {"role": "system", "content": prefs.system_prompt})
+        # Add system prompt as the first message. Fallback to default if custom is empty.
+        system_prompt_to_use = prefs.system_prompt or DEFAULT_SYSTEM_PROMPT
+        messages.insert(0, {"role": "system", "content": system_prompt_to_use})
 
         # Prepare and add the current user message
         current_user_content = [{"type": "text", "text": event.message.text or ""}]
@@ -305,3 +419,8 @@ async def chat_handler(event):
     finally:
         if temp_dir.exists():
             rmtree(temp_dir, ignore_errors=True)
+
+
+# --- Initialization ---
+# Schedule the command menu setup to run on the bot's event loop upon loading.
+borg.loop.create_task(set_bot_menu_commands())
