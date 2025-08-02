@@ -388,7 +388,13 @@ async def is_read(borg, entity, message, is_out=None):
     return message_id <= max_id
 
 
-async def run_and_get(event, to_await, cwd=None, *, delete_p=True,):
+async def run_and_get(
+    event,
+    to_await,
+    cwd=None,
+    *,
+    delete_p=True,
+):
     if cwd is None:
         cwd = dl_base + str(uuid.uuid4()) + "/"
     Path(cwd).mkdir(parents=True, exist_ok=True)
@@ -424,7 +430,9 @@ async def run_and_get(event, to_await, cwd=None, *, delete_p=True,):
                 continue
 
             search_ids = range(message_to_inspect.id - k, message_to_inspect.id + k)
-            messages_in_vicinity = await a.get_messages(event.chat, ids=list(search_ids))
+            messages_in_vicinity = await a.get_messages(
+                event.chat, ids=list(search_ids)
+            )
 
             for msg in messages_in_vicinity:
                 if msg and msg.grouped_id == group_id:
@@ -595,7 +603,14 @@ async def remove_potential_file(file, event=None):
             )
 
 
-async def discreet_send(event, message, reply_to=None, quiet=False, link_preview=False, parse_mode=None,):
+async def discreet_send(
+    event,
+    message,
+    reply_to=None,
+    quiet=False,
+    link_preview=False,
+    parse_mode=None,
+):
     message = message.strip()
     if quiet or len(message) == 0:
         return reply_to
@@ -623,6 +638,118 @@ async def discreet_send(event, message, reply_to=None, quiet=False, link_preview
                 caption="This message is too long, so it has been sent as a text file.",
             )
             return last_msg
+
+
+# Dictionary to track message chains for the edit_message function
+# Key: original_message_id, Value: list of child Message objects
+EDIT_CHAINS = {}
+
+
+async def edit_message(
+    message_obj, new_text, link_preview=False, parse_mode=None, max_len=4096
+):
+    """
+    Intelligently edits a message chain to reflect new text content.
+
+    - Edits existing messages in the chain to match the new text.
+    - Creates new messages if the new text is longer than the old chain.
+    - Deletes surplus messages if the new text is shorter.
+    - Tracks the relationship between the original message and its children.
+
+    Args:
+        message_obj: The original Telethon Message object to be edited.
+        new_text (str): The new, potentially long, text content.
+        link_preview (bool): Whether to enable link previews.
+        parse_mode (str): The markdown parse mode.
+        max_len (int): The maximum length of a single message.
+    """
+    global EDIT_CHAINS
+    message_id = message_obj.id
+
+    # Sanitize and chunk the new text
+    new_text = new_text.strip()
+    chunks = (
+        [new_text[i : i + max_len] for i in range(0, len(new_text), max_len)]
+        if new_text
+        else []
+    )
+
+    # Get the existing message chain for this message ID
+    existing_children = EDIT_CHAINS.get(message_id, [])
+    new_children = []
+
+    # Case 1: The new text is empty, delete the entire chain.
+    if not chunks:
+        for child in existing_children:
+            try:
+                await child.delete()
+            except Exception:
+                pass  # Ignore if deletion fails
+        EDIT_CHAINS.pop(message_id, None)
+        try:
+            # Edit the original message to be empty or show a placeholder
+            await message_obj.edit("__[empty]__")
+        except Exception:
+            pass
+        return
+
+    # Edit the primary message (the one the user replied to)
+    try:
+        await message_obj.edit(
+            chunks[0], parse_mode=parse_mode, link_preview=link_preview
+        )
+    except telethon.errors.rpcerrorlist.MessageNotModifiedError:
+        pass  # It's fine if the first part of the message is the same
+    except Exception as e:
+        print(f"Error editing original message {message_id}: {e}")
+        return  # If the head of the chain fails, abort
+
+    # Now, handle the children (the rest of the chunks)
+    # We loop through the maximum range of what we have and what we need
+    num_new_chunks = len(chunks) - 1
+    num_existing_children = len(existing_children)
+    last_message_in_chain = message_obj
+
+    for i in range(max(num_new_chunks, num_existing_children)):
+        # Edit existing messages if we have a chunk for them
+        if i < num_new_chunks and i < num_existing_children:
+            child_to_edit = existing_children[i]
+            try:
+                await child_to_edit.edit(chunks[i + 1], parse_mode=parse_mode)
+                new_children.append(child_to_edit)
+                last_message_in_chain = child_to_edit
+            except telethon.errors.rpcerrorlist.MessageNotModifiedError:
+                new_children.append(child_to_edit)  # Still part of the new chain
+                last_message_in_chain = child_to_edit
+            except Exception:
+                # If editing a child fails, we stop trying to edit subsequent
+                # children in this chain to avoid breaking reply-chain logic.
+                break
+
+        # Create new messages if new text is longer
+        elif i < num_new_chunks:
+            try:
+                new_child = await last_message_in_chain.reply(
+                    chunks[i + 1], parse_mode=parse_mode
+                )
+                new_children.append(new_child)
+                last_message_in_chain = new_child
+            except Exception:
+                break  # Stop if we can't send a new reply
+
+        # Delete surplus messages if new text is shorter
+        elif i < num_existing_children:
+            child_to_delete = existing_children[i]
+            try:
+                await child_to_delete.delete()
+            except Exception:
+                pass  # Ignore deletion errors
+
+    # Update the global state
+    if new_children:
+        EDIT_CHAINS[message_id] = new_children
+    else:
+        EDIT_CHAINS.pop(message_id, None)
 
 
 def postproccesor_json(file_path):
