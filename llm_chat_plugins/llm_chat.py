@@ -51,13 +51,15 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 # --- New Constants for Features ---
 LAST_N_MESSAGES_LIMIT = 50
 HISTORY_MESSAGE_LIMIT = 1000
+LOG_COUNT_LIMIT = 5
 AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
 DEFAULT_ENABLED_TOOLS = ["googleSearch", "urlContext"]
 REASONING_LEVELS = ["disable", "low", "medium", "high"]
 CONTEXT_MODES = ["reply_chain", "until_separator", "last_N"]
+CONTEXT_SEPARATOR = "---"
 CONTEXT_MODE_NAMES = {
     "reply_chain": "Reply Chain",
-    "until_separator": "Until Separator",
+    "until_separator": f"Until Separator (`{CONTEXT_SEPARATOR}`)",
     "last_N": f"Last {LAST_N_MESSAGES_LIMIT} Messages",
 }
 
@@ -342,7 +344,7 @@ async def _get_initial_messages_for_separator(event) -> List[Message]:
     try:
         message = await event.client.get_messages(event.chat_id, ids=event.message.reply_to_msg_id)
         while message:
-            if message.text and message.text.strip() == "---":
+            if message.text and message.text.strip() == CONTEXT_SEPARATOR:
                 break
             messages.append(message)
             if len(messages) >= HISTORY_MESSAGE_LIMIT:
@@ -412,6 +414,7 @@ async def set_bot_menu_commands():
                     BotCommand("start", "Onboard and set API key"),
                     BotCommand("help", "Show detailed help and instructions"),
                     BotCommand("status", "Show your current settings"),
+                    BotCommand("log", f"Get your last {LOG_COUNT_LIMIT} conversation logs"),
                     BotCommand("setgeminikey", "Set or update your Gemini API key"),
                     BotCommand("setmodel", "Set your preferred chat model"),
                     BotCommand("setsystemprompt", "Customize the bot's instructions"),
@@ -459,7 +462,7 @@ To get started, you'll need a free Gemini API key. Send me /setgeminikey to help
 I remember our conversations based on your chosen **Context Mode**.
 
 - **Reply Chain (Default):** To continue a conversation, simply **reply** to my last message. I will remember our previous messages in that chain.
-- **Until Separator:** I will read the reply chain until a message with only `---` is found. This lets you manually define the context length.
+- **Until Separator:** I will read the reply chain until a message with only `{CONTEXT_SEPARATOR}` is found. This lets you manually define the context length.
 - **Last {LAST_N_MESSAGES_LIMIT} Messages:** I will use the last {LAST_N_MESSAGES_LIMIT} messages in our chat as context, regardless of replies.
 - **Starting Fresh:** To start a new, separate conversation in "Reply Chain" mode, just send a message without replying to anything.
 
@@ -469,6 +472,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /start: Onboard and set up your API key.
 - /help: Shows this detailed help message.
 - /status: Shows a summary of your current settings.
+- /log: Get your last {LOG_COUNT_LIMIT} conversation logs as files.
 - /setgeminikey: Sets or updates your Gemini API key.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
 - /setSystemPrompt: Change my core instructions or reset to default.
@@ -501,6 +505,47 @@ async def status_handler(event):
         f"∙ **System Prompt:** `{system_prompt_status}`"
     )
     await event.reply(status_message, parse_mode="md")
+
+
+@borg.on(events.NewMessage(pattern="/log", func=lambda e: e.is_private))
+async def log_handler(event):
+    """Sends the last few conversation logs to the user."""
+    user_id = event.sender_id
+    user_log_dir = LOG_DIR / str(user_id)
+
+    if not user_log_dir.is_dir():
+        await event.reply("You have no conversation logs yet.")
+        return
+
+    try:
+        log_files = sorted(
+            [p for p in user_log_dir.glob("*.txt") if p.is_file()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+
+        if not log_files:
+            await event.reply("You have no conversation logs yet.")
+            return
+
+        logs_to_send = log_files[:LOG_COUNT_LIMIT]
+
+        await event.reply(
+            f"Sending your last {len(logs_to_send)} conversation log(s)..."
+            # of {len(log_files)}
+        )
+
+        for log_file in logs_to_send:
+            await event.client.send_file(
+                event.chat_id,
+                file=log_file,
+                caption=f"Log: `{log_file.name}`",
+                reply_to=event.id,
+            )
+    except Exception as e:
+        print(f"Error sending logs for user {user_id}: {e}")
+        traceback.print_exc()
+        await event.reply("Sorry, an error occurred while retrieving your logs.")
 
 
 @borg.on(events.NewMessage(pattern=r"(?i)/setGeminiKey(?:\s+(.*))?", func=lambda e: e.is_private))
@@ -710,6 +755,20 @@ async def chat_handler(event):
     if group_id:
         if group_id in PROCESSED_GROUP_IDS:
             return  # Already being processed
+
+    else:
+        # If the message is only a separator and we are in `until_separator` context mode, reply that the context has been cleared.
+        prefs = user_manager.get_prefs(user_id)
+        if (
+            prefs.context_mode == "until_separator"
+            and event.text
+            and event.text.strip() == CONTEXT_SEPARATOR
+        ):
+            await event.reply(
+                "Context cleared. The conversation will now start fresh from your next message."
+            )
+            return
+
 
     api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
     if not api_key:
