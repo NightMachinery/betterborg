@@ -281,7 +281,7 @@ async def chat_handler(event):
                 if (current_time - last_edit_time) > edit_interval:
                     try:
                         # Add a cursor to indicate the bot is still "typing"
-                        await response_message.edit(f"{response_text}▌", parse_mode="md")
+                        await util.edit_message(response_message, f"{response_text}▌", parse_mode="md")
                         last_edit_time = current_time
                     except errors.rpcerrorlist.MessageNotModifiedError:
                         # This error is expected if the content hasn't changed
@@ -292,10 +292,7 @@ async def chat_handler(event):
 
         # Final edit to remove the cursor and show the complete message
         final_text = response_text.strip() or "__[No response]__"
-        try:
-            await response_message.edit(final_text, parse_mode="md", link_preview=False)
-        except errors.rpcerrorlist.MessageNotModifiedError:
-            pass
+        await util.edit_message(response_message, final_text, parse_mode="md", link_preview=False)
 
         # Log the successful conversation
         await _log_conversation(event, prefs.model, messages, final_text)
