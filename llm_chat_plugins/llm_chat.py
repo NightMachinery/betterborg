@@ -21,7 +21,7 @@ from uniborg.storage import UserStorage
 
 # Use the litellm model naming convention.
 # See https://docs.litellm.ai/docs/providers/gemini
-DEFAULT_MODEL = "gemini/gemini-2.5-flash"
+DEFAULT_MODEL = "gemini/gemini-2.5-flash" #: Do NOT change the default model unless explicitly instructed to.
 DEFAULT_SYSTEM_PROMPT = """
 You are a helpful and knowledgeable assistant. Your primary audience is advanced STEM postgraduate researchers, so be precise and technically accurate.
 
