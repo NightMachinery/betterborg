@@ -4,3 +4,9 @@
 ** should only activate when the message starts with `@{bot_username}`
 *** should strip this prefix from messages when constructing the history
 *** should add metadata of each message (user id, name, timestamp, forwarded from where) at the start of each message
+
+* history_util
+#+begin_verse
+I am now trying to store message ids on new events as a workaround for getting previous messages. But `events.NewMessage()` seems to filter out the messages the bot itself is sending. How do I also include those?
+#+end_verse
+

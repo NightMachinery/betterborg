@@ -47,7 +47,7 @@ def get_all_ids(chat_id: int) -> List[int]:
 
 def initialize_history_handler():
     """
-    Creates an event handler to automatically capture all incoming and outgoing
+    Creates event handlers to automatically capture all incoming and outgoing
     messages and add them to the history cache.
     This should be called once when the bot starts.
     """
@@ -55,9 +55,14 @@ def initialize_history_handler():
         print("HistoryUtil Error: borg client is not set. Cannot initialize.")
         return
 
-    @borg.on(events.NewMessage())
-    async def universal_message_recorder(event: events.NewMessage.Event):
-        """Records every message ID to the history cache."""
+    @borg.on(events.NewMessage(incoming=True))
+    async def incoming_message_recorder(event: events.NewMessage.Event):
+        """Records every incoming message ID to the history cache."""
         add_message(event.chat_id, event.id)
 
-    print("HistoryUtil: Universal message recorder has been activated.")
+    @borg.on(events.NewMessage(outgoing=True))
+    async def outgoing_message_recorder(event: events.NewMessage.Event):
+        """Records every outgoing message ID to the history cache."""
+        add_message(event.chat_id, event.id)
+
+    print("HistoryUtil: Incoming and outgoing message recorders have been activated.")
