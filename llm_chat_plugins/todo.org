@@ -1,9 +1,14 @@
 #+TITLE: llm_chat_plugins/todo
 
 * Make the bot work in groups
-** should only activate when the message starts with `@{bot_username}`
+** should only activate when the message starts with =@{bot_username}=
 *** should strip this prefix from messages when constructing the history
-*** should add metadata of each message (user id, name, timestamp, forwarded from where) at the start of each message
+
+*** have a separate context mode setting for groups =/groupContextMode=
+**** for clearing context, check for the separator after striping the prefix activation
+
+*** should add metadata of each message (user id, name, timestamp, forwarded from whom) at the start of each message
+Define a variable =metadata_mode=. Default to =ONLY_WHEN_NOT_PRIVATE= which means only add the metadata when used in groups.
 
 * @retired
 :PROPERTIES:
