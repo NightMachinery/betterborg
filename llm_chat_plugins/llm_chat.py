@@ -942,8 +942,9 @@ def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
 
     # If it has text, check if it's a known command
     if event.text:
+        text = event.text.strip()
         first_word = event.text.split(" ", 1)[0]
-        if first_word in KNOWN_COMMAND_SET or first_word in ("...",):
+        if first_word in KNOWN_COMMAND_SET or text in ("...",):
             return False  # It's a command, so not a chat message
 
     # Passes all checks
