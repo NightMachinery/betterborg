@@ -264,7 +264,7 @@ async def chat_handler(event):
         # Make the API call using litellm
         response_text = ""
         last_edit_time = asyncio.get_event_loop().time()
-        edit_interval = 0.2  # Seconds between edits to avoid rate limits
+        edit_interval = 0.8  # Seconds between edits to avoid rate limits
 
         response_stream = await litellm.acompletion(
             model=prefs.model,
