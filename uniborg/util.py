@@ -442,7 +442,9 @@ async def run_and_get(
             processed_group_ids.add(group_id)
 
     #: Iterate over the values of the dictionary to get the unique Message objects.
-    for msg in todl_map.values().sort(key=lambda msg: msg.id):
+    todl_messages = list(todl_map.values())
+    todl_messages = todl_messages.sort(key=lambda msg: msg.id)
+    for msg in todl_messages:
         await dl(msg)
 
     # ic(cwd, dled_files)
