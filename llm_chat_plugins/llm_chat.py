@@ -9,7 +9,7 @@ from pathlib import Path
 from shutil import rmtree
 
 import litellm
-from telethon import events
+from telethon import events, errors
 from pydantic import BaseModel, Field
 
 # Import uniborg utilities and storage
@@ -229,7 +229,8 @@ async def chat_handler(event):
         return
 
     prefs = user_manager.get_prefs(user_id)
-    thinking_message = await event.reply("...")
+    # This message will be edited with the streaming response
+    response_message = await event.reply("...")
     temp_dir = Path(f"./temp_llm_chat_{event.id}/")
 
     try:
@@ -263,6 +264,7 @@ async def chat_handler(event):
         # Make the API call using litellm
         response_text = ""
         last_edit_time = asyncio.get_event_loop().time()
+        edit_interval = 0.2  # Seconds between edits to avoid rate limits
 
         response_stream = await litellm.acompletion(
             model=prefs.model,
@@ -276,20 +278,33 @@ async def chat_handler(event):
             if delta:
                 response_text += delta
                 current_time = asyncio.get_event_loop().time()
-                if (current_time - last_edit_time) > 1.5 and response_text.strip():
-                    await thinking_message.edit(f"{response_text}...")
-                    last_edit_time = current_time
+                if (current_time - last_edit_time) > edit_interval:
+                    try:
+                        # Add a cursor to indicate the bot is still "typing"
+                        await response_message.edit(f"{response_text}▌", parse_mode="md")
+                        last_edit_time = current_time
+                    except errors.rpcerrorlist.MessageNotModifiedError:
+                        # This error is expected if the content hasn't changed
+                        pass
+                    except Exception as e:
+                        # Log other edit errors but don't stop the stream
+                        print(f"Error during message edit: {e}")
 
+        # Final edit to remove the cursor and show the complete message
         final_text = response_text.strip() or "__[No response]__"
-        await thinking_message.delete()
-        await util.discreet_send(event, final_text, reply_to=event.message, parse_mode="md")
+        try:
+            await response_message.edit(final_text, parse_mode="md", link_preview=False)
+        except errors.rpcerrorlist.MessageNotModifiedError:
+            pass
 
         # Log the successful conversation
         await _log_conversation(event, prefs.model, messages, final_text)
 
     except Exception:
-        await util.handle_exc(event, reply_exc=False)
-        await thinking_message.edit("An error occurred. The details have been logged to the console.")
+        # If a major error occurs, edit the message to inform the user
+        error_text = "An error occurred. The details have been logged to the console."
+        await response_message.edit(error_text)
+        traceback.print_exc()
     finally:
         if temp_dir.exists():
             rmtree(temp_dir, ignore_errors=True)
