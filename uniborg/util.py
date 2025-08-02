@@ -443,7 +443,7 @@ async def run_and_get(
 
     #: Iterate over the values of the dictionary to get the unique Message objects.
     todl_messages = list(todl_map.values())
-    todl_messages = todl_messages.sort(key=lambda msg: msg.id)
+    todl_messages.sort(key=lambda msg: msg.id)  #: sorts inplace
     for msg in todl_messages:
         await dl(msg)
 
