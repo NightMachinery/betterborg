@@ -1,5 +1,22 @@
 #+TITLE: llm_chat_plugins/logo
 
+* _
+#+begin_verse
+ChatGPT, but right here in Telegram! I can chat, understand images, listen to audio, and read files.
+
+Send /help for more information.
+#+end_verse
+
+#+BEGIN_SRC markdown
+**Hello! I'm your personal AI assistant, powered by Google's Gemini.**
+
+Just like ChatGPT, but right here in Telegram! I can chat, understand images, listen to audio, and read files.
+
+To have a continuous conversation, simply **reply** to my messages. To start fresh, send a new message without a reply.
+
+➡️ Send `/help` to see all my commands and learn how to customize my model, context modes, and tools!
+#+END_SRC
+
 * G25
 #+begin_verse
 Draw:
@@ -12,3 +29,4 @@ Draw:
 
 A perfect sphere floats in the center of a pure white void. The sphere's surface is a seamless, intricate mosaic of different textures: one segment is polished chrome reflecting glowing data points, another has the texture of a lush green circuit board, and a third is like a satellite map. Minimalist, photorealistic, studio lighting.
 #+end_verse
+
