@@ -8,6 +8,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from shutil import rmtree
+from itertools import groupby
 
 import litellm
 from telethon import events, errors
@@ -16,9 +17,10 @@ from telethon.tl.types import (
     BotCommand,
     BotCommandScopeDefault,
     KeyboardButtonCallback,
+    Message,
 )
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 
 # Import uniborg utilities and storage
 from uniborg import util
@@ -47,9 +49,18 @@ LOG_DIR = Path(os.path.expanduser("~/.borg/llm_chat/log/"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- New Constants for Features ---
+LAST_N_MESSAGES_LIMIT = 50
+HISTORY_MESSAGE_LIMIT = 1000
 AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
 DEFAULT_ENABLED_TOOLS = ["googleSearch", "urlContext"]
 REASONING_LEVELS = ["disable", "low", "medium", "high"]
+CONTEXT_MODES = ["reply_chain", "until_separator", "last_N"]
+CONTEXT_MODE_NAMES = {
+    "reply_chain": "Reply Chain",
+    "until_separator": "Until Separator",
+    "last_N": f"Last {LAST_N_MESSAGES_LIMIT} Messages",
+}
+
 
 SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -76,6 +87,7 @@ class UserPrefs(BaseModel):
     thinking: Optional[str] = Field(default=None)
     enabled_tools: list[str] = Field(default_factory=lambda: DEFAULT_ENABLED_TOOLS)
     json_mode: bool = Field(default=False)
+    context_mode: str = Field(default="reply_chain")
 
 class UserManager:
     """High-level manager for user preferences, using the UserStorage class."""
@@ -119,6 +131,11 @@ class UserManager:
         prefs.json_mode = not prefs.json_mode
         self._save_prefs(user_id, prefs)
         return prefs.json_mode
+
+    def set_context_mode(self, user_id: int, mode: str):
+        prefs = self.get_prefs(user_id)
+        prefs.context_mode = mode
+        self._save_prefs(user_id, prefs)
 
 
 user_manager = UserManager()
@@ -207,98 +224,178 @@ async def _log_conversation(event, model_name: str, messages: list, final_respon
         print(f"Failed to write chat log for user {event.sender_id}: {e}")
         traceback.print_exc()
 
-async def build_conversation_history(event) -> list:
+async def _expand_and_sort_messages_with_groups(event, initial_messages: List[Message]) -> List[Message]:
     """
-    Constructs a conversation history from the reply chain, processing and
-    grouping media albums correctly.
+    Takes a list of messages and ensures all members of any represented media
+    group are included in the final, sorted list.
     """
+    final_messages_map = {m.id: m for m in initial_messages}
+    processed_group_ids = set()
+
+    # Iterate over a copy, as we might fetch more messages and add to the map
+    messages_to_check = list(initial_messages)
+
+    for msg in messages_to_check:
+        group_id = msg.grouped_id
+        if group_id and group_id not in processed_group_ids:
+            try:
+                # Fetch all messages in the vicinity of the current message to find group members
+                k = 30  # Search range
+                search_ids = range(msg.id - k, msg.id + k + 1)
+                messages_in_vicinity = await event.client.get_messages(
+                    event.chat_id, ids=list(search_ids)
+                )
+
+                group_messages = [m for m in messages_in_vicinity if m and m.grouped_id == group_id]
+                for group_msg in group_messages:
+                    final_messages_map[group_msg.id] = group_msg
+
+                processed_group_ids.add(group_id)
+            except Exception as e:
+                print(f"Could not expand message group {group_id}: {e}")
+
+    # Return a sorted, unique list of messages
+    return sorted(final_messages_map.values(), key=lambda m: m.id)
+
+async def _process_turns_to_history(event, message_list: List[Message], temp_dir: Path) -> List[dict]:
+    """
+    Processes a final, sorted list of messages into litellm history format,
+    grouping consecutive messages from the same sender into 'turns'.
+    """
+    history = []
+    if not message_list:
+        return history
+
+    bot_me = await event.client.get_me()
+
+    # Group consecutive messages by sender to create "turns"
+    for _, turn_messages_iter in groupby(message_list, key=lambda m: m.sender_id):
+        turn_messages = list(turn_messages_iter)
+        if not turn_messages:
+            continue
+
+        role = "assistant" if turn_messages[0].sender_id == bot_me.id else "user"
+
+        # Process all messages in this turn and consolidate into one history entry
+        text_buffer, media_parts = [], []
+        for turn_msg in turn_messages:
+            if turn_msg.text:
+                text_buffer.append(turn_msg.text)
+            media_part = await _process_media(turn_msg, temp_dir)
+            if media_part:
+                media_parts.append(media_part)
+
+        content_parts = []
+        if text_buffer:
+            content_parts.append({"type": "text", "text": "\n".join(text_buffer)})
+
+        text_from_files = []
+        for part in media_parts:
+            if part.get("type") == "text":
+                text_from_files.append(part["text"])
+            else:
+                content_parts.append(part)
+
+        if text_from_files:
+            combined_file_text = "\n".join(text_from_files)
+            existing_text_part = next((p for p in content_parts if p["type"] == "text"), None)
+            if existing_text_part:
+                existing_text_part["text"] += "\n" + combined_file_text
+            else:
+                content_parts.insert(0, {"type": "text", "text": combined_file_text})
+
+        if not content_parts:
+            continue
+
+        final_content = (
+            content_parts[0]["text"]
+            if len(content_parts) == 1 and content_parts[0]["type"] == "text"
+            else content_parts
+        )
+        history.append({"role": role, "content": final_content})
+
+    return history
+
+
+async def _get_initial_messages_for_reply_chain(event) -> List[Message]:
     if not event.message.reply_to_msg_id:
         return []
-    history = []
-    # 1. Traverse the reply chain to get all historical messages
-    messages_in_chain = []
+    messages = []
     try:
-        message = await event.client.get_messages(
-            event.chat_id, ids=event.message.reply_to_msg_id
-        )
+        message = await event.client.get_messages(event.chat_id, ids=event.message.reply_to_msg_id)
         while message:
-            messages_in_chain.append(message)
+            messages.append(message)
+            if len(messages) >= HISTORY_MESSAGE_LIMIT:
+                break
             if not message.reply_to_msg_id:
                 break
-            message = await event.client.get_messages(
-                event.chat_id, ids=message.reply_to_msg_id
-            )
+            message = await event.client.get_messages(event.chat_id, ids=message.reply_to_msg_id)
     except Exception:
-        pass  # Stop if we can't fetch a message
-    messages_in_chain.reverse()  # Sort from oldest to newest
-    if not messages_in_chain:
+        pass
+    messages.reverse()
+    return messages
+
+async def _get_initial_messages_for_separator(event) -> List[Message]:
+    if not event.message.reply_to_msg_id:
         return []
-    bot_me = await event.client.get_me()
-    temp_dir = Path(f"./temp_llm_chat_history_{event.id}/")
-    temp_dir.mkdir(exist_ok=True)
-    processed_message_ids = set()
+    messages = []
     try:
-        for msg in messages_in_chain:
-            if msg.id in processed_message_ids:
-                continue
-            # This is the "turn". It could be a single message or a group/album.
-            turn_messages = [msg]
-            group_id = msg.grouped_id
-            if group_id:
-                try:
-                    k = 20
-                    search_ids = range(msg.id - k, msg.id + k + 1)
-                    messages_in_vicinity = await event.client.get_messages(
-                        event.chat_id, ids=list(search_ids)
-                    )
-                    group_messages = [
-                        m for m in messages_in_vicinity if m and m.grouped_id == group_id
-                    ]
-                    if group_messages:
-                        turn_messages = sorted(group_messages, key=lambda m: m.id)
-                except Exception as e:
-                    print(f"Error gathering group {group_id} in history: {e}")
-                    turn_messages = [msg]
-            # Now, process all messages in this turn and consolidate into one history entry
-            role = "assistant" if turn_messages[0].sender_id == bot_me.id else "user"
-            text_buffer, media_parts = [], []
-            for turn_msg in turn_messages:
-                processed_message_ids.add(turn_msg.id)
-                if turn_msg.text:
-                    text_buffer.append(turn_msg.text)
-                media_part = await _process_media(turn_msg, temp_dir)
-                if media_part:
-                    media_parts.append(media_part)
-            content_parts = []
-            if text_buffer:
-                content_parts.append({"type": "text", "text": "\n".join(text_buffer)})
-            text_from_files = []
-            for part in media_parts:
-                if part.get("type") == "text":
-                    text_from_files.append(part["text"])
-                else:
-                    content_parts.append(part)
-            if text_from_files:
-                combined_file_text = "\n".join(text_from_files)
-                existing_text_part = next(
-                    (p for p in content_parts if p["type"] == "text"), None
-                )
-                if existing_text_part:
-                    existing_text_part["text"] += "\n" + combined_file_text
-                else:
-                    content_parts.insert(0, {"type": "text", "text": combined_file_text})
-            if not content_parts:
-                continue
-            final_content = (
-                content_parts[0]["text"]
-                if len(content_parts) == 1 and content_parts[0]["type"] == "text"
-                else content_parts
-            )
-            history.append({"role": role, "content": final_content})
-    finally:
-        if temp_dir.exists():
-            rmtree(temp_dir, ignore_errors=True)
+        message = await event.client.get_messages(event.chat_id, ids=event.message.reply_to_msg_id)
+        while message:
+            if message.text and message.text.strip() == "---":
+                break
+            messages.append(message)
+            if len(messages) >= HISTORY_MESSAGE_LIMIT:
+                break
+            if not message.reply_to_msg_id:
+                break
+            message = await event.client.get_messages(event.chat_id, ids=message.reply_to_msg_id)
+    except Exception:
+        pass
+    messages.reverse()
+    return messages
+
+async def _get_initial_messages_for_last_n(event) -> List[Message]:
+    messages = []
+    try:
+        # Fetch one more to exclude the triggering message itself
+        limit = LAST_N_MESSAGES_LIMIT + 1
+        messages = await event.client.get_messages(event.chat_id, limit=limit)
+        messages = [m for m in messages if m.id != event.id]
+        if len(messages) > LAST_N_MESSAGES_LIMIT:
+            messages = messages[:LAST_N_MESSAGES_LIMIT]
+    except Exception as e:
+        print(f"Error fetching last {LAST_N_MESSAGES_LIMIT} messages: {e}")
+        return []
+    messages.reverse()
+    return messages
+
+async def build_conversation_history(event, context_mode: str, temp_dir: Path) -> list:
+    """
+    Orchestrates the construction of a conversation history based on the user's
+    selected context mode, including group expansion and global limits.
+    """
+    initial_messages = []
+    if context_mode == "reply_chain":
+        initial_messages = await _get_initial_messages_for_reply_chain(event)
+    elif context_mode == "until_separator":
+        initial_messages = await _get_initial_messages_for_separator(event)
+    elif context_mode == "last_N":
+        initial_messages = await _get_initial_messages_for_last_n(event)
+
+    initial_messages += [event.message]
+
+    # Universally expand groups for the fetched messages
+    expanded_messages = await _expand_and_sort_messages_with_groups(event, initial_messages)
+
+    # Apply the global message limit as a final safeguard
+    if len(expanded_messages) > HISTORY_MESSAGE_LIMIT:
+        expanded_messages = expanded_messages[-HISTORY_MESSAGE_LIMIT:]
+
+    # Process the final message list into litellm format
+    history = await _process_turns_to_history(event, expanded_messages, temp_dir)
     return history
+
 
 # --- Bot Command Setup ---
 
@@ -314,10 +411,12 @@ async def set_bot_menu_commands():
                 commands=[
                     BotCommand("start", "Onboard and set API key"),
                     BotCommand("help", "Show detailed help and instructions"),
+                    BotCommand("status", "Show your current settings"),
                     BotCommand("setgeminikey", "Set or update your Gemini API key"),
                     BotCommand("setmodel", "Set your preferred chat model"),
                     BotCommand("setsystemprompt", "Customize the bot's instructions"),
                     BotCommand("setthink", "Adjust model's reasoning effort"),
+                    BotCommand("contextmode", "Change how conversation history is read"),
                     BotCommand("tools", "Enable or disable tools like search"),
                     BotCommand("json", "Toggle JSON output mode"),
                 ],
@@ -356,26 +455,52 @@ To get started, you'll need a free Gemini API key. Send me /setgeminikey to help
 
 **How to Chat with Me**
 
-**▶️ Understanding Conversations (Reply Chains)**
-I remember our conversations by following the **reply chain**. This is the key to having a continuous, context-aware chat.
+**▶️ Understanding Conversation Context**
+I remember our conversations based on your chosen **Context Mode**.
 
-- **Continuing the Chat:** To continue a conversation, simply **reply** to the last message of that conversation. I will remember our previous messages in that chain.
-- **Adding More Detail:** You can also **reply to your OWN message** to add more thoughts, context, or files before I've even answered. I will see it all as part of the same turn.
-- **Starting Fresh:** To start a new, separate conversation, just send a new message without replying to anything.
+- **Reply Chain (Default):** To continue a conversation, simply **reply** to my last message. I will remember our previous messages in that chain.
+- **Until Separator:** I will read the reply chain until a message with only `---` is found. This lets you manually define the context length.
+- **Last {LAST_N_MESSAGES_LIMIT} Messages:** I will use the last {LAST_N_MESSAGES_LIMIT} messages in our chat as context, regardless of replies.
+- **Starting Fresh:** To start a new, separate conversation in "Reply Chain" mode, just send a message without replying to anything.
 
-You can also attach **images, audio, video, and text files**. Sending multiple files as an **album** is also supported.
+You can attach **images, audio, video, and text files**. Sending multiple files as an **album** is also supported, and I will see all items in the album.
 
 **Available Commands**
 - /start: Onboard and set up your API key.
 - /help: Shows this detailed help message.
+- /status: Shows a summary of your current settings.
 - /setgeminikey: Sets or updates your Gemini API key.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
 - /setSystemPrompt: Change my core instructions or reset to default.
+- /contextMode: Change how conversation history is gathered.
 - /setthink: Adjust the model's reasoning effort for complex tasks.
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
 """
     await event.reply(help_text, link_preview=False, parse_mode="md")
+
+@borg.on(events.NewMessage(pattern=r"/status", func=lambda e: e.is_private))
+async def status_handler(event):
+    """Displays a summary of the user's current settings."""
+    user_id = event.sender_id
+    prefs = user_manager.get_prefs(user_id)
+    enabled_tools_str = ", ".join(prefs.enabled_tools) if prefs.enabled_tools else "None"
+    system_prompt_status = "Default"
+    if prefs.system_prompt and prefs.system_prompt != DEFAULT_SYSTEM_PROMPT:
+        system_prompt_status = "Custom"
+
+    context_mode_name = CONTEXT_MODE_NAMES.get(prefs.context_mode, prefs.context_mode.replace('_', ' ').title())
+    thinking_level = prefs.thinking.capitalize() if prefs.thinking else "Default"
+    status_message = (
+        f"**Your Current Bot Settings**\n\n"
+        f"∙ **Model:** `{prefs.model}`\n"
+        f"∙ **Context Mode:** `{context_mode_name}`\n"
+        f"∙ **Reasoning Level:** `{thinking_level}`\n"
+        f"∙ **Enabled Tools:** `{enabled_tools_str}`\n"
+        f"∙ **JSON Mode:** `{'Enabled' if prefs.json_mode else 'Disabled'}`\n"
+        f"∙ **System Prompt:** `{system_prompt_status}`"
+    )
+    await event.reply(status_message, parse_mode="md")
 
 
 @borg.on(events.NewMessage(pattern=r"(?i)/setGeminiKey(?:\s+(.*))?", func=lambda e: e.is_private))
@@ -446,6 +571,18 @@ async def set_system_prompt_handler(event):
 
 
 # --- New Feature Handlers ---
+@borg.on(events.NewMessage(pattern=r"/contextmode", func=lambda e: e.is_private))
+async def context_mode_handler(event):
+    """Displays buttons to set the conversation context mode."""
+    prefs = user_manager.get_prefs(event.sender_id)
+    buttons = [KeyboardButtonCallback(
+        f"✅ {CONTEXT_MODE_NAMES[mode]}" if prefs.context_mode == mode else CONTEXT_MODE_NAMES[mode],
+        data=f"context_{mode}"
+    ) for mode in CONTEXT_MODES]
+    await event.reply(
+        "**Set Conversation Context Mode**\nChoose how I should remember our conversation history.",
+        buttons=build_menu(buttons, n_cols=1)
+    )
 
 @borg.on(events.NewMessage(pattern=r"/setthink", func=lambda e: e.is_private))
 async def set_think_handler(event):
@@ -506,17 +643,25 @@ async def callback_handler(event):
         await event.answer("Thinking preference updated.")
     elif data_str.startswith("tool_"):
         tool_name = data_str.split("_")[1]
-        # Toggle tool state
         prefs = user_manager.get_prefs(user_id)
         is_enabled = tool_name not in prefs.enabled_tools
         user_manager.set_tool_state(user_id, tool_name, enabled=is_enabled)
-        # Re-generate buttons
         prefs = user_manager.get_prefs(user_id) # Re-fetch
         buttons = [KeyboardButtonCallback(
             f"{'✅' if tool in prefs.enabled_tools else '❌'} {tool}", data=f"tool_{tool}"
         ) for tool in AVAILABLE_TOOLS]
         await event.edit(buttons=build_menu(buttons, n_cols=1))
         await event.answer(f"{tool_name} {'enabled' if is_enabled else 'disabled'}.")
+    elif data_str.startswith("context_"):
+        mode = data_str.split("_", 1)[1]
+        user_manager.set_context_mode(user_id, mode)
+        prefs = user_manager.get_prefs(user_id)
+        buttons = [KeyboardButtonCallback(
+            f"✅ {CONTEXT_MODE_NAMES[m]}" if prefs.context_mode == m else CONTEXT_MODE_NAMES[m],
+            data=f"context_{m}"
+        ) for m in CONTEXT_MODES]
+        await event.edit(buttons=build_menu(buttons, n_cols=1))
+        await event.answer("Context mode updated.")
 
 
 @borg.on(
@@ -571,66 +716,21 @@ async def chat_handler(event):
         await llm_db.request_api_key_message(event)
         return
 
-    PROCESSED_GROUP_IDS.add(group_id)
-    ###
+    if group_id:
+        PROCESSED_GROUP_IDS.add(group_id)
 
     prefs = user_manager.get_prefs(user_id)
     response_message = await event.reply("...")
     temp_dir = Path(f"./temp_llm_chat_{event.id}/")
     try:
-        messages = await build_conversation_history(event)
+        temp_dir.mkdir(exist_ok=True)
+
+        if group_id:
+            await asyncio.sleep(0.1) # Allow album messages to arrive
+
+        messages = await build_conversation_history(event, prefs.context_mode, temp_dir)
         system_prompt_to_use = prefs.system_prompt or DEFAULT_SYSTEM_PROMPT
         messages.insert(0, {"role": "system", "content": system_prompt_to_use})
-
-        # --- Gather and Process Current User Turn (including groups) ---
-        current_turn_messages = [event.message]
-        if group_id:
-            await asyncio.sleep(0.1)  # Allow album messages to arrive
-            try:
-                # Search a range around the event's ID to find all messages in the group
-                k = 20
-                search_ids = range(event.id - k, event.id + k + 1)
-                messages_in_vicinity = await event.client.get_messages(event.chat_id, ids=list(search_ids))
-                group_messages = [m for m in messages_in_vicinity if m and m.grouped_id == group_id]
-                if group_messages:
-                    current_turn_messages = sorted(group_messages, key=lambda m: m.id)
-            except Exception as e:
-                print(f"Could not gather grouped messages for group {group_id}: {e}")
-                # Fallback to just the trigger message
-
-        content_parts = []
-        if current_turn_messages:
-            temp_dir.mkdir(exist_ok=True)
-            text_buffer, media_parts = [], []
-            for msg in current_turn_messages:
-                if msg.text:
-                    text_buffer.append(msg.text)
-                if msg.media:
-                    media_part = await _process_media(msg, temp_dir)
-                    if media_part:
-                        media_parts.append(media_part)
-
-            # Consolidate all text and media into a single user message
-            if text_buffer:
-                content_parts.append({"type": "text", "text": "\n".join(text_buffer)})
-
-            text_from_files = []
-            for part in media_parts:
-                if part['type'] == 'text':
-                    text_from_files.append(part['text'])
-                else:
-                    content_parts.append(part)
-
-            if text_from_files:
-                combined_file_text = "\n".join(text_from_files)
-                if content_parts and content_parts[0]['type'] == 'text':
-                    content_parts[0]['text'] += "\n" + combined_file_text
-                else:
-                    content_parts.insert(0, {'type': 'text', 'text': combined_file_text})
-
-        if content_parts:
-            final_content = content_parts[0]['text'] if len(content_parts) == 1 and content_parts[0]['type'] == 'text' else content_parts
-            messages.append({"role": "user", "content": final_content})
 
         # --- Construct API call arguments ---
         is_gemini_model = re.search(r'\bgemini\b', prefs.model, re.IGNORECASE)
@@ -683,14 +783,11 @@ async def chat_handler(event):
                         print(f"Error during message edit: {e}")
 
         # Final edit to remove the cursor and show the complete message
-
         final_text = response_text.strip() or "__[No response]__"
 
         if warnings:
             warning_text = "\n\n---\n**Note:**\n" + "\n".join(f"- {w}" for w in warnings)
-
-            #: no need to clutter the response in Telegram
-            # final_text += warning_text
+            # final_text += warning_text # No need to clutter the response
 
         await util.edit_message(response_message, final_text, parse_mode="md", link_preview=False)
         await _log_conversation(event, prefs.model, messages, final_text)
