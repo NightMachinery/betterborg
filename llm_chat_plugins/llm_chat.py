@@ -53,7 +53,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 # --- New Constants for Features ---
 LAST_N_MESSAGES_LIMIT = 50
 HISTORY_MESSAGE_LIMIT = 1000
-LOG_COUNT_LIMIT = 5
+LOG_COUNT_LIMIT = 3
 AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
 DEFAULT_ENABLED_TOOLS = ["googleSearch", "urlContext"]
 REASONING_LEVELS = ["disable", "low", "medium", "high"]
@@ -572,8 +572,9 @@ async def log_handler(event):
         logs_to_send = log_files[:LOG_COUNT_LIMIT]
 
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}Sending your last {len(logs_to_send)} of {len(log_files)} conversation log(s)..."
+            f"{BOT_META_INFO_PREFIX}Sending your last {len(logs_to_send)} conversation log(s)..."
         )
+        # `of {len(log_files)}`
 
         # Sending files doesn't need the prefix, but the caption does if we want it ignored
         for log_file in logs_to_send:
