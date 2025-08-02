@@ -896,3 +896,10 @@ def humanbytes(size):
         size /= power
         raised_to_pow += 1
     return str(round(size, 2)) + " " + dict_power_n[raised_to_pow] + "B"
+
+##
+def build_menu(buttons, n_cols):
+    """Helper to build a menu of inline buttons in a grid."""
+    return [buttons[i : i + n_cols] for i in range(0, len(buttons), n_cols)]
+
+##
