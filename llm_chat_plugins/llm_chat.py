@@ -429,7 +429,7 @@ async def set_bot_menu_commands():
 
     print("LLM_Chat: setting bot commands ...")
     try:
-        await asyncio.sleep(5)
+        # await asyncio.sleep(5)
         await borg(
             SetBotCommandsRequest(
                 scope=BotCommandScopeDefault(),
