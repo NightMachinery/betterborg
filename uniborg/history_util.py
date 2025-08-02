@@ -64,7 +64,7 @@ def initialize_history_handler():
         add_message(event.chat_id, event.id)
 
     # --- 2. Check if running as a bot or user and apply the correct strategy ---
-    if borg.me.bot:
+    if await borg.is_bot():
         # BOT MODE: Monkey-patch send methods, as bots don't get outgoing events.
 
         # Add a guard to prevent patching the client more than once
