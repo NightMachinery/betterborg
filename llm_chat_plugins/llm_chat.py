@@ -299,7 +299,7 @@ async def chat_handler(event):
 
     except Exception:
         # If a major error occurs, edit the message to inform the user
-        error_text = "An error occurred. The details have been logged to the console."
+        error_text = "An error occurred. You can send the inputs that caused this error to the bot developer."
         await response_message.edit(error_text)
         traceback.print_exc()
     finally:
