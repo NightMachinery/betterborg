@@ -4,6 +4,7 @@ import os
 import uuid
 import base64
 import mimetypes
+import re
 from datetime import datetime
 from pathlib import Path
 from shutil import rmtree
@@ -11,12 +12,18 @@ from shutil import rmtree
 import litellm
 from telethon import events, errors
 from telethon.tl.functions.bots import SetBotCommandsRequest
-from telethon.tl.types import BotCommand, BotCommandScopeDefault
+from telethon.tl.types import (
+    BotCommand,
+    BotCommandScopeDefault,
+    KeyboardButtonCallback,
+)
 from pydantic import BaseModel, Field
+from typing import Optional
 
 # Import uniborg utilities and storage
 from uniborg import util
 from uniborg import llm_db
+from uniborg import llm_util
 from uniborg.storage import UserStorage
 
 # --- Constants and Configuration ---
@@ -39,6 +46,17 @@ You are a helpful and knowledgeable assistant. Your primary audience is advanced
 LOG_DIR = Path(os.path.expanduser("~/.borg/llm_chat/log/"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+# --- New Constants for Features ---
+AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
+DEFAULT_ENABLED_TOOLS = ["googleSearch", "urlContext"]
+REASONING_LEVELS = ["disable", "low", "medium", "high"]
+
+SAFETY_SETTINGS = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+]
 
 # --- User Preference Management ---
 
@@ -46,6 +64,9 @@ class UserPrefs(BaseModel):
     """Pydantic model for type-safe user preferences."""
     model: str = Field(default=DEFAULT_MODEL)
     system_prompt: str = Field(default=DEFAULT_SYSTEM_PROMPT)
+    thinking: Optional[str] = Field(default=None)
+    enabled_tools: list[str] = Field(default_factory=lambda: DEFAULT_ENABLED_TOOLS)
+    json_mode: bool = Field(default=False)
 
 class UserManager:
     """High-level manager for user preferences, using the UserStorage class."""
@@ -56,20 +77,84 @@ class UserManager:
         data = self.storage.get(user_id)
         return UserPrefs.model_validate(data or {})
 
+    def _save_prefs(self, user_id: int, prefs: UserPrefs):
+        self.storage.set(user_id, prefs.model_dump(exclude_defaults=True))
+
     def set_model(self, user_id: int, model_name: str):
         prefs = self.get_prefs(user_id)
         prefs.model = model_name
-        self.storage.set(user_id, prefs.model_dump())
+        self._save_prefs(user_id, prefs)
 
     def set_system_prompt(self, user_id: int, prompt: str):
         prefs = self.get_prefs(user_id)
         prefs.system_prompt = prompt
-        self.storage.set(user_id, prefs.model_dump())
+        self._save_prefs(user_id, prefs)
+
+    def set_thinking(self, user_id: int, level: Optional[str]):
+        prefs = self.get_prefs(user_id)
+        prefs.thinking = level
+        self._save_prefs(user_id, prefs)
+
+    def set_tool_state(self, user_id: int, tool_name: str, enabled: bool):
+        if tool_name not in AVAILABLE_TOOLS:
+            return
+        prefs = self.get_prefs(user_id)
+        if enabled and tool_name not in prefs.enabled_tools:
+            prefs.enabled_tools.append(tool_name)
+        elif not enabled and tool_name in prefs.enabled_tools:
+            prefs.enabled_tools.remove(tool_name)
+        self._save_prefs(user_id, prefs)
+
+    def toggle_json_mode(self, user_id: int) -> bool:
+        prefs = self.get_prefs(user_id)
+        prefs.json_mode = not prefs.json_mode
+        self._save_prefs(user_id, prefs)
+        return prefs.json_mode
+
 
 user_manager = UserManager()
 
 
 # --- Core Logic & Helpers ---
+
+def build_menu(buttons, n_cols):
+    """Helper to build a menu of inline buttons in a grid."""
+    return [buttons[i:i + n_cols] for i in range(0, len(buttons), n_cols)]
+
+async def _process_media(message, temp_dir: Path) -> Optional[dict]:
+    """Downloads media, encodes it, and returns a content part for litellm."""
+    if not message or not message.media:
+        return None
+    try:
+        file_path_str = await message.download_media(file=temp_dir)
+        if not file_path_str: return None
+        file_path = Path(file_path_str)
+        mime_type, _ = mimetypes.guess_type(file_path)
+        # Fallback for some audio/video types
+        if not mime_type:
+            for ext, m_type in llm_util.MIME_TYPE_MAP.items(): # Use imported map
+                if file_path.name.lower().endswith(ext):
+                    mime_type = m_type
+                    break
+        # Fallback for common text file types
+        if not mime_type and file_path.suffix.lower() in ['.txt', '.md', '.py', '.js', '.html', '.css', '.json', '.xml', '.log']:
+             mime_type = "text/plain"
+        if not mime_type or not (
+            mime_type.startswith(("image/", "audio/", "video/", "text/"))
+        ):
+            print(f"Unsupported media type '{mime_type}' for file {file_path.name}")
+            return None
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+        if mime_type.startswith("text/"):
+            # For text, return a standard text part to be merged.
+            return {"type": "text", "text": f"\n--- Attachment: {file_path.name} ---\n{file_bytes.decode('utf-8', errors='ignore')}"}
+        else:
+            b64_content = base64.b64encode(file_bytes).decode("utf-8")
+            return {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_content}"}}
+    except Exception as e:
+        print(f"Error processing media from message {message.id}: {e}")
+        return None
 
 async def _log_conversation(event, model_name: str, messages: list, final_response: str):
     """Formats and writes the conversation log to a user-specific file."""
@@ -90,94 +175,70 @@ async def _log_conversation(event, model_name: str, messages: list, final_respon
         log_file_path = user_log_dir / log_filename
 
         log_parts = [
-            f"Date: {timestamp}",
-            f"User ID: {user_id}",
-            f"Name: {full_name}",
-            f"Username: @{username}",
-            f"Model: {model_name}",
-            "--- Conversation ---"
+            f"Date: {timestamp}", f"User ID: {user_id}", f"Name: {full_name}",
+            f"Username: @{username}", f"Model: {model_name}", "--- Conversation ---"
         ]
-
         for msg in messages:
             role = msg.get("role", "unknown").capitalize()
             content = msg.get("content")
-
             log_parts.append(f"\n[{role}]:")
             if isinstance(content, str):
                 log_parts.append(content)
             elif isinstance(content, list):
-                # Handle multimodal content for logging
                 for part in content:
                     if part.get("type") == "text":
                         log_parts.append(part.get("text", ""))
-                    elif part.get("type") == "image_url":
-                        log_parts.append("[Attachment: Image]")
-
+                    else: # Handle media attachments in logs
+                        log_parts.append("[Attachment: Media Content]")
         log_parts.append("\n[Assistant]:")
         log_parts.append(final_response)
-
         with open(log_file_path, "w", encoding="utf-8") as f:
             f.write("\n".join(log_parts))
-
     except Exception as e:
         print(f"Failed to write chat log for user {event.sender_id}: {e}")
         traceback.print_exc()
 
-
 async def build_conversation_history(event) -> list:
     """
-    Constructs a conversation history for litellm from the reply chain,
-    downloading and encoding media. Excludes the current message.
+    Constructs a conversation history from the reply chain, processing media.
     """
     if not event.message.reply_to_msg_id:
         return []
-
     history = []
     message = await event.client.get_messages(event.chat_id, ids=event.message.reply_to_msg_id)
     bot_me = await event.client.get_me()
     temp_dir = Path(f"./temp_llm_chat_history_{event.id}/")
     temp_dir.mkdir(exist_ok=True)
-
     messages_to_process = []
     while message:
         messages_to_process.append(message)
-        if not message.reply_to_msg_id:
+        if not message.reply_to_msg_id: break
+        try:
+            message = await event.client.get_messages(event.chat_id, ids=message.reply_to_msg_id)
+        except Exception:
             break
-        message = await event.client.get_messages(event.chat_id, ids=message.reply_to_msg_id)
-
-    messages_to_process.reverse()  # Process from oldest to newest
-
+    messages_to_process.reverse()
     try:
         for msg in messages_to_process:
             role = "assistant" if msg.sender_id == bot_me.id else "user"
-            text_content = msg.text or ""
-
-            if not msg.media:
-                history.append({"role": role, "content": text_content})
-            else:
-                # Handle multimodal content in history
-                content_parts = [{"type": "text", "text": text_content}]
-                try:
-                    file_path_str = await msg.download_media(file=temp_dir)
-                    if file_path_str:
-                        file_path = Path(file_path_str)
-                        mime_type, _ = mimetypes.guess_type(file_path)
-                        if mime_type and mime_type.startswith("image/"):
-                            with open(file_path, "rb") as f:
-                                b64_content = base64.b64encode(f.read()).decode("utf-8")
-                            content_parts.append({
-                                "type": "image_url",
-                                "image_url": {"url": f"data:{mime_type};base64,{b64_content}"}
-                            })
-                    history.append({"role": role, "content": content_parts})
-                except Exception as e:
-                    print(f"Warning: Could not process media for history message {msg.id}. Error: {e}")
-                    # If media fails, just append the text content
-                    history.append({"role": role, "content": text_content})
+            content_parts = []
+            if msg.text:
+                content_parts.append({"type": "text", "text": msg.text})
+            media_part = await _process_media(msg, temp_dir)
+            if media_part:
+                if media_part["type"] == "text":
+                    if content_parts and content_parts[0]["type"] == "text":
+                        content_parts[0]["text"] += media_part['text']
+                    else:
+                        content_parts.append(media_part)
+                else:
+                    content_parts.append(media_part)
+            if not content_parts: continue
+            final_content = content_parts[0]['text'] if len(content_parts) == 1 and content_parts[0]['type'] == 'text' else content_parts
+            history.append({"role": role, "content": final_content})
     finally:
         if temp_dir.exists():
             rmtree(temp_dir, ignore_errors=True)
-
     return history
 
 # --- Bot Command Setup ---
@@ -186,7 +247,7 @@ async def set_bot_menu_commands():
     """Sets the bot's command menu in Telegram's UI."""
     print("LLM_Chat: setting bot commands ...")
     try:
-        await asyncio.sleep(5)  # Delay to ensure client is ready
+        await asyncio.sleep(5)
         await borg(
             SetBotCommandsRequest(
                 scope=BotCommandScopeDefault(),
@@ -197,13 +258,15 @@ async def set_bot_menu_commands():
                     BotCommand("setgeminikey", "Set or update your Gemini API key"),
                     BotCommand("setmodel", "Set your preferred chat model"),
                     BotCommand("setsystemprompt", "Customize the bot's instructions"),
+                    BotCommand("setthink", "Adjust model's reasoning effort"),
+                    BotCommand("tools", "Enable or disable tools like search"),
+                    BotCommand("json", "Toggle JSON output mode"),
                 ],
             )
         )
         print("LLM_Chat: Bot command menu has been updated.")
     except Exception as e:
         print(f"LLM_Chat: Failed to set bot commands: {e}")
-
 
 # --- Telethon Event Handlers ---
 
@@ -214,12 +277,9 @@ async def start_handler(event):
     if llm_db.is_awaiting_key(user_id):
         llm_db.cancel_key_flow(user_id)
     if llm_db.get_api_key(user_id=user_id, service="gemini"):
-        await event.reply(
-            "Welcome back! Your Gemini API key is configured. You can start chatting with me.\n\nUse /help to see all available commands."
-        )
+        await event.reply("Welcome back! Your Gemini API key is configured. You can start chatting with me.\n\nUse /help to see all available commands.")
     else:
         await llm_db.request_api_key_message(event)
-
 
 @borg.on(events.NewMessage(pattern="/help", func=lambda e: e.is_private))
 async def help_handler(event):
@@ -227,7 +287,6 @@ async def help_handler(event):
     if llm_db.is_awaiting_key(event.sender_id):
         llm_db.cancel_key_flow(event.sender_id)
         await event.reply("API key setup cancelled.")
-
     prefs = user_manager.get_prefs(event.sender_id)
     help_text = f"""
 **Hello! I am a chat assistant powered by Google's Gemini.**
@@ -247,20 +306,18 @@ I remember our conversations by following the **reply chain**. This is the key t
 - **Adding More Detail:** You can also **reply to your OWN message** to add more thoughts, context, or files before I've even answered. I will see it all as part of the same turn.
 - **Starting Fresh:** To start a new, separate conversation, just send a new message without replying to anything.
 
-**▶️ Advanced Features**
-
-- **Working with Images:** Attach an image to any of your messages (in the initial message or in a reply), and I'll be able to see and discuss it.
-- **Discussing Forwarded Content:** Forward messages to our chat. Then, **reply** to your forwarded message(s) with your question or prompt, and I will analyze their content.
+You can also attach **images, audio, video, and text files**.
 
 ---
-
 ### Available Commands
-
 - `/start`: Onboard and set up your API key.
 - `/help`: Shows this detailed help message.
 - `/setgeminikey [API_KEY]`: Sets or updates your Gemini API key.
 - `/setModel [model_id]`: Change the AI model. Your current model is: `{prefs.model}`.
 - `/setSystemPrompt [prompt]`: Change my core instructions. Use `/setSystemPrompt reset` to go back to the default.
+- `/setthink`: Adjust the model's reasoning effort for complex tasks.
+- `/tools`: Enable/disable tools like Google Search and Code Execution.
+- `/json`: Toggle JSON-only output mode for structured data needs.
 """
     await event.reply(help_text, link_preview=False, parse_mode="md")
 
@@ -296,11 +353,7 @@ async def set_model_handler(event):
         user_manager.set_model(user_id, model_name)
         await event.reply(f"Your chat model has been set to: `{model_name}`")
     else:
-        current_prefs = user_manager.get_prefs(user_id)
-        await event.reply(
-            f"Your current chat model is: `{current_prefs.model}`.\n\n"
-            "To change it, use `/setModel <model_id>`."
-        )
+        await event.reply(f"Your current chat model is: `{user_manager.get_prefs(user_id).model}`.\n\nTo change it, use `/setModel <model_id>`.")
 
 @borg.on(events.NewMessage(pattern=r"/setSystemPrompt(?:\s+([\s\S]+))?", func=lambda e: e.is_private))
 async def set_system_prompt_handler(event):
@@ -317,76 +370,147 @@ async def set_system_prompt_handler(event):
             user_manager.set_system_prompt(user_id, prompt)
             await event.reply("Your new system prompt has been saved.")
     else:
-        current_prefs = user_manager.get_prefs(user_id)
-        prompt_to_display = current_prefs.system_prompt or "Default (no custom prompt set)"
-        await event.reply(
-            "**Your current system prompt is:**\n\n"
-            f"```\n{prompt_to_display}\n```\n\n"
-            "To change it, use `/setSystemPrompt <your new prompt>` or `/setSystemPrompt reset`."
-        )
+        current_prompt = user_manager.get_prefs(user_id).system_prompt or "Default (no custom prompt set)"
+        await event.reply(f"**Your current system prompt is:**\n\n```\n{current_prompt}\n```\n\nTo change it, use `/setSystemPrompt <your new prompt>` or `/setSystemPrompt reset`.")
 
-@borg.on(events.NewMessage(
-    func=lambda e: e.is_private and (e.text or e.media) and not (e.text and e.text.startswith('/')) and not e.forward,
-))
+# --- New Feature Handlers ---
+
+@borg.on(events.NewMessage(pattern=r"/setthink", func=lambda e: e.is_private))
+async def set_think_handler(event):
+    """Displays buttons to set the reasoning effort."""
+    prefs = user_manager.get_prefs(event.sender_id)
+    buttons = [KeyboardButtonCallback(
+        f"✅ {lvl.capitalize()}" if prefs.thinking == lvl else lvl.capitalize(), data=f"think_{lvl}"
+    ) for lvl in REASONING_LEVELS]
+    clear_text = "Clear (Default)"
+    buttons.append(KeyboardButtonCallback(f"✅ {clear_text}" if prefs.thinking is None else clear_text, data="think_clear"))
+    await event.reply(
+        "**Set Reasoning Effort**\nChoose the level of thinking for the model. This may affect response time and cost.",
+        buttons=build_menu(buttons, n_cols=2)
+    )
+
+@borg.on(events.NewMessage(pattern=r"/tools", func=lambda e: e.is_private))
+async def tools_handler(event):
+    """Displays buttons to toggle tools."""
+    prefs = user_manager.get_prefs(event.sender_id)
+    buttons = [KeyboardButtonCallback(
+        f"{'✅' if tool in prefs.enabled_tools else '❌'} {tool}", data=f"tool_{tool}"
+    ) for tool in AVAILABLE_TOOLS]
+    await event.reply("**Manage Tools**\nToggle available tools for the model.", buttons=build_menu(buttons, n_cols=1))
+
+@borg.on(events.NewMessage(pattern=r"/(enable|disable)(?P<tool_name>\w+)", func=lambda e: e.is_private))
+async def toggle_tool_handler(event):
+    action = event.pattern_match.group(1)
+    tool_name_req = event.pattern_match.group("tool_name").lower()
+    matched_tool = next((t for t in AVAILABLE_TOOLS if t.lower() == tool_name_req), None)
+    if matched_tool:
+        is_enabled = action == "enable"
+        user_manager.set_tool_state(event.sender_id, matched_tool, enabled=is_enabled)
+        await event.reply(f"`{matched_tool}` has been **{action}d**.")
+    else:
+        await event.reply(f"Unknown tool: `{tool_name_req}`. Available: {', '.join(AVAILABLE_TOOLS)}")
+
+@borg.on(events.NewMessage(pattern=r"/json", func=lambda e: e.is_private))
+async def json_mode_handler(event):
+    """Toggles JSON mode."""
+    is_enabled = user_manager.toggle_json_mode(event.sender_id)
+    await event.reply(f"JSON response mode has been **{'enabled' if is_enabled else 'disabled'}**.")
+
+@borg.on(events.CallbackQuery())
+async def callback_handler(event):
+    """Handles all inline button presses for the plugin."""
+    data_str = event.data.decode("utf-8")
+    user_id = event.sender_id
+    if data_str.startswith("think_"):
+        level = data_str.split("_")[1]
+        user_manager.set_thinking(user_id, None if level == "clear" else level)
+        prefs = user_manager.get_prefs(user_id)
+        buttons = [KeyboardButtonCallback(
+            f"✅ {lvl.capitalize()}" if prefs.thinking == lvl else lvl.capitalize(), data=f"think_{lvl}"
+        ) for lvl in REASONING_LEVELS]
+        clear_text = "Clear (Default)"
+        buttons.append(KeyboardButtonCallback(f"✅ {clear_text}" if prefs.thinking is None else clear_text, data="think_clear"))
+        await event.edit(buttons=build_menu(buttons, n_cols=2))
+        await event.answer("Thinking preference updated.")
+    elif data_str.startswith("tool_"):
+        tool_name = data_str.split("_")[1]
+        # Toggle tool state
+        prefs = user_manager.get_prefs(user_id)
+        is_enabled = tool_name not in prefs.enabled_tools
+        user_manager.set_tool_state(user_id, tool_name, enabled=is_enabled)
+        # Re-generate buttons
+        prefs = user_manager.get_prefs(user_id) # Re-fetch
+        buttons = [KeyboardButtonCallback(
+            f"{'✅' if tool in prefs.enabled_tools else '❌'} {tool}", data=f"tool_{tool}"
+        ) for tool in AVAILABLE_TOOLS]
+        await event.edit(buttons=build_menu(buttons, n_cols=1))
+        await event.answer(f"{tool_name} {'enabled' if is_enabled else 'disabled'}.")
+
+@borg.on(events.NewMessage(func=lambda e: e.is_private and (e.text or e.media) and not (e.text and e.text.startswith('/')) and not e.forward))
 async def chat_handler(event):
     """Main handler for all non-command messages in a private chat."""
     user_id = event.sender_id
-
-    # If the user is in the middle of key setup, cancel it to chat instead.
     if llm_db.is_awaiting_key(user_id):
         llm_db.cancel_key_flow(user_id)
         await event.reply("API key setup cancelled. Responding to your message instead...")
-
     api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
     if not api_key:
         await llm_db.request_api_key_message(event)
         return
-
     prefs = user_manager.get_prefs(user_id)
-    # This message will be edited with the streaming response
     response_message = await event.reply("...")
     temp_dir = Path(f"./temp_llm_chat_{event.id}/")
-
     try:
         messages = await build_conversation_history(event)
-
-        # Add system prompt as the first message. Fallback to default if custom is empty.
         system_prompt_to_use = prefs.system_prompt or DEFAULT_SYSTEM_PROMPT
         messages.insert(0, {"role": "system", "content": system_prompt_to_use})
-
         # Prepare and add the current user message
-        current_user_content = [{"type": "text", "text": event.message.text or ""}]
+        content_parts = []
+        if event.message.text:
+            content_parts.append({"type": "text", "text": event.message.text})
         if event.message.media:
             temp_dir.mkdir(exist_ok=True)
-            try:
-                file_path_str = await event.message.download_media(file=temp_dir)
-                if file_path_str:
-                    file_path = Path(file_path_str)
-                    mime_type, _ = mimetypes.guess_type(file_path)
-                    if mime_type and mime_type.startswith("image/"):
-                        with open(file_path, "rb") as f:
-                            b64_content = base64.b64encode(f.read()).decode("utf-8")
-                        current_user_content.append({
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime_type};base64,{b64_content}"}
-                        })
-            except Exception as e:
-                 print(f"Failed to process media for current message: {e}")
+            media_part = await _process_media(event.message, temp_dir)
+            if media_part:
+                if media_part["type"] == "text":
+                    if content_parts and content_parts[0]["type"] == "text":
+                        content_parts[0]["text"] += media_part['text']
+                    else: content_parts.append(media_part)
+                else: content_parts.append(media_part)
+        if content_parts:
+            final_content = content_parts[0]['text'] if len(content_parts) == 1 and content_parts[0]['type'] == 'text' else content_parts
+            messages.append({"role": "user", "content": final_content})
 
-        messages.append({"role": "user", "content": current_user_content})
+        # --- Construct API call arguments ---
+        is_gemini_model = re.search(r'\bgemini\b', prefs.model, re.IGNORECASE)
+        warnings = []
 
-        # Make the API call using litellm
+        api_kwargs = {
+            "model": prefs.model, "messages": messages, "api_key": api_key,
+            "stream": True,
+        }
+
+        if prefs.json_mode:
+            api_kwargs["response_format"] = {"type": "json_object"}
+
+        if is_gemini_model:
+            api_kwargs["safety_settings"] = SAFETY_SETTINGS
+            if prefs.enabled_tools:
+                api_kwargs["tools"] = [{t: {}} for t in prefs.enabled_tools]
+            if prefs.thinking:
+                api_kwargs["reasoning_effort"] = prefs.thinking
+        else:
+            # Add warnings if user has Gemini-specific settings enabled
+            if prefs.enabled_tools:
+                warnings.append("Tools are disabled (Gemini-only feature).")
+            if prefs.thinking:
+                warnings.append("Reasoning effort is disabled (Gemini-only feature).")
+
+        # Make the API call
         response_text = ""
         last_edit_time = asyncio.get_event_loop().time()
-        edit_interval = 0.8  # Seconds between edits to avoid rate limits
-
-        response_stream = await litellm.acompletion(
-            model=prefs.model,
-            messages=messages,
-            api_key=api_key,
-            stream=True
-        )
-
+        edit_interval = 0.8
+        response_stream = await litellm.acompletion(**api_kwargs)
         async for chunk in response_stream:
             delta = chunk.choices[0].delta.content
             if delta:
@@ -405,14 +529,17 @@ async def chat_handler(event):
                         print(f"Error during message edit: {e}")
 
         # Final edit to remove the cursor and show the complete message
-        final_text = response_text.strip() or "__[No response]__"
-        await util.edit_message(response_message, final_text, parse_mode="md", link_preview=False)
 
-        # Log the successful conversation
+        final_text = response_text.strip() or "__[No response]__"
+
+        if warnings:
+            warning_text = "\n\n---\n**Note:**\n" + "\n".join(f"- {w}" for w in warnings)
+            final_text += warning_text
+
+        await util.edit_message(response_message, final_text, parse_mode="md", link_preview=False)
         await _log_conversation(event, prefs.model, messages, final_text)
 
     except Exception:
-        # If a major error occurs, edit the message to inform the user
         error_text = "An error occurred. You can send the inputs that caused this error to the bot developer."
         await response_message.edit(error_text)
         traceback.print_exc()
