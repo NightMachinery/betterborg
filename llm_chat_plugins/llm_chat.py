@@ -139,7 +139,7 @@ class UserPrefs(BaseModel):
     json_mode: bool = Field(default=False)
     context_mode: str = Field(default="reply_chain")
     group_context_mode: str = Field(default="reply_chain")
-    group_activation_mode: str = Field(default="mention_only")
+    group_activation_mode: str = Field(default="mention_and_reply")
     metadata_mode: str = Field(default="ONLY_WHEN_NOT_PRIVATE")
 
 
@@ -257,11 +257,6 @@ async def present_options(
             "keys": option_keys,
         }
         await event.reply(f"{BOT_META_INFO_PREFIX}\n".join(menu_text))
-
-
-def build_menu(buttons, n_cols):
-    """Helper to build a menu of inline buttons in a grid."""
-    return [buttons[i : i + n_cols] for i in range(0, len(buttons), n_cols)]
 
 
 async def _process_media(message, temp_dir: Path) -> Optional[dict]:
@@ -741,7 +736,18 @@ async def help_handler(event):
     cancel_input_flow(event.sender_id)
     prefs = user_manager.get_prefs(event.sender_id)
 
-    group_trigger = f"""start your message with `{BOT_USERNAME or "USERNAME_NOT_SET"}`"""
+    # Dynamically build the group trigger instructions based on user settings
+    activation_instructions = []
+    if BOT_USERNAME:
+        activation_instructions.append(f"start your message with `{BOT_USERNAME}`")
+    if prefs.group_activation_mode == "mention_and_reply":
+        activation_instructions.append("**reply** to one of my messages")
+
+    if not activation_instructions:
+        activation_instructions.append("ask the bot developer to set a username for this bot and then start your message with `@bot_username`")
+
+    group_trigger_text = " or ".join(activation_instructions)
+
     help_text = f"""
 **Hello! I am a Telegram chat bot powered by Google's Gemini.** It's like ChatGPT but in Telegram!
 
@@ -753,7 +759,7 @@ To get started, you'll need a free Gemini API key. Send me /setgeminikey to help
 To continue a conversation, simply **reply** to my last message. I will remember our previous messages in that chain. To start a new, separate conversation, just send a message without replying to anything.
 
 **▶️ In Group Chats**
-To talk to me in a group, {group_trigger}. You can also enable responding to replies via `/groupActivationMode`. Conversation history works the same way (e.g., reply to my last message in the group to continue a thread).
+To talk to me in a group, {group_trigger_text}. Conversation history works the same way (e.g., reply to my last message in the group to continue a thread).
 
 **▶️ Understanding Conversation Context**
 I remember our conversations based on your chosen **Context Mode**. You can set this separately for private and group chats.
@@ -1024,7 +1030,7 @@ async def tools_handler(event):
         ]
         await event.reply(
             f"{BOT_META_INFO_PREFIX}**Manage Tools**",
-            buttons=build_menu(buttons, n_cols=1),
+            buttons=util.build_menu(buttons, n_cols=1),
         )
     else:
         menu_text = ["**Manage Tools**\n"]
@@ -1076,10 +1082,11 @@ async def callback_handler(event):
     """Handles all inline button presses for the plugin (BOT MODE ONLY)."""
     data_str = event.data.decode("utf-8")
     user_id = event.sender_id
+    prefs = user_manager.get_prefs(user_id)
+
     if data_str.startswith("think_"):
         level = data_str.split("_")[1]
         user_manager.set_thinking(user_id, None if level == "clear" else level)
-        prefs = user_manager.get_prefs(user_id)
         think_options = {level: level.capitalize() for level in REASONING_LEVELS}
         think_options["clear"] = "Clear (Default)"
         buttons = [
@@ -1089,14 +1096,12 @@ async def callback_handler(event):
             )
             for key, display in think_options.items()
         ]
-        await event.edit(buttons=build_menu(buttons, n_cols=2))
+        await event.edit(buttons=util.build_menu(buttons, n_cols=2))
         await event.answer("Thinking preference updated.")
     elif data_str.startswith("tool_"):
         tool_name = data_str.split("_")[1]
-        prefs = user_manager.get_prefs(user_id)
         is_enabled = tool_name not in prefs.enabled_tools
         user_manager.set_tool_state(user_id, tool_name, enabled=is_enabled)
-        prefs = user_manager.get_prefs(user_id)  # Re-fetch
         buttons = [
             KeyboardButtonCallback(
                 f"{'✅' if tool in prefs.enabled_tools else '❌'} {tool}",
@@ -1104,23 +1109,44 @@ async def callback_handler(event):
             )
             for tool in AVAILABLE_TOOLS
         ]
-        await event.edit(buttons=build_menu(buttons, n_cols=1))
+        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer(f"{tool_name} {'enabled' if is_enabled else 'disabled'}.")
     elif data_str.startswith("context_"):
         mode = data_str.split("_", 1)[1]
         user_manager.set_context_mode(user_id, mode)
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {name}" if key == prefs.context_mode else name,
+                data=f"context_{key}",
+            )
+            for key, name in CONTEXT_MODE_NAMES.items()
+        ]
+        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer("Private context mode updated.")
-        await context_mode_handler(await event.get_message())
     elif data_str.startswith("groupcontext_"):
         mode = data_str.split("_", 1)[1]
         user_manager.set_group_context_mode(user_id, mode)
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {name}" if key == prefs.group_context_mode else name,
+                data=f"groupcontext_{key}",
+            )
+            for key, name in CONTEXT_MODE_NAMES.items()
+        ]
+        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer("Group context mode updated.")
-        await group_context_mode_handler(await event.get_message())
     elif data_str.startswith("groupactivation_"):
         mode = data_str.split("_", 1)[1]
         user_manager.set_group_activation_mode(user_id, mode)
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {name}" if key == prefs.group_activation_mode else name,
+                data=f"groupactivation_{key}",
+            )
+            for key, name in GROUP_ACTIVATION_MODES.items()
+        ]
+        await event.edit(buttons=util.build_menu(buttons, n_cols=2))
         await event.answer("Group activation mode updated.")
-        await group_activation_mode_handler(await event.get_message())
 
 
 @borg.on(
@@ -1265,7 +1291,11 @@ async def chat_handler(event):
                     USERBOT_HISTORY_CACHE.pop(event.chat_id, None)
                 reply_text = "Context cleared. The conversation will now start fresh from your next message"
                 if is_group_chat:
-                    reply_text += " mentioning me."
+                    activation_mode = prefs.group_activation_mode
+                    if activation_mode == 'mention_and_reply':
+                        reply_text += " mentioning me or replying to me."
+                    else:  # mention_only
+                        reply_text += " mentioning me."
                 else:
                     reply_text += "."
                 await event.reply(f"{BOT_META_INFO_PREFIX}{reply_text}")
