@@ -58,9 +58,8 @@ SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 ]
 
-
-# --- State Management for Interactive Commands ---
-# Key: user_id, Value: string identifier ('model', 'system_prompt')
+# --- State Management ---
+PROCESSED_GROUP_IDS = set()
 AWAITING_INPUT_FROM_USERS = {}
 
 def cancel_input_flow(user_id: int):
@@ -314,7 +313,7 @@ I remember our conversations by following the **reply chain**. This is the key t
 - **Adding More Detail:** You can also **reply to your OWN message** to add more thoughts, context, or files before I've even answered. I will see it all as part of the same turn.
 - **Starting Fresh:** To start a new, separate conversation, just send a new message without replying to anything.
 
-You can also attach **images, audio, video, and text files**.
+You can also attach **images, audio, video, and text files**. Sending multiple files as an **album** is also supported.
 
 **Available Commands**
 - /start: Onboard and set up your API key.
@@ -490,14 +489,14 @@ async def generic_input_handler(event):
 
     if input_type == "model":
         user_manager.set_model(user_id, text)
-        await event.reply(f"‚úÖ Your chat model has been updated to: `{text}`")
+        await event.reply(f"✅ Your chat model has been updated to: `{text}`")
     elif input_type == "system_prompt":
         if text.lower() == "reset":
             user_manager.set_system_prompt(user_id, "")
-            await event.reply("‚úÖ Your system prompt has been reset to the default.")
+            await event.reply("✅ Your system prompt has been reset to the default.")
         else:
             user_manager.set_system_prompt(user_id, text)
-            await event.reply("‚úÖ Your new system prompt has been saved.")
+            await event.reply("✅ Your new system prompt has been saved.")
 
     cancel_input_flow(user_id)
 
@@ -511,8 +510,16 @@ async def chat_handler(event):
     if llm_db.is_awaiting_key(user_id) or user_id in AWAITING_INPUT_FROM_USERS:
         return
 
+    # --- Grouped Message Handling ---
+    group_id = event.grouped_id
+    if group_id:
+        if group_id in PROCESSED_GROUP_IDS:
+            return  # Already being processed
+        PROCESSED_GROUP_IDS.add(group_id)
+
     api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
     if not api_key:
+        if group_id: PROCESSED_GROUP_IDS.discard(group_id)
         await llm_db.request_api_key_message(event)
         return
 
@@ -524,18 +531,52 @@ async def chat_handler(event):
         system_prompt_to_use = prefs.system_prompt or DEFAULT_SYSTEM_PROMPT
         messages.insert(0, {"role": "system", "content": system_prompt_to_use})
 
+        # --- Gather and Process Current User Turn (including groups) ---
+        current_turn_messages = [event.message]
+        if group_id:
+            await asyncio.sleep(0.1)  # Allow album messages to arrive
+            try:
+                # Search a range around the event's ID to find all messages in the group
+                k = 20
+                search_ids = range(event.id - k, event.id + k + 1)
+                messages_in_vicinity = await event.client.get_messages(event.chat_id, ids=list(search_ids))
+                group_messages = [m for m in messages_in_vicinity if m and m.grouped_id == group_id]
+                if group_messages:
+                    current_turn_messages = sorted(group_messages, key=lambda m: m.id)
+            except Exception as e:
+                print(f"Could not gather grouped messages for group {group_id}: {e}")
+                # Fallback to just the trigger message
+
         content_parts = []
-        if event.message.text:
-            content_parts.append({"type": "text", "text": event.message.text})
-        if event.message.media:
+        if current_turn_messages:
             temp_dir.mkdir(exist_ok=True)
-            media_part = await _process_media(event.message, temp_dir)
-            if media_part:
-                if media_part["type"] == "text":
-                    if content_parts and content_parts[0]["type"] == "text":
-                        content_parts[0]["text"] += media_part['text']
-                    else: content_parts.append(media_part)
-                else: content_parts.append(media_part)
+            text_buffer, media_parts = [], []
+            for msg in current_turn_messages:
+                if msg.text:
+                    text_buffer.append(msg.text)
+                if msg.media:
+                    media_part = await _process_media(msg, temp_dir)
+                    if media_part:
+                        media_parts.append(media_part)
+
+            # Consolidate all text and media into a single user message
+            if text_buffer:
+                content_parts.append({"type": "text", "text": "\n".join(text_buffer)})
+
+            text_from_files = []
+            for part in media_parts:
+                if part['type'] == 'text':
+                    text_from_files.append(part['text'])
+                else:
+                    content_parts.append(part)
+
+            if text_from_files:
+                combined_file_text = "\n".join(text_from_files)
+                if content_parts and content_parts[0]['type'] == 'text':
+                    content_parts[0]['text'] += "\n" + combined_file_text
+                else:
+                    content_parts.insert(0, {'type': 'text', 'text': combined_file_text})
+
         if content_parts:
             final_content = content_parts[0]['text'] if len(content_parts) == 1 and content_parts[0]['type'] == 'text' else content_parts
             messages.append({"role": "user", "content": final_content})
@@ -608,6 +649,8 @@ async def chat_handler(event):
         await response_message.edit(error_text)
         traceback.print_exc()
     finally:
+        if group_id:
+            PROCESSED_GROUP_IDS.discard(group_id)
         if temp_dir.exists():
             rmtree(temp_dir, ignore_errors=True)
 
