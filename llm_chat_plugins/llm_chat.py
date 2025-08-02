@@ -209,41 +209,91 @@ async def _log_conversation(event, model_name: str, messages: list, final_respon
 
 async def build_conversation_history(event) -> list:
     """
-    Constructs a conversation history from the reply chain, processing media.
+    Constructs a conversation history from the reply chain, processing and
+    grouping media albums correctly.
     """
     if not event.message.reply_to_msg_id:
         return []
     history = []
-    message = await event.client.get_messages(event.chat_id, ids=event.message.reply_to_msg_id)
+    # 1. Traverse the reply chain to get all historical messages
+    messages_in_chain = []
+    try:
+        message = await event.client.get_messages(
+            event.chat_id, ids=event.message.reply_to_msg_id
+        )
+        while message:
+            messages_in_chain.append(message)
+            if not message.reply_to_msg_id:
+                break
+            message = await event.client.get_messages(
+                event.chat_id, ids=message.reply_to_msg_id
+            )
+    except Exception:
+        pass  # Stop if we can't fetch a message
+    messages_in_chain.reverse()  # Sort from oldest to newest
+    if not messages_in_chain:
+        return []
     bot_me = await event.client.get_me()
     temp_dir = Path(f"./temp_llm_chat_history_{event.id}/")
     temp_dir.mkdir(exist_ok=True)
-    messages_to_process = []
-    while message:
-        messages_to_process.append(message)
-        if not message.reply_to_msg_id: break
-        try:
-            message = await event.client.get_messages(event.chat_id, ids=message.reply_to_msg_id)
-        except Exception:
-            break
-    messages_to_process.reverse()
+    processed_message_ids = set()
     try:
-        for msg in messages_to_process:
-            role = "assistant" if msg.sender_id == bot_me.id else "user"
+        for msg in messages_in_chain:
+            if msg.id in processed_message_ids:
+                continue
+            # This is the "turn". It could be a single message or a group/album.
+            turn_messages = [msg]
+            group_id = msg.grouped_id
+            if group_id:
+                try:
+                    k = 20
+                    search_ids = range(msg.id - k, msg.id + k + 1)
+                    messages_in_vicinity = await event.client.get_messages(
+                        event.chat_id, ids=list(search_ids)
+                    )
+                    group_messages = [
+                        m for m in messages_in_vicinity if m and m.grouped_id == group_id
+                    ]
+                    if group_messages:
+                        turn_messages = sorted(group_messages, key=lambda m: m.id)
+                except Exception as e:
+                    print(f"Error gathering group {group_id} in history: {e}")
+                    turn_messages = [msg]
+            # Now, process all messages in this turn and consolidate into one history entry
+            role = "assistant" if turn_messages[0].sender_id == bot_me.id else "user"
+            text_buffer, media_parts = [], []
+            for turn_msg in turn_messages:
+                processed_message_ids.add(turn_msg.id)
+                if turn_msg.text:
+                    text_buffer.append(turn_msg.text)
+                media_part = await _process_media(turn_msg, temp_dir)
+                if media_part:
+                    media_parts.append(media_part)
             content_parts = []
-            if msg.text:
-                content_parts.append({"type": "text", "text": msg.text})
-            media_part = await _process_media(msg, temp_dir)
-            if media_part:
-                if media_part["type"] == "text":
-                    if content_parts and content_parts[0]["type"] == "text":
-                        content_parts[0]["text"] += media_part['text']
-                    else:
-                        content_parts.append(media_part)
+            if text_buffer:
+                content_parts.append({"type": "text", "text": "\n".join(text_buffer)})
+            text_from_files = []
+            for part in media_parts:
+                if part.get("type") == "text":
+                    text_from_files.append(part["text"])
                 else:
-                    content_parts.append(media_part)
-            if not content_parts: continue
-            final_content = content_parts[0]['text'] if len(content_parts) == 1 and content_parts[0]['type'] == 'text' else content_parts
+                    content_parts.append(part)
+            if text_from_files:
+                combined_file_text = "\n".join(text_from_files)
+                existing_text_part = next(
+                    (p for p in content_parts if p["type"] == "text"), None
+                )
+                if existing_text_part:
+                    existing_text_part["text"] += "\n" + combined_file_text
+                else:
+                    content_parts.insert(0, {"type": "text", "text": combined_file_text})
+            if not content_parts:
+                continue
+            final_content = (
+                content_parts[0]["text"]
+                if len(content_parts) == 1 and content_parts[0]["type"] == "text"
+                else content_parts
+            )
             history.append({"role": role, "content": final_content})
     finally:
         if temp_dir.exists():
