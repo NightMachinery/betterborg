@@ -944,7 +944,7 @@ def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     if event.text:
         text = event.text.strip()
         first_word = event.text.split(" ", 1)[0]
-        if first_word in KNOWN_COMMAND_SET or text in ("...",):
+        if first_word in KNOWN_COMMAND_SET:
             return False  # It's a command, so not a chat message
 
     # Passes all checks
@@ -988,7 +988,7 @@ async def chat_handler(event):
         PROCESSED_GROUP_IDS.add(group_id)
 
     prefs = user_manager.get_prefs(user_id)
-    response_message = await event.reply("...")
+    response_message = await event.reply(f"{BOT_META_INFO_PREFIX}...")
     temp_dir = Path(f"./temp_llm_chat_{event.id}/")
     try:
         temp_dir.mkdir(exist_ok=True)
