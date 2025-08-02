@@ -289,35 +289,30 @@ async def help_handler(event):
         await event.reply("API key setup cancelled.")
     prefs = user_manager.get_prefs(event.sender_id)
     help_text = f"""
-**Hello! I am a chat assistant powered by Google's Gemini.**
+**Hello! I am a Telegram chat bot powered by Google's Gemini.** It's like ChatGPT but in Telegram!
 
-To get started, you'll need a free Gemini API key.
-1.  **Get Your Key:** Go to **[Google AI Studio](https://aistudio.google.com/app/apikey)** to create one.
-2.  **Set Your Key:** Send me the command: `/setgeminikey YOUR_API_KEY_HERE`
+To get started, you'll need a free Gemini API key. Send me /setgeminikey to help you set this up.
 
----
-
-### How to Chat with Me
+**How to Chat with Me**
 
 **▶️ Understanding Conversations (Reply Chains)**
 I remember our conversations by following the **reply chain**. This is the key to having a continuous, context-aware chat.
 
-- **Continuing the Chat:** To continue our conversation, simply **reply** to my last message.
+- **Continuing the Chat:** To continue a conversation, simply **reply** to the last message of that conversation. I will remember our previous messages in that chain.
 - **Adding More Detail:** You can also **reply to your OWN message** to add more thoughts, context, or files before I've even answered. I will see it all as part of the same turn.
 - **Starting Fresh:** To start a new, separate conversation, just send a new message without replying to anything.
 
 You can also attach **images, audio, video, and text files**.
 
----
-### Available Commands
-- `/start`: Onboard and set up your API key.
-- `/help`: Shows this detailed help message.
-- `/setgeminikey [API_KEY]`: Sets or updates your Gemini API key.
+**Available Commands**
+- /start: Onboard and set up your API key.
+- /help: Shows this detailed help message.
+- /setgeminikey: Sets or updates your Gemini API key.
 - `/setModel [model_id]`: Change the AI model. Your current model is: `{prefs.model}`.
 - `/setSystemPrompt [prompt]`: Change my core instructions. Use `/setSystemPrompt reset` to go back to the default.
-- `/setthink`: Adjust the model's reasoning effort for complex tasks.
-- `/tools`: Enable/disable tools like Google Search and Code Execution.
-- `/json`: Toggle JSON-only output mode for structured data needs.
+- /setthink: Adjust the model's reasoning effort for complex tasks.
+- /tools: Enable/disable tools like Google Search and Code Execution.
+- /json: Toggle JSON-only output mode for structured data needs.
 """
     await event.reply(help_text, link_preview=False, parse_mode="md")
 
