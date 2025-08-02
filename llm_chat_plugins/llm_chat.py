@@ -515,13 +515,14 @@ async def chat_handler(event):
     if group_id:
         if group_id in PROCESSED_GROUP_IDS:
             return  # Already being processed
-        PROCESSED_GROUP_IDS.add(group_id)
 
     api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
     if not api_key:
-        if group_id: PROCESSED_GROUP_IDS.discard(group_id)
         await llm_db.request_api_key_message(event)
         return
+
+    PROCESSED_GROUP_IDS.add(group_id)
+    ###
 
     prefs = user_manager.get_prefs(user_id)
     response_message = await event.reply("...")
