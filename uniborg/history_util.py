@@ -4,6 +4,7 @@
 
 from collections import defaultdict, deque
 from telethon import events
+from telethon.tl.types import Message
 from typing import List, Deque, DefaultDict
 
 # --- Client Instance & Constants ---
@@ -47,22 +48,66 @@ def get_all_ids(chat_id: int) -> List[int]:
 
 def initialize_history_handler():
     """
-    Creates event handlers to automatically capture all incoming and outgoing
-    messages and add them to the history cache.
+    Initializes history tracking. It uses an event handler for userbots and
+    monkey-patches the send methods for official bots to ensure all outgoing
+    messages are logged correctly.
     This should be called once when the bot starts.
     """
     if not borg:
         print("HistoryUtil Error: borg client is not set. Cannot initialize.")
         return
 
+    # --- 1. Handler for Incoming Messages (works for both users and bots) ---
     @borg.on(events.NewMessage(incoming=True))
     async def incoming_message_recorder(event: events.NewMessage.Event):
         """Records every incoming message ID to the history cache."""
         add_message(event.chat_id, event.id)
 
-    @borg.on(events.NewMessage(outgoing=True))
-    async def outgoing_message_recorder(event: events.NewMessage.Event):
-        """Records every outgoing message ID to the history cache."""
-        add_message(event.chat_id, event.id)
+    # --- 2. Check if running as a bot or user and apply the correct strategy ---
+    if borg.me.bot:
+        # BOT MODE: Monkey-patch send methods, as bots don't get outgoing events.
 
-    print("HistoryUtil: Incoming and outgoing message recorders have been activated.")
+        # Add a guard to prevent patching the client more than once
+        if hasattr(borg, "_history_patched"):
+            return
+        borg._history_patched = True
+
+        # Store the original methods before we replace them
+        original_send_message = borg.send_message
+        original_send_file = borg.send_file
+
+        async def patched_send_message(*args, **kwargs):
+            # Call the original function to actually send the message
+            sent_message: Message = await original_send_message(*args, **kwargs)
+            # After the message is sent, log its ID
+            if sent_message:
+                add_message(sent_message.chat_id, sent_message.id)
+            return sent_message
+
+        async def patched_send_file(*args, **kwargs):
+            # Call the original function
+            result = await original_send_file(*args, **kwargs)
+            # send_file can return a single Message or a list of Messages (for albums)
+            if result:
+                if isinstance(result, list):
+                    for sent_message in result:
+                        if sent_message:
+                            add_message(sent_message.chat_id, sent_message.id)
+                else:
+                    add_message(result.chat_id, result.id)
+            return result
+
+        # Replace the methods on the live client instance with our new versions
+        borg.send_message = patched_send_message
+        borg.send_file = patched_send_file
+
+        print("HistoryUtil (Bot Mode): Incoming recorder active, send methods patched for outgoing history.")
+
+    else:
+        # USER MODE: Use the standard event handler for outgoing messages.
+        @borg.on(events.NewMessage(outgoing=True))
+        async def outgoing_message_recorder(event: events.NewMessage.Event):
+            """Records every outgoing message ID to the history cache."""
+            add_message(event.chat_id, event.id)
+
+        print("HistoryUtil (User Mode): Incoming and outgoing message recorders have been activated.")

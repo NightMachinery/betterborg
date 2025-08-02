@@ -7,6 +7,8 @@
 
 * history_util
 #+begin_verse
-I am now trying to store message ids on new events as a workaround for getting previous messages. But `events.NewMessage()` seems to filter out the messages the bot itself is sending. How do I also include those?
+I am now trying to store message ids on new events as a workaround for getting previous messages. But events.NewMessage() seems to filter out the messages the bot itself is sending. How do I also include those?
+
+I am using @client.on(events.NewMessage(outgoing=True)) for catching the messages the bot itself is sending, but it doesn't trigger.
 #+end_verse
 
