@@ -58,6 +58,16 @@ SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 ]
 
+
+# --- State Management for Interactive Commands ---
+# Key: user_id, Value: string identifier ('model', 'system_prompt')
+AWAITING_INPUT_FROM_USERS = {}
+
+def cancel_input_flow(user_id: int):
+    """Cancels any pending input requests for a user."""
+    AWAITING_INPUT_FROM_USERS.pop(user_id, None)
+
+
 # --- User Preference Management ---
 
 class UserPrefs(BaseModel):
@@ -276,6 +286,7 @@ async def start_handler(event):
     user_id = event.sender_id
     if llm_db.is_awaiting_key(user_id):
         llm_db.cancel_key_flow(user_id)
+    cancel_input_flow(user_id)
     if llm_db.get_api_key(user_id=user_id, service="gemini"):
         await event.reply("Welcome back! Your Gemini API key is configured. You can start chatting with me.\n\nUse /help to see all available commands.")
     else:
@@ -287,6 +298,7 @@ async def help_handler(event):
     if llm_db.is_awaiting_key(event.sender_id):
         llm_db.cancel_key_flow(event.sender_id)
         await event.reply("API key setup cancelled.")
+    cancel_input_flow(event.sender_id)
     prefs = user_manager.get_prefs(event.sender_id)
     help_text = f"""
 **Hello! I am a Telegram chat bot powered by Google's Gemini.** It's like ChatGPT but in Telegram!
@@ -308,8 +320,8 @@ You can also attach **images, audio, video, and text files**.
 - /start: Onboard and set up your API key.
 - /help: Shows this detailed help message.
 - /setgeminikey: Sets or updates your Gemini API key.
-- `/setModel [model_id]`: Change the AI model. Your current model is: `{prefs.model}`.
-- `/setSystemPrompt [prompt]`: Change my core instructions. Use `/setSystemPrompt reset` to go back to the default.
+- /setModel: Change the AI model. Current: `{prefs.model}`.
+- /setSystemPrompt: Change my core instructions or reset to default.
 - /setthink: Adjust the model's reasoning effort for complex tasks.
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
@@ -340,23 +352,33 @@ async def key_submission_handler(event):
 
 @borg.on(events.NewMessage(pattern=r"/setModel(?:\s+(.*))?", func=lambda e: e.is_private))
 async def set_model_handler(event):
-    """Sets the user's preferred chat model."""
+    """Sets the user's preferred chat model, now with an interactive flow."""
     user_id = event.sender_id
     model_name_match = event.pattern_match.group(1)
+
     if model_name_match:
         model_name = model_name_match.strip()
         user_manager.set_model(user_id, model_name)
+        cancel_input_flow(user_id)
         await event.reply(f"Your chat model has been set to: `{model_name}`")
     else:
-        await event.reply(f"Your current chat model is: `{user_manager.get_prefs(user_id).model}`.\n\nTo change it, use `/setModel <model_id>`.")
+        AWAITING_INPUT_FROM_USERS[user_id] = "model"
+        await event.reply(
+            f"Your current chat model is: `{user_manager.get_prefs(user_id).model}`."
+            "\n\nPlease send the new model ID in the next message."
+            "\n(Type `cancel` to stop this process.)"
+        )
+
 
 @borg.on(events.NewMessage(pattern=r"/setSystemPrompt(?:\s+([\s\S]+))?", func=lambda e: e.is_private))
 async def set_system_prompt_handler(event):
-    """Sets the user's custom system prompt or resets it to default."""
+    """Sets the user's custom system prompt or resets it, now with an interactive flow."""
     user_id = event.sender_id
     prompt_match = event.pattern_match.group(1)
+
     if prompt_match:
         prompt = prompt_match.strip()
+        cancel_input_flow(user_id)
         if prompt.lower() == "reset":
             # Set the prompt to an empty string to signify using the default
             user_manager.set_system_prompt(user_id, "")
@@ -365,8 +387,14 @@ async def set_system_prompt_handler(event):
             user_manager.set_system_prompt(user_id, prompt)
             await event.reply("Your new system prompt has been saved.")
     else:
+        AWAITING_INPUT_FROM_USERS[user_id] = "system_prompt"
         current_prompt = user_manager.get_prefs(user_id).system_prompt or "Default (no custom prompt set)"
-        await event.reply(f"**Your current system prompt is:**\n\n```\n{current_prompt}\n```\n\nTo change it, use `/setSystemPrompt <your new prompt>` or `/setSystemPrompt reset`.")
+        await event.reply(
+            f"**Your current system prompt is:**\n\n```\n{current_prompt}\n```"
+            "\n\nPlease send the new system prompt in the next message."
+            "\n(You can also send `reset` to restore the default, or `cancel` to stop.)"
+        )
+
 
 # --- New Feature Handlers ---
 
@@ -441,17 +469,53 @@ async def callback_handler(event):
         await event.edit(buttons=build_menu(buttons, n_cols=1))
         await event.answer(f"{tool_name} {'enabled' if is_enabled else 'disabled'}.")
 
+
+@borg.on(
+    events.NewMessage(
+        func=lambda e: e.is_private
+        and e.sender_id in AWAITING_INPUT_FROM_USERS
+        and e.text and not e.text.startswith("/")
+    )
+)
+async def generic_input_handler(event):
+    """Handles plain-text submissions for interactive commands."""
+    user_id = event.sender_id
+    text = event.text.strip()
+    input_type = AWAITING_INPUT_FROM_USERS.get(user_id)
+
+    if text.lower() == "cancel":
+        cancel_input_flow(user_id)
+        await event.reply("Process cancelled.")
+        return
+
+    if input_type == "model":
+        user_manager.set_model(user_id, text)
+        await event.reply(f"‚úÖ Your chat model has been updated to: `{text}`")
+    elif input_type == "system_prompt":
+        if text.lower() == "reset":
+            user_manager.set_system_prompt(user_id, "")
+            await event.reply("‚úÖ Your system prompt has been reset to the default.")
+        else:
+            user_manager.set_system_prompt(user_id, text)
+            await event.reply("‚úÖ Your new system prompt has been saved.")
+
+    cancel_input_flow(user_id)
+
+
 @borg.on(events.NewMessage(func=lambda e: e.is_private and (e.text or e.media) and not (e.text and e.text.startswith('/')) and not e.forward))
 async def chat_handler(event):
     """Main handler for all non-command messages in a private chat."""
     user_id = event.sender_id
-    if llm_db.is_awaiting_key(user_id):
-        llm_db.cancel_key_flow(user_id)
-        await event.reply("API key setup cancelled. Responding to your message instead...")
+
+    # Intercept if user is in any waiting state first.
+    if llm_db.is_awaiting_key(user_id) or user_id in AWAITING_INPUT_FROM_USERS:
+        return
+
     api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
     if not api_key:
         await llm_db.request_api_key_message(event)
         return
+
     prefs = user_manager.get_prefs(user_id)
     response_message = await event.reply("...")
     temp_dir = Path(f"./temp_llm_chat_{event.id}/")
@@ -459,7 +523,7 @@ async def chat_handler(event):
         messages = await build_conversation_history(event)
         system_prompt_to_use = prefs.system_prompt or DEFAULT_SYSTEM_PROMPT
         messages.insert(0, {"role": "system", "content": system_prompt_to_use})
-        # Prepare and add the current user message
+
         content_parts = []
         if event.message.text:
             content_parts.append({"type": "text", "text": event.message.text})
@@ -487,10 +551,13 @@ async def chat_handler(event):
 
         if prefs.json_mode:
             api_kwargs["response_format"] = {"type": "json_object"}
+            if prefs.enabled_tools:
+                warnings.append("Tools are disabled (not supported in JSON mode).")
 
         if is_gemini_model:
             api_kwargs["safety_settings"] = SAFETY_SETTINGS
-            if prefs.enabled_tools:
+            # Corrected Logic: Only enable tools if JSON mode is OFF.
+            if prefs.enabled_tools and not prefs.json_mode:
                 api_kwargs["tools"] = [{t: {}} for t in prefs.enabled_tools]
             if prefs.thinking:
                 api_kwargs["reasoning_effort"] = prefs.thinking
