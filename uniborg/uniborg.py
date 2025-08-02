@@ -20,11 +20,6 @@ from .storage import Storage
 from . import hacks
 from .util import admins
 
-#: An invisible character sequence to prefix bot meta messages.
-#: This allows us to filter them out from the conversation history.
-BOT_META_INFO_PREFIX = "\u200b\u200b\u200b\u200b"
-
-
 class Uniborg(TelegramClient):
     # @warn this var can be None in which case send_message will fail and potentially crash the whole program
     log_chat = -1001179162919  # alicization

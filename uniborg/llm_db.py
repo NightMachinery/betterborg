@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 
-from uniborg import BOT_META_INFO_PREFIX
+from uniborg.constants import BOT_META_INFO_PREFIX
 
 # --- Client Instance & In-Memory State ---
 # The borg client instance will be populated by `_async_init` in `uniborg/uniborg.py`.

@@ -1,7 +1,7 @@
 import llm
 from pathlib import Path
 import os
-from uniborg import BOT_META_INFO_PREFIX
+from uniborg.constants import BOT_META_INFO_PREFIX
 
 # --- LLM-Specific Shared Constants and Utilities ---
 
