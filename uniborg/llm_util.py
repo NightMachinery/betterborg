@@ -1,12 +1,9 @@
 import llm
 from pathlib import Path
 import os
+from uniborg import BOT_META_INFO_PREFIX
 
 # --- LLM-Specific Shared Constants and Utilities ---
-
-#: An invisible character sequence to prefix bot meta messages.
-#: This allows us to filter them out from the conversation history.
-BOT_META_INFO_PREFIX = "\u200b\u200b\u200b\u200b"
 
 MIME_TYPE_MAP = {
     ##

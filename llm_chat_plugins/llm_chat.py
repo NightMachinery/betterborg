@@ -28,7 +28,7 @@ from uniborg import llm_db
 from uniborg import llm_util
 from uniborg import history_util
 from uniborg.storage import UserStorage
-from uniborg.llm_util import BOT_META_INFO_PREFIX
+from uniborg import BOT_META_INFO_PREFIX
 
 # --- Constants and Configuration ---
 

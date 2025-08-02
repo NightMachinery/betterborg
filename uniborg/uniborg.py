@@ -20,6 +20,10 @@ from .storage import Storage
 from . import hacks
 from .util import admins
 
+#: An invisible character sequence to prefix bot meta messages.
+#: This allows us to filter them out from the conversation history.
+BOT_META_INFO_PREFIX = "\u200b\u200b\u200b\u200b"
+
 
 class Uniborg(TelegramClient):
     # @warn this var can be None in which case send_message will fail and potentially crash the whole program
@@ -150,14 +154,14 @@ class Uniborg(TelegramClient):
             self.load_plugin(shortname)
 
             await self.send_message(
-                chat, f"# Successfully (re)loaded plugin {shortname}"
+                chat, f"{BOT_META_INFO_PREFIX}# Successfully (re)loaded plugin {shortname}"
             )
         except Exception as e:
             tb = traceback.format_exc()
             logger.warn(f"Failed to (re)load plugin '{shortname}': {tb}")
             if chat:
                 await self.send_message(
-                    chat, f"# Failed to (re)load plugin '{shortname}': {e}"
+                    chat, f"{BOT_META_INFO_PREFIX}# Failed to (re)load plugin '{shortname}': {e}"
                 )
 
     def await_event(self, event_matcher, filter=None):
