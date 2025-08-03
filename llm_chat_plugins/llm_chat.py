@@ -129,6 +129,7 @@ SAFETY_SETTINGS = [
 
 # --- State Management ---
 BOT_USERNAME = None
+BOT_ID = None
 PROCESSED_GROUP_IDS = set()
 AWAITING_INPUT_FROM_USERS = {}
 IS_BOT = None
@@ -480,7 +481,7 @@ async def _get_user_metadata_prefix(message: Message) -> str:
     sender_name = getattr(sender, "first_name", None) or "Unknown"
     timestamp = message.date.isoformat()
 
-    if message.sender_id == bot_me.id:
+    if message.sender_id == BOT_ID:
         #: no need to inject useless metadata about the bot itself
         return ""
     else:
@@ -543,8 +544,7 @@ async def _process_message_content(
 ) -> tuple[list, list]:
     """Processes a single message's text and media into litellm content parts."""
     text_buffer, media_parts = [], []
-    bot_me = await message.client.get_me()
-    role = "assistant" if message.sender_id == bot_me.id else "user"
+    role = "assistant" if message.sender_id == BOT_ID else "user"
 
     # Filter out meta-info messages and commands from history
     if (
@@ -620,7 +620,6 @@ async def _process_turns_to_history(
     if not message_list:
         return history
 
-    bot_me = await event.client.get_me()
     user_prefs = user_manager.get_prefs(event.sender_id)
     active_metadata_mode = (
         user_prefs.group_metadata_mode
@@ -635,7 +634,7 @@ async def _process_turns_to_history(
             if not turn_messages:
                 continue
 
-            role = "assistant" if turn_messages[0].sender_id == bot_me.id else "user"
+            role = "assistant" if turn_messages[0].sender_id == BOT_ID else "user"
             text_buffer, media_parts = [], []
 
             for turn_msg in turn_messages:
@@ -666,7 +665,7 @@ async def _process_turns_to_history(
     # --- Modes 2, 3, 4: Separate Turns ---
     else:
         for message in message_list:
-            role = "assistant" if message.sender_id == bot_me.id else "user"
+            role = "assistant" if message.sender_id == BOT_ID else "user"
             prefix_parts = []
 
             if active_metadata_mode == "full_metadata":
@@ -832,12 +831,15 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
 
 async def initialize_llm_chat():
     """Initializes the plugin based on whether it's a bot or userbot."""
-    global BOT_USERNAME, IS_BOT
+    global BOT_ID, BOT_USERNAME, IS_BOT
     if IS_BOT is None:
         IS_BOT = await borg.is_bot()
 
     if BOT_USERNAME is None:
         me = await borg.get_me()
+
+        BOT_ID = me.id
+
         if me.username:
             BOT_USERNAME = f"@{me.username}"
         else:
