@@ -72,6 +72,12 @@ GROUP_ACTIVATION_MODES = {
     "mention_only": "Mention Only",
     "mention_and_reply": "Mention and Replies",
 }
+METADATA_MODES = {
+    "no_metadata": "No Metadata (Merged Turns)",
+    "separate_turns": "Separate Turns",
+    "only_forwarded": "Only Forwarded Metadata",
+    "full_metadata": "Full Metadata",
+}
 
 
 # --- Single Source of Truth for Bot Commands ---
@@ -94,6 +100,14 @@ BOT_COMMANDS = [
     {
         "command": "groupcontextmode",
         "description": "Change how GROUP chat history is read",
+    },
+    {
+        "command": "metadatamode",
+        "description": "Change how PRIVATE chat metadata is handled",
+    },
+    {
+        "command": "groupmetadatamode",
+        "description": "Change how GROUP chat metadata is handled",
     },
     {
         "command": "groupactivationmode",
@@ -140,7 +154,8 @@ class UserPrefs(BaseModel):
     context_mode: str = Field(default="reply_chain")
     group_context_mode: str = Field(default="reply_chain")
     group_activation_mode: str = Field(default="mention_and_reply")
-    metadata_mode: str = Field(default="ONLY_WHEN_NOT_PRIVATE")
+    metadata_mode: str = Field(default="only_forwarded")
+    group_metadata_mode: str = Field(default="full_metadata")
 
 
 class UserManager:
@@ -199,6 +214,20 @@ class UserManager:
             return
         prefs = self.get_prefs(user_id)
         prefs.group_context_mode = mode
+        self._save_prefs(user_id, prefs)
+
+    def set_metadata_mode(self, user_id: int, mode: str):
+        if mode not in METADATA_MODES:
+            return
+        prefs = self.get_prefs(user_id)
+        prefs.metadata_mode = mode
+        self._save_prefs(user_id, prefs)
+
+    def set_group_metadata_mode(self, user_id: int, mode: str):
+        if mode not in METADATA_MODES:
+            return
+        prefs = self.get_prefs(user_id)
+        prefs.group_metadata_mode = mode
         self._save_prefs(user_id, prefs)
 
     def set_group_activation_mode(self, user_id: int, mode: str):
@@ -286,6 +315,52 @@ async def _process_media(message, temp_dir: Path) -> Optional[dict]:
             ".json",
             ".xml",
             ".log",
+            ".yaml",
+            ".csv",
+            ".sql",
+            ".java",
+            ".c",
+            ".h",
+            ".cpp",
+            ".go",
+            ".sh",
+            ".rb",
+            ".swift",
+            ".toml",
+            ".conf",
+            ".ini",
+            ".org",
+            ".m",
+            ".applescript",
+            ".as",
+            ".osa",
+            ".nu",
+            ".nush",
+            ".el",
+            ".ss",
+            ".scm",
+            ".lisp",
+            ".rkt",
+            ".jl",
+            ".scala",
+            ".sc",
+            ".kt",
+            ".clj",
+            ".cljs",
+            ".jxa",
+            ".dart",
+            ".rs",
+            ".cr",
+            ".zsh",
+            ".dash",
+            ".bash",
+            # ".ml",
+            ".php",
+            ".lua",
+            ".glsl",
+            ".frag",
+            ".cson",
+            ".plist",
         ]:
             mime_type = "text/plain"
         if not mime_type or not (
@@ -399,167 +474,188 @@ async def _expand_and_sort_messages_with_groups(
     return sorted(final_messages_map.values(), key=lambda m: m.id)
 
 
+async def _get_metadata_prefix(message: Message) -> str:
+    """Generates the metadata prefix string for a given message."""
+    sender = await message.get_sender()
+    sender_name = getattr(sender, 'first_name', None) or "Unknown"
+    timestamp = message.date.isoformat()
+    prefix = f"[User: {sender_name} ({message.sender_id}) | Timestamp: {timestamp}]"
+
+    if message.forward:
+        fwd_parts = []
+        fwd_from_name = None
+        fwd_entity = message.forward.sender or message.forward.chat
+        if fwd_entity:
+            fwd_from_name = getattr(fwd_entity, 'title', getattr(fwd_entity, 'first_name', None))
+        if not fwd_from_name:
+            fwd_from_name = message.forward.from_name
+        if fwd_from_name:
+            fwd_parts.append(f"from: {fwd_from_name}")
+
+        if message.forward.from_id:
+            fwd_peer_id = getattr(message.forward.from_id, 'user_id', None) \
+                       or getattr(message.forward.from_id, 'chat_id', None) \
+                       or getattr(message.forward.from_id, 'channel_id', None)
+            if fwd_peer_id:
+                fwd_parts.append(f"from_id: {fwd_peer_id}")
+
+        if message.forward.date:
+            fwd_parts.append(f"original date: {message.forward.date.isoformat()}")
+
+        if message.forward.channel_post:
+            fwd_parts.append(f"post_id: {message.forward.channel_post}")
+
+        if message.forward.post_author:
+            fwd_parts.append(f"author: {message.forward.post_author}")
+
+        if message.forward.saved_from_peer:
+            saved_peer_id = getattr(message.forward.saved_from_peer, 'user_id', None) \
+                       or getattr(message.forward.saved_from_peer, 'chat_id', None) \
+                       or getattr(message.forward.saved_from_peer, 'channel_id', None)
+            if saved_peer_id:
+                fwd_parts.append(f"saved_from_peer: {saved_peer_id}")
+        if message.forward.saved_from_msg_id:
+            fwd_parts.append(f"saved_msg_id: {message.forward.saved_from_msg_id}")
+
+        if fwd_parts:
+            prefix += f" [Forwarded ({'; '.join(fwd_parts)})]"
+
+    return prefix
+
+
+async def _process_message_content(message: Message, temp_dir: Path, metadata_prefix: str = "") -> tuple[list, list]:
+    """Processes a single message's text and media into litellm content parts."""
+    text_buffer, media_parts = [], []
+    bot_me = await message.client.get_me()
+    role = "assistant" if message.sender_id == bot_me.id else "user"
+
+    # Filter out meta-info messages and commands from history
+    if role == "assistant" and message.text and message.text.startswith(BOT_META_INFO_PREFIX):
+        return [], []
+    if role == "user" and message.text and message.text.split(" ", 1)[0] in KNOWN_COMMAND_SET:
+        return [], []
+
+    processed_text = message.text
+    if not message.is_private and role == "user" and processed_text and BOT_USERNAME:
+        stripped = processed_text.strip()
+        if stripped.startswith(BOT_USERNAME):
+            processed_text = stripped[len(BOT_USERNAME):].strip()
+
+    if metadata_prefix:
+        processed_text = f"{metadata_prefix}\n{processed_text}" if processed_text else metadata_prefix
+
+    if processed_text:
+        text_buffer.append(processed_text)
+
+    media_part = await _process_media(message, temp_dir)
+    if media_part:
+        media_parts.append(media_part)
+
+    return text_buffer, media_parts
+
+
+async def _finalize_content_parts(text_buffer: list, media_parts: list) -> list:
+    """Combines text and media parts into a final list for a history entry."""
+    content_parts = []
+    if text_buffer:
+        content_parts.append({"type": "text", "text": "\n".join(text_buffer)})
+
+    text_from_files = []
+    for part in media_parts:
+        if part.get("type") == "text":
+            text_from_files.append(part["text"])
+        else:
+            content_parts.append(part)
+
+    if text_from_files:
+        combined_file_text = "\n".join(text_from_files)
+        existing_text_part = next(
+            (p for p in content_parts if p["type"] == "text"), None
+        )
+        if existing_text_part:
+            existing_text_part["text"] += "\n" + combined_file_text
+        else:
+            content_parts.insert(0, {"type": "text", "text": combined_file_text})
+
+    return content_parts
+
+
 async def _process_turns_to_history(
     event, message_list: List[Message], temp_dir: Path
 ) -> List[dict]:
     """
     Processes a final, sorted list of messages into litellm history format,
-    grouping consecutive messages from the same sender into 'turns'.
+    respecting the user's chosen metadata and context settings.
     """
     history = []
     if not message_list:
         return history
 
     bot_me = await event.client.get_me()
-    is_group_chat = not event.is_private
-    # The event.sender_id is the user who triggered the handler, so we get their prefs
     user_prefs = user_manager.get_prefs(event.sender_id)
-    add_metadata = (
-        user_prefs.metadata_mode == "ONLY_WHEN_NOT_PRIVATE"
-    ) and is_group_chat
+    active_metadata_mode = (
+        user_prefs.group_metadata_mode if not event.is_private else user_prefs.metadata_mode
+    )
 
-    # Group consecutive messages by sender to create "turns"
-    for _, turn_messages_iter in groupby(message_list, key=lambda m: m.sender_id):
-        turn_messages = list(turn_messages_iter)
-        if not turn_messages:
-            continue
-
-        # Get sender info once per turn
-        turn_sender_id = turn_messages[0].sender_id
-        turn_sender = await event.client.get_entity(turn_sender_id)
-        role = "assistant" if turn_sender_id == bot_me.id else "user"
-
-        # Process all messages in this turn and consolidate into one history entry
-        text_buffer, media_parts = [], []
-        for turn_msg in turn_messages:
-            # --- NEW: Filter out bot's meta-info messages from history ---
-            if (
-                role == "assistant"
-                and turn_msg.text
-                and turn_msg.text.startswith(BOT_META_INFO_PREFIX)
-            ):
+    # --- Mode 1: No Metadata (Merge consecutive messages) ---
+    if active_metadata_mode == "no_metadata":
+        for _, turn_messages_iter in groupby(message_list, key=lambda m: m.sender_id):
+            turn_messages = list(turn_messages_iter)
+            if not turn_messages:
                 continue
 
-            ##
-            #: @seeAlso/6ac96cfacfd852f715e9e3307e7e2b2f
-            if (
-                role == "user"
-                and turn_msg.text
-                and turn_msg.text.split(" ", 1)[0] in KNOWN_COMMAND_SET
-            ):
+            role = "assistant" if turn_messages[0].sender_id == bot_me.id else "user"
+            text_buffer, media_parts = [], []
+
+            for turn_msg in turn_messages:
+                # Process content without any metadata prefix
+                msg_texts, msg_media = await _process_message_content(turn_msg, temp_dir)
+                text_buffer.extend(msg_texts)
+                media_parts.extend(msg_media)
+
+            if not text_buffer and not media_parts:
                 continue
-            ##
 
-            # Start with the original text
-            processed_text = turn_msg.text
+            final_content_parts = await _finalize_content_parts(text_buffer, media_parts)
+            if not final_content_parts:
+                continue
 
-            # Strip prefix if in a group chat and the message is from a user
-            if is_group_chat and role == "user" and processed_text and BOT_USERNAME:
-                stripped = processed_text.strip()
-                if stripped.startswith(BOT_USERNAME):
-                    processed_text = stripped[len(BOT_USERNAME) :].strip()
-
-            # Add metadata if required (for user messages in groups)
-            if add_metadata and role == "user":
-                sender_name = turn_sender.first_name or "Unknown"
-                timestamp = turn_msg.date.isoformat()
-                metadata_prefix = (
-                    f"[User: {sender_name} ({turn_sender_id}) | Timestamp: {timestamp}]"
-                )
-                if turn_msg.forward:
-                    fwd_parts = []
-
-                    # 1. Get Forwarded-From Name
-                    fwd_from_name = None
-                    fwd_entity = turn_msg.forward.sender or turn_msg.forward.chat
-                    if fwd_entity:
-                        fwd_from_name = getattr(fwd_entity, 'title', getattr(fwd_entity, 'first_name', None))
-                    if not fwd_from_name:
-                        fwd_from_name = turn_msg.forward.from_name
-                    if fwd_from_name:
-                        fwd_parts.append(f"from: {fwd_from_name}")
-
-                    # 2. Get Forwarded-From ID
-                    if turn_msg.forward.from_id:
-                        fwd_peer_id = getattr(turn_msg.forward.from_id, 'user_id', None) \
-                                   or getattr(turn_msg.forward.from_id, 'chat_id', None) \
-                                   or getattr(turn_msg.forward.from_id, 'channel_id', None)
-                        if fwd_peer_id:
-                            fwd_parts.append(f"from_id: {fwd_peer_id}")
-
-                    # 3. Get Original Date
-                    if turn_msg.forward.date:
-                        fwd_parts.append(f"original date: {turn_msg.forward.date.isoformat()}")
-
-                    # 4. Get Channel Post ID
-                    if turn_msg.forward.channel_post:
-                        fwd_parts.append(f"post_id: {turn_msg.forward.channel_post}")
-
-                    # 5. Get Post Author Signature
-                    if turn_msg.forward.post_author:
-                        fwd_parts.append(f"author: {turn_msg.forward.post_author}")
-
-                    # 6. Saved from info (for "Saved Messages")
-                    if turn_msg.forward.saved_from_peer:
-                        saved_peer_id = getattr(turn_msg.forward.saved_from_peer, 'user_id', None) \
-                                   or getattr(turn_msg.forward.saved_from_peer, 'chat_id', None) \
-                                   or getattr(turn_msg.forward.saved_from_peer, 'channel_id', None)
-                        if saved_peer_id:
-                            fwd_parts.append(f"saved_from_peer: {saved_peer_id}")
-                    if turn_msg.forward.saved_from_msg_id:
-                        fwd_parts.append(f"saved_msg_id: {turn_msg.forward.saved_from_msg_id}")
-
-                    # Assemble the final metadata string
-                    if fwd_parts:
-                        metadata_prefix += f" [Forwarded ({'; '.join(fwd_parts)})]"
-
-                # Prepend metadata to the (potentially stripped) text
-                processed_text = (
-                    f"{metadata_prefix}\n{processed_text}"
-                    if processed_text
-                    else metadata_prefix
-                )
-
-            if processed_text:
-                text_buffer.append(processed_text)
-            media_part = await _process_media(turn_msg, temp_dir)
-            if media_part:
-                media_parts.append(media_part)
-
-        # If the turn is empty after filtering, skip it
-        if not text_buffer and not media_parts:
-            continue
-
-        content_parts = []
-        if text_buffer:
-            content_parts.append({"type": "text", "text": "\n".join(text_buffer)})
-
-        text_from_files = []
-        for part in media_parts:
-            if part.get("type") == "text":
-                text_from_files.append(part["text"])
-            else:
-                content_parts.append(part)
-
-        if text_from_files:
-            combined_file_text = "\n".join(text_from_files)
-            existing_text_part = next(
-                (p for p in content_parts if p["type"] == "text"), None
+            final_content = (
+                final_content_parts[0]["text"]
+                if len(final_content_parts) == 1 and final_content_parts[0]["type"] == "text"
+                else final_content_parts
             )
-            if existing_text_part:
-                existing_text_part["text"] += "\n" + combined_file_text
-            else:
-                content_parts.insert(0, {"type": "text", "text": combined_file_text})
+            history.append({"role": role, "content": final_content})
 
-        if not content_parts:
-            continue
+    # --- Modes 2, 3, 4: Separate Turns ---
+    else:
+        for message in message_list:
+            role = "assistant" if message.sender_id == bot_me.id else "user"
+            metadata_prefix = ""
 
-        final_content = (
-            content_parts[0]["text"]
-            if len(content_parts) == 1 and content_parts[0]["type"] == "text"
-            else content_parts
-        )
-        history.append({"role": role, "content": final_content})
+            # Determine if metadata should be added based on the mode
+            if active_metadata_mode == "full_metadata" and not event.is_private:
+                metadata_prefix = await _get_metadata_prefix(message)
+            elif active_metadata_mode == "only_forwarded" and message.forward:
+                 metadata_prefix = await _get_metadata_prefix(message)
+
+            text_buffer, media_parts = await _process_message_content(
+                message, temp_dir, metadata_prefix
+            )
+
+            if not text_buffer and not media_parts:
+                continue
+
+            final_content_parts = await _finalize_content_parts(text_buffer, media_parts)
+            if not final_content_parts:
+                continue
+
+            final_content = (
+                final_content_parts[0]["text"]
+                if len(final_content_parts) == 1 and final_content_parts[0]["type"] == "text"
+                else final_content_parts
+            )
+            history.append({"role": role, "content": final_content})
 
     return history
 
@@ -762,11 +858,18 @@ To continue a conversation, simply **reply** to my last message. I will remember
 To talk to me in a group, {group_trigger_text}. Conversation history works the same way (e.g., reply to my last message in the group to continue a thread).
 
 **▶️ Understanding Conversation Context**
-I remember our conversations based on your chosen **Context Mode**. You can set this separately for private and group chats.
+I remember our conversations based on your chosen settings. You can configure these separately for private and group chats.
 
-- **Reply Chain (Default):** To continue a conversation, simply **reply** to my last message. I will remember our previous messages in that chain.
-- **Until Separator:** I will read the reply chain until a message with only `{CONTEXT_SEPARATOR}` is found. This lets you manually define the context length.
-- **Last {LAST_N_MESSAGES_LIMIT} Messages:** I will use the last {LAST_N_MESSAGES_LIMIT} messages in our chat as context, regardless of replies.
+- **Context Mode:** This controls *which* messages are included.
+  - `Reply Chain (Default)`: Only messages in the current reply thread.
+  - `Until Separator`: The reply chain up to a message containing only `{CONTEXT_SEPARATOR}`.
+  - `Last {LAST_N_MESSAGES_LIMIT} Messages`: The most recent messages in the chat.
+
+- **Metadata Mode:** This controls *how* messages are formatted for the AI.
+  - `No Metadata`: Merges consecutive messages and adds no extra info.
+  - `Separate Turns`: Each message is a new turn, but no extra info.
+  - `Only Forwarded`: Adds sender/time details only to forwarded messages.
+  - `Full Metadata`: Adds sender/time details to every message (in groups).
 
 You can attach **images, audio, video, and text files**. Sending multiple files as an **album** is also supported, and I will see all items in the album.
 
@@ -780,6 +883,8 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setSystemPrompt: Change my core instructions or reset to default.
 - /contextMode: Change how **private** chat history is gathered.
 - /groupContextMode: Change how **group** chat history is gathered.
+- /metadataMode: Change how **private** chat metadata is handled.
+- /groupMetadataMode: Change how **group** chat metadata is handled.
 - /groupActivationMode: Change how I am triggered in groups.
 - /setthink: Adjust the model's reasoning effort for complex tasks.
 - /tools: Enable/disable tools like Google Search and Code Execution.
@@ -808,6 +913,12 @@ async def status_handler(event):
     group_context_mode_name = CONTEXT_MODE_NAMES.get(
         prefs.group_context_mode, prefs.group_context_mode.replace("_", " ").title()
     )
+    metadata_mode_name = METADATA_MODES.get(
+        prefs.metadata_mode, prefs.metadata_mode.replace("_", " ").title()
+    )
+    group_metadata_mode_name = METADATA_MODES.get(
+        prefs.group_metadata_mode, prefs.group_metadata_mode.replace("_", " ").title()
+    )
     group_activation_mode_name = GROUP_ACTIVATION_MODES.get(
         prefs.group_activation_mode, prefs.group_activation_mode.replace("_", " ").title()
     )
@@ -815,13 +926,17 @@ async def status_handler(event):
     status_message = (
         f"**Your Current Bot Settings**\n\n"
         f"∙ **Model:** `{prefs.model}`\n"
-        f"∙ **Private Context Mode:** `{context_mode_name}`\n"
-        f"∙ **Group Context Mode:** `{group_context_mode_name}`\n"
-        f"∙ **Group Activation:** `{group_activation_mode_name}`\n"
         f"∙ **Reasoning Level:** `{thinking_level}`\n"
         f"∙ **Enabled Tools:** `{enabled_tools_str}`\n"
         f"∙ **JSON Mode:** `{'Enabled' if prefs.json_mode else 'Disabled'}`\n"
-        f"∙ **System Prompt:** `{system_prompt_status}`"
+        f"∙ **System Prompt:** `{system_prompt_status}`\n\n"
+        f"**Private Chat Settings**\n"
+        f"∙ **Context Mode:** `{context_mode_name}`\n"
+        f"∙ **Metadata Mode:** `{metadata_mode_name}`\n\n"
+        f"**Group Chat Settings**\n"
+        f"∙ **Context Mode:** `{group_context_mode_name}`\n"
+        f"∙ **Metadata Mode:** `{group_metadata_mode_name}`\n"
+        f"∙ **Activation:** `{group_activation_mode_name}`\n"
     )
     await event.reply(f"{BOT_META_INFO_PREFIX}{status_message}", parse_mode="md")
 
@@ -987,6 +1102,34 @@ async def group_context_mode_handler(event):
     )
 
 
+@borg.on(events.NewMessage(pattern=r"/metadatamode", func=lambda e: e.is_private))
+async def metadata_mode_handler(event):
+    prefs = user_manager.get_prefs(event.sender_id)
+    await present_options(
+        event,
+        title="Set Private Chat Metadata Mode",
+        options=METADATA_MODES,
+        current_value=prefs.metadata_mode,
+        callback_prefix="metadata_",
+        awaiting_key="metadata_mode_selection",
+        n_cols=1,
+    )
+
+
+@borg.on(events.NewMessage(pattern=r"/groupmetadatamode", func=lambda e: e.is_private))
+async def group_metadata_mode_handler(event):
+    prefs = user_manager.get_prefs(event.sender_id)
+    await present_options(
+        event,
+        title="Set Group Chat Metadata Mode",
+        options=METADATA_MODES,
+        current_value=prefs.group_metadata_mode,
+        callback_prefix="groupmetadata_",
+        awaiting_key="group_metadata_mode_selection",
+        n_cols=1,
+    )
+
+
 @borg.on(events.NewMessage(pattern=r"/groupactivationmode", func=lambda e: e.is_private))
 async def group_activation_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
@@ -1058,7 +1201,7 @@ async def toggle_tool_handler(event):
     )
     if matched_tool:
         is_enabled = action == "enable"
-        user_manager.set_tool_state(event.sender_id, matched_tool, enabled=is_enabled)
+        user_manager.set_tool_state(event.sender_id, matched_tool, is_enabled)
         await event.reply(
             f"{BOT_META_INFO_PREFIX}`{matched_tool}` has been **{action}d**."
         )
@@ -1139,6 +1282,32 @@ async def callback_handler(event):
         ]
         await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer("Group context mode updated.")
+    elif data_str.startswith("metadata_"):
+        mode = data_str.split("_", 1)[1]
+        user_manager.set_metadata_mode(user_id, mode)
+        prefs = user_manager.get_prefs(user_id)
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {name}" if key == prefs.metadata_mode else name,
+                data=f"metadata_{key}",
+            )
+            for key, name in METADATA_MODES.items()
+        ]
+        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
+        await event.answer("Private metadata mode updated.")
+    elif data_str.startswith("groupmetadata_"):
+        mode = data_str.split("_", 1)[1]
+        user_manager.set_group_metadata_mode(user_id, mode)
+        prefs = user_manager.get_prefs(user_id)
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {name}" if key == prefs.group_metadata_mode else name,
+                data=f"groupmetadata_{key}",
+            )
+            for key, name in METADATA_MODES.items()
+        ]
+        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
+        await event.answer("Group metadata mode updated.")
     elif data_str.startswith("groupactivation_"):
         mode = data_str.split("_", 1)[1]
         user_manager.set_group_activation_mode(user_id, mode)
@@ -1201,6 +1370,12 @@ async def generic_input_handler(event):
                 elif input_type == "group_context_mode_selection":
                     user_manager.set_group_context_mode(user_id, selected_key)
                     await event.reply(f"{BOT_META_INFO_PREFIX}✅ Group context mode set to: **{CONTEXT_MODE_NAMES[selected_key]}**")
+                elif input_type == "metadata_mode_selection":
+                    user_manager.set_metadata_mode(user_id, selected_key)
+                    await event.reply(f"{BOT_META_INFO_PREFIX}✅ Private metadata mode set to: **{METADATA_MODES[selected_key]}**")
+                elif input_type == "group_metadata_mode_selection":
+                    user_manager.set_group_metadata_mode(user_id, selected_key)
+                    await event.reply(f"{BOT_META_INFO_PREFIX}✅ Group metadata mode set to: **{METADATA_MODES[selected_key]}**")
                 elif input_type == "group_activation_mode_selection":
                     user_manager.set_group_activation_mode(user_id, selected_key)
                     await event.reply(f"{BOT_META_INFO_PREFIX}✅ Group activation mode set to: **{GROUP_ACTIVATION_MODES[selected_key]}**")
