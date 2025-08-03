@@ -117,7 +117,7 @@ BOT_COMMANDS = [
     {"command": "json", "description": "Toggle JSON output mode"},
 ]
 # Create a set of command strings (e.g., {"/start", "/help"}) for efficient lookup
-KNOWN_COMMAND_SET = {f"/{cmd['command']}" for cmd in BOT_COMMANDS}
+KNOWN_COMMAND_SET = {f"/{cmd['command']}".lower() for cmd in BOT_COMMANDS}
 
 
 SAFETY_SETTINGS = [
@@ -556,7 +556,7 @@ async def _process_message_content(
     if (
         role == "user"
         and message.text
-        and message.text.split(" ", 1)[0] in KNOWN_COMMAND_SET
+        and message.text.split(" ", 1)[0].lower() in KNOWN_COMMAND_SET
     ):
         return [], []
 
@@ -875,7 +875,7 @@ async def initialize_llm_chat():
 # --- Telethon Event Handlers ---
 
 
-@borg.on(events.NewMessage(pattern="/start", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)/start", func=lambda e: e.is_private))
 async def start_handler(event):
     """Handles the /start command to onboard new users."""
     user_id = event.sender_id
@@ -891,7 +891,7 @@ async def start_handler(event):
         await llm_db.request_api_key_message(event)
 
 
-@borg.on(events.NewMessage(pattern="/help", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)/help", func=lambda e: e.is_private))
 async def help_handler(event):
     """Provides detailed help information about features and usage."""
     if llm_db.is_awaiting_key(event.sender_id):
@@ -965,7 +965,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
     )
 
 
-@borg.on(events.NewMessage(pattern=r"/status", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)/status", func=lambda e: e.is_private))
 async def status_handler(event):
     """Displays a summary of the user's current settings."""
     user_id = event.sender_id
@@ -1012,7 +1012,7 @@ async def status_handler(event):
     await event.reply(f"{BOT_META_INFO_PREFIX}{status_message}", parse_mode="md")
 
 
-@borg.on(events.NewMessage(pattern="/log", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)/log", func=lambda e: e.is_private))
 async def log_handler(event):
     """Sends the last few conversation logs to the user."""
     user_id = event.sender_id
@@ -1060,7 +1060,7 @@ async def log_handler(event):
 
 @borg.on(
     events.NewMessage(
-        pattern=r"(?i)/setGeminiKey(?:\s+(.*))?", func=lambda e: e.is_private
+        pattern=r"(?i)/setgeminikey(?:\s+(.*))?", func=lambda e: e.is_private
     )
 )
 async def set_key_handler(event):
@@ -1084,7 +1084,7 @@ async def key_submission_handler(event):
 
 
 @borg.on(
-    events.NewMessage(pattern=r"/setModel(?:\s+(.*))?", func=lambda e: e.is_private)
+    events.NewMessage(pattern=r"(?i)/setmodel(?:\s+(.*))?", func=lambda e: e.is_private)
 )
 async def set_model_handler(event):
     """Sets the user's preferred chat model, now with an interactive flow."""
@@ -1109,7 +1109,7 @@ async def set_model_handler(event):
 
 @borg.on(
     events.NewMessage(
-        pattern=r"/setSystemPrompt(?:\s+([\s\S]+))?", func=lambda e: e.is_private
+        pattern=r"(?i)/setsystemprompt(?:\s+([\s\S]+))?", func=lambda e: e.is_private
     )
 )
 async def set_system_prompt_handler(event):
@@ -1145,7 +1145,7 @@ async def set_system_prompt_handler(event):
 
 
 # --- New Feature Handlers ---
-@borg.on(events.NewMessage(pattern=r"/contextmode", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)/contextmode", func=lambda e: e.is_private))
 async def context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     await present_options(
@@ -1159,7 +1159,9 @@ async def context_mode_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"/groupcontextmode", func=lambda e: e.is_private))
+@borg.on(
+    events.NewMessage(pattern=r"(?i)/groupcontextmode", func=lambda e: e.is_private)
+)
 async def group_context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     await present_options(
@@ -1173,7 +1175,7 @@ async def group_context_mode_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"/metadatamode", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)/metadatamode", func=lambda e: e.is_private))
 async def metadata_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     await present_options(
@@ -1187,7 +1189,9 @@ async def metadata_mode_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"/groupmetadatamode", func=lambda e: e.is_private))
+@borg.on(
+    events.NewMessage(pattern=r"(?i)/groupmetadatamode", func=lambda e: e.is_private)
+)
 async def group_metadata_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     await present_options(
@@ -1202,7 +1206,7 @@ async def group_metadata_mode_handler(event):
 
 
 @borg.on(
-    events.NewMessage(pattern=r"/groupactivationmode", func=lambda e: e.is_private)
+    events.NewMessage(pattern=r"(?i)/groupactivationmode", func=lambda e: e.is_private)
 )
 async def group_activation_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
@@ -1216,7 +1220,7 @@ async def group_activation_mode_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"/setthink", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)/setthink", func=lambda e: e.is_private))
 async def set_think_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     # Add "clear" option
@@ -1232,7 +1236,7 @@ async def set_think_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"/tools", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)/tools", func=lambda e: e.is_private))
 async def tools_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     # For this one, the current value is a list, so we handle it differently
@@ -1263,7 +1267,7 @@ async def tools_handler(event):
 
 @borg.on(
     events.NewMessage(
-        pattern=r"/(enable|disable)(?P<tool_name>\w+)", func=lambda e: e.is_private
+        pattern=r"(?i)/(enable|disable)(?P<tool_name>\w+)", func=lambda e: e.is_private
     )
 )
 async def toggle_tool_handler(event):
@@ -1284,7 +1288,7 @@ async def toggle_tool_handler(event):
         )
 
 
-@borg.on(events.NewMessage(pattern=r"/json", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)/json", func=lambda e: e.is_private))
 async def json_mode_handler(event):
     """Toggles JSON mode."""
     is_enabled = user_manager.toggle_json_mode(event.sender_id)
@@ -1501,7 +1505,7 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
         return False
     if event.forward:
         return False
-    if event.text and event.text.split(" ", 1)[0] in KNOWN_COMMAND_SET:
+    if event.text and event.text.split(" ", 1)[0].lower() in KNOWN_COMMAND_SET:
         return False
 
     # Userbot-specific filters
