@@ -485,7 +485,7 @@ async def _get_user_metadata_prefix(message: Message) -> str:
         #: no need to inject useless metadata about the bot itself
         return ""
     else:
-        return f"[User: {sender_name} ({message.sender_id}) | Timestamp: {timestamp}]"
+        return f"[Sender: {sender_name} (ID: {message.sender_id}) | Sending Date: {timestamp}]"
 
 
 async def _get_forward_metadata_prefix(message: Message) -> str:
@@ -503,7 +503,7 @@ async def _get_forward_metadata_prefix(message: Message) -> str:
     if not fwd_from_name:
         fwd_from_name = message.forward.from_name
     if fwd_from_name:
-        fwd_parts.append(f"from: {fwd_from_name}")
+        fwd_parts.append(f"From (Name): {fwd_from_name}")
 
     if message.forward.from_id:
         fwd_peer_id = (
@@ -512,16 +512,16 @@ async def _get_forward_metadata_prefix(message: Message) -> str:
             or getattr(message.forward.from_id, "channel_id", None)
         )
         if fwd_peer_id:
-            fwd_parts.append(f"from_id: {fwd_peer_id}")
+            fwd_parts.append(f"From (ID): {fwd_peer_id}")
 
     if message.forward.date:
-        fwd_parts.append(f"original date: {message.forward.date.isoformat()}")
+        fwd_parts.append(f"Original Message Date: {message.forward.date.isoformat()}")
 
     if message.forward.channel_post:
-        fwd_parts.append(f"channel_post: {message.forward.channel_post}")
+        fwd_parts.append(f"Post's ID in Channel: {message.forward.channel_post}")
 
     if message.forward.post_author:
-        fwd_parts.append(f"author: {message.forward.post_author}")
+        fwd_parts.append(f"Post Author: {message.forward.post_author}")
 
     if message.forward.saved_from_peer:
         saved_peer_id = (
@@ -530,9 +530,9 @@ async def _get_forward_metadata_prefix(message: Message) -> str:
             or getattr(message.forward.saved_from_peer, "channel_id", None)
         )
         if saved_peer_id:
-            fwd_parts.append(f"saved_from_peer: {saved_peer_id}")
+            fwd_parts.append(f"Saved From ID: {saved_peer_id}")
     if message.forward.saved_from_msg_id:
-        fwd_parts.append(f"saved_msg_id: {message.forward.saved_from_msg_id}")
+        fwd_parts.append(f"Saved Message ID: {message.forward.saved_from_msg_id}")
 
     if fwd_parts:
         return f"[Forwarded ({'; '.join(fwd_parts)})]"
