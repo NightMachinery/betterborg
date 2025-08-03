@@ -479,7 +479,12 @@ async def _get_user_metadata_prefix(message: Message) -> str:
     sender = await message.get_sender()
     sender_name = getattr(sender, "first_name", None) or "Unknown"
     timestamp = message.date.isoformat()
-    return f"[User: {sender_name} ({message.sender_id}) | Timestamp: {timestamp}]"
+
+    if message.sender_id == bot_me.id:
+        #: no need to inject useless metadata about the bot itself
+        return ""
+    else:
+        return f"[User: {sender_name} ({message.sender_id}) | Timestamp: {timestamp}]"
 
 
 async def _get_forward_metadata_prefix(message: Message) -> str:
