@@ -474,75 +474,99 @@ async def _expand_and_sort_messages_with_groups(
     return sorted(final_messages_map.values(), key=lambda m: m.id)
 
 
-async def _get_metadata_prefix(message: Message) -> str:
-    """Generates the metadata prefix string for a given message."""
+async def _get_user_metadata_prefix(message: Message) -> str:
+    """Generates the user and timestamp part of the metadata prefix."""
     sender = await message.get_sender()
-    sender_name = getattr(sender, 'first_name', None) or "Unknown"
+    sender_name = getattr(sender, "first_name", None) or "Unknown"
     timestamp = message.date.isoformat()
-    prefix = f"[User: {sender_name} ({message.sender_id}) | Timestamp: {timestamp}]"
-
-    if message.forward:
-        fwd_parts = []
-        fwd_from_name = None
-        fwd_entity = message.forward.sender or message.forward.chat
-        if fwd_entity:
-            fwd_from_name = getattr(fwd_entity, 'title', getattr(fwd_entity, 'first_name', None))
-        if not fwd_from_name:
-            fwd_from_name = message.forward.from_name
-        if fwd_from_name:
-            fwd_parts.append(f"from: {fwd_from_name}")
-
-        if message.forward.from_id:
-            fwd_peer_id = getattr(message.forward.from_id, 'user_id', None) \
-                       or getattr(message.forward.from_id, 'chat_id', None) \
-                       or getattr(message.forward.from_id, 'channel_id', None)
-            if fwd_peer_id:
-                fwd_parts.append(f"from_id: {fwd_peer_id}")
-
-        if message.forward.date:
-            fwd_parts.append(f"original date: {message.forward.date.isoformat()}")
-
-        if message.forward.channel_post:
-            fwd_parts.append(f"post_id: {message.forward.channel_post}")
-
-        if message.forward.post_author:
-            fwd_parts.append(f"author: {message.forward.post_author}")
-
-        if message.forward.saved_from_peer:
-            saved_peer_id = getattr(message.forward.saved_from_peer, 'user_id', None) \
-                       or getattr(message.forward.saved_from_peer, 'chat_id', None) \
-                       or getattr(message.forward.saved_from_peer, 'channel_id', None)
-            if saved_peer_id:
-                fwd_parts.append(f"saved_from_peer: {saved_peer_id}")
-        if message.forward.saved_from_msg_id:
-            fwd_parts.append(f"saved_msg_id: {message.forward.saved_from_msg_id}")
-
-        if fwd_parts:
-            prefix += f" [Forwarded ({'; '.join(fwd_parts)})]"
-
-    return prefix
+    return f"[User: {sender_name} ({message.sender_id}) | Timestamp: {timestamp}]"
 
 
-async def _process_message_content(message: Message, temp_dir: Path, metadata_prefix: str = "") -> tuple[list, list]:
+async def _get_forward_metadata_prefix(message: Message) -> str:
+    """Generates the forwarded part of the metadata prefix, if applicable."""
+    if not message.forward:
+        return ""
+
+    fwd_parts = []
+    fwd_from_name = None
+    fwd_entity = message.forward.sender or message.forward.chat
+    if fwd_entity:
+        fwd_from_name = getattr(
+            fwd_entity, "title", getattr(fwd_entity, "first_name", None)
+        )
+    if not fwd_from_name:
+        fwd_from_name = message.forward.from_name
+    if fwd_from_name:
+        fwd_parts.append(f"from: {fwd_from_name}")
+
+    if message.forward.from_id:
+        fwd_peer_id = (
+            getattr(message.forward.from_id, "user_id", None)
+            or getattr(message.forward.from_id, "chat_id", None)
+            or getattr(message.forward.from_id, "channel_id", None)
+        )
+        if fwd_peer_id:
+            fwd_parts.append(f"from_id: {fwd_peer_id}")
+
+    if message.forward.date:
+        fwd_parts.append(f"original date: {message.forward.date.isoformat()}")
+
+    if message.forward.channel_post:
+        fwd_parts.append(f"channel_post: {message.forward.channel_post}")
+
+    if message.forward.post_author:
+        fwd_parts.append(f"author: {message.forward.post_author}")
+
+    if message.forward.saved_from_peer:
+        saved_peer_id = (
+            getattr(message.forward.saved_from_peer, "user_id", None)
+            or getattr(message.forward.saved_from_peer, "chat_id", None)
+            or getattr(message.forward.saved_from_peer, "channel_id", None)
+        )
+        if saved_peer_id:
+            fwd_parts.append(f"saved_from_peer: {saved_peer_id}")
+    if message.forward.saved_from_msg_id:
+        fwd_parts.append(f"saved_msg_id: {message.forward.saved_from_msg_id}")
+
+    if fwd_parts:
+        return f"[Forwarded ({'; '.join(fwd_parts)})]"
+    return ""
+
+
+async def _process_message_content(
+    message: Message, temp_dir: Path, metadata_prefix: str = ""
+) -> tuple[list, list]:
     """Processes a single message's text and media into litellm content parts."""
     text_buffer, media_parts = [], []
     bot_me = await message.client.get_me()
     role = "assistant" if message.sender_id == bot_me.id else "user"
 
     # Filter out meta-info messages and commands from history
-    if role == "assistant" and message.text and message.text.startswith(BOT_META_INFO_PREFIX):
+    if (
+        role == "assistant"
+        and message.text
+        and message.text.startswith(BOT_META_INFO_PREFIX)
+    ):
         return [], []
-    if role == "user" and message.text and message.text.split(" ", 1)[0] in KNOWN_COMMAND_SET:
+    if (
+        role == "user"
+        and message.text
+        and message.text.split(" ", 1)[0] in KNOWN_COMMAND_SET
+    ):
         return [], []
 
     processed_text = message.text
     if not message.is_private and role == "user" and processed_text and BOT_USERNAME:
         stripped = processed_text.strip()
         if stripped.startswith(BOT_USERNAME):
-            processed_text = stripped[len(BOT_USERNAME):].strip()
+            processed_text = stripped[len(BOT_USERNAME) :].strip()
 
     if metadata_prefix:
-        processed_text = f"{metadata_prefix}\n{processed_text}" if processed_text else metadata_prefix
+        processed_text = (
+            f"{metadata_prefix}\n{processed_text}"
+            if processed_text
+            else metadata_prefix
+        )
 
     if processed_text:
         text_buffer.append(processed_text)
@@ -594,7 +618,9 @@ async def _process_turns_to_history(
     bot_me = await event.client.get_me()
     user_prefs = user_manager.get_prefs(event.sender_id)
     active_metadata_mode = (
-        user_prefs.group_metadata_mode if not event.is_private else user_prefs.metadata_mode
+        user_prefs.group_metadata_mode
+        if not event.is_private
+        else user_prefs.metadata_mode
     )
 
     # --- Mode 1: No Metadata (Merge consecutive messages) ---
@@ -609,20 +635,25 @@ async def _process_turns_to_history(
 
             for turn_msg in turn_messages:
                 # Process content without any metadata prefix
-                msg_texts, msg_media = await _process_message_content(turn_msg, temp_dir)
+                msg_texts, msg_media = await _process_message_content(
+                    turn_msg, temp_dir
+                )
                 text_buffer.extend(msg_texts)
                 media_parts.extend(msg_media)
 
             if not text_buffer and not media_parts:
                 continue
 
-            final_content_parts = await _finalize_content_parts(text_buffer, media_parts)
+            final_content_parts = await _finalize_content_parts(
+                text_buffer, media_parts
+            )
             if not final_content_parts:
                 continue
 
             final_content = (
                 final_content_parts[0]["text"]
-                if len(final_content_parts) == 1 and final_content_parts[0]["type"] == "text"
+                if len(final_content_parts) == 1
+                and final_content_parts[0]["type"] == "text"
                 else final_content_parts
             )
             history.append({"role": role, "content": final_content})
@@ -631,13 +662,19 @@ async def _process_turns_to_history(
     else:
         for message in message_list:
             role = "assistant" if message.sender_id == bot_me.id else "user"
-            metadata_prefix = ""
+            prefix_parts = []
 
-            # Determine if metadata should be added based on the mode
-            if active_metadata_mode == "full_metadata" and not event.is_private:
-                metadata_prefix = await _get_metadata_prefix(message)
-            elif active_metadata_mode == "only_forwarded" and message.forward:
-                 metadata_prefix = await _get_metadata_prefix(message)
+            if active_metadata_mode == "full_metadata":
+                prefix_parts.append(await _get_user_metadata_prefix(message))
+
+                if message.forward:
+                    prefix_parts.append(await _get_forward_metadata_prefix(message))
+
+            elif active_metadata_mode == "only_forwarded":
+                if message.forward:
+                    prefix_parts.append(await _get_forward_metadata_prefix(message))
+
+            metadata_prefix = " ".join(prefix_parts)
 
             text_buffer, media_parts = await _process_message_content(
                 message, temp_dir, metadata_prefix
@@ -646,13 +683,16 @@ async def _process_turns_to_history(
             if not text_buffer and not media_parts:
                 continue
 
-            final_content_parts = await _finalize_content_parts(text_buffer, media_parts)
+            final_content_parts = await _finalize_content_parts(
+                text_buffer, media_parts
+            )
             if not final_content_parts:
                 continue
 
             final_content = (
                 final_content_parts[0]["text"]
-                if len(final_content_parts) == 1 and final_content_parts[0]["type"] == "text"
+                if len(final_content_parts) == 1
+                and final_content_parts[0]["type"] == "text"
                 else final_content_parts
             )
             history.append({"role": role, "content": final_content})
@@ -699,7 +739,9 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
         else:
             message_ids = []
             if context_mode == "last_N":
-                message_ids = history_util.get_last_n_ids(chat_id, LAST_N_MESSAGES_LIMIT)
+                message_ids = history_util.get_last_n_ids(
+                    chat_id, LAST_N_MESSAGES_LIMIT
+                )
             elif context_mode == "until_separator":
                 message_ids = history_util.get_all_ids(chat_id)
 
@@ -707,7 +749,9 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
             if all_ids:
                 try:
                     fetched_messages = [
-                        m for m in await event.client.get_messages(chat_id, ids=all_ids) if m
+                        m
+                        for m in await event.client.get_messages(chat_id, ids=all_ids)
+                        if m
                     ]
                     if context_mode == "until_separator":
                         context_slice = []
@@ -730,7 +774,9 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
             messages_to_process.append(event.message)
 
         elif context_mode == "last_N":
-            history_iter = event.client.iter_messages(chat_id, limit=LAST_N_MESSAGES_LIMIT)
+            history_iter = event.client.iter_messages(
+                chat_id, limit=LAST_N_MESSAGES_LIMIT
+            )
             messages_to_process = [msg async for msg in history_iter]
             messages_to_process.reverse()
 
@@ -738,7 +784,10 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
             cached_history = USERBOT_HISTORY_CACHE.get(chat_id)
             if not cached_history:
                 full_history = [
-                    msg async for msg in event.client.iter_messages(chat_id, limit=HISTORY_MESSAGE_LIMIT)
+                    msg
+                    async for msg in event.client.iter_messages(
+                        chat_id, limit=HISTORY_MESSAGE_LIMIT
+                    )
                 ]
                 cached_history = list(reversed(full_history))
                 USERBOT_HISTORY_CACHE[chat_id] = cached_history
@@ -746,7 +795,10 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
                 last_id = cached_history[-1].id
                 if event.id > last_id:
                     new_messages = [
-                        msg async for msg in event.client.iter_messages(chat_id, min_id=last_id)
+                        msg
+                        async for msg in event.client.iter_messages(
+                            chat_id, min_id=last_id
+                        )
                     ]
                     cached_history.extend(list(reversed(new_messages)))
                     if len(cached_history) > HISTORY_MESSAGE_LIMIT:
@@ -761,7 +813,9 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
             messages_to_process = list(reversed(context_slice))
 
     # --- Universal Post-Processing ---
-    expanded_messages = await _expand_and_sort_messages_with_groups(event, messages_to_process)
+    expanded_messages = await _expand_and_sort_messages_with_groups(
+        event, messages_to_process
+    )
     if len(expanded_messages) > HISTORY_MESSAGE_LIMIT:
         expanded_messages = expanded_messages[-HISTORY_MESSAGE_LIMIT:]
 
@@ -769,6 +823,7 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
 
 
 # --- Bot/Userbot Initialization ---
+
 
 async def initialize_llm_chat():
     """Initializes the plugin based on whether it's a bot or userbot."""
@@ -782,7 +837,9 @@ async def initialize_llm_chat():
             BOT_USERNAME = f"@{me.username}"
         else:
             if not IS_BOT:
-                print("LLM_Chat (Userbot): No username found. Group mention features will be unavailable.")
+                print(
+                    "LLM_Chat (Userbot): No username found. Group mention features will be unavailable."
+                )
 
     if IS_BOT:
         await history_util.initialize_history_handler()
@@ -794,14 +851,18 @@ async def initialize_llm_chat():
                 SetBotCommandsRequest(
                     scope=BotCommandScopeDefault(),
                     lang_code="en",
-                    commands=[BotCommand(c["command"], c["description"]) for c in BOT_COMMANDS],
+                    commands=[
+                        BotCommand(c["command"], c["description"]) for c in BOT_COMMANDS
+                    ],
                 )
             )
             print("LLM_Chat: Bot command menu has been updated.")
         except Exception as e:
             print(f"LLM_Chat: Failed to set bot commands: {e}")
     else:
-        print("LLM_Chat: Running as a USERBOT. History utility and bot commands skipped.")
+        print(
+            "LLM_Chat: Running as a USERBOT. History utility and bot commands skipped."
+        )
 
 
 # --- Telethon Event Handlers ---
@@ -840,7 +901,9 @@ async def help_handler(event):
         activation_instructions.append("**reply** to one of my messages")
 
     if not activation_instructions:
-        activation_instructions.append("ask the bot developer to set a username for this bot and then start your message with `@bot_username`")
+        activation_instructions.append(
+            "ask the bot developer to set a username for this bot and then start your message with `@bot_username`"
+        )
 
     group_trigger_text = " or ".join(activation_instructions)
 
@@ -920,7 +983,8 @@ async def status_handler(event):
         prefs.group_metadata_mode, prefs.group_metadata_mode.replace("_", " ").title()
     )
     group_activation_mode_name = GROUP_ACTIVATION_MODES.get(
-        prefs.group_activation_mode, prefs.group_activation_mode.replace("_", " ").title()
+        prefs.group_activation_mode,
+        prefs.group_activation_mode.replace("_", " ").title(),
     )
     thinking_level = prefs.thinking.capitalize() if prefs.thinking else "Default"
     status_message = (
@@ -1130,7 +1194,9 @@ async def group_metadata_mode_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"/groupactivationmode", func=lambda e: e.is_private))
+@borg.on(
+    events.NewMessage(pattern=r"/groupactivationmode", func=lambda e: e.is_private)
+)
 async def group_activation_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     await present_options(
@@ -1201,7 +1267,7 @@ async def toggle_tool_handler(event):
     )
     if matched_tool:
         is_enabled = action == "enable"
-        user_manager.set_tool_state(event.sender_id, matched_tool, is_enabled)
+        user_manager.set_tool_state(event.sender_id, matched_tool, enabled=is_enabled)
         await event.reply(
             f"{BOT_META_INFO_PREFIX}`{matched_tool}` has been **{action}d**."
         )
@@ -1353,7 +1419,9 @@ async def generic_input_handler(event):
     elif input_type == "system_prompt":
         if text.lower() == "reset":
             user_manager.set_system_prompt(user_id, "")
-            await event.reply(f"{BOT_META_INFO_PREFIX}✅ System prompt reset to default.")
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}✅ System prompt reset to default."
+            )
         else:
             user_manager.set_system_prompt(user_id, text)
             await event.reply(f"{BOT_META_INFO_PREFIX}✅ System prompt updated.")
@@ -1366,33 +1434,51 @@ async def generic_input_handler(event):
                 selected_key = option_keys[choice_idx]
                 if input_type == "context_mode_selection":
                     user_manager.set_context_mode(user_id, selected_key)
-                    await event.reply(f"{BOT_META_INFO_PREFIX}✅ Private context mode set to: **{CONTEXT_MODE_NAMES[selected_key]}**")
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}✅ Private context mode set to: **{CONTEXT_MODE_NAMES[selected_key]}**"
+                    )
                 elif input_type == "group_context_mode_selection":
                     user_manager.set_group_context_mode(user_id, selected_key)
-                    await event.reply(f"{BOT_META_INFO_PREFIX}✅ Group context mode set to: **{CONTEXT_MODE_NAMES[selected_key]}**")
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}✅ Group context mode set to: **{CONTEXT_MODE_NAMES[selected_key]}**"
+                    )
                 elif input_type == "metadata_mode_selection":
                     user_manager.set_metadata_mode(user_id, selected_key)
-                    await event.reply(f"{BOT_META_INFO_PREFIX}✅ Private metadata mode set to: **{METADATA_MODES[selected_key]}**")
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}✅ Private metadata mode set to: **{METADATA_MODES[selected_key]}**"
+                    )
                 elif input_type == "group_metadata_mode_selection":
                     user_manager.set_group_metadata_mode(user_id, selected_key)
-                    await event.reply(f"{BOT_META_INFO_PREFIX}✅ Group metadata mode set to: **{METADATA_MODES[selected_key]}**")
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}✅ Group metadata mode set to: **{METADATA_MODES[selected_key]}**"
+                    )
                 elif input_type == "group_activation_mode_selection":
                     user_manager.set_group_activation_mode(user_id, selected_key)
-                    await event.reply(f"{BOT_META_INFO_PREFIX}✅ Group activation mode set to: **{GROUP_ACTIVATION_MODES[selected_key]}**")
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}✅ Group activation mode set to: **{GROUP_ACTIVATION_MODES[selected_key]}**"
+                    )
                 elif input_type == "think_selection":
                     level = None if selected_key == "clear" else selected_key
                     user_manager.set_thinking(user_id, level)
-                    await event.reply(f"{BOT_META_INFO_PREFIX}✅ Reasoning level updated.")
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}✅ Reasoning level updated."
+                    )
                 elif input_type == "tool_selection":
                     prefs = user_manager.get_prefs(user_id)
                     is_enabled = selected_key not in prefs.enabled_tools
                     user_manager.set_tool_state(user_id, selected_key, is_enabled)
-                    await event.reply(f"{BOT_META_INFO_PREFIX}✅ Tool **{selected_key}** has been {'enabled' if is_enabled else 'disabled'}.")
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}✅ Tool **{selected_key}** has been {'enabled' if is_enabled else 'disabled'}."
+                    )
             else:
-                await event.reply(f"{BOT_META_INFO_PREFIX}Invalid number. Please try again.")
+                await event.reply(
+                    f"{BOT_META_INFO_PREFIX}Invalid number. Please try again."
+                )
                 return
         except ValueError:
-            await event.reply(f"{BOT_META_INFO_PREFIX}Please reply with a valid number.")
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}Please reply with a valid number."
+            )
             return
 
     cancel_input_flow(user_id)
@@ -1462,7 +1548,11 @@ async def chat_handler(event):
 
         if active_context_mode == "until_separator" and event.text:
             text_to_check = event.text.strip()
-            if is_group_chat and BOT_USERNAME and text_to_check.startswith(BOT_USERNAME):
+            if (
+                is_group_chat
+                and BOT_USERNAME
+                and text_to_check.startswith(BOT_USERNAME)
+            ):
                 # For groups, check for the separator after the bot's name
                 text_to_check = text_to_check[len(BOT_USERNAME) :].strip()
 
@@ -1472,7 +1562,7 @@ async def chat_handler(event):
                 reply_text = "Context cleared. The conversation will now start fresh from your next message"
                 if is_group_chat:
                     activation_mode = prefs.group_activation_mode
-                    if activation_mode == 'mention_and_reply':
+                    if activation_mode == "mention_and_reply":
                         reply_text += " mentioning me or replying to me."
                     else:  # mention_only
                         reply_text += " mentioning me."
