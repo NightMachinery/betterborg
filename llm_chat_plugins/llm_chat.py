@@ -208,6 +208,7 @@ class UserManager:
 
     def set_tool_state(self, user_id: int, tool_name: str, enabled: bool):
         if tool_name not in AVAILABLE_TOOLS:
+            print(f"Invalid tool name: tool_name='{tool_name}', user_id={user_id}")
             return
         prefs = self.get_prefs(user_id)
         if enabled and tool_name not in prefs.enabled_tools:
@@ -224,34 +225,43 @@ class UserManager:
 
     def set_context_mode(self, user_id: int, mode: str):
         if mode not in CONTEXT_MODES:
+            print(f"Invalid context mode: mode='{mode}', user_id={user_id}")
             return
+
         prefs = self.get_prefs(user_id)
         prefs.context_mode = mode
         self._save_prefs(user_id, prefs)
 
     def set_group_context_mode(self, user_id: int, mode: str):
         if mode not in CONTEXT_MODES:
+            print(f"Invalid group context mode: mode='{mode}', user_id={user_id}")
             return
+
         prefs = self.get_prefs(user_id)
         prefs.group_context_mode = mode
         self._save_prefs(user_id, prefs)
 
     def set_metadata_mode(self, user_id: int, mode: str):
         if mode not in METADATA_MODES:
+            print(f"Invalid metadata mode: mode='{mode}', user_id={user_id}")
             return
+
         prefs = self.get_prefs(user_id)
         prefs.metadata_mode = mode
         self._save_prefs(user_id, prefs)
 
     def set_group_metadata_mode(self, user_id: int, mode: str):
         if mode not in METADATA_MODES:
+            print(f"Invalid group metadata mode: mode='{mode}', user_id={user_id}")
             return
+
         prefs = self.get_prefs(user_id)
         prefs.group_metadata_mode = mode
         self._save_prefs(user_id, prefs)
 
     def set_group_activation_mode(self, user_id: int, mode: str):
         if mode not in GROUP_ACTIVATION_MODES:
+            print(f"Invalid group activation mode: mode='{mode}', user_id={user_id}")
             return
         prefs = self.get_prefs(user_id)
         prefs.group_activation_mode = mode
