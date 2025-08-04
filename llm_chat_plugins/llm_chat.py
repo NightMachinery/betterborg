@@ -5,6 +5,7 @@ import uuid
 import base64
 import mimetypes
 import re
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from shutil import rmtree
@@ -452,7 +453,7 @@ async def _process_media(message, temp_dir: Path) -> Optional[dict]:
 
 
 async def _log_conversation(
-    event, model_name: str, messages: list, final_response: str
+    event, prefs: UserPrefs, messages: list, final_response: str
 ):
     """Formats and writes the conversation log to a user-specific file."""
     try:
@@ -471,12 +472,19 @@ async def _log_conversation(
         user_log_dir.mkdir(exist_ok=True)
         log_file_path = user_log_dir / log_filename
 
+        # Log prefs object as JSON, excluding the system_prompt
+        prefs_dict = prefs.model_dump()
+        prefs_dict.pop("system_prompt", None)
+        prefs_json = json.dumps(prefs_dict, indent=2)
+
         log_parts = [
             f"Date: {timestamp}",
             f"User ID: {user_id}",
             f"Name: {full_name}",
             f"Username: @{username}",
-            f"Model: {model_name}",
+            f"Model: {prefs.model}",
+            "--- Preferences ---",
+            prefs_json,
             "--- Conversation ---",
         ]
         for msg in messages:
@@ -1850,7 +1858,7 @@ async def chat_handler(event):
         await util.edit_message(
             response_message, final_text, parse_mode="md", link_preview=False
         )
-        await _log_conversation(event, prefs.model, messages, final_text)
+        await _log_conversation(event, prefs, messages, final_text)
 
     except Exception:
         error_text = f"{BOT_META_INFO_PREFIX}An error occurred. You can send the inputs that caused this error to the bot developer."
