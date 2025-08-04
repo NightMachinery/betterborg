@@ -85,7 +85,7 @@ CONTEXT_MODE_NAMES = {
     "reply_chain": "Reply Chain",
     "until_separator": f"Until Separator (`{CONTEXT_SEPARATOR}`)",
     "last_N": f"Last {LAST_N_MESSAGES_LIMIT} Messages",
-    "smart": "Smart Mode (Auto-switches)",
+    "smart": "Smart Mode (Auto-Switches)",
 }
 GROUP_ACTIVATION_MODES = {
     "mention_only": "Mention Only",
