@@ -73,31 +73,6 @@ You are a helpful and knowledgeable assistant. Your primary audience is advanced
 LOG_DIR = Path(os.path.expanduser("~/.borg/llm_chat/log/"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-# --- New Constants for Features ---
-LAST_N_MESSAGES_LIMIT = 50
-HISTORY_MESSAGE_LIMIT = 1000
-LOG_COUNT_LIMIT = 3
-AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
-DEFAULT_ENABLED_TOOLS = ["googleSearch", "urlContext"]
-REASONING_LEVELS = ["disable", "low", "medium", "high"]
-CONTEXT_SEPARATOR = "---"
-CONTEXT_MODE_NAMES = {
-    "reply_chain": "Reply Chain",
-    "until_separator": f"Until Separator (`{CONTEXT_SEPARATOR}`)",
-    "last_N": f"Last {LAST_N_MESSAGES_LIMIT} Messages",
-    "smart": "Smart Mode (Auto-Switches)",
-}
-CONTEXT_MODES = list(CONTEXT_MODE_NAMES.keys())
-GROUP_ACTIVATION_MODES = {
-    "mention_only": "Mention Only",
-    "mention_and_reply": "Mention and Replies",
-}
-METADATA_MODES = {
-    "no_metadata": "No Metadata (Merged Turns)",
-    "separate_turns": "Separate Turns",
-    "only_forwarded": "Only Forwarded Metadata",
-    "full_metadata": "Full Metadata",
-}
 
 
 # --- New Constants for Features ---
