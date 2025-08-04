@@ -35,6 +35,21 @@ from uniborg.constants import BOT_META_INFO_PREFIX
 # Use the litellm model naming convention.
 # See https://docs.litellm.ai/docs/providers/gemini
 DEFAULT_MODEL = "gemini/gemini-2.5-flash"  #: Do NOT change the default model unless explicitly instructed to.
+PROMPT_REPLACEMENTS = {
+    re.compile(r"^\.ocr$", re.IGNORECASE): r"""
+You will be given a series of images that are part of a single, related sequence. Your task is to perform OCR and combine the text from all images into one final, coherent output, following these specific rules:
+
+*Combine Text:* Transcribe and merge the text from all images into a single, continuous document. Ensure the text flows in the correct sequence from one image to the next.
+
+*No Commentary:* The final output must not contain any of your own commentary, explanations, or headers like "OCR Result" or "Image 1." It should only be the transcribed text itself.
+
+*Consolidate Recurring Information:* Identify any information that is repeated across multiple images, such as headers, footers, author names, social media handles, logos, advertisements, or contact details. Remove these repetitions from the main body of the text.
+
+*Create a Single Header and Footer:* Place all the consolidated, recurring information you identified in the previous step just once at the very beginning and the very end of the document, creating a clean header and a clean footer.
+
+The goal is to produce a single, clean document as if it were the original, without the page breaks and repeated headers or footers from the images.
+"""
+}
 DEFAULT_SYSTEM_PROMPT = """
 You are a helpful and knowledgeable assistant. Your primary audience is advanced STEM postgraduate researchers, so be precise and technically accurate.
 
@@ -561,6 +576,13 @@ async def _process_message_content(
         return [], []
 
     processed_text = message.text
+    if role == "user" and processed_text:
+        stripped_text = processed_text.strip()
+        for pattern, replacement in PROMPT_REPLACEMENTS.items():
+            if pattern.fullmatch(stripped_text):
+                processed_text = replacement
+                break
+
     if not message.is_private and role == "user" and processed_text and BOT_USERNAME:
         stripped = processed_text.strip()
         if stripped.startswith(BOT_USERNAME):
