@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, event, Column, Integer, String
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
+from telethon import events
 
 from uniborg.constants import BOT_META_INFO_PREFIX
 
@@ -180,6 +181,9 @@ async def request_api_key_message(event, service: str):
                 f"{BOT_META_INFO_PREFIX}I couldn't send you a private message. Please check your privacy settings, "
                 f"then send `/start` to me in a private chat."
             )
+
+    raise events.StopPropagation
+    # If this exception is raised in any of the handlers for a given event, it will stop the execution of all other registered event handlers. It can be seen as the StopIteration in a for loop but for events.
 
 
 async def _save_key_with_error_handling(event, user_id, service, key):
