@@ -310,6 +310,23 @@ user_manager = UserManager()
 # --- Core Logic & Helpers ---
 
 
+
+SANITIZATION_MAP = {
+    ":": "__COLON__",
+}
+
+def _sanitize_model_key(key: str) -> str:
+    """Replaces problematic characters in model keys for Telegram callback data."""
+    for char, replacement in SANITIZATION_MAP.items():
+        key = key.replace(char, replacement)
+    return key
+
+def _unsanitize_model_key(sanitized_key: str) -> str:
+    """Restores original model key from sanitized Telegram callback data."""
+    for char, replacement in SANITIZATION_MAP.items():
+        sanitized_key = sanitized_key.replace(replacement, char)
+    return sanitized_key
+
 async def present_options(
     event,
     *,
@@ -328,7 +345,7 @@ async def present_options(
         buttons = [
             KeyboardButtonCallback(
                 f"✅ {display_name}" if key == current_value else display_name,
-                data=f"{callback_prefix}{key}",
+                data=f"{callback_prefix}{_sanitize_model_key(key)}",
             )
             for key, display_name in options.items()
         ]
@@ -352,6 +369,7 @@ async def present_options(
             "keys": option_keys,
         }
         await event.reply(f"{BOT_META_INFO_PREFIX}\n".join(menu_text))
+
 
 
 async def _process_media(message, temp_dir: Path) -> Optional[dict]:
@@ -1435,14 +1453,14 @@ async def callback_handler(event):
     prefs = user_manager.get_prefs(user_id)
 
     if data_str.startswith("model_"):
-        model_id = data_str.split("_", 1)[1]
+        model_id = _unsanitize_model_key(data_str.split("_", 1)[1])
         user_manager.set_model(user_id, model_id)
         cancel_input_flow(user_id)  # Cancel the custom input flow
         prefs = user_manager.get_prefs(user_id)  # update prefs
         buttons = [
             KeyboardButtonCallback(
                 f"✅ {name}" if key == prefs.model else name,
-                data=f"model_{key}",
+                data=f"model_{_sanitize_model_key(key)}",
             )
             for key, name in MODEL_CHOICES.items()
         ]
