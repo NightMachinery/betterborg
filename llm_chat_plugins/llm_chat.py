@@ -77,9 +77,35 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- New Constants for Features ---
 MODEL_CHOICES = {
+    ## Gemini
     "gemini/gemini-2.5-flash": "Gemini 2.5 Flash",
     "gemini/gemini-2.5-pro": "Gemini 2.5 Pro",
-    "openrouter/anthropic/claude-4-sonnet": "Claude 4 Sonnet (OpenRouter)",
+    "openrouter/google/gemini-2.5-pro": "Gemini 2.5 Pro (OpenRouter)",
+    ## Anthropic Claude
+    "openrouter/anthropic/claude-sonnet-4": "Claude 4 Sonnet (OpenRouter)",
+    "openrouter/anthropic/claude-opus-4": "Claude 4 Opus (OpenRouter)",
+    ## Grok
+    "openrouter/x-ai/grok-4": "Grok 4 (OpenRouter)",
+    ## OpenAI
+    "openrouter/openai/gpt-4o": "GPT-4o (OpenRouter)",
+    "openrouter/openai/chatgpt-4o-latest": "ChatGPT 4o (OpenRouter)",
+    # openai/chatgpt-4o-latest: OpenAI ChatGPT 4o is continually updated by OpenAI to point to the current version of GPT-4o used by ChatGPT. It therefore differs slightly from the API version of GPT-4o in that it has additional RLHF. It is intended for research and evaluation.  OpenAI notes that this model is not suited for production use-cases as it may be removed or redirected to another model in the future.
+    "openrouter/openai/gpt-4o-mini": "GPT-4o Mini (OpenRouter)",
+    "openrouter/openai/gpt-4.1-mini": "GPT-4.1 Mini (OpenRouter)",
+    "openrouter/openai/gpt-4.1": "GPT-4.1 (OpenRouter)",
+    "openrouter/openai/o4-mini-high": "o4-mini-high (OpenRouter)",
+    ## Kimi
+    # moonshotai/kimi-k2:free
+    "openrouter/moonshotai/kimi-k2:free": "🎁 Kimi K2 (Free, OpenRouter)",
+    ## Qwen
+    # qwen/qwen3-coder:free
+    "openrouter/qwen/qwen3-coder:free": "🎁 Qwen3 Coder (Free, OpenRouter)",
+    ## Various
+    # cognitivecomputations/dolphin-mistral-24b-venice-edition:free
+    "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "🎁 Venice Uncensored Dolphin Mistral 24B Venice Edition (Free, OpenRouter)",
+    ## Cloaked Models
+    "openrouter/horizon-beta": "🎁 Horizon Beta (Free, OpenRouter)",
+    # [[https://openrouter.ai/openrouter/horizon-beta][Horizon Beta - API, Providers, Stats | OpenRouter]]
 }
 LAST_N_MESSAGES_LIMIT = 50
 HISTORY_MESSAGE_LIMIT = 1000
