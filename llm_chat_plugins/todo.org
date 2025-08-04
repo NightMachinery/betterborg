@@ -2,7 +2,7 @@
 
 * add shortcuts =/sep=, =/replyChain=, =/lastN= for switching context mode directly
 
-* should skip deleted messages in history_util
+* llm_chat: should skip deleted messages in history_util. we should probably do this in the code section where we retrieve the actual message objects from the message ids.
 
 * TODO 0, [8/4/2025  15:12]
 Create an OCR bot: waits for 1 second for messages to arrive (unless already waiting in which case we won't reset the timer) and add them to the queue. After one sec, process all of the messages with this prompt:
