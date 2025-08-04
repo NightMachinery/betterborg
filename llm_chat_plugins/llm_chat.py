@@ -577,6 +577,9 @@ async def _process_message_content(
 
     processed_text = message.text
     if role == "user" and processed_text:
+        if re.match(r"^\.s\b", processed_text):
+            processed_text = processed_text[2:].strip()
+
         stripped_text = processed_text.strip()
         for pattern, replacement in PROMPT_REPLACEMENTS.items():
             if pattern.fullmatch(stripped_text):
