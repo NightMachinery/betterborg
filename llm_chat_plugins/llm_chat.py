@@ -1649,7 +1649,7 @@ async def chat_handler(event):
         context_mode_to_use = "recent"
         event.message.text = event.text[2:].strip()
 
-        response_message = await event.reply(f"{BOT_META_INFO_PREFIX}**Recent Context Mode:** I'll use only the recent messages to form the conversation context. I have waited {RECENT_WAIT_TIME} seconds to receive all your messages.\n\nProcessing ... ")
+        response_message = await event.reply(f"{BOT_META_INFO_PREFIX}**Recent Context Mode:** I'll use only the recent messages to form the conversation context. I have waited {RECENT_WAIT_TIME} second(s) to receive all your messages.\n\nProcessing ... ")
 
     else:
         response_message = await event.reply(f"{BOT_META_INFO_PREFIX}...")
