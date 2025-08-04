@@ -35,6 +35,9 @@ from uniborg.constants import BOT_META_INFO_PREFIX
 # Use the litellm model naming convention.
 # See https://docs.litellm.ai/docs/providers/gemini
 DEFAULT_MODEL = "gemini/gemini-2.5-flash"  #: Do NOT change the default model unless explicitly instructed to.
+# Alternatives:
+# - "gemini/gemini-2.5-pro"
+##
 PROMPT_REPLACEMENTS = {
     re.compile(r"^\.ocr$", re.MULTILINE | re.IGNORECASE): r"""
 You will be given a series of images that are part of a single, related sequence. Your task is to perform OCR and combine the text from all images into one final, coherent output, following these specific rules:
