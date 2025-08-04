@@ -1637,23 +1637,29 @@ async def chat_handler(event):
         PROCESSED_GROUP_IDS.add(group_id)
 
     prefs = user_manager.get_prefs(user_id)
-    response_message = await event.reply(f"{BOT_META_INFO_PREFIX}...")
     temp_dir = Path(f"./temp_llm_chat_{event.id}/")
+
+    # Select context_mode based on chat type
+    context_mode_to_use = (
+        prefs.group_context_mode if not event.is_private else prefs.context_mode
+    )
+
+    if event.text and re.match(r"^\.s\b", event.text):
+        RECENT_WAIT_TIME = 1
+        await asyncio.sleep(RECENT_WAIT_TIME)
+        context_mode_to_use = "recent"
+        event.message.text = event.text[2:].strip()
+
+        response_message = await event.reply(f"{BOT_META_INFO_PREFIX}**Recent Context Mode:** I'll use only the recent messages to form the conversation context. I'll wait {RECENT_WAIT_TIME} seconds before gathering context ... ")
+
+    else:
+        response_message = await event.reply(f"{BOT_META_INFO_PREFIX}...")
+
     try:
         temp_dir.mkdir(exist_ok=True)
 
         if group_id:
             await asyncio.sleep(0.1)  # Allow album messages to arrive
-
-        # Select context_mode based on chat type
-        context_mode_to_use = (
-            prefs.group_context_mode if not event.is_private else prefs.context_mode
-        )
-
-        if event.text and re.match(r"^\.s\b", event.text):
-            await asyncio.sleep(1)
-            context_mode_to_use = "recent"
-            event.message.text = event.text[2:].strip()
 
         messages = await build_conversation_history(
             event, context_mode_to_use, temp_dir
