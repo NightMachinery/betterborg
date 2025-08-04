@@ -5,7 +5,7 @@ import uuid
 import base64
 import mimetypes
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from shutil import rmtree
 from itertools import groupby
@@ -759,40 +759,52 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
 
     if IS_BOT:
         # --- Bot Logic (using history_util cache) ---
+        message_ids = []
         if context_mode == "reply_chain":
+            # For reply chains, we still need to fetch the messages directly.
             messages_to_process = await _get_initial_messages_for_reply_chain(event)
             messages_to_process.append(event.message)
-        else:
-            message_ids = []
-            if context_mode == "last_N":
-                message_ids = history_util.get_last_n_ids(
-                    chat_id, LAST_N_MESSAGES_LIMIT
-                )
-            elif context_mode == "until_separator":
-                message_ids = history_util.get_all_ids(chat_id)
+            # No further processing needed for this case, jump to the end.
+            expanded_messages = await _expand_and_sort_messages_with_groups(
+                event, messages_to_process
+            )
+            return await _process_turns_to_history(event, expanded_messages, temp_dir)
 
-            all_ids = sorted(list(set(message_ids + [event.id])))
-            if all_ids:
-                try:
-                    fetched_messages = [
-                        m
-                        for m in await event.client.get_messages(chat_id, ids=all_ids)
-                        if m
-                    ]
-                    if context_mode == "until_separator":
-                        context_slice = []
-                        for msg in reversed(fetched_messages):
-                            if msg.text and msg.text.strip() == CONTEXT_SEPARATOR:
-                                break
-                            context_slice.append(msg)
-                        messages_to_process = list(reversed(context_slice))
-                    else:  # last_N
-                        messages_to_process = fetched_messages
-                except Exception as e:
-                    print(f"LLM_Chat (Bot): Could not fetch from history cache: {e}")
-                    messages_to_process = [event.message]
-            else:
+        elif context_mode == "last_N":
+            message_ids = history_util.get_last_n_ids(
+                chat_id, LAST_N_MESSAGES_LIMIT
+            )
+        elif context_mode == "until_separator":
+            message_ids = history_util.get_all_ids(chat_id)
+        elif context_mode == "recent":
+            now = datetime.now(timezone.utc)
+            five_seconds_ago = now - timedelta(seconds=5)
+            message_ids = history_util.get_ids_since(chat_id, five_seconds_ago)
+
+        # Common logic for bot modes that use message_ids
+        all_ids = sorted(list(set(message_ids + [event.id])))
+        if all_ids:
+            try:
+                fetched_messages = [
+                    m
+                    for m in await event.client.get_messages(chat_id, ids=all_ids)
+                    if m
+                ]
+                if context_mode == "until_separator":
+                    context_slice = []
+                    for msg in reversed(fetched_messages):
+                        if msg.text and msg.text.strip() == CONTEXT_SEPARATOR:
+                            break
+                        context_slice.append(msg)
+                    messages_to_process = list(reversed(context_slice))
+                else:  # last_N and recent
+                    messages_to_process = fetched_messages
+            except Exception as e:
+                print(f"LLM_Chat (Bot): Could not fetch from history cache: {e}")
                 messages_to_process = [event.message]
+        else:
+            messages_to_process = [event.message]
+
     else:
         # --- Userbot Logic (using direct API calls + cache) ---
         if context_mode == "reply_chain":
@@ -837,6 +849,18 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
                 if msg.text and msg.text.strip() == CONTEXT_SEPARATOR:
                     break
             messages_to_process = list(reversed(context_slice))
+
+        elif context_mode == "recent":
+            # Fetch messages from the last 5 seconds
+            now = datetime.now(timezone.utc)
+            five_seconds_ago = now - timedelta(seconds=5)
+            messages_to_process = [
+                msg
+                async for msg in event.client.iter_messages(
+                    event.chat_id, offset_date=now, reverse=True
+                )
+                if msg.date > five_seconds_ago
+            ]
 
     # --- Universal Post-Processing ---
     expanded_messages = await _expand_and_sort_messages_with_groups(
@@ -1625,6 +1649,11 @@ async def chat_handler(event):
         context_mode_to_use = (
             prefs.group_context_mode if not event.is_private else prefs.context_mode
         )
+
+        if event.text and re.match(r"^\.s\b", event.text):
+            await asyncio.sleep(1)
+            context_mode_to_use = "recent"
+            event.message.text = event.text[2:].strip()
 
         messages = await build_conversation_history(
             event, context_mode_to_use, temp_dir
