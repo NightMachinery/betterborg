@@ -1465,7 +1465,7 @@ async def callback_handler(event):
             )
             for key, name in MODEL_CHOICES.items()
         ]
-        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
+        await event.edit(buttons=util.build_menu(buttons, n_cols=2))
         await event.answer(f"Model set to {MODEL_CHOICES[model_id]}")
 
     if data_str.startswith("think_"):
