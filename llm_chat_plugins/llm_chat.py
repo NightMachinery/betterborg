@@ -87,11 +87,11 @@ MODEL_CHOICES = {
     ## Grok
     "openrouter/x-ai/grok-4": "Grok 4 (OpenRouter)",
     ## OpenAI
-    "openrouter/openai/gpt-4o": "GPT-4o (OpenRouter)",
+    # "openrouter/openai/gpt-4o": "GPT-4o (OpenRouter)",
     "openrouter/openai/chatgpt-4o-latest": "ChatGPT 4o (OpenRouter)",
     # openai/chatgpt-4o-latest: OpenAI ChatGPT 4o is continually updated by OpenAI to point to the current version of GPT-4o used by ChatGPT. It therefore differs slightly from the API version of GPT-4o in that it has additional RLHF. It is intended for research and evaluation.  OpenAI notes that this model is not suited for production use-cases as it may be removed or redirected to another model in the future.
-    "openrouter/openai/gpt-4o-mini": "GPT-4o Mini (OpenRouter)",
-    "openrouter/openai/gpt-4.1-mini": "GPT-4.1 Mini (OpenRouter)",
+    # "openrouter/openai/gpt-4o-mini": "GPT-4o Mini (OpenRouter)",
+    # "openrouter/openai/gpt-4.1-mini": "GPT-4.1 Mini (OpenRouter)",
     "openrouter/openai/gpt-4.1": "GPT-4.1 (OpenRouter)",
     "openrouter/openai/o4-mini-high": "o4-mini-high (OpenRouter)",
     ## Kimi
@@ -102,7 +102,7 @@ MODEL_CHOICES = {
     "openrouter/qwen/qwen3-coder:free": "🎁 Qwen3 Coder (Free, OpenRouter)",
     ## Various
     # cognitivecomputations/dolphin-mistral-24b-venice-edition:free
-    "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "🎁 Venice Uncensored Dolphin Mistral 24B Venice Edition (Free, OpenRouter)",
+    "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "🎁 Venice Uncensored 24B (Free, OpenRouter)",
     ## Cloaked Models
     "openrouter/horizon-beta": "🎁 Horizon Beta (Free, OpenRouter)",
     # [[https://openrouter.ai/openrouter/horizon-beta][Horizon Beta - API, Providers, Stats | OpenRouter]]
@@ -1245,7 +1245,7 @@ async def set_model_handler(event):
             current_value=prefs.model,
             callback_prefix="model_",
             awaiting_key="model_selection",
-            n_cols=1,
+            n_cols=2,
         )
         # Also prompt for custom model
         await event.reply(
