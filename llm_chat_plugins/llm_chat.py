@@ -99,6 +99,38 @@ METADATA_MODES = {
 }
 
 
+# --- New Constants for Features ---
+MODEL_CHOICES = {
+    "gemini/gemini-2.5-flash": "Gemini 2.5 Flash",
+    "gemini/gemini-2.5-pro": "Gemini 2.5 Pro",
+    "openrouter/anthropic/claude-4-sonnet": "Claude 4 Sonnet (OpenRouter)",
+}
+LAST_N_MESSAGES_LIMIT = 50
+HISTORY_MESSAGE_LIMIT = 1000
+LOG_COUNT_LIMIT = 3
+AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
+DEFAULT_ENABLED_TOOLS = ["googleSearch", "urlContext"]
+REASONING_LEVELS = ["disable", "low", "medium", "high"]
+CONTEXT_SEPARATOR = "---"
+CONTEXT_MODE_NAMES = {
+    "reply_chain": "Reply Chain",
+    "until_separator": f"Until Separator (`{CONTEXT_SEPARATOR}`)",
+    "last_N": f"Last {LAST_N_MESSAGES_LIMIT} Messages",
+    "smart": "Smart Mode (Auto-Switches)",
+}
+CONTEXT_MODES = list(CONTEXT_MODE_NAMES.keys())
+GROUP_ACTIVATION_MODES = {
+    "mention_only": "Mention Only",
+    "mention_and_reply": "Mention and Replies",
+}
+METADATA_MODES = {
+    "no_metadata": "No Metadata (Merged Turns)",
+    "separate_turns": "Separate Turns",
+    "only_forwarded": "Only Forwarded Metadata",
+    "full_metadata": "Full Metadata",
+}
+
+
 # --- Single Source of Truth for Bot Commands ---
 BOT_COMMANDS = [
     {"command": "start", "description": "Onboard and set API key"},
@@ -109,6 +141,7 @@ BOT_COMMANDS = [
         "description": f"Get your last {LOG_COUNT_LIMIT} conversation logs",
     },
     {"command": "setgeminikey", "description": "Set or update your Gemini API key"},
+    {"command": "setopenrouterkey", "description": "Set or update your OpenRouter API key"},
     {"command": "setmodel", "description": "Set your preferred chat model"},
     {"command": "setsystemprompt", "description": "Customize the bot's instructions"},
     {"command": "setthink", "description": "Adjust model's reasoning effort"},
@@ -943,16 +976,20 @@ async def initialize_llm_chat():
 async def start_handler(event):
     """Handles the /start command to onboard new users."""
     user_id = event.sender_id
+    # Cancel any pending input flows
     if llm_db.is_awaiting_key(user_id):
         llm_db.cancel_key_flow(user_id)
     cancel_input_flow(user_id)
+
+    # Check for Gemini API key specifically
     if llm_db.get_api_key(user_id=user_id, service="gemini"):
         await event.reply(
             f"{BOT_META_INFO_PREFIX}Welcome back! Your Gemini API key is configured. You can start chatting with me.\n\n"
             "Use /help to see all available commands."
         )
     else:
-        await llm_db.request_api_key_message(event)
+        # If no Gemini key, start the process for it.
+        await llm_db.request_api_key_message(event, "gemini")
 
 
 @borg.on(events.NewMessage(pattern=r"(?i)/help", func=lambda e: e.is_private))
@@ -1129,7 +1166,17 @@ async def log_handler(event):
 )
 async def set_key_handler(event):
     """Delegates /setgeminikey command logic to the shared module."""
-    await llm_db.handle_set_key_command(event)
+    await llm_db.handle_set_key_command(event, "gemini")
+
+
+@borg.on(
+    events.NewMessage(
+        pattern=r"(?i)/setopenrouterkey(?:\s+(.*))?", func=lambda e: e.is_private
+    )
+)
+async def set_openrouter_key_handler(event):
+    """Delegates /setopenrouterkey command logic to the shared module."""
+    await llm_db.handle_set_key_command(event, "openrouter")
 
 
 @borg.on(
@@ -1142,9 +1189,9 @@ async def set_key_handler(event):
 )
 async def key_submission_handler(event):
     """Delegates plain-text key submission logic to the shared module."""
-    await llm_db.handle_key_submission(
-        event, success_msg="You can now start chatting with me."
-    )
+    service = llm_db.get_awaiting_service(event.sender_id)
+    success_msg = f"You can now use {service.capitalize()} models."
+    await llm_db.handle_key_submission(event, success_msg=success_msg)
 
 
 @borg.on(
@@ -1154,6 +1201,7 @@ async def set_model_handler(event):
     """Sets the user's preferred chat model, now with an interactive flow."""
     user_id = event.sender_id
     model_name_match = event.pattern_match.group(1)
+    prefs = user_manager.get_prefs(user_id)
 
     if model_name_match:
         model_name = model_name_match.strip()
@@ -1163,12 +1211,21 @@ async def set_model_handler(event):
             f"{BOT_META_INFO_PREFIX}Your chat model has been set to: `{model_name}`"
         )
     else:
-        AWAITING_INPUT_FROM_USERS[user_id] = {"type": "model"}
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}Your current chat model is: `{user_manager.get_prefs(user_id).model}`."
-            "\n\nPlease send the new model ID in the next message."
-            "\n(Type `cancel` to stop this process.)"
+        await present_options(
+            event,
+            title="Set Chat Model",
+            options=MODEL_CHOICES,
+            current_value=prefs.model,
+            callback_prefix="model_",
+            awaiting_key="model_selection",
+            n_cols=1,
         )
+        # Also prompt for custom model
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}Or, send a custom model ID below."
+            "\n(Type `cancel` to stop.)"
+        )
+        AWAITING_INPUT_FROM_USERS[user_id] = {"type": "model"}
 
 
 @borg.on(
@@ -1367,6 +1424,21 @@ async def callback_handler(event):
     data_str = event.data.decode("utf-8")
     user_id = event.sender_id
     prefs = user_manager.get_prefs(user_id)
+
+    if data_str.startswith("model_"):
+        model_id = data_str.split("_", 1)[1]
+        user_manager.set_model(user_id, model_id)
+        cancel_input_flow(user_id)  # Cancel the custom input flow
+        prefs = user_manager.get_prefs(user_id)  # update prefs
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {name}" if key == prefs.model else name,
+                data=f"model_{key}",
+            )
+            for key, name in MODEL_CHOICES.items()
+        ]
+        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
+        await event.answer(f"Model set to {MODEL_CHOICES[model_id]}")
 
     if data_str.startswith("think_"):
         level = data_str.split("_")[1]
@@ -1667,17 +1739,26 @@ async def chat_handler(event):
             return
 
     if group_id and group_id in PROCESSED_GROUP_IDS:
-        return # Already being processed
+        return  # Already being processed
 
-    api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
+    prefs = user_manager.get_prefs(user_id)
+    model_in_use = prefs.model
+
+    # Determine which API key is needed
+    service_needed = "gemini"
+    if model_in_use.startswith("openrouter/"):
+        service_needed = "openrouter"
+    elif model_in_use.startswith("openai/"):
+        service_needed = "openai"  # Assuming you might add this later
+
+    api_key = llm_db.get_api_key(user_id=user_id, service=service_needed)
+
     if not api_key:
-        await llm_db.request_api_key_message(event)
+        await llm_db.request_api_key_message(event, service_needed)
         return
 
     if group_id:
         PROCESSED_GROUP_IDS.add(group_id)
-
-    prefs = user_manager.get_prefs(user_id)
 
     if event.text and re.match(r"^\.s\b", event.text):
         RECENT_WAIT_TIME = 1

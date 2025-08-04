@@ -15,13 +15,26 @@ borg = None
 
 # In-memory state for managing the API key setting flow.
 # This state is specific to each running process.
-AWAITING_KEY_FROM_USERS = set()
+AWAITING_KEY_FROM_USERS: dict[int, str] = {}  # {user_id: service_name}
 API_KEY_ATTEMPTS = {}
 
 
 # --- Constants ---
-GEMINI_API_KEY_REGEX = r"^(?P<gemini_key>AIza[0-9A-Za-z_-]{30,50})$"
 MAX_KEY_ATTEMPTS = 3
+API_KEY_CONFIG = {
+    "gemini": {
+        "name": "Gemini",
+        "url": "https://aistudio.google.com/app/apikey",
+        "regex": r"^(?P<gemini_key>AIza[0-9A-Za-z_-]{30,50})$",
+        "welcome_message": "**Welcome! To use this service, I need a Gemini API key.**",
+    },
+    "openrouter": {
+        "name": "OpenRouter.ai",
+        "url": "https://openrouter.ai/keys",
+        "regex": r"^(?P<openrouter_key>sk-or-v1-[a-zA-Z0-9]{48})$",
+        "welcome_message": "**To use OpenRouter models, I need an OpenRouter.ai API key.**",
+    },
+}
 
 
 # --- Database Setup ---
@@ -118,29 +131,39 @@ def is_awaiting_key(user_id: int) -> bool:
     return user_id in AWAITING_KEY_FROM_USERS
 
 
+def get_awaiting_service(user_id: int) -> str | None:
+    """Gets the service for which the user is providing a key."""
+    return AWAITING_KEY_FROM_USERS.get(user_id)
+
+
 def cancel_key_flow(user_id: int):
     """Cancels the API key flow for a user."""
-    AWAITING_KEY_FROM_USERS.discard(user_id)
+    AWAITING_KEY_FROM_USERS.pop(user_id, None)
     API_KEY_ATTEMPTS.pop(user_id, None)
 
 
 # --- Reusable Handler Logic ---
 
 
-async def request_api_key_message(event):
+async def request_api_key_message(event, service: str):
     """Sends the instructional message to a user to ask for their API key."""
     if not borg:
         print("Error: llm_db.borg not set. This should never happen.")
         return
 
+    config = API_KEY_CONFIG.get(service)
+    if not config:
+        print(f"Invalid service '{service}' requested for API key.")
+        return
+
     user_id = event.sender_id
-    AWAITING_KEY_FROM_USERS.add(user_id)
+    AWAITING_KEY_FROM_USERS[user_id] = service
     API_KEY_ATTEMPTS[user_id] = 0
 
     key_request_message = (
-        f"{BOT_META_INFO_PREFIX}**Welcome! To use this service, I need a Gemini API key.**\n\n"
-        "You can get a free API key from Google AI Studio:\n"
-        "➡️ **https://aistudio.google.com/app/apikey** ⬅️\n\n"
+        f"{BOT_META_INFO_PREFIX}{config['welcome_message']}\n\n"
+        f"You can get a free API key from here:\n"
+        f"➡️ **{config['url']}** ⬅️\n\n"
         "Once you have your key, please send it to me in the next message.\n\n"
         "(Type `cancel` to stop this process.)"
     )
@@ -155,7 +178,7 @@ async def request_api_key_message(event):
         if hasattr(event, "reply"):
             await event.reply(
                 f"{BOT_META_INFO_PREFIX}I couldn't send you a private message. Please check your privacy settings, "
-                "then send `/start` to me in a private chat."
+                f"then send `/start` to me in a private chat."
             )
 
 
@@ -185,23 +208,27 @@ async def _save_key_with_error_handling(event, user_id, service, key):
         return False
 
 
-async def handle_set_key_command(event):
-    """High-level logic for the /setgeminikey command."""
+async def handle_set_key_command(event, service: str):
+    """High-level logic for the /set<service>key command."""
+    config = API_KEY_CONFIG.get(service)
+    if not config:
+        return
+
     api_key_match = event.pattern_match.group(1)
     user_id = event.sender_id
 
     if api_key_match and api_key_match.strip():
         api_key = api_key_match.strip()
-        if not re.match(GEMINI_API_KEY_REGEX, api_key):
+        if not re.match(config["regex"], api_key):
             await event.reply(
-                f"{BOT_META_INFO_PREFIX}The provided API key has an invalid format. Please check and try again."
+                f"{BOT_META_INFO_PREFIX}The provided API key has an invalid format for {config['name']}. Please check and try again."
             )
             return
 
-        if await _save_key_with_error_handling(event, user_id, "gemini", api_key):
+        if await _save_key_with_error_handling(event, user_id, service, api_key):
             cancel_key_flow(user_id)
             await event.delete()
-            confirmation_message = f"{BOT_META_INFO_PREFIX}✅ Your Gemini API key has been saved. Your message was deleted for security."
+            confirmation_message = f"{BOT_META_INFO_PREFIX}✅ Your {config['name']} API key has been saved. Your message was deleted for security."
             try:
                 await borg.send_message(user_id, confirmation_message)
                 if not event.is_private:
@@ -211,7 +238,7 @@ async def handle_set_key_command(event):
             except Exception:
                 await event.respond(confirmation_message)
     else:
-        await request_api_key_message(event)
+        await request_api_key_message(event, service)
 
 
 async def handle_key_submission(
@@ -222,32 +249,38 @@ async def handle_key_submission(
     """High-level logic for handling a plain-text API key submission."""
     user_id = event.sender_id
     text = event.text.strip()
+    service = get_awaiting_service(user_id)
+
+    if not service:
+        return
+
+    config = API_KEY_CONFIG[service]
 
     if text.lower() == "cancel":
         cancel_key_flow(user_id)
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}API key setup has been cancelled. You can start again with /setgeminikey."
+            f"{BOT_META_INFO_PREFIX}API key setup has been cancelled. You can start again with /set{service}key."
         )
         return
 
-    if not re.match(GEMINI_API_KEY_REGEX, text):
+    if not re.match(config["regex"], text):
         API_KEY_ATTEMPTS[user_id] = API_KEY_ATTEMPTS.get(user_id, 0) + 1
         if API_KEY_ATTEMPTS[user_id] >= MAX_KEY_ATTEMPTS:
             cancel_key_flow(user_id)
             await event.reply(
-                f"{BOT_META_INFO_PREFIX}Too many invalid attempts. The API key setup has been cancelled. You can try again later with /setgeminikey."
+                f"{BOT_META_INFO_PREFIX}Too many invalid attempts. The API key setup has been cancelled. You can try again later with /set{service}key."
             )
         else:
             remaining = MAX_KEY_ATTEMPTS - API_KEY_ATTEMPTS[user_id]
             await event.reply(
-                f"{BOT_META_INFO_PREFIX}This does not look like a valid API key. Please try again. You have {remaining} attempt(s) left."
+                f"{BOT_META_INFO_PREFIX}This does not look like a valid {config['name']} API key. Please try again. You have {remaining} attempt(s) left."
             )
         return
 
-    if await _save_key_with_error_handling(event, user_id, "gemini", text):
+    if await _save_key_with_error_handling(event, user_id, service, text):
         cancel_key_flow(user_id)
         await event.delete()
         await event.respond(
-            f"{BOT_META_INFO_PREFIX}✅ Your Gemini API key has been saved. Your message was deleted for security.\n"
+            f"{BOT_META_INFO_PREFIX}✅ Your {config['name']} API key has been saved. Your message was deleted for security.\n"
             + success_msg
         )
