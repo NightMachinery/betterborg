@@ -79,7 +79,6 @@ LOG_COUNT_LIMIT = 3
 AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
 DEFAULT_ENABLED_TOOLS = ["googleSearch", "urlContext"]
 REASONING_LEVELS = ["disable", "low", "medium", "high"]
-CONTEXT_MODES = ["reply_chain", "until_separator", "last_N"]
 CONTEXT_SEPARATOR = "---"
 CONTEXT_MODE_NAMES = {
     "reply_chain": "Reply Chain",
@@ -87,6 +86,7 @@ CONTEXT_MODE_NAMES = {
     "last_N": f"Last {LAST_N_MESSAGES_LIMIT} Messages",
     "smart": "Smart Mode (Auto-Switches)",
 }
+CONTEXT_MODES = list(CONTEXT_MODE_NAMES.keys())
 GROUP_ACTIVATION_MODES = {
     "mention_only": "Mention Only",
     "mention_and_reply": "Mention and Replies",
