@@ -7,31 +7,31 @@ Smart context mode: switch to until separator when separator seen
 Switch to reply mode when user replies to a message (this reply must not be a forwarded message). Each mode change should send a message to the user. To implement this, we need a "current_smart_context_mode" in-memory variable for each user, and this defaults to reply mode. Also, smart mode is only an option for private chats, not groups.
 
 * TODO 0, [8/4/2025  15:12]
-Add a dict of prompt replacements:
-Match and replace regex to prompt on all messages
-
-Populate thic dict with the regex to match (start_of_line "\.ocr" end of line) to "OCR the given media into a single coherent document. Don't repeat headers and footers more than once."
-
-* TODO 0, [8/4/2025  15:12]
-When a message starts with .s, strip this prefix and use the secret context mode "recent" which uses messages that were sent in the last 5 seconds. Wait for one second first to allow any forwarded messages to be received.
-
-* TODO 0, [8/4/2025  15:12]
 Create an OCR bot: waits for 1 second for messages to arrive (unless already waiting in which case we won't reset the timer) and add them to the queue. After one sec, process all of the messages with this prompt:
-
-* DONE Make the bot work in groups
-** should only activate when the message starts with =@{bot_username}=
-*** should strip this prefix from messages when constructing the history
-
-*** have a separate context mode setting for groups =/groupContextMode=
-**** for clearing context, check for the separator after striping the prefix activation
-
-*** should add metadata of each message (user id, name, timestamp, forwarded from whom) at the start of each message
-Define a variable =metadata_mode=. Default to =ONLY_WHEN_NOT_PRIVATE= which means only add the metadata when used in groups.
 
 * @retired
 :PROPERTIES:
 :visibility: folded
 :END:
+** DONE Make the bot work in groups
+*** should only activate when the message starts with =@{bot_username}=
+**** should strip this prefix from messages when constructing the history
+
+**** have a separate context mode setting for groups =/groupContextMode=
+***** for clearing context, check for the separator after striping the prefix activation
+
+**** should add metadata of each message (user id, name, timestamp, forwarded from whom) at the start of each message
+Define a variable =metadata_mode=. Default to =ONLY_WHEN_NOT_PRIVATE= which means only add the metadata when used in groups.
+
+** DONE _
+When a message starts with .s, strip this prefix and use the secret context mode "recent" which uses messages that were sent in the last 5 seconds. Wait for one second first to allow any forwarded messages to be received.
+
+** DONE _
+Add a dict of prompt replacements:
+Match and replace regex to prompt on all messages
+
+Populate thic dict with the regex to match (start_of_line "\.ocr" end of line) to "OCR the given media into a single coherent document. Don't repeat headers and footers more than once."
+
 ** DONE history_util
 #+begin_verse
 I am now trying to store message ids on new events as a workaround for getting previous messages. But events.NewMessage() seems to filter out the messages the bot itself is sending. How do I also include those?

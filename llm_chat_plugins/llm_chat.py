@@ -1637,7 +1637,6 @@ async def chat_handler(event):
         PROCESSED_GROUP_IDS.add(group_id)
 
     prefs = user_manager.get_prefs(user_id)
-    temp_dir = Path(f"./temp_llm_chat_{event.id}/")
 
     # Select context_mode based on chat type
     context_mode_to_use = (
@@ -1650,12 +1649,13 @@ async def chat_handler(event):
         context_mode_to_use = "recent"
         event.message.text = event.text[2:].strip()
 
-        response_message = await event.reply(f"{BOT_META_INFO_PREFIX}**Recent Context Mode:** I'll use only the recent messages to form the conversation context. I'll wait {RECENT_WAIT_TIME} seconds before gathering context ... ")
+        response_message = await event.reply(f"{BOT_META_INFO_PREFIX}**Recent Context Mode:** I'll use only the recent messages to form the conversation context. I have waited {RECENT_WAIT_TIME} seconds to receive all your messages.\n\nProcessing ... ")
 
     else:
         response_message = await event.reply(f"{BOT_META_INFO_PREFIX}...")
 
     try:
+        temp_dir = Path(f"./temp_llm_chat_{event.id}/")
         temp_dir.mkdir(exist_ok=True)
 
         if group_id:
