@@ -153,6 +153,7 @@ PROCESSED_GROUP_IDS = set()
 AWAITING_INPUT_FROM_USERS = {}
 IS_BOT = None
 USERBOT_HISTORY_CACHE = {}
+SMART_CONTEXT_STATE = {}
 
 
 def cancel_input_flow(user_id: int):
