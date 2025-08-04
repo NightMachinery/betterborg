@@ -32,7 +32,7 @@ API_KEY_CONFIG = {
     "openrouter": {
         "name": "OpenRouter.ai",
         "url": "https://openrouter.ai/keys",
-        "regex": r"^(?P<openrouter_key>sk-or-v1-[a-zA-Z0-9]{30-60})$",
+        "regex": r"^(?P<openrouter_key>sk-or-v1-[a-zA-Z0-9]{40-100})$",
         "welcome_message": "**To use OpenRouter models, I need an OpenRouter.ai API key.**",
     },
 }
