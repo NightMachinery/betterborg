@@ -102,8 +102,8 @@ MODEL_CHOICES = {
     # qwen/qwen3-coder:free
     "openrouter/qwen/qwen3-coder:free": "🎁 Qwen3 Coder (Free, OpenRouter)",
     ## Various
-    # cognitivecomputations/dolphin-mistral-24b-venice-edition:free
-    "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "🎁 Venice Uncensored 24B (Free, OpenRouter)",
+    # "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "🎁 Venice Uncensored 24B (Free, OpenRouter)",
+    #: model name is too long for Telegram API's `data` field in `present_options`
     ## Cloaked Models
     "openrouter/horizon-beta": "🎁 Horizon Beta (Free, OpenRouter)",
     # [[https://openrouter.ai/openrouter/horizon-beta][Horizon Beta - API, Providers, Stats | OpenRouter]]
