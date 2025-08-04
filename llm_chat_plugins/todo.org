@@ -2,8 +2,6 @@
 
 * add shortcuts =/sep=, =/replyChain=, =/lastN= for switching context mode directly
 
-* llm_chat: should skip deleted messages in history_util. we should probably do this in the code section where we retrieve the actual message objects from the message ids.
-
 * TODO 0, [8/4/2025  15:12]
 Create an OCR bot: waits for 1 second for messages to arrive (unless already waiting in which case we won't reset the timer) and add them to the queue. After one sec, process all of the messages with this prompt:
 
@@ -11,6 +9,8 @@ Create an OCR bot: waits for 1 second for messages to arrive (unless already wai
 :PROPERTIES:
 :visibility: folded
 :END:
+** DONE llm_chat: should skip deleted messages in history_util. we should probably do this in the code section where we retrieve the actual message objects from the message ids.
+
 ** DONE _
 Smart context mode: switch to until separator when separator seen
 Switch to reply mode when user replies to a message (this reply must not be a forwarded message). Each mode change should send a message to the user. To implement this, we need a "current_smart_context_mode" in-memory variable for each user, and this defaults to reply mode. Also, smart mode is only an option for private chats, not groups.
