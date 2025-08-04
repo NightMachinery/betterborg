@@ -85,6 +85,7 @@ CONTEXT_MODE_NAMES = {
     "reply_chain": "Reply Chain",
     "until_separator": f"Until Separator (`{CONTEXT_SEPARATOR}`)",
     "last_N": f"Last {LAST_N_MESSAGES_LIMIT} Messages",
+    "smart": "Smart Mode (Auto-switches)",
 }
 GROUP_ACTIVATION_MODES = {
     "mention_only": "Mention Only",
@@ -1594,45 +1595,68 @@ async def chat_handler(event):
     if llm_db.is_awaiting_key(user_id) or user_id in AWAITING_INPUT_FROM_USERS:
         return
 
-    # --- Grouped Message Handling ---
+    # --- Context and Separator Logic ---
     group_id = event.grouped_id
-    if group_id:
-        if group_id in PROCESSED_GROUP_IDS:
-            return  # Already being processed
-    else:
-        # Check for context separator, now considering group chats
-        is_group_chat = not event.is_private
-        prefs = user_manager.get_prefs(user_id)
+    prefs = user_manager.get_prefs(user_id)
+    is_private = event.is_private
 
-        # Determine which context mode is active
-        active_context_mode = (
-            prefs.group_context_mode if is_group_chat else prefs.context_mode
-        )
+    context_mode_to_use = prefs.context_mode if is_private else prefs.group_context_mode
 
-        if active_context_mode == "until_separator" and event.text:
-            text_to_check = event.text.strip()
-            if (
-                is_group_chat
-                and BOT_USERNAME
-                and text_to_check.startswith(BOT_USERNAME)
-            ):
-                # For groups, check for the separator after the bot's name
-                text_to_check = text_to_check[len(BOT_USERNAME) :].strip()
+    # Smart Mode logic
+    if context_mode_to_use == "smart":
+        current_smart_mode = SMART_CONTEXT_STATE.get(user_id, "reply_chain")
 
-            if text_to_check == CONTEXT_SEPARATOR:
-                if not IS_BOT:
-                    USERBOT_HISTORY_CACHE.pop(event.chat_id, None)
-                reply_text = "Context cleared. The conversation will now start fresh from your next message"
-                if is_group_chat:
-                    activation_mode = prefs.group_activation_mode
-                    if activation_mode == "mention_and_reply":
-                        reply_text += " mentioning me or replying to me."
-                    else:  # mention_only
-                        reply_text += " mentioning me."
+        # Separator message switches mode
+        if event.text and event.text.strip() == CONTEXT_SEPARATOR:
+            if not IS_BOT:
+                USERBOT_HISTORY_CACHE.pop(event.chat_id, None)
+
+            if current_smart_mode != "until_separator":
+                SMART_CONTEXT_STATE[user_id] = "until_separator"
+                await event.reply(
+                    f"{BOT_META_INFO_PREFIX}**Smart Mode**: Switched to `Until Separator` context. "
+                    "All messages from now on will be included until you reply to a message."
+                )
+            else: # Already in this mode
+                await event.reply(f"{BOT_META_INFO_PREFIX}**Smart Mode**: Context cleared. Still in `Until Separator` context mode.")
+
+            return
+
+        # Reply (not to a forward) switches back to reply_chain
+        if event.is_reply and not event.forward:
+            if current_smart_mode == "until_separator":
+                SMART_CONTEXT_STATE[user_id] = "reply_chain"
+
+                await event.reply(
+                    f"{BOT_META_INFO_PREFIX}**Smart Mode**: Switched to `Reply Chain` context."
+                )
+            context_mode_to_use = "reply_chain"
+        else: # Not a reply, use the current state
+            context_mode_to_use = current_smart_mode
+
+    # Standard separator logic for group chats or explicit "until_separator" mode
+    elif context_mode_to_use == "until_separator" and event.text and not group_id:
+        text_to_check = event.text.strip()
+        if not is_private and BOT_USERNAME and text_to_check.startswith(BOT_USERNAME):
+            text_to_check = text_to_check[len(BOT_USERNAME) :].strip()
+
+        if text_to_check == CONTEXT_SEPARATOR:
+            if not IS_BOT:
+                USERBOT_HISTORY_CACHE.pop(event.chat_id, None)
+            reply_text = "Context cleared. The conversation will now start fresh from your next message"
+            if not is_private:
+                activation_mode = prefs.group_activation_mode
+                if activation_mode == "mention_and_reply":
+                    reply_text += " mentioning me or replying to me."
                 else:
-                    reply_text += "."
-                await event.reply(f"{BOT_META_INFO_PREFIX}{reply_text}")
-                return
+                    reply_text += " mentioning me."
+            else:
+                reply_text += "."
+            await event.reply(f"{BOT_META_INFO_PREFIX}{reply_text}")
+            return
+
+    if group_id and group_id in PROCESSED_GROUP_IDS:
+        return # Already being processed
 
     api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
     if not api_key:
@@ -1643,11 +1667,6 @@ async def chat_handler(event):
         PROCESSED_GROUP_IDS.add(group_id)
 
     prefs = user_manager.get_prefs(user_id)
-
-    # Select context_mode based on chat type
-    context_mode_to_use = (
-        prefs.group_context_mode if not event.is_private else prefs.context_mode
-    )
 
     if event.text and re.match(r"^\.s\b", event.text):
         RECENT_WAIT_TIME = 1
