@@ -6,17 +6,59 @@ from collections import defaultdict, deque
 from datetime import datetime
 from telethon import events
 from telethon.tl.types import Message
-from typing import List, Deque, DefaultDict, Tuple
+import telethon.utils
+from typing import List, Deque, DefaultDict, Dict
+from dataclasses import dataclass, replace
+
+# --- Data Structures ---
+
+
+@dataclass(frozen=True)
+class HistoryItem:
+    """Represents a single message entry in our history cache."""
+    message_id: int
+    timestamp: datetime
+    deleted: bool = False
+
+# A global lookup map for O(1) chat_id retrieval from a message_id.
+# This is the core of the performance optimization for handling deletions.
+_message_id_to_chat_id_map: Dict[int, int] = {}
+
+
+class EvictionTrackingDeque(deque):
+    """
+    A deque subclass that automatically removes an item's corresponding
+    entry from the global lookup map when that item is evicted.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def append(self, item: HistoryItem):
+        # Before appending, check if the deque is full.
+        if self.maxlen is not None and len(self) == self.maxlen:
+            # If so, the leftmost item is about to be evicted.
+            # We must remove it from our lookup map.
+            evicted_item = self[0]
+            _message_id_to_chat_id_map.pop(evicted_item.message_id, None)
+        # Now, perform the actual append operation.
+        super().append(item)
+
+    def clear(self):
+        # When clearing a chat's history, remove all its messages from the map.
+        for item in self:
+            _message_id_to_chat_id_map.pop(item.message_id, None)
+        super().clear()
+
 
 # --- Client Instance & Constants ---
 # The borg client instance will be populated by `_async_init` in `uniborg/uniborg.py`.
 borg = None
 HISTORY_LIMIT = 2000  # Max number of message IDs to store per chat.
 
-# In-memory store for message IDs and their timestamps
-# {chat_id: deque([(msg_id, timestamp), ...])}
-_history_cache: DefaultDict[int, Deque[Tuple[int, datetime]]] = defaultdict(
-    lambda: deque(maxlen=HISTORY_LIMIT)
+# In-memory store using our custom EvictionTrackingDeque.
+# {chat_id: EvictionTrackingDeque([HistoryItem, ...])}
+_history_cache: DefaultDict[int, Deque[HistoryItem]] = defaultdict(
+    lambda: EvictionTrackingDeque(maxlen=HISTORY_LIMIT)
 )
 
 
@@ -24,39 +66,80 @@ _history_cache: DefaultDict[int, Deque[Tuple[int, datetime]]] = defaultdict(
 
 
 def add_message(chat_id: int, message_id: int, timestamp: datetime):
-    """Adds a message ID and its timestamp to the in-memory history."""
-    _history_cache[chat_id].append((message_id, timestamp))
+    """
+    Adds a new message to the history, syncing both the cache and the lookup map.
+    """
+    # 1. Add the message to the chat's history deque.
+    #    The deque itself handles evicting old entries from the lookup map.
+    _history_cache[chat_id].append(
+        HistoryItem(message_id=message_id, timestamp=timestamp)
+    )
+    # 2. Add the new message to our lookup map for fast deletion handling.
+    _message_id_to_chat_id_map[message_id] = chat_id
 
 
-def get_last_n_ids(chat_id: int, n: int) -> List[int]:
+def mark_as_deleted(chat_id: int, message_ids: List[int]):
+    """Marks a list of message IDs as deleted for a specific chat."""
+    chat_history = _history_cache.get(chat_id)
+    if not chat_history:
+        return
+
+    updated_history = EvictionTrackingDeque(maxlen=HISTORY_LIMIT)
+    message_ids_set = set(message_ids)
+
+    for item in chat_history:
+        if item.message_id in message_ids_set:
+            updated_history.append(replace(item, deleted=True))
+        else:
+            updated_history.append(item)
+
+    _history_cache[chat_id] = updated_history
+
+
+def get_last_n_ids(chat_id: int, n: int, skip_deleted_p: bool = True) -> List[int]:
     """
     Retrieves the last N message IDs for a given chat from the cache.
-    Returns them in chronological order (oldest to newest).
     """
     chat_history = _history_cache.get(chat_id, deque())
-    # Return only the message IDs
-    return [item[0] for item in list(chat_history)[-n:]]
+    if skip_deleted_p:
+        filtered_ids = [item.message_id for item in chat_history if not item.deleted]
+        return filtered_ids[-n:]
+    else:
+        return [item.message_id for item in list(chat_history)[-n:]]
 
 
-def get_all_ids(chat_id: int) -> List[int]:
+def get_all_ids(chat_id: int, skip_deleted_p: bool = True) -> List[int]:
     """
-    Retrieves all cached message IDs for a given chat in chronological order.
+    Retrieves all cached message IDs for a given chat.
     """
-    # Return only the message IDs
-    return [item[0] for item in _history_cache.get(chat_id, deque())]
+    chat_history = _history_cache.get(chat_id, deque())
+    if skip_deleted_p:
+        return [item.message_id for item in chat_history if not item.deleted]
+    else:
+        return [item.message_id for item in chat_history]
 
 
-def get_ids_since(chat_id: int, timestamp: datetime) -> List[int]:
+def get_ids_since(
+    chat_id: int, timestamp: datetime, skip_deleted_p: bool = True
+) -> List[int]:
     """
     Retrieves message IDs for a chat that have occurred since the given timestamp.
     """
     chat_history = _history_cache.get(chat_id, deque())
-    return [msg_id for msg_id, msg_ts in chat_history if msg_ts > timestamp]
+    if skip_deleted_p:
+        return [
+            item.message_id
+            for item in chat_history
+            if item.timestamp > timestamp and not item.deleted
+        ]
+    else:
+        return [item.message_id for item in chat_history if item.timestamp > timestamp]
 
 
 def clear_chat_history(chat_id: int):
     """Clears the history for a specific chat."""
     if chat_id in _history_cache:
+        # Our custom deque's clear() method handles map cleanup.
         _history_cache[chat_id].clear()
 
 
@@ -65,26 +148,40 @@ def clear_chat_history(chat_id: int):
 
 async def initialize_history_handler():
     """
-    Initializes history tracking. It uses an event handler for userbots and
-    monkey-patches the send methods for official bots to ensure all outgoing
-    messages are logged correctly.
-    This should be called once when the bot starts.
+    Initializes history tracking. It uses event handlers and monkey-patching
+    to log new, outgoing, and deleted messages.
     """
+    global borg
     if not borg:
         print("HistoryUtil Error: borg client is not set. Cannot initialize.")
         return
 
-    # --- 1. Handler for Incoming Messages (works for both users and bots) ---
+    # --- 1. Handler for Incoming Messages ---
     @borg.on(events.NewMessage(incoming=True))
     async def incoming_message_recorder(event: events.NewMessage.Event):
-        """Records every incoming message ID to the history cache."""
         add_message(event.chat_id, event.id, event.date)
 
-    # --- 2. Check if running as a bot or user and apply the correct strategy ---
-    if await borg.is_bot():
-        # BOT MODE: Monkey-patch send methods, as bots don't get outgoing events.
+    # --- 2. Handler for Deleted Messages (Now highly efficient) ---
+    @borg.on(events.MessageDeleted)
+    async def message_deleted_recorder(event: events.MessageDeleted.Event):
+        if not event.deleted_ids:
+            return
 
-        # Add a guard to prevent patching the client more than once
+        # Group deleted IDs by the chat they belong to.
+        deletions_by_chat: DefaultDict[int, List[int]] = defaultdict(list)
+        for msg_id in event.deleted_ids:
+            # Instantly find the chat_id using our lookup map.
+            chat_id = _message_id_to_chat_id_map.get(msg_id)
+            if chat_id:
+                deletions_by_chat[chat_id].append(msg_id)
+
+        # Process the deletions for each affected chat.
+        for chat_id, ids_to_delete in deletions_by_chat.items():
+            mark_as_deleted(chat_id, ids_to_delete)
+
+    # --- 3. Strategy for Outgoing Messages (User vs. Bot) ---
+    if await borg.is_bot():
+        # BOT MODE: Monkey-patch send methods.
         if hasattr(borg, "_history_patched"):
             return
         borg._history_patched = True
@@ -106,14 +203,12 @@ async def initialize_history_handler():
             result = await original_send_file(*args, **kwargs)
             # send_file can return a single Message or a list of Messages (for albums)
             if result:
-                if isinstance(result, list):
-                    for sent_message in result:
-                        if sent_message:
-                            add_message(
-                                sent_message.chat_id, sent_message.id, sent_message.date
-                            )
-                else:
-                    add_message(result.chat_id, result.id, result.date)
+                messages = result if isinstance(result, list) else [result]
+                for sent_message in messages:
+                    if sent_message:
+                        add_message(
+                            sent_message.chat_id, sent_message.id, sent_message.date
+                        )
             return result
 
         # Replace the methods on the live client instance with our new versions

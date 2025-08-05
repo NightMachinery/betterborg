@@ -867,7 +867,7 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
                 fetched_messages = [
                     m
                     for m in await event.client.get_messages(chat_id, ids=all_ids)
-                    if m and not m.deleted
+                    if m
                 ]
                 if context_mode == "until_separator":
                     context_slice = []
