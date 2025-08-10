@@ -276,9 +276,9 @@ async def load_smart_context_states():
                 continue  # Skip malformed keys
 
         if keys:
-            print(f"LLMChat: Loaded {len(keys)} smart context states from Redis")
+            print(f"LLM_Chat: Loaded {len(keys)} smart context states from Redis")
     except Exception as e:
-        print(f"LLMChat: Failed to load smart context states from Redis: {e}")
+        print(f"LLM_Chat: Failed to load smart context states from Redis: {e}")
 
 def get_smart_context_mode(user_id: int) -> str:
     """Get smart context mode for user from in-memory storage."""
@@ -298,7 +298,7 @@ async def set_smart_context_mode(user_id: int, mode: str):
                 expire_seconds=redis_util.get_long_expire_duration()
             )
         except Exception as e:
-            print(f"LLMChat: Redis set_smart_context_mode failed: {e}")
+            print(f"LLM_Chat: Redis set_smart_context_mode failed: {e}")
 
 
 def cancel_input_flow(user_id: int):
