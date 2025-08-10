@@ -1380,12 +1380,26 @@ async def status_handler(event):
     if chat_prompt:
         chat_system_prompt_status = "Custom (Overrides your personal prompt)"
 
+    # Get context mode name and handle smart mode
     context_mode_name = CONTEXT_MODE_NAMES.get(
         prefs.context_mode, prefs.context_mode.replace("_", " ").title()
     )
+    smart_mode_status_str = ""
+    if prefs.context_mode == "smart":
+        current_smart_state = get_smart_context_mode(user_id)
+        smart_state_name = CONTEXT_MODE_NAMES.get(current_smart_state, current_smart_state)
+        smart_mode_status_str = f" (State: `{smart_state_name}`)"
+
     group_context_mode_name = CONTEXT_MODE_NAMES.get(
         prefs.group_context_mode, prefs.group_context_mode.replace("_", " ").title()
     )
+    group_smart_mode_status_str = ""
+    if prefs.group_context_mode == "smart":
+        current_smart_state = get_smart_context_mode(user_id)
+        smart_state_name = CONTEXT_MODE_NAMES.get(current_smart_state, current_smart_state)
+        group_smart_mode_status_str = f" (State: `{smart_state_name}`)"
+
+
     metadata_mode_name = METADATA_MODES.get(
         prefs.metadata_mode, prefs.metadata_mode.replace("_", " ").title()
     )
@@ -1409,10 +1423,10 @@ async def status_handler(event):
         f"**This Chat's Settings**\n"
         f"∙ **Chat System Prompt:** `{chat_system_prompt_status}`\n\n"
         f"**Private Chat Context**\n"
-        f"∙ **Context Mode:** `{context_mode_name}`\n"
+        f"∙ **Context Mode:** `{context_mode_name}`{smart_mode_status_str}\n"
         f"∙ **Metadata Mode:** `{metadata_mode_name}`\n\n"
         f"**Group Chat Context**\n"
-        f"∙ **Context Mode:** `{group_context_mode_name}`\n"
+        f"∙ **Context Mode:** `{group_context_mode_name}`{group_smart_mode_status_str}\n"
         f"∙ **Metadata Mode:** `{group_metadata_mode_name}`\n"
         f"∙ **Activation:** `{group_activation_mode_name}`\n"
     )
