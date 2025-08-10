@@ -1699,23 +1699,31 @@ async def get_context_mode_here_handler(event):
     user_id = event.sender_id
     prefs = user_manager.get_prefs(user_id)
     is_private = event.is_private
-    
+
+    # Determine the base mode and its source
     chat_context_mode = chat_manager.get_context_mode(event.chat_id)
-    
     if chat_context_mode:
-        mode_name = CONTEXT_MODE_NAMES.get(chat_context_mode, chat_context_mode)
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}**Current chat context mode:** `{mode_name}`",
-            parse_mode="md"
-        )
+        effective_mode = chat_context_mode
+        source_text = "the current chat setting"
     else:
-        fallback_mode = prefs.context_mode if is_private else prefs.group_context_mode
-        fallback_name = CONTEXT_MODE_NAMES.get(fallback_mode, fallback_mode)
-        source = "personal" if is_private else "group"
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}This chat has no custom context mode set. Using your {source} preference: `{fallback_name}`",
-            parse_mode="md"
-        )
+        effective_mode = prefs.context_mode if is_private else prefs.group_context_mode
+        source_text = "your personal preference" if is_private else "your group preference"
+
+    mode_name = CONTEXT_MODE_NAMES.get(effective_mode, effective_mode)
+
+    # Build the response message
+    response_parts = [
+        f"{BOT_META_INFO_PREFIX}**Context mode source:** {source_text}\n"
+        f"**Effective Mode:** `{mode_name}`"
+    ]
+
+    # If the effective mode is 'smart', add the current state
+    if effective_mode == 'smart':
+        current_smart_state = get_smart_context_mode(user_id)
+        smart_state_name = CONTEXT_MODE_NAMES.get(current_smart_state, current_smart_state)
+        response_parts.append(f"**Current Smart State:** `{smart_state_name}`")
+
+    await event.reply("\n".join(response_parts), parse_mode="md")
 
 
 # --- New Feature Handlers ---
