@@ -114,7 +114,8 @@ MODEL_CHOICES = {
     ## Grok
     "openrouter/x-ai/grok-4": "Grok 4 (OpenRouter)",
     ## OpenAI
-    # "openrouter/openai/gpt-4o": "GPT-4o (OpenRouter)",
+    # openai/gpt-5-chat
+    "openrouter/openai/gpt-5-chat": "GPT-5 Chat (OpenRouter)",
     "openrouter/openai/chatgpt-4o-latest": "ChatGPT 4o (OpenRouter)",
     # openai/chatgpt-4o-latest: OpenAI ChatGPT 4o is continually updated by OpenAI to point to the current version of GPT-4o used by ChatGPT. It therefore differs slightly from the API version of GPT-4o in that it has additional RLHF. It is intended for research and evaluation.  OpenAI notes that this model is not suited for production use-cases as it may be removed or redirected to another model in the future.
     # "openrouter/openai/gpt-4o-mini": "GPT-4o Mini (OpenRouter)",
@@ -131,8 +132,6 @@ MODEL_CHOICES = {
     # "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "🎁 Venice Uncensored 24B (Free, OpenRouter)",
     #: model name is too long for Telegram API's `data` field in `present_options`
     ## Cloaked Models
-    "openrouter/horizon-beta": "🎁 Horizon Beta (Free, OpenRouter)",
-    # [[https://openrouter.ai/openrouter/horizon-beta][Horizon Beta - API, Providers, Stats | OpenRouter]]
 }
 LAST_N_MESSAGES_LIMIT = 50
 HISTORY_MESSAGE_LIMIT = 1000
