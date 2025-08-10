@@ -655,12 +655,31 @@ async def _get_forward_metadata_prefix(message: Message) -> str:
     return ""
 
 
+async def _get_message_role(message: Message) -> str:
+    """
+    Determines the message role ('assistant' or 'user'), correctly handling
+    forwards of the bot's own messages.
+    """
+    # Default to 'user'
+    role = "user"
+    original_sender_id = None
+
+    if message.forward and message.forward.from_id:
+        # from_id is a Peer object; we only care about user-to-user forwards for role assignment.
+        original_sender_id = getattr(message.forward.from_id, 'user_id', None)
+
+    # A message is from the assistant if it was sent by the bot OR if it's a forward of a message originally from the bot.
+    if message.sender_id == BOT_ID or original_sender_id == BOT_ID:
+        role = "assistant"
+
+    return role
+
+
 async def _process_message_content(
-    message: Message, temp_dir: Path, metadata_prefix: str = ""
+    message: Message, role: str, temp_dir: Path, metadata_prefix: str = ""
 ) -> tuple[list, list]:
     """Processes a single message's text and media into litellm content parts."""
     text_buffer, media_parts = [], []
-    role = "assistant" if message.sender_id == BOT_ID else "user"
 
     # Filter out meta-info messages and commands from history
     if (
@@ -753,20 +772,26 @@ async def _process_turns_to_history(
         else user_prefs.metadata_mode
     )
 
-    # --- Mode 1: No Metadata (Merge consecutive messages) ---
+    # Pre-calculate roles for all messages to use in grouping and processing.
+    message_roles = [
+        (await _get_message_role(m), m) for m in message_list
+    ]
+
+
+    # --- Mode 1: No Metadata (Merge consecutive messages by role) ---
     if active_metadata_mode == "no_metadata":
-        for _, turn_messages_iter in groupby(message_list, key=lambda m: m.sender_id):
-            turn_messages = list(turn_messages_iter)
+        # Group by the pre-calculated role.
+        for role, turn_items_iter in groupby(message_roles, key=lambda item: item[0]):
+            turn_messages = [item[1] for item in turn_items_iter] # Extract messages
             if not turn_messages:
                 continue
 
-            role = "assistant" if turn_messages[0].sender_id == BOT_ID else "user"
             text_buffer, media_parts = [], []
 
             for turn_msg in turn_messages:
-                # Process content without any metadata prefix
+                # Process content without any metadata prefix, passing the known role.
                 msg_texts, msg_media = await _process_message_content(
-                    turn_msg, temp_dir
+                    turn_msg, role, temp_dir
                 )
                 text_buffer.extend(msg_texts)
                 media_parts.extend(msg_media)
@@ -790,8 +815,7 @@ async def _process_turns_to_history(
 
     # --- Modes 2, 3, 4: Separate Turns ---
     else:
-        for message in message_list:
-            role = "assistant" if message.sender_id == BOT_ID else "user"
+        for role, message in message_roles:
             prefix_parts = []
 
             if active_metadata_mode == "full_metadata":
@@ -807,7 +831,7 @@ async def _process_turns_to_history(
             metadata_prefix = " ".join(prefix_parts)
 
             text_buffer, media_parts = await _process_message_content(
-                message, temp_dir, metadata_prefix
+                message, role, temp_dir, metadata_prefix
             )
 
             if not text_buffer and not media_parts:
