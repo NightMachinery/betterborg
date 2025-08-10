@@ -26,6 +26,10 @@ For enum-like conditionals, use explicit matching conditions, and raise an excep
 
 # Project Specific
 
+## Initial Context
+
+Start by reading these files completely: uniborg/*.py stt_plugins/*.py llm_chat_plugins/*.py .
+
 ## Development Commands
 
 ### Installation and Setup
