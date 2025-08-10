@@ -33,7 +33,11 @@ from uniborg import history_util
 from uniborg.storage import UserStorage
 from uniborg.constants import BOT_META_INFO_PREFIX
 
+# Redis utilities for smart context state persistence
+from uniborg import redis_util
+
 # --- Constants and Configuration ---
+
 
 # Use the litellm model naming convention.
 # See https://docs.litellm.ai/docs/providers/gemini
@@ -241,6 +245,59 @@ AWAITING_INPUT_FROM_USERS = {}
 IS_BOT = None
 USERBOT_HISTORY_CACHE = {}
 SMART_CONTEXT_STATE = {}
+
+# --- Smart Context State Management ---
+
+async def load_smart_context_states():
+    """Load all smart context states from Redis into memory on startup."""
+    if not redis_util.is_redis_available():
+        return
+    
+    try:
+        redis_client = await redis_util.get_redis()
+        if not redis_client:
+            return
+            
+        # Get all smart context keys
+        pattern = "borg:smart_context:*"
+        keys = await redis_client.keys(pattern)
+        
+        for key in keys:
+            try:
+                # Extract user_id from key (format: "borg:smart_context:{user_id}")
+                user_id = int(key.split(":")[-1])
+                mode = await redis_client.get(key)
+                if mode:
+                    SMART_CONTEXT_STATE[user_id] = mode
+                    # Renew expiry for another month
+                    await redis_client.expire(key, redis_util.get_long_expire_duration())
+            except (ValueError, IndexError):
+                continue  # Skip malformed keys
+                
+        if keys:
+            print(f"LLMChat: Loaded {len(keys)} smart context states from Redis")
+    except Exception as e:
+        print(f"LLMChat: Failed to load smart context states from Redis: {e}")
+
+def get_smart_context_mode(user_id: int) -> str:
+    """Get smart context mode for user from in-memory storage."""
+    return SMART_CONTEXT_STATE.get(user_id, "reply_chain")
+
+async def set_smart_context_mode(user_id: int, mode: str):
+    """Set smart context mode for user with Redis persistence and in-memory update."""
+    # Update in-memory immediately
+    SMART_CONTEXT_STATE[user_id] = mode
+    
+    # Persist to Redis with long expiry (1 month)
+    if redis_util.is_redis_available():
+        try:
+            await redis_util.set_with_expiry(
+                redis_util.smart_context_key(user_id), 
+                mode, 
+                expire_seconds=redis_util.get_long_expire_duration()
+            )
+        except Exception as e:
+            print(f"LLMChat: Redis set_smart_context_mode failed: {e}")
 
 
 def cancel_input_flow(user_id: int):
@@ -1197,6 +1254,9 @@ async def initialize_llm_chat():
             "LLM_Chat: Running as a USERBOT. History utility and bot commands skipped."
         )
 
+    # Load smart context states from Redis on startup (both bot and userbot)
+    await load_smart_context_states()
+
 
 # --- Telethon Event Handlers ---
 
@@ -2101,7 +2161,7 @@ async def chat_handler(event):
 
     # Smart Mode logic
     if context_mode_to_use == "smart":
-        current_smart_mode = SMART_CONTEXT_STATE.get(user_id, "reply_chain")
+        current_smart_mode = get_smart_context_mode(user_id)
 
         # Separator message switches mode
         if event.text and event.text.strip() == CONTEXT_SEPARATOR:
@@ -2109,7 +2169,7 @@ async def chat_handler(event):
                 USERBOT_HISTORY_CACHE.pop(event.chat_id, None)
 
             if current_smart_mode != "until_separator":
-                SMART_CONTEXT_STATE[user_id] = "until_separator"
+                await set_smart_context_mode(user_id, "until_separator")
                 await event.reply(
                     f"{BOT_META_INFO_PREFIX}**Smart Mode**: Switched to `Until Separator` context. "
                     "All messages from now on will be included until you reply to a message."
@@ -2122,7 +2182,7 @@ async def chat_handler(event):
         # Reply (not to a forward) switches back to reply_chain
         if event.is_reply and not event.forward:
             if current_smart_mode == "until_separator":
-                SMART_CONTEXT_STATE[user_id] = "reply_chain"
+                await set_smart_context_mode(user_id, "reply_chain")
 
                 await event.reply(
                     f"{BOT_META_INFO_PREFIX}**Smart Mode**: Switched to `Reply Chain` context."
