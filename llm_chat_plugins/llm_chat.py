@@ -1038,7 +1038,8 @@ async def _process_turns_to_history(
                 if message.forward:
                     prefix_parts.append(await _get_forward_metadata_prefix(message))
 
-            metadata_prefix = " ".join(prefix_parts)
+            metadata_prefix = " ".join(filter(None, prefix_parts))
+            #: Return an iterator yielding those items of iterable for which function(item) is true. If function is None, return the items that are true.
 
             text_buffer, media_parts = await _process_message_content(
                 message, role, temp_dir, metadata_prefix
