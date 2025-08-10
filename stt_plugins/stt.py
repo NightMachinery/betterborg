@@ -16,6 +16,13 @@ from telethon.tl.types import BotCommand, BotCommandScopeDefault
 from pydantic import BaseModel, Field
 from typing import Optional
 
+# --- Bot Commands Registration ---
+BOT_COMMANDS = [
+    {"command": "start", "description": "Onboard and set API key"},
+    {"command": "help", "description": "Show help and instructions"},
+    {"command": "setgeminikey", "description": "Set or update your Gemini API key"},
+]
+
 # --- Pydantic Schema and Prompt for Transcription ---
 
 
@@ -265,9 +272,7 @@ async def set_bot_menu_commands():
                 scope=BotCommandScopeDefault(),
                 lang_code="en",
                 commands=[
-                    BotCommand("start", "Onboard and set API key"),
-                    BotCommand("help", "Show help and instructions"),
-                    BotCommand("setgeminikey", "Set or update your Gemini API key"),
+                    BotCommand(c["command"], c["description"]) for c in BOT_COMMANDS
                 ],
             )
         )

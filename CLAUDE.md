@@ -108,9 +108,51 @@ async def handler(event):
 - Plugins can be reloaded individually using the `reload_plugin` method
 
 ### Database and Storage
-- Uses SQLite databases for LLM chat history and user data
 - Per-plugin storage system with automatic path management
 - Storage objects are automatically injected into each plugin
 
 ### Admin System
-Admin functionality is controlled through the `util.isAdmin()` function, with admin users defined in `uniborg/util.py`.
+The (user)bot has some admins which are the bot developers (nothing to do with Telegram admins). These admins can be detected using the `util.isAdmin()` function, with admin users defined in `uniborg/util.py`.
+
+### Bot Commands Registration
+When adding new slash commands to any plugin (e.g., `llm_chat_plugins/llm_chat.py`, `stt_plugins/stt.py`), you **MUST** update the `BOT_COMMANDS` list in that plugin to register them with Telegram:
+
+```python
+BOT_COMMANDS = [
+    {"command": "newcommand", "description": "Description of what the command does"},
+    # ... other commands
+]
+```
+
+**Important Notes:**
+- Commands in `BOT_COMMANDS` automatically appear in Telegram's command menu
+- The `command` field should match the pattern handler (without the `/` prefix)
+- Provide clear, concise descriptions for user guidance
+- Commands are registered with Telegram via `SetBotCommandsRequest` using the BOT_COMMANDS list
+- Missing commands from this list won't appear in the Telegram UI command suggestions
+
+**Registration Pattern:**
+```python
+# 1. Define BOT_COMMANDS list
+BOT_COMMANDS = [
+    {"command": "mycommand", "description": "Brief description of mycommand"},
+    # ... other commands
+]
+
+# 2. Command handler
+@borg.on(events.NewMessage(pattern=r"(?i)/mycommand"))
+async def my_command_handler(event):
+    # handler implementation
+
+# 3. Register with Telegram (usually in initialization function)
+await borg(
+    SetBotCommandsRequest(
+        scope=BotCommandScopeDefault(),
+        lang_code="en",
+        commands=[
+            BotCommand(c["command"], c["description"]) for c in BOT_COMMANDS
+        ],
+    )
+)
+```
+
