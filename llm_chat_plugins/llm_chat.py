@@ -2286,8 +2286,8 @@ async def chat_handler(event):
     else:
         response_message = await event.reply(f"{BOT_META_INFO_PREFIX}...")
 
+    temp_dir = Path(f"./temp_llm_chat_{event.id}/")
     try:
-        temp_dir = Path(f"./temp_llm_chat_{event.id}/")
         temp_dir.mkdir(exist_ok=True)
 
         if group_id:
