@@ -82,6 +82,12 @@ class Uniborg(TelegramClient):
         self.load_plugin_from_file(core_plugin)
 
         for p in Path().glob(f"{self._plugin_path}/*.py"):
+            if p.stem.startswith("."):
+                #: these are helper files used by other plugins, not plugins themselves
+                #: `watch_plugins` also skips these files
+                print(f"Skipping '{p.stem}' due to leading dot")
+                continue
+
             self.load_plugin_from_file(p)
         return self
 
