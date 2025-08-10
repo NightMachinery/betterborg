@@ -182,6 +182,10 @@ BOT_COMMANDS = [
         "command": "resetsystemprompthere",
         "description": "Reset the system prompt for the current chat",
     },
+    {
+        "command": "getsystemprompthere",
+        "description": "View the effective system prompt for the current chat",
+    },
     {"command": "setthink", "description": "Adjust model's reasoning effort"},
     {
         "command": "contextmode",
@@ -190,6 +194,18 @@ BOT_COMMANDS = [
     {
         "command": "groupcontextmode",
         "description": "Change how GROUP chat history is read",
+    },
+    {
+        "command": "contextmodehere",
+        "description": "Set context mode for the current chat",
+    },
+    {
+        "command": "resetcontextmodehere",
+        "description": "Reset context mode for the current chat",
+    },
+    {
+        "command": "getcontextmodehere",
+        "description": "View context mode for the current chat",
     },
     {
         "command": "metadatamode",
