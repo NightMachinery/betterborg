@@ -125,10 +125,13 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
             f"Error: '{model_name}' model not found. Perhaps the relevant LLM plugin has not been installed."
         )
         return
-    except Exception:
-        print(traceback.format_exc())
-        print(e)
-        await event.reply("An unexpected error occurred while loading the model.")
+    except Exception as e:
+        await llm_util.handle_llm_error(
+            event=event,
+            exception=e,
+            base_error_message="An unexpected error occurred while loading the model.",
+            error_id_p=True,
+        )
         return
 
     # --- Refactored Attachment Creation ---
@@ -236,17 +239,14 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
         await status_message.delete()
 
     except Exception as e:
-        print(e)
-        print(traceback.format_exc())
-
-        msg = "An error occurred during the API call."
-        if "exceeded your current quota" in str(e).lower():
-            await status_message.edit(f"{msg}\n\n{str(e)}")
-        elif "api key not valid" in str(e).lower():
-            await status_message.delete()
-            await llm_db.request_api_key_message(event)
-        else:
-            await status_message.edit(msg)
+        await llm_util.handle_llm_error(
+            event=event,
+            exception=e,
+            response_message=status_message,
+            service="gemini",
+            base_error_message="An error occurred during the API call.",
+            error_id_p=True,
+        )
 
 
 # --- Bot Command Setup ---

@@ -1229,10 +1229,11 @@ async def log_handler(event):
                 reply_to=event.id,
             )
     except Exception as e:
-        print(f"Error sending logs for user {user_id}: {e}")
-        traceback.print_exc()
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}Sorry, an error occurred while retrieving your logs."
+        await llm_util.handle_llm_error(
+            event=event,
+            exception=e,
+            base_error_message="Sorry, an error occurred while retrieving your logs.",
+            error_id_p=True,
         )
 
 
@@ -1708,6 +1709,9 @@ async def generic_input_handler(event):
     cancel_input_flow(user_id)
 
 
+
+
+
 async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     """
     Determines if a message is a valid conversational message to be
@@ -1929,10 +1933,15 @@ async def chat_handler(event):
         )
         await _log_conversation(event, prefs, messages, final_text)
 
-    except Exception:
-        error_text = f"{BOT_META_INFO_PREFIX}An error occurred. You can send the inputs that caused this error to the bot developer."
-        await response_message.edit(error_text)
-        traceback.print_exc()
+    except Exception as e:
+        await llm_util.handle_llm_error(
+            event=event,
+            exception=e,
+            response_message=response_message,
+            service=service_needed,
+            base_error_message="An error occurred. You can send the inputs that caused this error to the bot developer.",
+            error_id_p=True,
+        )
     finally:
         if group_id:
             PROCESSED_GROUP_IDS.discard(group_id)
