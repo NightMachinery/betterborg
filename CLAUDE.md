@@ -119,21 +119,16 @@ async def handler(event):
 The (user)bot has some admins which are the bot developers (nothing to do with Telegram admins). These admins can be detected using the `util.isAdmin()` function, with admin users defined in `uniborg/util.py`.
 
 ### Bot Commands Registration
-When adding new slash commands to any plugin (e.g., `llm_chat_plugins/llm_chat.py`, `stt_plugins/stt.py`), you **MUST** update the `BOT_COMMANDS` list in that plugin to register them with Telegram:
+When adding new slash commands to any plugin (e.g., `llm_chat_plugins/llm_chat.py`, `stt_plugins/stt.py`), you **MUST** update the `BOT_COMMANDS` list in that plugin to register them with Telegram.
 
-```python
-BOT_COMMANDS = [
-    {"command": "newcommand", "description": "Description of what the command does"},
-    # ... other commands
-]
-```
+The preferred pattern is to decouple the handler definition from its registration. This allows for dynamic pattern creation, for example, using a `BOT_USERNAME` variable that is only available after the bot has initialized.
 
 **Important Notes:**
-- Commands in `BOT_COMMANDS` automatically appear in Telegram's command menu
-- The `command` field should match the pattern handler (without the `/` prefix)
-- Provide clear, concise descriptions for user guidance
-- Commands are registered with Telegram via `SetBotCommandsRequest` using the BOT_COMMANDS list
-- Missing commands from this list won't appear in the Telegram UI command suggestions
+- Commands in `BOT_COMMANDS` automatically appear in Telegram's command menu.
+- The `command` field should match the pattern handler (without the `/` prefix).
+- Provide clear, concise descriptions for user guidance.
+- Commands are registered with Telegram via `SetBotCommandsRequest` using the BOT_COMMANDS list.
+- Missing commands from this list won't appear in the Telegram UI command suggestions.
 
 **Registration Pattern:**
 ```python
@@ -143,20 +138,37 @@ BOT_COMMANDS = [
     # ... other commands
 ]
 
-# 2. Command handler
-@borg.on(events.NewMessage(pattern=r"(?i)/mycommand"))
+# 2. Define the command handler function WITHOUT a decorator
 async def my_command_handler(event):
     # handler implementation
 
-# 3. Register with Telegram (usually in initialization function)
-await borg(
-    SetBotCommandsRequest(
-        scope=BotCommandScopeDefault(),
-        lang_code="en",
-        commands=[
-            BotCommand(c["command"], c["description"]) for c in BOT_COMMANDS
-        ],
-    )
-)
-```
+# 3. Define a registration function to attach handlers to events
+def register_handlers():
+    """Dynamically registers all event handlers."""
+    # This allows using variables initialized later, like BOT_USERNAME
+    bot_username_suffix_re = f"(?:{re.escape(BOT_USERNAME)})?" if BOT_USERNAME else ""
+    
+    borg.on(events.NewMessage(pattern=rf"(?i)/mycommand{bot_username_suffix_re}"))(my_command_handler)
+    # ... register other handlers ...
 
+# 4. Create an initialization function for the plugin
+async def initialize_my_plugin():
+    # ... perform initial setup, like getting BOT_USERNAME ...
+    
+    # Now, register the handlers with the now-defined variables
+    register_handlers()
+
+    # Register the commands with Telegram's UI
+    await borg(
+        SetBotCommandsRequest(
+            scope=BotCommandScopeDefault(),
+            lang_code="en",
+            commands=[
+                BotCommand(c["command"], c["description"]) for c in BOT_COMMANDS
+            ],
+        )
+    )
+
+# 5. Schedule the plugin's initialization to run on the event loop
+borg.loop.create_task(initialize_my_plugin())
+```

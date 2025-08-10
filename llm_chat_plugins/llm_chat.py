@@ -1177,6 +1177,46 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
 
 # --- Bot/Userbot Initialization ---
 
+def register_handlers():
+    """Dynamically registers all event handlers after initialization."""
+    bot_username_suffix_re = f"(?:{re.escape(BOT_USERNAME)})?" if BOT_USERNAME else ""
+
+    # Command Handlers
+    borg.on(events.NewMessage(pattern=rf"(?i)^/start{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(start_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/help{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(help_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/status{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(status_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/log{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(log_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/setgeminikey{bot_username_suffix_re}(?:\s+(.*))?\s*$", func=lambda e: e.is_private))(set_key_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/setopenrouterkey{bot_username_suffix_re}(?:\s+(.*))?\s*$", func=lambda e: e.is_private))(set_openrouter_key_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/setmodel{bot_username_suffix_re}(?:\s+(.*))?\s*$", func=lambda e: e.is_private))(set_model_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/setsystemprompt{bot_username_suffix_re}(?:\s+([\s\S]+))?\s*$", func=lambda e: e.is_private))(set_system_prompt_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/setsystemprompthere{bot_username_suffix_re}(?:\s+([\s\S]+))?\s*$"))(set_system_prompt_here_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/resetsystemprompthere{bot_username_suffix_re}\s*$"))(reset_system_prompt_here_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/getsystemprompthere{bot_username_suffix_re}\s*$"))(get_system_prompt_here_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/contextmodehere{bot_username_suffix_re}\s*$"))(context_mode_here_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/resetcontextmodehere{bot_username_suffix_re}\s*$"))(reset_context_mode_here_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/getcontextmodehere{bot_username_suffix_re}\s*$"))(get_context_mode_here_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/contextmode{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(context_mode_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/groupcontextmode{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(group_context_mode_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/metadatamode{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(metadata_mode_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/groupmetadatamode{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(group_metadata_mode_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/sep{bot_username_suffix_re}\s*$"))(sep_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/groupactivationmode{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(group_activation_mode_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/setthink{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(set_think_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/tools{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(tools_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/(enable|disable)(?P<tool_name>\w+){bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(toggle_tool_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/json{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(json_mode_handler)
+
+    # Func-based Handlers
+    borg.on(events.NewMessage(func=lambda e: e.is_private and llm_db.is_awaiting_key(e.sender_id) and e.text and not e.text.startswith("/")))(key_submission_handler)
+    borg.on(events.NewMessage(func=lambda e: e.is_private and e.sender_id in AWAITING_INPUT_FROM_USERS and e.text and not e.text.startswith("/")))(generic_input_handler)
+    borg.on(events.NewMessage(func=is_valid_chat_message))(chat_handler)
+
+    # Other Event Handlers
+    borg.on(events.CallbackQuery())(callback_handler)
+
+    print("LLM_Chat: All event handlers registered.")
+
 
 async def initialize_llm_chat():
     """Initializes the plugin based on whether it's a bot or userbot."""
@@ -1228,12 +1268,12 @@ Your Telegram ID is {BOT_USERNAME}. The user might mention you using this ID.
 
     # Load smart context states from Redis on startup (both bot and userbot)
     await load_smart_context_states()
+    register_handlers()
 
 
 # --- Telethon Event Handlers ---
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/start\s*$", func=lambda e: e.is_private))
 async def start_handler(event):
     """Handles the /start command to onboard new users."""
     user_id = event.sender_id
@@ -1253,7 +1293,6 @@ async def start_handler(event):
         await llm_db.request_api_key_message(event, "gemini")
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/help\s*$", func=lambda e: e.is_private))
 async def help_handler(event):
     """Provides detailed help information about features and usage."""
     if llm_db.is_awaiting_key(event.sender_id):
@@ -1327,7 +1366,6 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/status\s*$", func=lambda e: e.is_private))
 async def status_handler(event):
     """Displays a summary of the user's current settings."""
     user_id = event.sender_id
@@ -1404,7 +1442,6 @@ async def status_handler(event):
 
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/log\s*$", func=lambda e: e.is_private))
 async def log_handler(event):
     """Sends the last few conversation logs to the user."""
     user_id = event.sender_id
@@ -1451,34 +1488,16 @@ async def log_handler(event):
         )
 
 
-@borg.on(
-    events.NewMessage(
-        pattern=r"(?i)^/setgeminikey(?:\s+(.*))?\s*$", func=lambda e: e.is_private
-    )
-)
 async def set_key_handler(event):
     """Delegates /setgeminikey command logic to the shared module."""
     await llm_db.handle_set_key_command(event, "gemini")
 
 
-@borg.on(
-    events.NewMessage(
-        pattern=r"(?i)^/setopenrouterkey(?:\s+(.*))?\s*$", func=lambda e: e.is_private
-    )
-)
 async def set_openrouter_key_handler(event):
     """Delegates /setopenrouterkey command logic to the shared module."""
     await llm_db.handle_set_key_command(event, "openrouter")
 
 
-@borg.on(
-    events.NewMessage(
-        func=lambda e: e.is_private
-        and llm_db.is_awaiting_key(e.sender_id)
-        and e.text
-        and not e.text.startswith("/")
-    )
-)
 async def key_submission_handler(event):
     """Delegates plain-text key submission logic to the shared module."""
     service = llm_db.get_awaiting_service(event.sender_id)
@@ -1486,9 +1505,6 @@ async def key_submission_handler(event):
     await llm_db.handle_key_submission(event, success_msg=success_msg)
 
 
-@borg.on(
-    events.NewMessage(pattern=r"(?i)^/setmodel(?:\s+(.*))?\s*$", func=lambda e: e.is_private)
-)
 async def set_model_handler(event):
     """Sets the user's preferred chat model, now with an interactive flow."""
     user_id = event.sender_id
@@ -1520,11 +1536,6 @@ async def set_model_handler(event):
         AWAITING_INPUT_FROM_USERS[user_id] = {"type": "model"}
 
 
-@borg.on(
-    events.NewMessage(
-        pattern=r"(?i)^/setsystemprompt(?:\s+([\s\S]+))?\s*$", func=lambda e: e.is_private
-    )
-)
 async def set_system_prompt_handler(event):
     """Sets the user's custom system prompt or resets it, now with an interactive flow."""
     user_id = event.sender_id
@@ -1557,7 +1568,6 @@ async def set_system_prompt_handler(event):
         )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/setsystemprompthere(?:\s+([\s\S]+))?\s*$"))
 async def set_system_prompt_here_handler(event):
     """Sets a system prompt for the current chat only."""
     is_bot_admin = await util.isAdmin(event)
@@ -1583,7 +1593,6 @@ async def set_system_prompt_here_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/resetsystemprompthere\s*$"))
 async def reset_system_prompt_here_handler(event):
     """Resets the system prompt for the current chat."""
     is_bot_admin = await util.isAdmin(event)
@@ -1601,7 +1610,6 @@ async def reset_system_prompt_here_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/getsystemprompthere\s*$"))
 async def get_system_prompt_here_handler(event):
     """Gets and displays the system prompt for the current chat."""
     prompt_info = get_system_prompt_info(event)
@@ -1619,7 +1627,6 @@ async def get_system_prompt_here_handler(event):
         )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/contextmodehere\s*$"))
 async def context_mode_here_handler(event):
     """Sets the context mode for the current chat."""
     is_bot_admin = await util.isAdmin(event)
@@ -1645,7 +1652,6 @@ async def context_mode_here_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/resetcontextmodehere\s*$"))
 async def reset_context_mode_here_handler(event):
     """Resets the context mode for the current chat."""
     is_bot_admin = await util.isAdmin(event)
@@ -1663,7 +1669,6 @@ async def reset_context_mode_here_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/getcontextmodehere\s*$"))
 async def get_context_mode_here_handler(event):
     """Gets and displays the context mode for the current chat."""
     user_id = event.sender_id
@@ -1697,7 +1702,7 @@ async def get_context_mode_here_handler(event):
 
 
 # --- New Feature Handlers ---
-@borg.on(events.NewMessage(pattern=r"(?i)^/contextmode\s*$", func=lambda e: e.is_private))
+
 async def context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
 
@@ -1712,9 +1717,6 @@ async def context_mode_handler(event):
     )
 
 
-@borg.on(
-    events.NewMessage(pattern=r"(?i)^/groupcontextmode\s*$", func=lambda e: e.is_private)
-)
 async def group_context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     await present_options(
@@ -1728,7 +1730,6 @@ async def group_context_mode_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/metadatamode\s*$", func=lambda e: e.is_private))
 async def metadata_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     await present_options(
@@ -1742,9 +1743,6 @@ async def metadata_mode_handler(event):
     )
 
 
-@borg.on(
-    events.NewMessage(pattern=r"(?i)^/groupmetadatamode\s*$", func=lambda e: e.is_private)
-)
 async def group_metadata_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     await present_options(
@@ -1758,7 +1756,6 @@ async def group_metadata_mode_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/sep\s*$"))
 async def sep_handler(event):
     """Switch to smart mode and set to until_separator context."""
     user_id = event.sender_id
@@ -1775,9 +1772,6 @@ async def sep_handler(event):
     )
 
 
-@borg.on(
-    events.NewMessage(pattern=r"(?i)^/groupactivationmode\s*$", func=lambda e: e.is_private)
-)
 async def group_activation_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     await present_options(
@@ -1790,7 +1784,6 @@ async def group_activation_mode_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/setthink\s*$", func=lambda e: e.is_private))
 async def set_think_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     # Add "clear" option
@@ -1806,7 +1799,6 @@ async def set_think_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/tools\s*$", func=lambda e: e.is_private))
 async def tools_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     # For this one, the current value is a list, so we handle it differently
@@ -1835,11 +1827,6 @@ async def tools_handler(event):
         await event.reply(f"{BOT_META_INFO_PREFIX}\n".join(menu_text))
 
 
-@borg.on(
-    events.NewMessage(
-        pattern=r"(?i)^/(enable|disable)(?P<tool_name>\w+)\s*$", func=lambda e: e.is_private
-    )
-)
 async def toggle_tool_handler(event):
     action = event.pattern_match.group(1)
     tool_name_req = event.pattern_match.group("tool_name").lower()
@@ -1858,7 +1845,6 @@ async def toggle_tool_handler(event):
         )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^/json\s*$", func=lambda e: e.is_private))
 async def json_mode_handler(event):
     """Toggles JSON mode."""
     is_enabled = user_manager.toggle_json_mode(event.sender_id)
@@ -1867,7 +1853,6 @@ async def json_mode_handler(event):
     )
 
 
-@borg.on(events.CallbackQuery())
 async def callback_handler(event):
     """Handles all inline button presses for the plugin (BOT MODE ONLY)."""
     data_str = event.data.decode("utf-8")
@@ -2008,14 +1993,6 @@ async def callback_handler(event):
         await event.answer("Group activation mode updated.")
 
 
-@borg.on(
-    events.NewMessage(
-        func=lambda e: e.is_private
-        and e.sender_id in AWAITING_INPUT_FROM_USERS
-        and e.text
-        and not e.text.startswith("/")
-    )
-)
 async def generic_input_handler(event):
     """Handles plain-text submissions for interactive commands."""
     user_id = event.sender_id
@@ -2149,7 +2126,6 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     return False
 
 
-@borg.on(events.NewMessage(func=is_valid_chat_message))
 async def chat_handler(event):
     """Main handler for all non-command messages in a private chat."""
     user_id = event.sender_id
