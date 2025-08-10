@@ -1180,7 +1180,7 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
 
 async def initialize_llm_chat():
     """Initializes the plugin based on whether it's a bot or userbot."""
-    global BOT_ID, BOT_USERNAME, IS_BOT
+    global BOT_ID, BOT_USERNAME, IS_BOT, DEFAULT_SYSTEM_PROMPT
     if IS_BOT is None:
         IS_BOT = await borg.is_bot()
 
@@ -1196,6 +1196,12 @@ async def initialize_llm_chat():
                 print(
                     "LLM_Chat (Userbot): No username found. Group mention features will be unavailable."
                 )
+
+    if BOT_USERNAME:
+        DEFAULT_SYSTEM_PROMPT += f"""
+
+Your Telegram ID is {BOT_USERNAME}. The user might mention you using this ID.
+"""
 
     if IS_BOT:
         await history_util.initialize_history_handler()
@@ -2130,7 +2136,7 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     # Group chats: must be a mention or a reply to self
     if not event.is_private:
         prefs = user_manager.get_prefs(event.sender_id)
-        if event.text and BOT_USERNAME and BOT_USERNAME in event.text:
+        if event.text and BOT_USERNAME and re.search(r"\b" + re.escape(BOT_USERNAME) + r"\b", event.text, re.IGNORECASE):
             return True
         if prefs.group_activation_mode == "mention_and_reply" and event.is_reply:
             try:
