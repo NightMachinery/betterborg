@@ -1737,7 +1737,7 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     # Group chats: must be a mention or a reply to self
     if not event.is_private:
         prefs = user_manager.get_prefs(event.sender_id)
-        if event.text and BOT_USERNAME and event.text.strip().startswith(BOT_USERNAME):
+        if event.text and BOT_USERNAME and BOT_USERNAME in event.text:
             return True
         if prefs.group_activation_mode == "mention_and_reply" and event.is_reply:
             try:
