@@ -1,5 +1,8 @@
 #+TITLE: llm_chat_plugins/todo
 
+* add image gen models
+** add TTS models
+
 * DONE refactor history_util to persist data into redis
 ** cache file downloads inside Redis with an expire time of an hour (REDIS_EXPIRE_DURATION)? each time the files are accessed, renew expire time
 
