@@ -564,146 +564,110 @@ async def present_options(
 
 
 
-async def _process_media(message, temp_dir: Path) -> Optional[dict]:
-    """Downloads media, encodes it, and returns a content part for litellm."""
+async def _process_media(message: Message, temp_dir: Path) -> Optional[dict]:
+    """
+    Downloads or retrieves media from cache, prepares it for litellm,
+    and ensures it's cached in a text-safe format (raw text or Base64).
+    """
     if not message or not message.media:
         return None
-    try:
-        # Create a unique file identifier from message metadata
-        file_id = f"{message.chat_id}_{message.id}_{getattr(message.media, 'id', 'unknown')}"
 
-        # Try to get cached file first
+    try:
+        file_id = f"{message.chat_id}_{message.id}_{getattr(message.media, 'id', 'unknown')}"
         cached_file_info = await history_util.get_cached_file(file_id)
 
+        # --- Branch 1: Use Cached File ---
         if cached_file_info:
-            # Use cached file data and metadata directly
-            file_bytes = cached_file_info["data"]
-            original_filename = cached_file_info.get("filename")
-            mime_type = cached_file_info.get("mime_type")
+            storage_type = cached_file_info['data_storage_type']
+            data = cached_file_info['data']  # This is a string (text or base64)
+            filename = cached_file_info.get('filename')
+            mime_type = cached_file_info.get('mime_type')
 
-            # Fallback to message metadata if not cached
-            if not original_filename:
-                original_filename = getattr(message.media, 'name', None) or getattr(message.media.document, 'name', None) if hasattr(message.media, 'document') else None
-                if not original_filename:
-                    # Create filename with appropriate extension
-                    if mime_type:
-                        ext = mimetypes.guess_extension(mime_type) or '.bin'
-                        original_filename = f"cached_file_{message.id}{ext}"
-                    else:
-                        original_filename = f"cached_file_{message.id}.bin"
+            if storage_type == 'text':
+                return {
+                    "type": "text",
+                    "text": f"\n--- Attachment: {filename} ---\n{data}",
+                }
+            elif storage_type == 'base64':
+                return {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{data}"},
+                }
+            else:
+                print(f"Unknown storage type '{storage_type}' in cache for file_id {file_id}")
+                return None
 
-            # Fallback MIME type detection only if not cached
-            if not mime_type:
-                if hasattr(message.media, 'document') and hasattr(message.media.document, 'mime_type'):
-                    mime_type = message.media.document.mime_type
-                else:
-                    # Use filename for MIME type detection
-                    temp_path = Path(original_filename)
-                    mime_type, _ = mimetypes.guess_type(temp_path)
+        # --- Branch 2: New File - Download, Process, and Cache ---
         else:
-            # File not cached, download it
             file_path_str = await message.download_media(file=temp_dir)
             if not file_path_str:
                 return None
+
             file_path = Path(file_path_str)
             original_filename = file_path.name
 
-            # Get MIME type from downloaded file and message metadata
             mime_type, _ = mimetypes.guess_type(file_path)
             if not mime_type and hasattr(message.media, 'document') and hasattr(message.media.document, 'mime_type'):
                 mime_type = message.media.document.mime_type
 
-            # Read and cache the downloaded file with metadata
+            if not mime_type:
+                for ext, m_type in llm_util.MIME_TYPE_MAP.items():
+                    if original_filename.lower().endswith(ext):
+                        mime_type = m_type
+                        break
+
             with open(file_path, "rb") as f:
                 file_bytes = f.read()
 
-            # Cache the file with metadata for future use
-            await history_util.cache_file(file_id, file_bytes, filename=original_filename, mime_type=mime_type)
-        # Fallback for some audio/video types
-        if not mime_type:
-            for ext, m_type in llm_util.MIME_TYPE_MAP.items():  # Use imported map
-                if original_filename.lower().endswith(ext):
-                    mime_type = m_type
-                    break
-        # Fallback for common text file types
-        if not mime_type and Path(original_filename).suffix.lower() in [
-            ".txt",
-            ".md",
-            ".py",
-            ".js",
-            ".html",
-            ".css",
-            ".json",
-            ".xml",
-            ".log",
-            ".yaml",
-            ".csv",
-            ".sql",
-            ".java",
-            ".c",
-            ".h",
-            ".cpp",
-            ".go",
-            ".sh",
-            ".rb",
-            ".swift",
-            ".toml",
-            ".conf",
-            ".ini",
-            ".org",
-            ".m",
-            ".applescript",
-            ".as",
-            ".osa",
-            ".nu",
-            ".nush",
-            ".el",
-            ".ss",
-            ".scm",
-            ".lisp",
-            ".rkt",
-            ".jl",
-            ".scala",
-            ".sc",
-            ".kt",
-            ".clj",
-            ".cljs",
-            ".jxa",
-            ".dart",
-            ".rs",
-            ".cr",
-            ".zsh",
-            ".dash",
-            ".bash",
-            # ".ml",
-            ".php",
-            ".lua",
-            ".glsl",
-            ".frag",
-            ".cson",
-            ".plist",
-        ]:
-            mime_type = "text/plain"
-        if not mime_type or not (
-            mime_type.startswith(("image/", "audio/", "video/", "text/"))
-        ):
-            print(f"Unsupported media type '{mime_type}' for file {original_filename}")
-            return None
+            is_text_file = False
+            text_extensions = {
+                ".txt", ".md", ".py", ".js", ".html", ".css", ".json", ".xml",
+                ".log", ".yaml", ".csv", ".sql", ".java", ".c", ".h", ".cpp",
+                ".go", ".sh", ".rb", ".swift", ".toml", ".conf", ".ini", ".org",
+                ".m", ".applescript", ".as", ".osa", ".nu", ".nush", ".el",
+                ".ss", ".scm", ".lisp", ".rkt", ".jl", ".scala", ".sc", ".kt",
+                ".clj", ".cljs", ".jxa", ".dart", ".rs", ".cr", ".zsh", ".dash",
+                ".bash", ".php", ".lua", ".glsl", ".frag", ".cson", ".plist"
+            }
+            if mime_type and mime_type.startswith("text/"):
+                is_text_file = True
+            elif not mime_type and file_path.suffix.lower() in text_extensions:
+                is_text_file = True
+                mime_type = "text/plain"
 
-        if mime_type.startswith("text/"):
-            # For text, return a standard text part to be merged.
-            return {
-                "type": "text",
-                "text": f"\n--- Attachment: {original_filename} ---\n{file_bytes.decode('utf-8', errors='ignore')}",
-            }
-        else:
-            b64_content = base64.b64encode(file_bytes).decode("utf-8")
-            return {
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime_type};base64,{b64_content}"},
-            }
+            if is_text_file:
+                text_content = file_bytes.decode('utf-8', errors='ignore')
+                await history_util.cache_file(
+                    file_id,
+                    data=text_content,
+                    data_storage_type='text',
+                    filename=original_filename,
+                    mime_type=mime_type,
+                )
+                return {
+                    "type": "text",
+                    "text": f"\n--- Attachment: {original_filename} ---\n{text_content}",
+                }
+            else:
+                if not mime_type or not mime_type.startswith(("image/", "audio/", "video/")):
+                    print(f"Unsupported binary media type '{mime_type}' for file {original_filename}")
+                    return None
+
+                b64_content = base64.b64encode(file_bytes).decode("utf-8")
+                await history_util.cache_file(
+                    file_id,
+                    data=b64_content,
+                    data_storage_type='base64',
+                    filename=original_filename,
+                    mime_type=mime_type
+                )
+                return {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{b64_content}"},
+                }
     except Exception as e:
         print(f"Error processing media from message {message.id}: {e}")
+        traceback.print_exc()
         return None
 
 

@@ -1,0 +1,6 @@
+#+TITLE: betterborg/breadcrumbs
+
+* Delete all cached files (=history_util=) from Redis:
+#+begin_src zsh :eval never
+redis-cli --scan --pattern 'borg:files:*' | xargs -r redis-cli DEL
+#+end_src
