@@ -2,28 +2,21 @@
 
 * _
 #+begin_verse
-TODO 0, [8/10/2025  01:18]
 یه ویژگی میتونم اضافه کنم که برا گروه پرامپت ست بشه
-
-TODO 0, [8/10/2025  01:18]
-باید منشن اول پیام باشه
-
-TODO 0, [8/10/2025  01:18]
-میتونم عوضش کنم که اینطور نباشه
-
-TODO 0, [8/10/2025  01:18]
-به نظرم contains باشه منطقی تره. 
-
-چون کاربر که نمی‌دونه! یکی مثل منه.
-
-TODO 0, [8/10/2025  01:21]
-برای هیستوری هم پس من ایده دارم. 
-
-میشه تو ردیس مثلاً ۲۰۰۰ تا پیام آخر رو کش کنی😅
-
-TODO 0, [8/10/2025  14:47]
-Forwarded messages from our own bot should have the Assistant role.
 #+end_verse
+
+* _
+#+begin_verse
+باید منشن اول پیام باشه
+میتونم عوضش کنم که اینطور نباشه
+به نظرم contains باشه منطقی تره. 
+#+end_verse
+
+* refactor history_util to persist data into redis
+
+* cache file downloads inside Redis with an expire time of an hour (REDIS_EXPIRE_DURATION)? each time the files are accessed, renew expire time
+
+* create a generic error handler function which, if the chat is private and the user is an admin (use =await util.isAdmin(event)=), adds the error message to the response in general. Otherwise, we'll just print it and the traceback like we do currently. exception: when the error contains "quota" (just like the stt plugin), add the error message to the response so the user knows. 
 
 * add shortcuts =/sep=, =/replyChain=, =/lastN= for switching context mode directly
 
@@ -34,6 +27,8 @@ Create an OCR bot: waits for 1 second for messages to arrive (unless already wai
 :PROPERTIES:
 :visibility: folded
 :END:
+** DONE Forwarded messages from our own bot should have the Assistant role.
+
 ** DONE llm_chat: should skip deleted messages in history_util. we should probably do this in the code section where we retrieve the actual message objects from the message ids.
 
 ** DONE _
