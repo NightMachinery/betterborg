@@ -23,6 +23,7 @@ from telethon.tl.types import (
 )
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
+from dataclasses import dataclass
 
 # Import uniborg utilities and storage
 from uniborg import util
@@ -390,6 +391,41 @@ def _unsanitize_model_key(sanitized_key: str) -> str:
     for char, replacement in SANITIZATION_MAP.items():
         sanitized_key = sanitized_key.replace(replacement, char)
     return sanitized_key
+
+@dataclass
+class SystemPromptInfo:
+    """Contains all system prompt information for a chat context."""
+    chat_prompt: Optional[str]
+    user_prompt: Optional[str]
+    default_prompt: str
+    effective_prompt: str
+    source: str  # "chat", "user", or "default"
+
+def get_system_prompt_info(event) -> SystemPromptInfo:
+    """Returns comprehensive system prompt information for the given event."""
+    user_id = event.sender_id
+    chat_prompt = chat_manager.get_system_prompt(event.chat_id)
+    user_prefs = user_manager.get_prefs(user_id)
+    user_prompt = user_prefs.system_prompt
+    
+    # Determine effective prompt and source
+    if chat_prompt:
+        effective_prompt = chat_prompt
+        source = "chat"
+    elif user_prompt:
+        effective_prompt = user_prompt
+        source = "user"
+    else:
+        effective_prompt = DEFAULT_SYSTEM_PROMPT
+        source = "default"
+    
+    return SystemPromptInfo(
+        chat_prompt=chat_prompt,
+        user_prompt=user_prompt,
+        default_prompt=DEFAULT_SYSTEM_PROMPT,
+        effective_prompt=effective_prompt,
+        source=source
+    )
 
 async def present_options(
     event,
@@ -1441,6 +1477,24 @@ async def reset_system_prompt_here_handler(event):
     )
 
 
+@borg.on(events.NewMessage(pattern=r"(?i)/getsystemprompthere"))
+async def get_system_prompt_here_handler(event):
+    """Gets and displays the system prompt for the current chat."""
+    prompt_info = get_system_prompt_info(event)
+    
+    if prompt_info.source == "chat":
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}**Current chat system prompt:**\n\n```\n{prompt_info.chat_prompt}\n```",
+            parse_mode="md"
+        )
+    else:
+        source_text = "user's personal prompt" if prompt_info.source == "user" else "default system prompt"
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}This chat has no custom system prompt set. Using {source_text}:\n\n```\n{prompt_info.effective_prompt}\n```",
+            parse_mode="md"
+        )
+
+
 # --- New Feature Handlers ---
 @borg.on(events.NewMessage(pattern=r"(?i)/contextmode", func=lambda e: e.is_private))
 async def context_mode_handler(event):
@@ -1963,11 +2017,8 @@ async def chat_handler(event):
         )
 
         # --- System Prompt Selection Logic ---
-        chat_prompt = chat_manager.get_system_prompt(event.chat_id)
-        user_prefs = user_manager.get_prefs(user_id)
-        system_prompt_to_use = (
-            chat_prompt or user_prefs.system_prompt or DEFAULT_SYSTEM_PROMPT
-        )
+        prompt_info = get_system_prompt_info(event)
+        system_prompt_to_use = prompt_info.effective_prompt
 
         messages.insert(0, {"role": "system", "content": system_prompt_to_use})
 
