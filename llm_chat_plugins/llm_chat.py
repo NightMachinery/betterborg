@@ -211,6 +211,7 @@ BOT_COMMANDS = [
         "command": "getcontextmodehere",
         "description": "View context mode for the current chat",
     },
+    {"command": "sep", "description": "Switch to smart mode with until separator context"},
     {
         "command": "metadatamode",
         "description": "Change how PRIVATE chat metadata is handled",
@@ -1761,6 +1762,23 @@ async def group_metadata_mode_handler(event):
         callback_prefix="groupmetadata_",
         awaiting_key="group_metadata_mode_selection",
         n_cols=1,
+    )
+
+
+@borg.on(events.NewMessage(pattern=r"(?i)/sep"))
+async def sep_handler(event):
+    """Switch to smart mode and set to until_separator context."""
+    user_id = event.sender_id
+    
+    # Set user's context mode to smart (enables smart mode)
+    user_manager.set_context_mode(user_id, "smart")
+    
+    # Set smart context mode to until_separator
+    await set_smart_context_mode(user_id, "until_separator")
+    
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}✅ Switched to **Smart Mode** with `Until Separator` context. "
+        f"All messages will be included until you reply to a message or send `{CONTEXT_SEPARATOR}`."
     )
 
 
