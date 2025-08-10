@@ -5,18 +5,18 @@
 یه ویژگی میتونم اضافه کنم که برا گروه پرامپت ست بشه
 #+end_verse
 
-* _
+* refactor history_util to persist data into redis
+
+* cache file downloads inside Redis with an expire time of an hour (REDIS_EXPIRE_DURATION)? each time the files are accessed, renew expire time
+
+* DONE _
 #+begin_verse
 باید منشن اول پیام باشه
 میتونم عوضش کنم که اینطور نباشه
 به نظرم contains باشه منطقی تره. 
 #+end_verse
 
-* refactor history_util to persist data into redis
-
-* cache file downloads inside Redis with an expire time of an hour (REDIS_EXPIRE_DURATION)? each time the files are accessed, renew expire time
-
-* llm_chat:  create a generic error handler function which, if the chat is private and the user is an admin (use =await util.isAdmin(event)=), adds the error message to the response in general. Otherwise, we'll just print it and the traceback like we do currently. exception: when the error contains "exceeded your current quota" (just like the stt plugin), add the error message to the response so the user knows. 
+* DONE llm_chat:  create a generic error handler function which, if the chat is private and the user is an admin (use =await util.isAdmin(event)=), adds the error message to the response in general. Otherwise, we'll just print it and the traceback like we do currently. exception: when the error contains "exceeded your current quota" (just like the stt plugin), add the error message to the response so the user knows. 
 
 * add shortcuts =/sep=, =/replyChain=, =/lastN= for switching context mode directly
 
