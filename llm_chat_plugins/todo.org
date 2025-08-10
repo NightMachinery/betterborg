@@ -3,6 +3,9 @@
 * refactor history_util to persist data into redis
 ** cache file downloads inside Redis with an expire time of an hour (REDIS_EXPIRE_DURATION)? each time the files are accessed, renew expire time
 
+* DONE Add =/contextModeHere= which sets the context mode for the current chat.
+** only usable by bot admin or group admins
+
 * DONE _
 #+begin_verse
 یه ویژگی میتونم اضافه کنم که برا گروه پرامپت ست بشه
