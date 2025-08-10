@@ -1681,7 +1681,7 @@ async def get_context_mode_here_handler(event):
         source_text = "the current chat setting"
     else:
         effective_mode = prefs.context_mode if is_private else prefs.group_context_mode
-        source_text = "your personal preference" if is_private else "your group preference"
+        source_text = "your generic private preference" if is_private else "your generic group preference"
 
     mode_name = CONTEXT_MODE_NAMES.get(effective_mode, effective_mode)
 
