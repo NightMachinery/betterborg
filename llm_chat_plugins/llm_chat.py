@@ -405,6 +405,10 @@ def _unsanitize_model_key(sanitized_key: str) -> str:
         sanitized_key = sanitized_key.replace(replacement, char)
     return sanitized_key
 
+def is_native_gemini(model: str) -> bool:
+    """Check if model is native Gemini (not OpenRouter) and supports context caching."""
+    return model.startswith("gemini/")
+
 @dataclass
 class SystemPromptInfo:
     """Contains all system prompt information for a chat context."""
@@ -2179,7 +2183,19 @@ async def chat_handler(event):
         prompt_info = get_system_prompt_info(event)
         system_prompt_to_use = prompt_info.effective_prompt
 
-        messages.insert(0, {"role": "system", "content": system_prompt_to_use})
+        # Create system message with context caching for native Gemini models
+        system_message = {"role": "system", "content": system_prompt_to_use}
+        
+        # Add context caching for native Gemini models
+        if is_native_gemini(prefs.model):
+            # Add cache_control to system message
+            system_message["cache_control"] = {"type": "ephemeral"}
+            
+            # Add cache_control to ALL conversation messages for full context caching
+            for message in messages:
+                message["cache_control"] = {"type": "ephemeral"}
+        
+        messages.insert(0, system_message)
 
         # --- Construct API call arguments ---
         is_gemini_model = re.search(r"\bgemini\b", prefs.model, re.IGNORECASE)
