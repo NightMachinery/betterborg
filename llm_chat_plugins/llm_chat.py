@@ -253,16 +253,16 @@ async def load_smart_context_states():
     """Load all smart context states from Redis into memory on startup."""
     if not redis_util.is_redis_available():
         return
-    
+
     try:
         redis_client = await redis_util.get_redis()
         if not redis_client:
             return
-            
+
         # Get all smart context keys
         pattern = "borg:smart_context:*"
         keys = await redis_client.keys(pattern)
-        
+
         for key in keys:
             try:
                 # Extract user_id from key (format: "borg:smart_context:{user_id}")
@@ -274,7 +274,7 @@ async def load_smart_context_states():
                     await redis_client.expire(key, redis_util.get_long_expire_duration())
             except (ValueError, IndexError):
                 continue  # Skip malformed keys
-                
+
         if keys:
             print(f"LLMChat: Loaded {len(keys)} smart context states from Redis")
     except Exception as e:
@@ -288,13 +288,13 @@ async def set_smart_context_mode(user_id: int, mode: str):
     """Set smart context mode for user with Redis persistence and in-memory update."""
     # Update in-memory immediately
     SMART_CONTEXT_STATE[user_id] = mode
-    
+
     # Persist to Redis with long expiry (1 month)
     if redis_util.is_redis_available():
         try:
             await redis_util.set_with_expiry(
-                redis_util.smart_context_key(user_id), 
-                mode, 
+                redis_util.smart_context_key(user_id),
+                mode,
                 expire_seconds=redis_util.get_long_expire_duration()
             )
         except Exception as e:
@@ -450,7 +450,7 @@ class ChatManager:
         if mode is not None and mode not in CONTEXT_MODES:
             print(f"Invalid context mode: mode='{mode}', chat_id={chat_id}")
             return
-        
+
         prefs = self.get_prefs(chat_id)
         prefs.context_mode = mode
         self._save_prefs(chat_id, prefs)
@@ -499,7 +499,7 @@ def get_system_prompt_info(event) -> SystemPromptInfo:
     chat_prompt = chat_manager.get_system_prompt(event.chat_id)
     user_prefs = user_manager.get_prefs(user_id)
     user_prompt = user_prefs.system_prompt
-    
+
     # Determine effective prompt and source
     if chat_prompt:
         effective_prompt = chat_prompt
@@ -510,7 +510,7 @@ def get_system_prompt_info(event) -> SystemPromptInfo:
     else:
         effective_prompt = DEFAULT_SYSTEM_PROMPT
         source = "default"
-    
+
     return SystemPromptInfo(
         chat_prompt=chat_prompt,
         user_prompt=user_prompt,
@@ -571,16 +571,16 @@ async def _process_media(message, temp_dir: Path) -> Optional[dict]:
     try:
         # Create a unique file identifier from message metadata
         file_id = f"{message.chat_id}_{message.id}_{getattr(message.media, 'id', 'unknown')}"
-        
+
         # Try to get cached file first
         cached_file_info = await history_util.get_cached_file(file_id)
-        
+
         if cached_file_info:
             # Use cached file data and metadata directly
             file_bytes = cached_file_info["data"]
             original_filename = cached_file_info.get("filename")
             mime_type = cached_file_info.get("mime_type")
-            
+
             # Fallback to message metadata if not cached
             if not original_filename:
                 original_filename = getattr(message.media, 'name', None) or getattr(message.media.document, 'name', None) if hasattr(message.media, 'document') else None
@@ -591,7 +591,7 @@ async def _process_media(message, temp_dir: Path) -> Optional[dict]:
                         original_filename = f"cached_file_{message.id}{ext}"
                     else:
                         original_filename = f"cached_file_{message.id}.bin"
-            
+
             # Fallback MIME type detection only if not cached
             if not mime_type:
                 if hasattr(message.media, 'document') and hasattr(message.media.document, 'mime_type'):
@@ -607,16 +607,16 @@ async def _process_media(message, temp_dir: Path) -> Optional[dict]:
                 return None
             file_path = Path(file_path_str)
             original_filename = file_path.name
-            
+
             # Get MIME type from downloaded file and message metadata
             mime_type, _ = mimetypes.guess_type(file_path)
             if not mime_type and hasattr(message.media, 'document') and hasattr(message.media.document, 'mime_type'):
                 mime_type = message.media.document.mime_type
-            
+
             # Read and cache the downloaded file with metadata
             with open(file_path, "rb") as f:
                 file_bytes = f.read()
-            
+
             # Cache the file with metadata for future use
             await history_util.cache_file(file_id, file_bytes, filename=original_filename, mime_type=mime_type)
         # Fallback for some audio/video types
@@ -689,7 +689,7 @@ async def _process_media(message, temp_dir: Path) -> Optional[dict]:
         ):
             print(f"Unsupported media type '{mime_type}' for file {original_filename}")
             return None
-        
+
         if mime_type.startswith("text/"):
             # For text, return a standard text part to be merged.
             return {
@@ -1263,7 +1263,7 @@ async def initialize_llm_chat():
 # --- Telethon Event Handlers ---
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/start", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)^/start\s*$", func=lambda e: e.is_private))
 async def start_handler(event):
     """Handles the /start command to onboard new users."""
     user_id = event.sender_id
@@ -1283,7 +1283,7 @@ async def start_handler(event):
         await llm_db.request_api_key_message(event, "gemini")
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/help", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)^/help\s*$", func=lambda e: e.is_private))
 async def help_handler(event):
     """Provides detailed help information about features and usage."""
     if llm_db.is_awaiting_key(event.sender_id):
@@ -1357,7 +1357,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/status", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)^/status\s*$", func=lambda e: e.is_private))
 async def status_handler(event):
     """Displays a summary of the user's current settings."""
     user_id = event.sender_id
@@ -1434,7 +1434,7 @@ async def status_handler(event):
 
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/log", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)^/log\s*$", func=lambda e: e.is_private))
 async def log_handler(event):
     """Sends the last few conversation logs to the user."""
     user_id = event.sender_id
@@ -1483,7 +1483,7 @@ async def log_handler(event):
 
 @borg.on(
     events.NewMessage(
-        pattern=r"(?i)/setgeminikey(?:\s+(.*))?", func=lambda e: e.is_private
+        pattern=r"(?i)^/setgeminikey(?:\s+(.*))?\s*$", func=lambda e: e.is_private
     )
 )
 async def set_key_handler(event):
@@ -1493,7 +1493,7 @@ async def set_key_handler(event):
 
 @borg.on(
     events.NewMessage(
-        pattern=r"(?i)/setopenrouterkey(?:\s+(.*))?", func=lambda e: e.is_private
+        pattern=r"(?i)^/setopenrouterkey(?:\s+(.*))?\s*$", func=lambda e: e.is_private
     )
 )
 async def set_openrouter_key_handler(event):
@@ -1517,7 +1517,7 @@ async def key_submission_handler(event):
 
 
 @borg.on(
-    events.NewMessage(pattern=r"(?i)/setmodel(?:\s+(.*))?", func=lambda e: e.is_private)
+    events.NewMessage(pattern=r"(?i)^/setmodel(?:\s+(.*))?\s*$", func=lambda e: e.is_private)
 )
 async def set_model_handler(event):
     """Sets the user's preferred chat model, now with an interactive flow."""
@@ -1552,7 +1552,7 @@ async def set_model_handler(event):
 
 @borg.on(
     events.NewMessage(
-        pattern=r"(?i)/setsystemprompt(?:\s+([\s\S]+))?", func=lambda e: e.is_private
+        pattern=r"(?i)^/setsystemprompt(?:\s+([\s\S]+))?\s*$", func=lambda e: e.is_private
     )
 )
 async def set_system_prompt_handler(event):
@@ -1587,7 +1587,7 @@ async def set_system_prompt_handler(event):
         )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/setsystemprompthere(?:\s+([\s\S]+))?"))
+@borg.on(events.NewMessage(pattern=r"(?i)^/setsystemprompthere(?:\s+([\s\S]+))?\s*$"))
 async def set_system_prompt_here_handler(event):
     """Sets a system prompt for the current chat only."""
     is_bot_admin = await util.isAdmin(event)
@@ -1613,7 +1613,7 @@ async def set_system_prompt_here_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/resetsystemprompthere"))
+@borg.on(events.NewMessage(pattern=r"(?i)^/resetsystemprompthere\s*$"))
 async def reset_system_prompt_here_handler(event):
     """Resets the system prompt for the current chat."""
     is_bot_admin = await util.isAdmin(event)
@@ -1631,11 +1631,11 @@ async def reset_system_prompt_here_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/getsystemprompthere"))
+@borg.on(events.NewMessage(pattern=r"(?i)^/getsystemprompthere\s*$"))
 async def get_system_prompt_here_handler(event):
     """Gets and displays the system prompt for the current chat."""
     prompt_info = get_system_prompt_info(event)
-    
+
     if prompt_info.source == "chat":
         await event.reply(
             f"{BOT_META_INFO_PREFIX}**Current chat system prompt:**\n\n```\n{prompt_info.chat_prompt}\n```",
@@ -1649,7 +1649,7 @@ async def get_system_prompt_here_handler(event):
         )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/contextmodehere"))
+@borg.on(events.NewMessage(pattern=r"(?i)^/contextmodehere\s*$"))
 async def context_mode_here_handler(event):
     """Sets the context mode for the current chat."""
     is_bot_admin = await util.isAdmin(event)
@@ -1675,7 +1675,7 @@ async def context_mode_here_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/resetcontextmodehere"))
+@borg.on(events.NewMessage(pattern=r"(?i)^/resetcontextmodehere\s*$"))
 async def reset_context_mode_here_handler(event):
     """Resets the context mode for the current chat."""
     is_bot_admin = await util.isAdmin(event)
@@ -1693,7 +1693,7 @@ async def reset_context_mode_here_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/getcontextmodehere"))
+@borg.on(events.NewMessage(pattern=r"(?i)^/getcontextmodehere\s*$"))
 async def get_context_mode_here_handler(event):
     """Gets and displays the context mode for the current chat."""
     user_id = event.sender_id
@@ -1727,7 +1727,7 @@ async def get_context_mode_here_handler(event):
 
 
 # --- New Feature Handlers ---
-@borg.on(events.NewMessage(pattern=r"(?i)/contextmode", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)^/contextmode\s*$", func=lambda e: e.is_private))
 async def context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
 
@@ -1743,7 +1743,7 @@ async def context_mode_handler(event):
 
 
 @borg.on(
-    events.NewMessage(pattern=r"(?i)/groupcontextmode", func=lambda e: e.is_private)
+    events.NewMessage(pattern=r"(?i)^/groupcontextmode\s*$", func=lambda e: e.is_private)
 )
 async def group_context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
@@ -1758,7 +1758,7 @@ async def group_context_mode_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/metadatamode", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)^/metadatamode\s*$", func=lambda e: e.is_private))
 async def metadata_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     await present_options(
@@ -1773,7 +1773,7 @@ async def metadata_mode_handler(event):
 
 
 @borg.on(
-    events.NewMessage(pattern=r"(?i)/groupmetadatamode", func=lambda e: e.is_private)
+    events.NewMessage(pattern=r"(?i)^/groupmetadatamode\s*$", func=lambda e: e.is_private)
 )
 async def group_metadata_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
@@ -1788,17 +1788,17 @@ async def group_metadata_mode_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/sep"))
+@borg.on(events.NewMessage(pattern=r"(?i)^/sep\s*$"))
 async def sep_handler(event):
     """Switch to smart mode and set to until_separator context."""
     user_id = event.sender_id
-    
+
     # Set user's context mode to smart (enables smart mode)
     user_manager.set_context_mode(user_id, "smart")
-    
+
     # Set smart context mode to until_separator
     await set_smart_context_mode(user_id, "until_separator")
-    
+
     await event.reply(
         f"{BOT_META_INFO_PREFIX}✅ Switched to **Smart Mode** with `Until Separator` context. "
         f"All messages will be included until you reply to a message or send `{CONTEXT_SEPARATOR}`."
@@ -1806,7 +1806,7 @@ async def sep_handler(event):
 
 
 @borg.on(
-    events.NewMessage(pattern=r"(?i)/groupactivationmode", func=lambda e: e.is_private)
+    events.NewMessage(pattern=r"(?i)^/groupactivationmode\s*$", func=lambda e: e.is_private)
 )
 async def group_activation_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
@@ -1820,7 +1820,7 @@ async def group_activation_mode_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/setthink", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)^/setthink\s*$", func=lambda e: e.is_private))
 async def set_think_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     # Add "clear" option
@@ -1836,7 +1836,7 @@ async def set_think_handler(event):
     )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/tools", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)^/tools\s*$", func=lambda e: e.is_private))
 async def tools_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     # For this one, the current value is a list, so we handle it differently
@@ -1867,7 +1867,7 @@ async def tools_handler(event):
 
 @borg.on(
     events.NewMessage(
-        pattern=r"(?i)/(enable|disable)(?P<tool_name>\w+)", func=lambda e: e.is_private
+        pattern=r"(?i)^/(enable|disable)(?P<tool_name>\w+)\s*$", func=lambda e: e.is_private
     )
 )
 async def toggle_tool_handler(event):
@@ -1888,7 +1888,7 @@ async def toggle_tool_handler(event):
         )
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)/json", func=lambda e: e.is_private))
+@borg.on(events.NewMessage(pattern=r"(?i)^/json\s*$", func=lambda e: e.is_private))
 async def json_mode_handler(event):
     """Toggles JSON mode."""
     is_enabled = user_manager.toggle_json_mode(event.sender_id)
@@ -1967,11 +1967,11 @@ async def callback_handler(event):
         # Check admin permissions for chat context mode changes
         is_bot_admin = await util.isAdmin(event)
         is_group_admin = await util.is_group_admin(event)
-        
+
         if not event.is_private and not (is_bot_admin or is_group_admin):
             await event.answer("You must be a group admin or bot admin to change chat context mode.")
             return
-            
+
         mode = data_str.split("_", 1)[1]
         chat_manager.set_context_mode(event.chat_id, mode)
         chat_prefs = chat_manager.get_prefs(event.chat_id)
@@ -2303,16 +2303,16 @@ async def chat_handler(event):
 
         # Create system message with context caching for native Gemini models
         system_message = {"role": "system", "content": system_prompt_to_use}
-        
+
         # Add context caching for native Gemini models
         if is_native_gemini(prefs.model):
             # Add cache_control to system message
             system_message["cache_control"] = {"type": "ephemeral"}
-            
+
             # Add cache_control to ALL conversation messages for full context caching
             for message in messages:
                 message["cache_control"] = {"type": "ephemeral"}
-        
+
         messages.insert(0, system_message)
 
         # --- Construct API call arguments ---
