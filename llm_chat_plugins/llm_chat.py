@@ -253,6 +253,7 @@ class ChatPrefs(BaseModel):
     """Pydantic model for chat-specific settings."""
 
     system_prompt: Optional[str] = Field(default=None)
+    context_mode: Optional[str] = Field(default=None)
 
 
 class UserManager:
@@ -365,6 +366,18 @@ class ChatManager:
     def set_system_prompt(self, chat_id: int, prompt: Optional[str]):
         prefs = self.get_prefs(chat_id)
         prefs.system_prompt = prompt
+        self._save_prefs(chat_id, prefs)
+
+    def get_context_mode(self, chat_id: int) -> Optional[str]:
+        return self.get_prefs(chat_id).context_mode
+
+    def set_context_mode(self, chat_id: int, mode: Optional[str]):
+        if mode is not None and mode not in CONTEXT_MODES:
+            print(f"Invalid context mode: mode='{mode}', chat_id={chat_id}")
+            return
+        
+        prefs = self.get_prefs(chat_id)
+        prefs.context_mode = mode
         self._save_prefs(chat_id, prefs)
 
 
@@ -1495,6 +1508,75 @@ async def get_system_prompt_here_handler(event):
         )
 
 
+@borg.on(events.NewMessage(pattern=r"(?i)/contextmodehere"))
+async def context_mode_here_handler(event):
+    """Sets the context mode for the current chat."""
+    is_bot_admin = await util.isAdmin(event)
+    is_group_admin = await util.is_group_admin(event)
+
+    if not event.is_private and not (is_bot_admin or is_group_admin):
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}You must be a group admin or bot admin to use this command in a group."
+        )
+        return
+
+    chat_prefs = chat_manager.get_prefs(event.chat_id)
+    current_mode = chat_prefs.context_mode
+
+    await present_options(
+        event,
+        title="Set Context Mode for This Chat",
+        options=CONTEXT_MODE_NAMES,
+        current_value=current_mode,
+        callback_prefix="contexthere_",
+        awaiting_key="context_mode_here_selection",
+        n_cols=1,
+    )
+
+
+@borg.on(events.NewMessage(pattern=r"(?i)/resetcontextmodehere"))
+async def reset_context_mode_here_handler(event):
+    """Resets the context mode for the current chat."""
+    is_bot_admin = await util.isAdmin(event)
+    is_group_admin = await util.is_group_admin(event)
+
+    if not event.is_private and not (is_bot_admin or is_group_admin):
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}You must be a group admin or bot admin to use this command in a group."
+        )
+        return
+
+    chat_manager.set_context_mode(event.chat_id, None)
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}✅ This chat's context mode has been reset to default (uses user preferences)."
+    )
+
+
+@borg.on(events.NewMessage(pattern=r"(?i)/getcontextmodehere"))
+async def get_context_mode_here_handler(event):
+    """Gets and displays the context mode for the current chat."""
+    user_id = event.sender_id
+    prefs = user_manager.get_prefs(user_id)
+    is_private = event.is_private
+    
+    chat_context_mode = chat_manager.get_context_mode(event.chat_id)
+    
+    if chat_context_mode:
+        mode_name = CONTEXT_MODE_NAMES.get(chat_context_mode, chat_context_mode)
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}**Current chat context mode:** `{mode_name}`",
+            parse_mode="md"
+        )
+    else:
+        fallback_mode = prefs.context_mode if is_private else prefs.group_context_mode
+        fallback_name = CONTEXT_MODE_NAMES.get(fallback_mode, fallback_mode)
+        source = "personal" if is_private else "group"
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}This chat has no custom context mode set. Using your {source} preference: `{fallback_name}`",
+            parse_mode="md"
+        )
+
+
 # --- New Feature Handlers ---
 @borg.on(events.NewMessage(pattern=r"(?i)/contextmode", func=lambda e: e.is_private))
 async def context_mode_handler(event):
@@ -1654,6 +1736,8 @@ async def callback_handler(event):
     """Handles all inline button presses for the plugin (BOT MODE ONLY)."""
     data_str = event.data.decode("utf-8")
     user_id = event.sender_id
+    #: @Claude Based on the Telethon documentation, I can now confirm that event.sender_id in  a CallbackQuery event is indeed the ID of the person who clicked the button,  not the original sender of the menu message.
+
     prefs = user_manager.get_prefs(user_id)
 
     if data_str.startswith("model_"):
@@ -1713,6 +1797,27 @@ async def callback_handler(event):
         ]
         await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer("Private context mode updated.")
+    elif data_str.startswith("contexthere_"):
+        # Check admin permissions for chat context mode changes
+        is_bot_admin = await util.isAdmin(event)
+        is_group_admin = await util.is_group_admin(event)
+        
+        if not event.is_private and not (is_bot_admin or is_group_admin):
+            await event.answer("You must be a group admin or bot admin to change chat context mode.")
+            return
+            
+        mode = data_str.split("_", 1)[1]
+        chat_manager.set_context_mode(event.chat_id, mode)
+        chat_prefs = chat_manager.get_prefs(event.chat_id)
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {name}" if key == chat_prefs.context_mode else name,
+                data=f"contexthere_{key}",
+            )
+            for key, name in CONTEXT_MODE_NAMES.items()
+        ]
+        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
+        await event.answer("Chat context mode updated.")
     elif data_str.startswith("groupcontext_"):
         mode = data_str.split("_", 1)[1]
         user_manager.set_group_context_mode(user_id, mode)
@@ -1820,6 +1925,11 @@ async def generic_input_handler(event):
                     await event.reply(
                         f"{BOT_META_INFO_PREFIX}✅ Group context mode set to: **{CONTEXT_MODE_NAMES[selected_key]}**"
                     )
+                elif input_type == "context_mode_here_selection":
+                    chat_manager.set_context_mode(event.chat_id, selected_key)
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}✅ Chat context mode set to: **{CONTEXT_MODE_NAMES[selected_key]}**"
+                    )
                 elif input_type == "metadata_mode_selection":
                     user_manager.set_metadata_mode(user_id, selected_key)
                     await event.reply(
@@ -1917,7 +2027,12 @@ async def chat_handler(event):
     prefs = user_manager.get_prefs(user_id)
     is_private = event.is_private
 
-    context_mode_to_use = prefs.context_mode if is_private else prefs.group_context_mode
+    # Check for chat-specific context mode first
+    chat_context_mode = chat_manager.get_context_mode(event.chat_id)
+    if chat_context_mode:
+        context_mode_to_use = chat_context_mode
+    else:
+        context_mode_to_use = prefs.context_mode if is_private else prefs.group_context_mode
 
     # Smart Mode logic
     if context_mode_to_use == "smart":
