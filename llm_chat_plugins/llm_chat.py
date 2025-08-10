@@ -171,7 +171,15 @@ BOT_COMMANDS = [
     {"command": "setgeminikey", "description": "Set or update your Gemini API key"},
     {"command": "setopenrouterkey", "description": "Set or update your OpenRouter API key"},
     {"command": "setmodel", "description": "Set your preferred chat model"},
-    {"command": "setsystemprompt", "description": "Customize the bot's instructions"},
+    {"command": "setsystemprompt", "description": "Customize the bot's system prompt (default in all chats)"},
+    {
+        "command": "setsystemprompthere",
+        "description": "Set a system prompt for the current chat only",
+    },
+    {
+        "command": "resetsystemprompthere",
+        "description": "Reset the system prompt for the current chat",
+    },
     {"command": "setthink", "description": "Adjust model's reasoning effort"},
     {
         "command": "contextmode",
@@ -222,7 +230,7 @@ def cancel_input_flow(user_id: int):
     AWAITING_INPUT_FROM_USERS.pop(user_id, None)
 
 
-# --- User Preference Management ---
+# --- Preference Management ---
 
 
 class UserPrefs(BaseModel):
@@ -238,6 +246,12 @@ class UserPrefs(BaseModel):
     group_activation_mode: str = Field(default="mention_and_reply")
     metadata_mode: str = Field(default="only_forwarded")
     group_metadata_mode: str = Field(default="full_metadata")
+
+
+class ChatPrefs(BaseModel):
+    """Pydantic model for chat-specific settings."""
+
+    system_prompt: Optional[str] = Field(default=None)
 
 
 class UserManager:
@@ -330,7 +344,31 @@ class UserManager:
         self._save_prefs(user_id, prefs)
 
 
+class ChatManager:
+    """High-level manager for chat-specific settings."""
+
+    def __init__(self):
+        # We reuse UserStorage, but the key is a chat_id, not a user_id.
+        self.storage = UserStorage(purpose="llm_chat_chats")
+
+    def get_prefs(self, chat_id: int) -> ChatPrefs:
+        data = self.storage.get(chat_id)
+        return ChatPrefs.model_validate(data or {})
+
+    def _save_prefs(self, chat_id: int, prefs: ChatPrefs):
+        self.storage.set(chat_id, prefs.model_dump(exclude_defaults=True))
+
+    def get_system_prompt(self, chat_id: int) -> Optional[str]:
+        return self.get_prefs(chat_id).system_prompt
+
+    def set_system_prompt(self, chat_id: int, prompt: Optional[str]):
+        prefs = self.get_prefs(chat_id)
+        prefs.system_prompt = prompt
+        self._save_prefs(chat_id, prefs)
+
+
 user_manager = UserManager()
+chat_manager = ChatManager()
 
 
 # --- Core Logic & Helpers ---
@@ -1147,13 +1185,24 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 async def status_handler(event):
     """Displays a summary of the user's current settings."""
     user_id = event.sender_id
+    chat_id = event.chat_id
+
     prefs = user_manager.get_prefs(user_id)
+    chat_prompt = chat_manager.get_system_prompt(chat_id)
+
     enabled_tools_str = (
         ", ".join(prefs.enabled_tools) if prefs.enabled_tools else "None"
     )
-    system_prompt_status = "Default"
+
+    # Determine status of the user-specific system prompt
+    user_system_prompt_status = "Default"
     if prefs.system_prompt and prefs.system_prompt != DEFAULT_SYSTEM_PROMPT:
-        system_prompt_status = "Custom"
+        user_system_prompt_status = "Custom"
+
+    # Determine status of the chat-specific system prompt
+    chat_system_prompt_status = "Not set"
+    if chat_prompt:
+        chat_system_prompt_status = "Custom (Overrides your personal prompt)"
 
     context_mode_name = CONTEXT_MODE_NAMES.get(
         prefs.context_mode, prefs.context_mode.replace("_", " ").title()
@@ -1165,29 +1214,34 @@ async def status_handler(event):
         prefs.metadata_mode, prefs.metadata_mode.replace("_", " ").title()
     )
     group_metadata_mode_name = METADATA_MODES.get(
-        prefs.group_metadata_mode, prefs.group_metadata_mode.replace("_", " ").title()
+        prefs.group_metadata_mode,
+        prefs.group_metadata_mode.replace("_", " ").title(),
     )
     group_activation_mode_name = GROUP_ACTIVATION_MODES.get(
         prefs.group_activation_mode,
         prefs.group_activation_mode.replace("_", " ").title(),
     )
     thinking_level = prefs.thinking.capitalize() if prefs.thinking else "Default"
+
     status_message = (
-        f"**Your Current Bot Settings**\n\n"
+        f"**Your Personal Bot Settings**\n\n"
         f"∙ **Model:** `{prefs.model}`\n"
         f"∙ **Reasoning Level:** `{thinking_level}`\n"
         f"∙ **Enabled Tools:** `{enabled_tools_str}`\n"
         f"∙ **JSON Mode:** `{'Enabled' if prefs.json_mode else 'Disabled'}`\n"
-        f"∙ **System Prompt:** `{system_prompt_status}`\n\n"
-        f"**Private Chat Settings**\n"
+        f"∙ **Personal System Prompt:** `{user_system_prompt_status}`\n\n"
+        f"**This Chat's Settings**\n"
+        f"∙ **Chat System Prompt:** `{chat_system_prompt_status}`\n\n"
+        f"**Private Chat Context**\n"
         f"∙ **Context Mode:** `{context_mode_name}`\n"
         f"∙ **Metadata Mode:** `{metadata_mode_name}`\n\n"
-        f"**Group Chat Settings**\n"
+        f"**Group Chat Context**\n"
         f"∙ **Context Mode:** `{group_context_mode_name}`\n"
         f"∙ **Metadata Mode:** `{group_metadata_mode_name}`\n"
         f"∙ **Activation:** `{group_activation_mode_name}`\n"
     )
     await event.reply(f"{BOT_META_INFO_PREFIX}{status_message}", parse_mode="md")
+
 
 
 @borg.on(events.NewMessage(pattern=r"(?i)/log", func=lambda e: e.is_private))
@@ -1343,10 +1397,55 @@ async def set_system_prompt_handler(event):
         )
 
 
+@borg.on(events.NewMessage(pattern=r"(?i)/setsystemprompthere(?:\s+([\s\S]+))?"))
+async def set_system_prompt_here_handler(event):
+    """Sets a system prompt for the current chat only."""
+    is_bot_admin = await util.isAdmin(event)
+    is_group_admin = await util.is_group_admin(event)
+
+    if not event.is_private and not (is_bot_admin or is_group_admin):
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}You must be a group admin or bot admin to use this command in a group."
+        )
+        return
+
+    prompt_match = event.pattern_match.group(1)
+    if not prompt_match or not prompt_match.strip():
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}**Usage:** `/setSystemPromptHere <your prompt here>`"
+        )
+        return
+
+    prompt = prompt_match.strip()
+    chat_manager.set_system_prompt(event.chat_id, prompt)
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}✅ This chat's system prompt has been updated."
+    )
+
+
+@borg.on(events.NewMessage(pattern=r"(?i)/resetsystemprompthere"))
+async def reset_system_prompt_here_handler(event):
+    """Resets the system prompt for the current chat."""
+    is_bot_admin = await util.isAdmin(event)
+    is_group_admin = await util.is_group_admin(event)
+
+    if not event.is_private and not (is_bot_admin or is_group_admin):
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}You must be a group admin or bot admin to use this command in a group."
+        )
+        return
+
+    chat_manager.set_system_prompt(event.chat_id, None)
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}✅ This chat's system prompt has been reset to default."
+    )
+
+
 # --- New Feature Handlers ---
 @borg.on(events.NewMessage(pattern=r"(?i)/contextmode", func=lambda e: e.is_private))
 async def context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
+
     await present_options(
         event,
         title="Set Private Chat Context Mode",
@@ -1862,7 +1961,14 @@ async def chat_handler(event):
         messages = await build_conversation_history(
             event, context_mode_to_use, temp_dir
         )
-        system_prompt_to_use = prefs.system_prompt or DEFAULT_SYSTEM_PROMPT
+
+        # --- System Prompt Selection Logic ---
+        chat_prompt = chat_manager.get_system_prompt(event.chat_id)
+        user_prefs = user_manager.get_prefs(user_id)
+        system_prompt_to_use = (
+            chat_prompt or user_prefs.system_prompt or DEFAULT_SYSTEM_PROMPT
+        )
+
         messages.insert(0, {"role": "system", "content": system_prompt_to_use})
 
         # --- Construct API call arguments ---

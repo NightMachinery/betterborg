@@ -903,3 +903,19 @@ def build_menu(buttons, n_cols):
     return [buttons[i : i + n_cols] for i in range(0, len(buttons), n_cols)]
 
 ##
+async def is_group_admin(event) -> bool:
+    """Checks if the sender of the event is a group administrator or creator."""
+    if not event.is_private:
+        chat = await event.get_chat()
+        sender = await event.get_sender()
+        if chat.megagroup or chat.channel:
+            try:
+                permissions = await event.client.get_permissions(chat, sender)
+                return permissions and (permissions.is_admin or permissions.is_creator)
+            except Exception as e:
+                print(f"Could not get permissions for {sender.id} in chat {chat.id}: {e}")
+                return False
+    return False
+
+
+##
