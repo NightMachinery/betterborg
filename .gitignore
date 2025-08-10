@@ -18,4 +18,4 @@ session_jlib.session
 Lightnovels
 plots
 aeirya_plugins/
-.claude/
+.claude/settings.local.json

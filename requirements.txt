@@ -41,6 +41,8 @@ icecream
 
 sqlalchemy
 
+redis
+
 # junk deps:
 # sortedcontainers
 # jsonpickle

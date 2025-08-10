@@ -490,19 +490,64 @@ async def _process_media(message, temp_dir: Path) -> Optional[dict]:
     if not message or not message.media:
         return None
     try:
-        file_path_str = await message.download_media(file=temp_dir)
-        if not file_path_str:
-            return None
-        file_path = Path(file_path_str)
-        mime_type, _ = mimetypes.guess_type(file_path)
+        # Create a unique file identifier from message metadata
+        file_id = f"{message.chat_id}_{message.id}_{getattr(message.media, 'id', 'unknown')}"
+        
+        # Try to get cached file first
+        cached_file_info = await history_util.get_cached_file(file_id)
+        
+        if cached_file_info:
+            # Use cached file data and metadata directly
+            file_bytes = cached_file_info["data"]
+            original_filename = cached_file_info.get("filename")
+            mime_type = cached_file_info.get("mime_type")
+            
+            # Fallback to message metadata if not cached
+            if not original_filename:
+                original_filename = getattr(message.media, 'name', None) or getattr(message.media.document, 'name', None) if hasattr(message.media, 'document') else None
+                if not original_filename:
+                    # Create filename with appropriate extension
+                    if mime_type:
+                        ext = mimetypes.guess_extension(mime_type) or '.bin'
+                        original_filename = f"cached_file_{message.id}{ext}"
+                    else:
+                        original_filename = f"cached_file_{message.id}.bin"
+            
+            # Fallback MIME type detection only if not cached
+            if not mime_type:
+                if hasattr(message.media, 'document') and hasattr(message.media.document, 'mime_type'):
+                    mime_type = message.media.document.mime_type
+                else:
+                    # Use filename for MIME type detection
+                    temp_path = Path(original_filename)
+                    mime_type, _ = mimetypes.guess_type(temp_path)
+        else:
+            # File not cached, download it
+            file_path_str = await message.download_media(file=temp_dir)
+            if not file_path_str:
+                return None
+            file_path = Path(file_path_str)
+            original_filename = file_path.name
+            
+            # Get MIME type from downloaded file and message metadata
+            mime_type, _ = mimetypes.guess_type(file_path)
+            if not mime_type and hasattr(message.media, 'document') and hasattr(message.media.document, 'mime_type'):
+                mime_type = message.media.document.mime_type
+            
+            # Read and cache the downloaded file with metadata
+            with open(file_path, "rb") as f:
+                file_bytes = f.read()
+            
+            # Cache the file with metadata for future use
+            await history_util.cache_file(file_id, file_bytes, filename=original_filename, mime_type=mime_type)
         # Fallback for some audio/video types
         if not mime_type:
             for ext, m_type in llm_util.MIME_TYPE_MAP.items():  # Use imported map
-                if file_path.name.lower().endswith(ext):
+                if original_filename.lower().endswith(ext):
                     mime_type = m_type
                     break
         # Fallback for common text file types
-        if not mime_type and file_path.suffix.lower() in [
+        if not mime_type and Path(original_filename).suffix.lower() in [
             ".txt",
             ".md",
             ".py",
@@ -563,15 +608,14 @@ async def _process_media(message, temp_dir: Path) -> Optional[dict]:
         if not mime_type or not (
             mime_type.startswith(("image/", "audio/", "video/", "text/"))
         ):
-            print(f"Unsupported media type '{mime_type}' for file {file_path.name}")
+            print(f"Unsupported media type '{mime_type}' for file {original_filename}")
             return None
-        with open(file_path, "rb") as f:
-            file_bytes = f.read()
+        
         if mime_type.startswith("text/"):
             # For text, return a standard text part to be merged.
             return {
                 "type": "text",
-                "text": f"\n--- Attachment: {file_path.name} ---\n{file_bytes.decode('utf-8', errors='ignore')}",
+                "text": f"\n--- Attachment: {original_filename} ---\n{file_bytes.decode('utf-8', errors='ignore')}",
             }
         else:
             b64_content = base64.b64encode(file_bytes).decode("utf-8")
@@ -986,15 +1030,15 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
             return await _process_turns_to_history(event, expanded_messages, temp_dir)
 
         elif context_mode == "last_N":
-            message_ids = history_util.get_last_n_ids(
+            message_ids = await history_util.get_last_n_ids(
                 chat_id, LAST_N_MESSAGES_LIMIT
             )
         elif context_mode == "until_separator":
-            message_ids = history_util.get_all_ids(chat_id)
+            message_ids = await history_util.get_all_ids(chat_id)
         elif context_mode == "recent":
             now = datetime.now(timezone.utc)
             five_seconds_ago = now - timedelta(seconds=5)
-            message_ids = history_util.get_ids_since(chat_id, five_seconds_ago)
+            message_ids = await history_util.get_ids_since(chat_id, five_seconds_ago)
 
         # Common logic for bot modes that use message_ids
         all_ids = sorted(list(set(message_ids + [event.id])))
