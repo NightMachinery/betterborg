@@ -313,7 +313,7 @@ class UserPrefs(BaseModel):
     """Pydantic model for type-safe user preferences."""
 
     model: str = Field(default=DEFAULT_MODEL)
-    system_prompt: str = Field(default=DEFAULT_SYSTEM_PROMPT)
+    system_prompt: Optional[str] = Field(default=None)
     thinking: Optional[str] = Field(default=None)
     enabled_tools: list[str] = Field(default_factory=lambda: DEFAULT_ENABLED_TOOLS)
     json_mode: bool = Field(default=False)
@@ -349,7 +349,7 @@ class UserManager:
         prefs.model = model_name
         self._save_prefs(user_id, prefs)
 
-    def set_system_prompt(self, user_id: int, prompt: str):
+    def set_system_prompt(self, user_id: int, prompt: Optional[str]):
         prefs = self.get_prefs(user_id)
         prefs.system_prompt = prompt
         self._save_prefs(user_id, prefs)
@@ -1380,7 +1380,7 @@ async def status_handler(event):
 
     # Determine status of the user-specific system prompt
     user_system_prompt_status = "Default"
-    if prefs.system_prompt and prefs.system_prompt != DEFAULT_SYSTEM_PROMPT:
+    if prefs.system_prompt is not None:
         user_system_prompt_status = "Custom"
 
     # Determine status of the chat-specific system prompt
@@ -1545,8 +1545,8 @@ async def set_system_prompt_handler(event):
         prompt = prompt_match.strip()
         cancel_input_flow(user_id)
         if prompt.lower() == "reset":
-            # Set the prompt to an empty string to signify using the default
-            user_manager.set_system_prompt(user_id, "")
+            # Set the prompt to None to signify using the default
+            user_manager.set_system_prompt(user_id, None)
             await event.reply(
                 f"{BOT_META_INFO_PREFIX}Your system prompt has been reset to the default."
             )
@@ -1558,8 +1558,7 @@ async def set_system_prompt_handler(event):
     else:
         AWAITING_INPUT_FROM_USERS[user_id] = {"type": "system_prompt"}
         current_prompt = (
-            user_manager.get_prefs(user_id).system_prompt
-            or "Default (no custom prompt set)"
+            user_manager.get_prefs(user_id).system_prompt or DEFAULT_SYSTEM_PROMPT
         )
         await event.reply(
             f"{BOT_META_INFO_PREFIX}**Your current system prompt is:**\n\n```\n{current_prompt}\n```"
