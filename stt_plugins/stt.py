@@ -110,7 +110,7 @@ async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
 
     api_key = llm_db.get_api_key(user_id=event.sender_id, service="gemini")
     if not api_key:
-        await llm_db.request_api_key_message(event)
+        await llm_db.request_api_key_message(event, "gemini")
         return
 
     try:
