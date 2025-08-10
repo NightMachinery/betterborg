@@ -2099,7 +2099,7 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
         return False
 
     if event.text:
-        _text = event.text.split(" ", 1)[0].lower()
+        _text = event.text.split(sep=None, maxsplits=1)[0].lower()
         _text = re.sub(re.escape(BOT_USERNAME) + r"\b", "", _text, flags=re.IGNORECASE).strip()
         if _text in KNOWN_COMMAND_SET:
             return False
