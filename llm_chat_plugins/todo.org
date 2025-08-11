@@ -9,6 +9,8 @@ read https://ai.google.dev/gemini-api/docs/live ,  https://colab.research.google
 
 ** update =/status= to show live mode details
 
+** WAIT [[id:772f7610-04e4-4d41-8580-ea34e703a7cb][TimeoutError: timed out during handshake · Issue #384 · google-gemini/cookbook]]
+
 * TTS
 ** Refactor shred logic between =handle_llm_error= and =handle_tts_error=.
 
