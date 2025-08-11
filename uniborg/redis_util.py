@@ -24,6 +24,7 @@ except ImportError:
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 REDIS_EXPIRE_DURATION = int(os.environ.get("BORG_REDIS_EXPIRE_DURATION", "3600"))  # 1 hour default
 REDIS_LONG_EXPIRE_DURATION = int(os.environ.get("BORG_REDIS_LONG_EXPIRE_DURATION", "2592000"))  # 1 month default
+REDIS_VERY_LONG_EXPIRE_DURATION = int(os.environ.get("BORG_REDIS_VERY_LONG_EXPIRE_DURATION", "15552000"))  # 6 months default
 FALLBACK_TO_MEMORY = True  # Fallback to in-memory storage if Redis fails
 
 # --- Connection Management ---
@@ -216,3 +217,7 @@ def get_expire_duration() -> int:
 def get_long_expire_duration() -> int:
     """Get the long expiration duration (1 month)."""
     return REDIS_LONG_EXPIRE_DURATION
+
+def get_very_long_expire_duration() -> int:
+    """Get the very long expiration duration (6 months)."""
+    return REDIS_VERY_LONG_EXPIRE_DURATION

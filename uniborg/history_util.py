@@ -87,13 +87,15 @@ async def _add_message_redis(chat_id: int, message_id: int, timestamp: datetime)
     await redis_util.zadd_with_limit_and_expiry(
         redis_util.chat_history_key(chat_id),
         {json.dumps(item.to_dict()): timestamp.timestamp()},
-        limit=HISTORY_LIMIT
+        limit=HISTORY_LIMIT,
+        expire_seconds=redis_util.get_very_long_expire_duration()
     )
 
     # Add lookup mapping
     await redis_util.set_with_expiry(
         redis_util.message_lookup_key(message_id),
-        str(chat_id)
+        str(chat_id),
+        expire_seconds=redis_util.get_very_long_expire_duration()
     )
 
 def _add_message_memory(chat_id: int, message_id: int, timestamp: datetime):
@@ -128,7 +130,7 @@ async def _mark_deleted_redis(chat_id: int, message_ids: List[int]):
                 item = replace(item, deleted=True)
             pipe.zadd(history_key, {json.dumps(item.to_dict()): item.timestamp.timestamp()})
 
-        pipe.expire(history_key, redis_util.get_expire_duration())
+        pipe.expire(history_key, redis_util.get_very_long_expire_duration())
         await pipe.execute()
         return True
     except Exception as e:
@@ -154,7 +156,10 @@ def _mark_deleted_memory(chat_id: int, message_ids: List[int]):
 
 async def _get_history_items_redis(chat_id: int) -> List[HistoryItem]:
     """Get all history items from Redis."""
-    raw_items = await redis_util.zrange_and_renew(redis_util.chat_history_key(chat_id))
+    raw_items = await redis_util.zrange_and_renew(
+        redis_util.chat_history_key(chat_id), 
+        expire_seconds=redis_util.get_very_long_expire_duration()
+    )
 
     items = []
     for raw_item in raw_items:
@@ -327,7 +332,10 @@ async def _lookup_chat_id_for_deleted_message(message_id: int) -> Optional[int]:
     """Look up chat_id for a deleted message, trying Redis first."""
     if redis_util.is_redis_available():
         try:
-            chat_id_str = await redis_util.get_and_renew(redis_util.message_lookup_key(message_id))
+            chat_id_str = await redis_util.get_and_renew(
+                redis_util.message_lookup_key(message_id),
+                expire_seconds=redis_util.get_very_long_expire_duration()
+            )
             if chat_id_str:
                 return int(chat_id_str)
         except Exception as e:
