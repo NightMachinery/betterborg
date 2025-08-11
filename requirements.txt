@@ -45,6 +45,8 @@ redis
 
 google-genai
 
+typed-ffmpeg
+
 # junk deps:
 # sortedcontainers
 # jsonpickle
