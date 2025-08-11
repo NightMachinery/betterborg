@@ -104,7 +104,11 @@ def set_api_key(*, user_id: int, service: str, key: str):
         session.close()
 
 
-def get_api_key(user_id: int, *, service: str) -> str | None:
+def get_api_key(
+    user_id: int,
+    *,
+    service: str = "gemini",
+) -> str | None:
     """Retrieves a user's API key for a given service."""
     session = Session()
     try:
