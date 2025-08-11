@@ -1689,7 +1689,8 @@ async def status_handler(event):
     chat_id = event.chat_id
 
     prefs = user_manager.get_prefs(user_id)
-    chat_prompt = chat_manager.get_system_prompt(chat_id)
+    chat_prefs = chat_manager.get_prefs(chat_id)
+    chat_prompt = chat_prefs.system_prompt
 
     enabled_tools_str = (
         ", ".join(prefs.enabled_tools) if prefs.enabled_tools else "None"
@@ -1741,6 +1742,13 @@ async def status_handler(event):
     )
     thinking_level = prefs.thinking.capitalize() if prefs.thinking else "Default"
 
+    # TTS Settings
+    tts_model_display = tts_util.TTS_MODELS.get(chat_prefs.tts_model, "Unknown")
+    if chat_prefs.tts_voice_override:
+        effective_voice_display = f"`{chat_prefs.tts_voice_override}` (this chat)"
+    else:
+        effective_voice_display = f"`{prefs.tts_global_voice}` (global default)"
+
     status_message = (
         f"**Your Personal Bot Settings**\n\n"
         f"∙ **Model:** `{prefs.model}`\n"
@@ -1750,6 +1758,9 @@ async def status_handler(event):
         f"∙ **Personal System Prompt:** `{user_system_prompt_status}`\n\n"
         f"**This Chat's Settings**\n"
         f"∙ **Chat System Prompt:** `{chat_system_prompt_status}`\n\n"
+        f"**TTS Settings (This Chat)**\n"
+        f"∙ **TTS Model:** `{tts_model_display}`\n"
+        f"∙ **Voice:** {effective_voice_display}\n\n"
         f"**Private Chat Context**\n"
         f"∙ **Context Mode:** `{context_mode_name}`{smart_mode_status_str}\n"
         f"∙ **Metadata Mode:** `{metadata_mode_name}`\n\n"
@@ -2181,10 +2192,13 @@ async def tts_handler(event):
 async def gemini_voice_handler(event):
     """Handle /geminiVoice - global voice selection"""
     current_voice = user_manager.get_tts_global_voice(event.sender_id)
+    voice_options = {
+        name: f"{name}: {desc}" for name, desc in tts_util.GEMINI_VOICES.items()
+    }
     await present_options(
         event,
         title="🎤 Default Gemini voice (all chats)",
-        options=tts_util.GEMINI_VOICES,
+        options=voice_options,
         current_value=current_voice,
         callback_prefix="voice_",
         awaiting_key="voice_selection",
@@ -2206,9 +2220,11 @@ async def gemini_voice_here_handler(event):
     current_voice = chat_manager.get_tts_voice_override(event.chat_id)
     global_voice = user_manager.get_tts_global_voice(event.sender_id)
 
-    # Add "Use Global Default" option
+    # Add "Use Global Default" option and format all voice options
     voice_options = {"": f"Use Global Default ({global_voice})"}
-    voice_options.update(tts_util.GEMINI_VOICES)
+    voice_options.update(
+        {name: f"{name}: {desc}" for name, desc in tts_util.GEMINI_VOICES.items()}
+    )
 
     await present_options(
         event,
@@ -2225,7 +2241,7 @@ async def callback_handler(event):
     """Handles all inline button presses for the plugin (BOT MODE ONLY)."""
     data_str = event.data.decode("utf-8")
     user_id = event.sender_id
-    #: @Claude Based on the Telethon documentation, I can now confirm that event.sender_id in  a CallbackQuery event is indeed the ID of the person who clicked the button,  not the original sender of the menu message.
+    #: @Claude Based on the Telethon documentation, I can now confirm that event.sender_id in a CallbackQuery event is indeed the ID of the person who clicked the button, not the original sender of the menu message.
 
     prefs = user_manager.get_prefs(user_id)
 
@@ -2405,7 +2421,7 @@ async def callback_handler(event):
         user_manager.set_tts_global_voice(user_id, voice)
         buttons = [
             KeyboardButtonCallback(
-                f"✅ {name} ({desc})" if name == voice else f"{name} ({desc})",
+                f"✅ {name}: {desc}" if name == voice else f"{name}: {desc}",
                 data=f"voice_{name}",
             )
             for name, desc in tts_util.GEMINI_VOICES.items()
@@ -2425,9 +2441,11 @@ async def callback_handler(event):
         chat_manager.set_tts_voice_override(event.chat_id, voice if voice else None)
         global_voice = user_manager.get_tts_global_voice(user_id)
 
-        # Rebuild options with current selection
+        # Rebuild options with current selection and consistent formatting
         voice_options = {"": f"Use Global Default ({global_voice})"}
-        voice_options.update(tts_util.GEMINI_VOICES)
+        voice_options.update(
+            {name: f"{name}: {desc}" for name, desc in tts_util.GEMINI_VOICES.items()}
+        )
 
         buttons = [
             KeyboardButtonCallback(
@@ -2534,7 +2552,7 @@ async def generic_input_handler(event):
                 elif input_type == "voice_selection":
                     user_manager.set_tts_global_voice(user_id, selected_key)
                     await event.reply(
-                        f"{BOT_META_INFO_PREFIX}✅ Global voice set to: **{selected_key}** ({tts_util.GEMINI_VOICES[selected_key]})"
+                        f"{BOT_META_INFO_PREFIX}✅ Global voice set to: **{selected_key}: {tts_util.GEMINI_VOICES[selected_key]}**"
                     )
                 elif input_type == "voice_here_selection":
                     # Check admin permissions
@@ -2552,7 +2570,7 @@ async def generic_input_handler(event):
 
                     if voice_to_set:
                         voice_name = (
-                            f"{voice_to_set} ({tts_util.GEMINI_VOICES[voice_to_set]})"
+                            f"{voice_to_set}: {tts_util.GEMINI_VOICES[voice_to_set]}"
                         )
                     else:
                         global_voice = user_manager.get_tts_global_voice(user_id)
@@ -2657,8 +2675,8 @@ async def _handle_tts_response(event, response_text: str):
             # Send as voice message with proper attributes
             from telethon.tl.types import DocumentAttributeAudio
             await event.client.send_file(
-                event.chat_id, 
-                ogg_file_path, 
+                event.chat_id,
+                ogg_file_path,
                 voice_note=True,
                 reply_to=event.id,
                 attributes=[DocumentAttributeAudio(
