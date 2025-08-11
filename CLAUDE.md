@@ -30,6 +30,8 @@ For enum-like conditionals, use explicit matching conditions, and raise an excep
 
 Start by reading these files completely: uniborg/*.py stt_plugins/*.py llm_chat_plugins/*.py .
 
+When a file is too big to read directly, read its first 500 lines, and also search for various definitions inside it to get a map of the file (e.g., classes, functions, ...). Then read parts that you need from this map.
+
 ## Development Commands
 
 ### Installation and Setup
@@ -129,6 +131,7 @@ The preferred pattern is to decouple the handler definition from its registratio
 - Provide clear, concise descriptions for user guidance.
 - Commands are registered with Telegram via `SetBotCommandsRequest` using the BOT_COMMANDS list.
 - Missing commands from this list won't appear in the Telegram UI command suggestions.
+- The `/help` command of the plugin should include information about the important commands the plugin has. You might need to update the info this command shows.
 
 **Registration Pattern:**
 ```python
@@ -172,3 +175,4 @@ async def initialize_my_plugin():
 # 5. Schedule the plugin's initialization to run on the event loop
 borg.loop.create_task(initialize_my_plugin())
 ```
+
