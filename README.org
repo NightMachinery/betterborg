@@ -3,6 +3,13 @@ The crust of this fork is the advanced_get plugin, which gives you a unix shell 
 
 Needs Python 3.7.2+.
 
+* Public Instances of Bots
+** [[https://t.me/llm_stt_bot][Transcribe!]]
+
+** [[https://t.me/vlm_chat_bot][Chat!]]
+
+** [[https://t.me/say_this_bot][Say!]]
+
 * llm-chat
 #+begin_src zsh :eval never
 # Install dash, zsh, tmux, grealpath (GNU realpath, on Linux you could probably use `alias grealpath=realpath`)

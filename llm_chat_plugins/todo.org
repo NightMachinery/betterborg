@@ -8,6 +8,10 @@ read https://ai.google.dev/gemini-api/docs/live ,  https://colab.research.google
 #+end_verse
 
 * TTS
+** Refactor shred logic between =handle_llm_error= and =handle_tts_error=.
+
+** tts_bot: should have =/setModel= which shows a menu to set the TTS model for the user
+
 ** DONE create a TTS plugin =tts_bot.py= which has its own =/geminiVoice= command and has the commands for setting gemini api key. this bot should simply forward anything the user sends to the tts util with no templating.
 When the user attaches files (grouped messages must be supported), we should find text files (ignore others and print warnings) and concat those text files to the end of the user's message with this template:
 #+begin_example
