@@ -1288,7 +1288,7 @@ async def initialize_llm_chat():
     if BOT_USERNAME:
         DEFAULT_SYSTEM_PROMPT += f"""
 
-Your Telegram ID is {BOT_USERNAME}. The user might mention you using this ID.
+Your username on Telegram is {BOT_USERNAME}. The user might mention you using this username.
 """
 
     if IS_BOT:
