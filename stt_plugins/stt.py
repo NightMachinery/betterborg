@@ -107,6 +107,7 @@ print(f"STT Prompt Loaded:\n\n{TRANSCRIPTION_PROMPT}\n---\n\n")
 
 # --- Core Transcription Logic ---
 
+
 async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
     """
     Performs speech-to-text on media, enforcing a single structured JSON output

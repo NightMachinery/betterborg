@@ -49,8 +49,8 @@ async def borg_init(background_mode=True):
             for change_type, path in changes:
                 bname = os.path.basename(path)
                 _, ext = os.path.splitext(path)
-                if ext != '.py':
-                        continue
+                if ext != ".py":
+                    continue
 
                 if not (bname.startswith("#") or bname.startswith(".")):
                     if change_type == Change.modified:

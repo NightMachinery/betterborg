@@ -21,6 +21,7 @@ from . import hacks
 from .util import admins
 from .constants import BOT_META_INFO_PREFIX
 
+
 class Uniborg(TelegramClient):
     # @warn this var can be None in which case send_message will fail and potentially crash the whole program
     log_chat = -1001179162919  # alicization
@@ -156,14 +157,16 @@ class Uniborg(TelegramClient):
             self.load_plugin(shortname)
 
             await self.send_message(
-                chat, f"{BOT_META_INFO_PREFIX}# Successfully (re)loaded plugin {shortname}"
+                chat,
+                f"{BOT_META_INFO_PREFIX}# Successfully (re)loaded plugin {shortname}",
             )
         except Exception as e:
             tb = traceback.format_exc()
             logger.warn(f"Failed to (re)load plugin '{shortname}': {tb}")
             if chat:
                 await self.send_message(
-                    chat, f"{BOT_META_INFO_PREFIX}# Failed to (re)load plugin '{shortname}': {e}"
+                    chat,
+                    f"{BOT_META_INFO_PREFIX}# Failed to (re)load plugin '{shortname}': {e}",
                 )
 
     def await_event(self, event_matcher, filter=None):

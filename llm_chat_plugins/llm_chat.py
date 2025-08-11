@@ -1,5 +1,7 @@
 import asyncio
-from pynight.common_icecream import ic  #: used for debugging, DO NOT REMOVE even if currently unused
+from pynight.common_icecream import (
+    ic,
+)  #: used for debugging, DO NOT REMOVE even if currently unused
 import traceback
 import os
 import uuid
@@ -47,7 +49,9 @@ DEFAULT_MODEL = "gemini/gemini-2.5-flash"  #: Do NOT change the default model un
 # - "gemini/gemini-2.5-pro"
 ##
 PROMPT_REPLACEMENTS = {
-    re.compile(r"^\.ocr$", re.MULTILINE | re.IGNORECASE): r"""
+    re.compile(
+        r"^\.ocr$", re.MULTILINE | re.IGNORECASE
+    ): r"""
 You will be given a series of images that are part of a single, related sequence. Your task is to perform OCR and combine the text from all images into one final, coherent output, following these specific rules:
 
 *Combine Text:* Transcribe and merge the text from all images into a single, continuous document. Ensure the text flows in the correct sequence from one image to the next.
@@ -106,7 +110,6 @@ You are a helpful and knowledgeable assistant. Your primary audience is advanced
 # Directory for logs, mirroring the STT plugin's structure
 LOG_DIR = Path(os.path.expanduser("~/.borg/llm_chat/log/"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
-
 
 
 # --- New Constants for Features ---
@@ -176,9 +179,15 @@ BOT_COMMANDS = [
         "description": f"Get your last {LOG_COUNT_LIMIT} conversation logs",
     },
     {"command": "setgeminikey", "description": "Set or update your Gemini API key"},
-    {"command": "setopenrouterkey", "description": "Set or update your OpenRouter API key"},
+    {
+        "command": "setopenrouterkey",
+        "description": "Set or update your OpenRouter API key",
+    },
     {"command": "setmodel", "description": "Set your preferred chat model"},
-    {"command": "setsystemprompt", "description": "Customize the bot's system prompt (default in all chats)"},
+    {
+        "command": "setsystemprompt",
+        "description": "Customize the bot's system prompt (default in all chats)",
+    },
     {
         "command": "setsystemprompthere",
         "description": "Set a system prompt for the current chat only",
@@ -208,7 +217,10 @@ BOT_COMMANDS = [
         "command": "getcontextmodehere",
         "description": "View context mode for the current chat",
     },
-    {"command": "sep", "description": "Switch to smart mode with until separator context"},
+    {
+        "command": "sep",
+        "description": "Switch to smart mode with until separator context",
+    },
     {
         "command": "metadatamode",
         "description": "Change how PRIVATE chat metadata is handled",
@@ -249,6 +261,7 @@ SMART_CONTEXT_STATE = {}
 
 # --- Smart Context State Management ---
 
+
 async def load_smart_context_states():
     """Load all smart context states from Redis into memory on startup."""
     if not redis_util.is_redis_available():
@@ -271,7 +284,9 @@ async def load_smart_context_states():
                 if mode:
                     SMART_CONTEXT_STATE[user_id] = mode
                     # Renew expiry for another month
-                    await redis_client.expire(key, redis_util.get_long_expire_duration())
+                    await redis_client.expire(
+                        key, redis_util.get_long_expire_duration()
+                    )
             except (ValueError, IndexError):
                 continue  # Skip malformed keys
 
@@ -280,9 +295,11 @@ async def load_smart_context_states():
     except Exception as e:
         print(f"LLM_Chat: Failed to load smart context states from Redis: {e}")
 
+
 def get_smart_context_mode(user_id: int) -> str:
     """Get smart context mode for user from in-memory storage."""
     return SMART_CONTEXT_STATE.get(user_id, "reply_chain")
+
 
 async def set_smart_context_mode(user_id: int, mode: str):
     """Set smart context mode for user with Redis persistence and in-memory update."""
@@ -295,7 +312,7 @@ async def set_smart_context_mode(user_id: int, mode: str):
             await redis_util.set_with_expiry(
                 redis_util.smart_context_key(user_id),
                 mode,
-                expire_seconds=redis_util.get_long_expire_duration()
+                expire_seconds=redis_util.get_long_expire_duration(),
             )
         except Exception as e:
             print(f"LLM_Chat: Redis set_smart_context_mode failed: {e}")
@@ -499,16 +516,17 @@ chat_manager = ChatManager()
 # --- Core Logic & Helpers ---
 
 
-
 SANITIZATION_MAP = {
     ":": "__COLON__",
 }
+
 
 def _sanitize_model_key(key: str) -> str:
     """Replaces problematic characters in model keys for Telegram callback data."""
     for char, replacement in SANITIZATION_MAP.items():
         key = key.replace(char, replacement)
     return key
+
 
 def _unsanitize_model_key(sanitized_key: str) -> str:
     """Restores original model key from sanitized Telegram callback data."""
@@ -527,22 +545,28 @@ def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
 
     # Strip bot username if requested (for event.text processing)
     if strip_bot_username and BOT_USERNAME:
-        command = re.sub(re.escape(BOT_USERNAME) + r"\b", "", command, flags=re.IGNORECASE).strip()
+        command = re.sub(
+            re.escape(BOT_USERNAME) + r"\b", "", command, flags=re.IGNORECASE
+        ).strip()
 
     return command in KNOWN_COMMAND_SET
+
 
 def is_native_gemini(model: str) -> bool:
     """Check if model is native Gemini (not OpenRouter) and supports context caching."""
     return model.startswith("gemini/")
 
+
 @dataclass
 class SystemPromptInfo:
     """Contains all system prompt information for a chat context."""
+
     chat_prompt: Optional[str]
     user_prompt: Optional[str]
     default_prompt: str
     effective_prompt: str
     source: str  # "chat", "user", or "default"
+
 
 def get_system_prompt_info(event) -> SystemPromptInfo:
     """Returns comprehensive system prompt information for the given event."""
@@ -567,8 +591,9 @@ def get_system_prompt_info(event) -> SystemPromptInfo:
         user_prompt=user_prompt,
         default_prompt=DEFAULT_SYSTEM_PROMPT,
         effective_prompt=effective_prompt,
-        source=source
+        source=source,
     )
+
 
 async def _get_context_mode_status_text(event) -> str:
     """Generates a user-friendly string explaining the current context mode for a chat."""
@@ -583,7 +608,11 @@ async def _get_context_mode_status_text(event) -> str:
         source_text = "a specific setting for **this chat**"
     else:
         effective_mode = prefs.context_mode if is_private else prefs.group_context_mode
-        source_text = "your **personal default** for private chats" if is_private else "your **personal default** for group chats"
+        source_text = (
+            "your **personal default** for private chats"
+            if is_private
+            else "your **personal default** for group chats"
+        )
 
     mode_name = CONTEXT_MODE_NAMES.get(effective_mode, effective_mode)
 
@@ -594,12 +623,17 @@ async def _get_context_mode_status_text(event) -> str:
     ]
 
     # If the effective mode is 'smart', add the current state
-    if effective_mode == 'smart':
+    if effective_mode == "smart":
         current_smart_state = get_smart_context_mode(user_id)
-        smart_state_name = CONTEXT_MODE_NAMES.get(current_smart_state, current_smart_state)
-        response_parts.append(f"∙ **Smart State:** The bot is currently using the `{smart_state_name}` method.")
+        smart_state_name = CONTEXT_MODE_NAMES.get(
+            current_smart_state, current_smart_state
+        )
+        response_parts.append(
+            f"∙ **Smart State:** The bot is currently using the `{smart_state_name}` method."
+        )
 
     return "\n".join(response_parts)
+
 
 async def present_options(
     event,
@@ -630,7 +664,7 @@ async def present_options(
         await event.reply(
             f"{BOT_META_INFO_PREFIX}{title_bold}",
             buttons=util.build_menu(buttons, n_cols=n_cols),
-            parse_mode="md"
+            parse_mode="md",
         )
     else:
         option_keys = list(options.keys())
@@ -650,7 +684,6 @@ async def present_options(
         await event.reply(f"{BOT_META_INFO_PREFIX}\n".join(menu_text), parse_mode="md")
 
 
-
 async def _process_media(message: Message, temp_dir: Path) -> Optional[dict]:
     """
     Downloads or retrieves media from cache, prepares it for litellm,
@@ -660,28 +693,32 @@ async def _process_media(message: Message, temp_dir: Path) -> Optional[dict]:
         return None
 
     try:
-        file_id = f"{message.chat_id}_{message.id}_{getattr(message.media, 'id', 'unknown')}"
+        file_id = (
+            f"{message.chat_id}_{message.id}_{getattr(message.media, 'id', 'unknown')}"
+        )
         cached_file_info = await history_util.get_cached_file(file_id)
 
         # --- Branch 1: Use Cached File ---
         if cached_file_info:
-            storage_type = cached_file_info['data_storage_type']
-            data = cached_file_info['data']  # This is a string (text or base64)
-            filename = cached_file_info.get('filename')
-            mime_type = cached_file_info.get('mime_type')
+            storage_type = cached_file_info["data_storage_type"]
+            data = cached_file_info["data"]  # This is a string (text or base64)
+            filename = cached_file_info.get("filename")
+            mime_type = cached_file_info.get("mime_type")
 
-            if storage_type == 'text':
+            if storage_type == "text":
                 return {
                     "type": "text",
                     "text": f"\n--- Attachment: {filename} ---\n{data}",
                 }
-            elif storage_type == 'base64':
+            elif storage_type == "base64":
                 return {
                     "type": "image_url",
                     "image_url": {"url": f"data:{mime_type};base64,{data}"},
                 }
             else:
-                print(f"Unknown storage type '{storage_type}' in cache for file_id {file_id}")
+                print(
+                    f"Unknown storage type '{storage_type}' in cache for file_id {file_id}"
+                )
                 return None
 
         # --- Branch 2: New File - Download, Process, and Cache ---
@@ -694,7 +731,11 @@ async def _process_media(message: Message, temp_dir: Path) -> Optional[dict]:
             original_filename = file_path.name
 
             mime_type, _ = mimetypes.guess_type(file_path)
-            if not mime_type and hasattr(message.media, 'document') and hasattr(message.media.document, 'mime_type'):
+            if (
+                not mime_type
+                and hasattr(message.media, "document")
+                and hasattr(message.media.document, "mime_type")
+            ):
                 mime_type = message.media.document.mime_type
 
             if not mime_type:
@@ -708,13 +749,60 @@ async def _process_media(message: Message, temp_dir: Path) -> Optional[dict]:
 
             is_text_file = False
             text_extensions = {
-                ".txt", ".md", ".py", ".js", ".html", ".css", ".json", ".xml",
-                ".log", ".yaml", ".csv", ".sql", ".java", ".c", ".h", ".cpp",
-                ".go", ".sh", ".rb", ".swift", ".toml", ".conf", ".ini", ".org",
-                ".m", ".applescript", ".as", ".osa", ".nu", ".nush", ".el",
-                ".ss", ".scm", ".lisp", ".rkt", ".jl", ".scala", ".sc", ".kt",
-                ".clj", ".cljs", ".jxa", ".dart", ".rs", ".cr", ".zsh", ".dash",
-                ".bash", ".php", ".lua", ".glsl", ".frag", ".cson", ".plist"
+                ".txt",
+                ".md",
+                ".py",
+                ".js",
+                ".html",
+                ".css",
+                ".json",
+                ".xml",
+                ".log",
+                ".yaml",
+                ".csv",
+                ".sql",
+                ".java",
+                ".c",
+                ".h",
+                ".cpp",
+                ".go",
+                ".sh",
+                ".rb",
+                ".swift",
+                ".toml",
+                ".conf",
+                ".ini",
+                ".org",
+                ".m",
+                ".applescript",
+                ".as",
+                ".osa",
+                ".nu",
+                ".nush",
+                ".el",
+                ".ss",
+                ".scm",
+                ".lisp",
+                ".rkt",
+                ".jl",
+                ".scala",
+                ".sc",
+                ".kt",
+                ".clj",
+                ".cljs",
+                ".jxa",
+                ".dart",
+                ".rs",
+                ".cr",
+                ".zsh",
+                ".dash",
+                ".bash",
+                ".php",
+                ".lua",
+                ".glsl",
+                ".frag",
+                ".cson",
+                ".plist",
             }
             if mime_type and mime_type.startswith("text/"):
                 is_text_file = True
@@ -723,11 +811,11 @@ async def _process_media(message: Message, temp_dir: Path) -> Optional[dict]:
                 mime_type = "text/plain"
 
             if is_text_file:
-                text_content = file_bytes.decode('utf-8', errors='ignore')
+                text_content = file_bytes.decode("utf-8", errors="ignore")
                 await history_util.cache_file(
                     file_id,
                     data=text_content,
-                    data_storage_type='text',
+                    data_storage_type="text",
                     filename=original_filename,
                     mime_type=mime_type,
                 )
@@ -736,17 +824,21 @@ async def _process_media(message: Message, temp_dir: Path) -> Optional[dict]:
                     "text": f"\n--- Attachment: {original_filename} ---\n{text_content}",
                 }
             else:
-                if not mime_type or not mime_type.startswith(("image/", "audio/", "video/")):
-                    print(f"Unsupported binary media type '{mime_type}' for file {original_filename}")
+                if not mime_type or not mime_type.startswith(
+                    ("image/", "audio/", "video/")
+                ):
+                    print(
+                        f"Unsupported binary media type '{mime_type}' for file {original_filename}"
+                    )
                     return None
 
                 b64_content = base64.b64encode(file_bytes).decode("utf-8")
                 await history_util.cache_file(
                     file_id,
                     data=b64_content,
-                    data_storage_type='base64',
+                    data_storage_type="base64",
                     filename=original_filename,
-                    mime_type=mime_type
+                    mime_type=mime_type,
                 )
                 return {
                     "type": "image_url",
@@ -863,10 +955,7 @@ async def _get_user_metadata_prefix(message: Message) -> str:
         #: no need to inject useless metadata about the bot itself
         return ""
     else:
-        sender_info = {
-            "name": sender_name,
-            "id": message.sender_id
-        }
+        sender_info = {"name": sender_name, "id": message.sender_id}
         if username:
             sender_info["username"] = username
         return f"[Sender: {sender_info} | Sending Date: {timestamp}]"
@@ -944,7 +1033,7 @@ async def _get_message_role(message: Message) -> str:
 
     if message.forward and message.forward.from_id:
         # from_id is a Peer object; we only care about user-to-user forwards for role assignment.
-        original_sender_id = getattr(message.forward.from_id, 'user_id', None)
+        original_sender_id = getattr(message.forward.from_id, "user_id", None)
 
     # A message is from the assistant if it was sent by the bot OR if it's a forward of a message originally from the bot.
     if message.sender_id == BOT_ID or original_sender_id == BOT_ID:
@@ -1047,16 +1136,13 @@ async def _process_turns_to_history(
     )
 
     # Pre-calculate roles for all messages to use in grouping and processing.
-    message_roles = [
-        (await _get_message_role(m), m) for m in message_list
-    ]
-
+    message_roles = [(await _get_message_role(m), m) for m in message_list]
 
     # --- Mode 1: No Metadata (Merge consecutive messages by role) ---
     if active_metadata_mode == "no_metadata":
         # Group by the pre-calculated role.
         for role, turn_items_iter in groupby(message_roles, key=lambda item: item[0]):
-            turn_messages = [item[1] for item in turn_items_iter] # Extract messages
+            turn_messages = [item[1] for item in turn_items_iter]  # Extract messages
             if not turn_messages:
                 continue
 
@@ -1277,41 +1363,170 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
 
 # --- Bot/Userbot Initialization ---
 
+
 def register_handlers():
     """Dynamically registers all event handlers after initialization."""
     bot_username_suffix_re = f"(?:{re.escape(BOT_USERNAME)})?" if BOT_USERNAME else ""
 
     # Command Handlers
-    borg.on(events.NewMessage(pattern=rf"(?i)^/start{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(start_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/help{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(help_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/status{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(status_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/log{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(log_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/setgeminikey{bot_username_suffix_re}(?:\s+(.*))?\s*$", func=lambda e: e.is_private))(set_key_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/setopenrouterkey{bot_username_suffix_re}(?:\s+(.*))?\s*$", func=lambda e: e.is_private))(set_openrouter_key_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/setmodel{bot_username_suffix_re}(?:\s+(.*))?\s*$", func=lambda e: e.is_private))(set_model_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/setsystemprompt{bot_username_suffix_re}(?:\s+([\s\S]+))?\s*$", func=lambda e: e.is_private))(set_system_prompt_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/setsystemprompthere{bot_username_suffix_re}(?:\s+([\s\S]+))?\s*$"))(set_system_prompt_here_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/resetsystemprompthere{bot_username_suffix_re}\s*$"))(reset_system_prompt_here_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/getsystemprompthere{bot_username_suffix_re}\s*$"))(get_system_prompt_here_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/contextmodehere{bot_username_suffix_re}\s*$"))(context_mode_here_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/getcontextmodehere{bot_username_suffix_re}\s*$"))(get_context_mode_here_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/contextmode{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(context_mode_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/groupcontextmode{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(group_context_mode_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/metadatamode{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(metadata_mode_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/groupmetadatamode{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(group_metadata_mode_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/sep{bot_username_suffix_re}\s*$"))(sep_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/groupactivationmode{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(group_activation_mode_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/setthink{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(set_think_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/tools{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(tools_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/(enable|disable)(?P<tool_name>\w+){bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(toggle_tool_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/json{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(json_mode_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/tts{bot_username_suffix_re}\s*$"))(tts_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/geminivoice{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(gemini_voice_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/geminivoicehere{bot_username_suffix_re}\s*$"))(gemini_voice_here_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/start{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(start_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/help{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(help_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/status{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(status_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/log{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(log_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/setgeminikey{bot_username_suffix_re}(?:\s+(.*))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(set_key_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/setopenrouterkey{bot_username_suffix_re}(?:\s+(.*))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(set_openrouter_key_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/setmodel{bot_username_suffix_re}(?:\s+(.*))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(set_model_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/setsystemprompt{bot_username_suffix_re}(?:\s+([\s\S]+))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(set_system_prompt_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/setsystemprompthere{bot_username_suffix_re}(?:\s+([\s\S]+))?\s*$"
+        )
+    )(set_system_prompt_here_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/resetsystemprompthere{bot_username_suffix_re}\s*$"
+        )
+    )(reset_system_prompt_here_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/getsystemprompthere{bot_username_suffix_re}\s*$"
+        )
+    )(get_system_prompt_here_handler)
+    borg.on(
+        events.NewMessage(pattern=rf"(?i)^/contextmodehere{bot_username_suffix_re}\s*$")
+    )(context_mode_here_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/getcontextmodehere{bot_username_suffix_re}\s*$"
+        )
+    )(get_context_mode_here_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/contextmode{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(context_mode_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/groupcontextmode{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(group_context_mode_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/metadatamode{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(metadata_mode_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/groupmetadatamode{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(group_metadata_mode_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/sep{bot_username_suffix_re}\s*$"))(
+        sep_handler
+    )
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/groupactivationmode{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(group_activation_mode_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/setthink{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(set_think_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/tools{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(tools_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/(enable|disable)(?P<tool_name>\w+){bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(toggle_tool_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/json{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(json_mode_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/tts{bot_username_suffix_re}\s*$"))(
+        tts_handler
+    )
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/geminivoice{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(gemini_voice_handler)
+    borg.on(
+        events.NewMessage(pattern=rf"(?i)^/geminivoicehere{bot_username_suffix_re}\s*$")
+    )(gemini_voice_here_handler)
 
     # Func-based Handlers
-    borg.on(events.NewMessage(func=lambda e: e.is_private and llm_db.is_awaiting_key(e.sender_id) and e.text and not e.text.startswith("/")))(key_submission_handler)
-    borg.on(events.NewMessage(func=lambda e: e.is_private and e.sender_id in AWAITING_INPUT_FROM_USERS and e.text and not e.text.startswith("/")))(generic_input_handler)
+    borg.on(
+        events.NewMessage(
+            func=lambda e: e.is_private
+            and llm_db.is_awaiting_key(e.sender_id)
+            and e.text
+            and not e.text.startswith("/")
+        )
+    )(key_submission_handler)
+    borg.on(
+        events.NewMessage(
+            func=lambda e: e.is_private
+            and e.sender_id in AWAITING_INPUT_FROM_USERS
+            and e.text
+            and not e.text.startswith("/")
+        )
+    )(generic_input_handler)
     borg.on(events.NewMessage(func=is_valid_chat_message))(chat_handler)
 
     # Other Event Handlers
@@ -1497,7 +1712,9 @@ async def status_handler(event):
     smart_mode_status_str = ""
     if prefs.context_mode == "smart":
         current_smart_state = get_smart_context_mode(user_id)
-        smart_state_name = CONTEXT_MODE_NAMES.get(current_smart_state, current_smart_state)
+        smart_state_name = CONTEXT_MODE_NAMES.get(
+            current_smart_state, current_smart_state
+        )
         smart_mode_status_str = f" (State: `{smart_state_name}`)"
 
     group_context_mode_name = CONTEXT_MODE_NAMES.get(
@@ -1506,9 +1723,10 @@ async def status_handler(event):
     group_smart_mode_status_str = ""
     if prefs.group_context_mode == "smart":
         current_smart_state = get_smart_context_mode(user_id)
-        smart_state_name = CONTEXT_MODE_NAMES.get(current_smart_state, current_smart_state)
+        smart_state_name = CONTEXT_MODE_NAMES.get(
+            current_smart_state, current_smart_state
+        )
         group_smart_mode_status_str = f" (State: `{smart_state_name}`)"
-
 
     metadata_mode_name = METADATA_MODES.get(
         prefs.metadata_mode, prefs.metadata_mode.replace("_", " ").title()
@@ -1541,7 +1759,6 @@ async def status_handler(event):
         f"∙ **Activation:** `{group_activation_mode_name}`\n"
     )
     await event.reply(f"{BOT_META_INFO_PREFIX}{status_message}", parse_mode="md")
-
 
 
 async def log_handler(event):
@@ -1718,13 +1935,17 @@ async def get_system_prompt_here_handler(event):
     if prompt_info.source == "chat":
         await event.reply(
             f"{BOT_META_INFO_PREFIX}**Current chat system prompt:**\n\n```\n{prompt_info.chat_prompt}\n```",
-            parse_mode="md"
+            parse_mode="md",
         )
     else:
-        source_text = "user's personal prompt" if prompt_info.source == "user" else "default system prompt"
+        source_text = (
+            "user's personal prompt"
+            if prompt_info.source == "user"
+            else "default system prompt"
+        )
         await event.reply(
             f"{BOT_META_INFO_PREFIX}This chat has no custom system prompt set. Using {source_text}:\n\n```\n{prompt_info.effective_prompt}\n```",
-            parse_mode="md"
+            parse_mode="md",
         )
 
 
@@ -1786,11 +2007,12 @@ async def get_context_mode_here_handler(event):
     status_text = await _get_context_mode_status_text(event)
     await event.reply(
         f"{BOT_META_INFO_PREFIX}**Chat Context Mode Status**\n\n{status_text}",
-        parse_mode="md"
+        parse_mode="md",
     )
 
 
 # --- New Feature Handlers ---
+
 
 async def context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
@@ -1983,11 +2205,11 @@ async def gemini_voice_here_handler(event):
 
     current_voice = chat_manager.get_tts_voice_override(event.chat_id)
     global_voice = user_manager.get_tts_global_voice(event.sender_id)
-    
+
     # Add "Use Global Default" option
     voice_options = {"": f"Use Global Default ({global_voice})"}
     voice_options.update(tts_util.GEMINI_VOICES)
-    
+
     await present_options(
         event,
         title="🎤 Gemini voice for this chat only",
@@ -2070,7 +2292,9 @@ async def callback_handler(event):
         is_group_admin = await util.is_group_admin(event)
 
         if not event.is_private and not (is_bot_admin or is_group_admin):
-            await event.answer("You must be a group admin or bot admin to change chat context mode.")
+            await event.answer(
+                "You must be a group admin or bot admin to change chat context mode."
+            )
             return
 
         mode = data_str.split("_", 1)[1]
@@ -2081,7 +2305,11 @@ async def callback_handler(event):
 
         # Re-fetch prefs to update the button display correctly
         chat_prefs = chat_manager.get_prefs(event.chat_id)
-        current_mode_for_buttons = chat_prefs.context_mode if chat_prefs.context_mode is not None else "not_set"
+        current_mode_for_buttons = (
+            chat_prefs.context_mode
+            if chat_prefs.context_mode is not None
+            else "not_set"
+        )
 
         options_for_menu = CONTEXT_MODE_NAMES.copy()
         options_for_menu["not_set"] = "Not Set (Use Personal Default)"
@@ -2099,9 +2327,13 @@ async def callback_handler(event):
         new_title = f"**Current Status:**\n{new_status_text}\n\n**Set Context Mode for This Chat**"
 
         try:
-            await event.edit(text=f"{BOT_META_INFO_PREFIX}{new_title}", buttons=util.build_menu(buttons, n_cols=1), parse_mode="md")
+            await event.edit(
+                text=f"{BOT_META_INFO_PREFIX}{new_title}",
+                buttons=util.build_menu(buttons, n_cols=1),
+                parse_mode="md",
+            )
         except errors.rpcerrorlist.MessageNotModifiedError:
-            pass # Ignore if nothing changed
+            pass  # Ignore if nothing changed
 
         await event.answer("Chat context mode updated.")
     elif data_str.startswith("groupcontext_"):
@@ -2185,18 +2417,18 @@ async def callback_handler(event):
         # Check admin permissions for chat voice changes
         is_bot_admin = await util.isAdmin(event)
         is_group_admin = await util.is_group_admin(event)
-        
+
         if not event.is_private and not (is_bot_admin or is_group_admin):
             await event.answer("Admin access required.", show_alert=True)
             return
-            
+
         chat_manager.set_tts_voice_override(event.chat_id, voice if voice else None)
         global_voice = user_manager.get_tts_global_voice(user_id)
-        
+
         # Rebuild options with current selection
         voice_options = {"": f"Use Global Default ({global_voice})"}
         voice_options.update(tts_util.GEMINI_VOICES)
-        
+
         buttons = [
             KeyboardButtonCallback(
                 f"✅ {display}" if key == voice else display,
@@ -2308,20 +2540,24 @@ async def generic_input_handler(event):
                     # Check admin permissions
                     is_bot_admin = await util.isAdmin(event)
                     is_group_admin = await util.is_group_admin(event)
-                    
+
                     if not event.is_private and not (is_bot_admin or is_group_admin):
-                        await event.reply(f"{BOT_META_INFO_PREFIX}You must be a group admin or bot admin to use this command in a group.")
+                        await event.reply(
+                            f"{BOT_META_INFO_PREFIX}You must be a group admin or bot admin to use this command in a group."
+                        )
                         return
-                        
+
                     voice_to_set = None if selected_key == "" else selected_key
                     chat_manager.set_tts_voice_override(event.chat_id, voice_to_set)
-                    
+
                     if voice_to_set:
-                        voice_name = f"{voice_to_set} ({tts_util.GEMINI_VOICES[voice_to_set]})"
+                        voice_name = (
+                            f"{voice_to_set} ({tts_util.GEMINI_VOICES[voice_to_set]})"
+                        )
                     else:
                         global_voice = user_manager.get_tts_global_voice(user_id)
                         voice_name = f"Global Default ({global_voice})"
-                    
+
                     await event.reply(
                         f"{BOT_META_INFO_PREFIX}✅ Chat voice set to: **{voice_name}**"
                     )
@@ -2337,9 +2573,6 @@ async def generic_input_handler(event):
             return
 
     cancel_input_flow(user_id)
-
-
-
 
 
 async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
@@ -2369,11 +2602,17 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     if not event.is_private:
         prefs = user_manager.get_prefs(event.sender_id)
         mention_re = r"(?<!\w)" + re.escape(BOT_USERNAME) + r"\b"
-        if event.text and BOT_USERNAME and re.search(mention_re, event.text, re.IGNORECASE):
+        if (
+            event.text
+            and BOT_USERNAME
+            and re.search(mention_re, event.text, re.IGNORECASE)
+        ):
             return True
 
         elif event.text and BOT_USERNAME in event.text:
-            print(f"Unmatched mention in group chat: mention_re={mention_re}, text:\n{event.text}\n---")
+            print(
+                f"Unmatched mention in group chat: mention_re={mention_re}, text:\n{event.text}\n---"
+            )
 
         if prefs.group_activation_mode == "mention_and_reply" and event.is_reply:
             try:
@@ -2393,51 +2632,41 @@ async def _handle_tts_response(event, response_text: str):
         tts_model = chat_manager.get_tts_model(event.chat_id)
         if tts_model == "Disabled":
             return
-            
+
         # Get user's Gemini API key
         api_key = llm_db.get_api_key(event.sender_id, "gemini")
         if not api_key:
             return  # No API key, silently skip TTS
-            
+
         # Determine voice to use (chat override or global default)
         voice_override = chat_manager.get_tts_voice_override(event.chat_id)
         if voice_override:
             voice = voice_override
         else:
             voice = user_manager.get_tts_global_voice(event.sender_id)
-            
+
         # Truncate text if needed
         truncated_text, was_truncated = tts_util.truncate_text_for_tts(response_text)
-        
+
         # Generate TTS audio
         audio_data = await tts_util.generate_tts_audio(
-            truncated_text,
-            voice=voice,
-            model=tts_model,
-            api_key=api_key
+            truncated_text, voice=voice, model=tts_model, api_key=api_key
         )
-        
+
         # Send as voice message
         await event.client.send_file(
-            event.chat_id,
-            audio_data,
-            voice_note=True,
-            reply_to=event.id
+            event.chat_id, audio_data, voice_note=True, reply_to=event.id
         )
-        
+
         # Send truncation notice if needed
         if was_truncated:
             await event.reply(
                 f"{BOT_META_INFO_PREFIX}🔊 **TTS Note:** Text was truncated to {tts_util.TTS_MAX_LENGTH} characters for voice generation."
             )
-            
+
     except Exception as e:
         # Handle TTS errors gracefully
-        await tts_util.handle_tts_error(
-            event=event,
-            exception=e,
-            service="gemini"
-        )
+        await tts_util.handle_tts_error(event=event, exception=e, service="gemini")
 
 
 async def chat_handler(event):
@@ -2458,7 +2687,9 @@ async def chat_handler(event):
     if chat_context_mode:
         context_mode_to_use = chat_context_mode
     else:
-        context_mode_to_use = prefs.context_mode if is_private else prefs.group_context_mode
+        context_mode_to_use = (
+            prefs.context_mode if is_private else prefs.group_context_mode
+        )
 
     # Smart Mode logic
     if context_mode_to_use == "smart":
@@ -2475,8 +2706,10 @@ async def chat_handler(event):
                     f"{BOT_META_INFO_PREFIX}**Smart Mode**: Switched to `Until Separator` context. "
                     "All messages from now on will be included until you reply to a message."
                 )
-            else: # Already in this mode
-                await event.reply(f"{BOT_META_INFO_PREFIX}**Smart Mode**: Context cleared. Still in `Until Separator` context mode.")
+            else:  # Already in this mode
+                await event.reply(
+                    f"{BOT_META_INFO_PREFIX}**Smart Mode**: Context cleared. Still in `Until Separator` context mode."
+                )
 
             return
 
@@ -2489,7 +2722,7 @@ async def chat_handler(event):
                     f"{BOT_META_INFO_PREFIX}**Smart Mode**: Switched to `Reply Chain` context."
                 )
             context_mode_to_use = "reply_chain"
-        else: # Not a reply, use the current state
+        else:  # Not a reply, use the current state
             context_mode_to_use = current_smart_mode
 
     # Standard separator logic for group chats or explicit "until_separator" mode
@@ -2541,7 +2774,9 @@ async def chat_handler(event):
         context_mode_to_use = "recent"
         event.message.text = event.text[2:].strip()
 
-        response_message = await event.reply(f"{BOT_META_INFO_PREFIX}**Recent Context Mode:** I'll use only the recent messages to form the conversation context. I have waited {RECENT_WAIT_TIME} second(s) to receive all your messages.\n\nProcessing ... ")
+        response_message = await event.reply(
+            f"{BOT_META_INFO_PREFIX}**Recent Context Mode:** I'll use only the recent messages to form the conversation context. I have waited {RECENT_WAIT_TIME} second(s) to receive all your messages.\n\nProcessing ... "
+        )
 
     else:
         response_message = await event.reply(f"{BOT_META_INFO_PREFIX}...")
@@ -2641,10 +2876,10 @@ async def chat_handler(event):
         await util.edit_message(
             response_message, final_text, parse_mode="md", link_preview=False
         )
-        
+
         # TTS Integration Hook
         await _handle_tts_response(event, final_text)
-        
+
         await _log_conversation(event, prefs, messages, final_text)
 
     except Exception as e:

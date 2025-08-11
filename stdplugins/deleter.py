@@ -30,7 +30,9 @@ async def _(event):
     chat = await event.get_chat()
     delete_count = 0
 
-    async for msg in tqdm(borg.iter_messages(chat, limit=n), total=n, desc="Deleting messages"):
+    async for msg in tqdm(
+        borg.iter_messages(chat, limit=n), total=n, desc="Deleting messages"
+    ):
         if self_only and not await util.isAdmin(None, msg=msg):
             # print(f"skipped non-self msg: {msg}")
             continue

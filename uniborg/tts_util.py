@@ -11,7 +11,7 @@ TTS_MAX_LENGTH = 10000  # Very high but not unlimited
 # All 30 Gemini voices from the API documentation
 GEMINI_VOICES = {
     "Zephyr": "Bright",
-    "Puck": "Upbeat", 
+    "Puck": "Upbeat",
     "Charon": "Informative",
     "Kore": "Firm",
     "Enceladus": "Breathy",
@@ -39,13 +39,13 @@ GEMINI_VOICES = {
     "Luna": "Soft",
     "Nova": "Dynamic",
     "Sol": "Bold",
-    "Zen": "Calm"
+    "Zen": "Calm",
 }
 
 TTS_MODELS = {
     "gemini-2.5-flash-preview-tts": "Flash Preview TTS",
     "gemini-2.5-pro-preview-tts": "Pro Preview TTS",
-    "Disabled": "Disabled"
+    "Disabled": "Disabled",
 }
 
 DEFAULT_VOICE = "Zephyr"
@@ -54,60 +54,59 @@ DEFAULT_VOICE = "Zephyr"
 def truncate_text_for_tts(text: str) -> tuple[str, bool]:
     """
     Truncate text to TTS_MAX_LENGTH if needed.
-    
+
     Returns:
         tuple: (truncated_text, was_truncated)
     """
     if len(text) <= TTS_MAX_LENGTH:
         return text, False
-    
+
     # Truncate at character limit
     truncated = text[:TTS_MAX_LENGTH]
-    
+
     # Try to truncate at word boundary if possible
     if truncated and not truncated[-1].isspace():
-        last_space = truncated.rfind(' ')
+        last_space = truncated.rfind(" ")
         if last_space > TTS_MAX_LENGTH * 0.9:  # Only if we don't lose too much text
             truncated = truncated[:last_space]
-    
+
     return truncated, True
 
 
-async def generate_tts_audio(text: str, *, voice: str, model: str, api_key: str) -> bytes:
+async def generate_tts_audio(
+    text: str, *, voice: str, model: str, api_key: str
+) -> bytes:
     """
     Generate TTS audio using Gemini's speech generation API.
-    
+
     Args:
         text: Text to convert to speech
         voice: Voice name from GEMINI_VOICES
         model: TTS model (e.g., "gemini-2.5-flash-preview-tts")
         api_key: Gemini API key
-        
+
     Returns:
         Audio data as bytes
-        
+
     Raises:
         Exception: On API errors
     """
     import google.generativeai as genai
-    
+
     # Configure the API
     genai.configure(api_key=api_key)
-    
+
     # Create the model
     tts_model = genai.GenerativeModel(model_name=model)
-    
+
     # Configure voice
     voice_config = genai.types.VoiceConfig(name=voice)
-    
+
     # Generate audio
     response = tts_model.generate_content(
-        text,
-        generation_config=genai.GenerationConfig(
-            voice_config=voice_config
-        )
+        text, generation_config=genai.GenerationConfig(voice_config=voice_config)
     )
-    
+
     # Return the audio data
     return response.parts[0].audio_data
 

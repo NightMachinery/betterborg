@@ -5,6 +5,7 @@
 import json
 import os
 from pathlib import Path
+
 # Note: UserStorage requires the 'filelock' library.
 # Install it with: pip install filelock
 from filelock import FileLock, Timeout
@@ -16,12 +17,14 @@ from filelock import FileLock, Timeout
 
 FILE_NAME = "data.json"
 
+
 class Storage:
     """
     A simple storage class that saves all its data into a single `data.json`
     file. Best suited for simple, single-process applications without
     concurrent write needs.
     """
+
     class _Guard:
         def __init__(self, storage):
             self._storage = storage
@@ -42,7 +45,9 @@ class Storage:
                 with open(self._root / FILE_NAME) as fp:
                     self._data = json.load(fp)
             except json.JSONDecodeError:
-                print(f"Warning: {self._root / FILE_NAME} is corrupted. Initializing with empty data.")
+                print(
+                    f"Warning: {self._root / FILE_NAME} is corrupted. Initializing with empty data."
+                )
 
                 self._data = {}
         else:
@@ -75,19 +80,23 @@ class Storage:
 # New Per-User Storage Class with File Locking
 # ---------------------------------------------------------------------------
 
+
 class UserStorage:
     """
     Manages storing and retrieving user-specific data in individual JSON files
     with process-safe file locking. Ideal for multi-user bots or applications
     with potential for concurrent access.
     """
+
     def __init__(self, purpose: str):
         """
         Initializes the storage for a specific purpose (e.g., 'llm_chat').
         This purpose will be used as the subdirectory name under ~/.borg/
         """
         if not purpose or not isinstance(purpose, str):
-            raise ValueError("Purpose must be a valid string for the subdirectory name.")
+            raise ValueError(
+                "Purpose must be a valid string for the subdirectory name."
+            )
         self.base_dir = Path(os.path.expanduser("~/.borg/")) / purpose
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
@@ -113,13 +122,17 @@ class UserStorage:
                 with open(file_path, "r", encoding="utf-8") as f:
                     return json.load(f)
         except (json.JSONDecodeError, Timeout) as e:
-            print(f"Warning: Could not read data for user {user_id}. Returning default. Error: {e}")
+            print(
+                f"Warning: Could not read data for user {user_id}. Returning default. Error: {e}"
+            )
             return {}
         except Exception as e:
-            print(f"Warning: An unexpected error occurred reading data for user {user_id}. Error: {e}")
+            print(
+                f"Warning: An unexpected error occurred reading data for user {user_id}. Error: {e}"
+            )
             return {}
 
-    def set(self, user_id: int, data: dict)-> bool:
+    def set(self, user_id: int, data: dict) -> bool:
         """
         Atomically saves a user's data from a dictionary to their JSON file.
         """
@@ -138,11 +151,16 @@ class UserStorage:
         except Timeout:
             # In a bot context, it's often better to log and fail silently
             # than to crash the handler.
-            print(f"Error: Could not acquire lock to save data for user {user_id}. Write operation skipped.")
+            print(
+                f"Error: Could not acquire lock to save data for user {user_id}. Write operation skipped."
+            )
 
             return False
 
         except Exception as e:
-            print(f"Error: An unexpected error occurred while saving data for user {user_id}: {e}")
+            print(
+                f"Error: An unexpected error occurred while saving data for user {user_id}: {e}"
+            )
+
 
 ################

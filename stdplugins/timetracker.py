@@ -278,7 +278,6 @@ subs = {
     "thesisw": "study_cs_ai_thesis_writing",
     "seminar": "study_cs_ai_thesis_writing_seminar",
     "sem": "study_cs_ai_thesis_writing_seminar",
-
     "attr": "study_cs_ai_thesis_attribution",
     "attrs": "study_cs_ai_thesis_attribution_survey",
     "contrastive": "study_cs_ai_thesis_attribution_contrastive",
@@ -341,23 +340,17 @@ subs = {
     ##
     "creative": "creative",
     "cr": "creative",
-
     "photography": "creative_photography",
     "camera": "creative_photography",
     "cam": "creative_photography",
-
     "crai": "creative_ai",
     "crllm": "creative_ai_llm",
     "crl": "creative_ai_llm",
     "crv": "creative_ai_visual",
-
     "vis": "creative_visual",
-
     "crw": "creative_writing",
-
     "memory": "creative_writing_memorial",
     "mem": "creative_writing_memorial",
-
     "fiw": "creative_writing_fiction",
     "fim": "creative_mentalWriting_fiction",
     "journal": "creative_writing_journal",
@@ -555,7 +548,6 @@ subs = {
     "gaseries": "exploration_gathering_series",
     # "gaths": "exploration_gathering_series",
     "gas": "exploration_gathering_series",
-
     "nostalgia": "exploration_gathering_nostalgia",
     "nos": "exploration_gathering_nostalgia",
     ##
@@ -806,7 +798,7 @@ async def _process_msg(
             #: Find matching suffix, checking longest first
             matching_suffix = None
             for suffix in sorted_suffixes:
-                if text.endswith(suffix) and len(text[:-len(suffix)]) >= 1:
+                if text.endswith(suffix) and len(text[: -len(suffix)]) >= 1:
                     matching_suffix = suffix
                     break
 
@@ -819,7 +811,7 @@ async def _process_msg(
             else:
                 delayed_actions_special_.append(matching_suffix)
 
-            text = text[:-len(matching_suffix)]
+            text = text[: -len(matching_suffix)]
             if not text:
                 choiceConfirmed = True
                 return out

@@ -22,9 +22,11 @@ HISTORY_LIMIT = 5000  # Max number of message IDs to store per chat
 
 # --- Data Structures ---
 
+
 @dataclass(frozen=True)
 class HistoryItem:
     """Represents a single message entry in our history cache."""
+
     message_id: int
     timestamp: datetime
     deleted: bool = False
@@ -34,7 +36,7 @@ class HistoryItem:
         return {
             "message_id": self.message_id,
             "timestamp": self.timestamp.isoformat(),
-            "deleted": self.deleted
+            "deleted": self.deleted,
         }
 
     @classmethod
@@ -43,14 +45,17 @@ class HistoryItem:
         return cls(
             message_id=data["message_id"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
-            deleted=data.get("deleted", False)
+            deleted=data.get("deleted", False),
         )
 
+
 # --- Redis Connection Delegation ---
+
 
 # --- Fallback In-Memory Storage (original implementation) ---
 class EvictionTrackingDeque(deque):
     """A deque subclass that automatically removes evicted items from the lookup map."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -65,6 +70,7 @@ class EvictionTrackingDeque(deque):
             _message_id_to_chat_id_map.pop(item.message_id, None)
         super().clear()
 
+
 # Global fallback storage
 _message_id_to_chat_id_map: Dict[int, int] = {}
 _history_cache: DefaultDict[int, Deque[HistoryItem]] = defaultdict(
@@ -76,8 +82,8 @@ _history_cache: DefaultDict[int, Deque[HistoryItem]] = defaultdict(
 borg: TelegramClient = None
 
 
-
 # --- Storage Backend Functions ---
+
 
 async def _add_message_redis(chat_id: int, message_id: int, timestamp: datetime):
     """Add message to Redis storage."""
@@ -88,20 +94,24 @@ async def _add_message_redis(chat_id: int, message_id: int, timestamp: datetime)
         redis_util.chat_history_key(chat_id),
         {json.dumps(item.to_dict()): timestamp.timestamp()},
         limit=HISTORY_LIMIT,
-        expire_seconds=redis_util.get_very_long_expire_duration()
+        expire_seconds=redis_util.get_very_long_expire_duration(),
     )
 
     # Add lookup mapping
     await redis_util.set_with_expiry(
         redis_util.message_lookup_key(message_id),
         str(chat_id),
-        expire_seconds=redis_util.get_very_long_expire_duration()
+        expire_seconds=redis_util.get_very_long_expire_duration(),
     )
+
 
 def _add_message_memory(chat_id: int, message_id: int, timestamp: datetime):
     """Add message to in-memory storage (fallback)."""
-    _history_cache[chat_id].append(HistoryItem(message_id=message_id, timestamp=timestamp))
+    _history_cache[chat_id].append(
+        HistoryItem(message_id=message_id, timestamp=timestamp)
+    )
     _message_id_to_chat_id_map[message_id] = chat_id
+
 
 async def _mark_deleted_redis(chat_id: int, message_ids: List[int]):
     """Mark messages as deleted in Redis storage."""
@@ -128,7 +138,9 @@ async def _mark_deleted_redis(chat_id: int, message_ids: List[int]):
             item = HistoryItem.from_dict(item_data)
             if item.message_id in message_ids_set:
                 item = replace(item, deleted=True)
-            pipe.zadd(history_key, {json.dumps(item.to_dict()): item.timestamp.timestamp()})
+            pipe.zadd(
+                history_key, {json.dumps(item.to_dict()): item.timestamp.timestamp()}
+            )
 
         pipe.expire(history_key, redis_util.get_very_long_expire_duration())
         await pipe.execute()
@@ -136,6 +148,7 @@ async def _mark_deleted_redis(chat_id: int, message_ids: List[int]):
     except Exception as e:
         print(f"HistoryUtil: Redis mark_deleted failed: {e}")
         return False
+
 
 def _mark_deleted_memory(chat_id: int, message_ids: List[int]):
     """Mark messages as deleted in memory storage (fallback)."""
@@ -154,11 +167,12 @@ def _mark_deleted_memory(chat_id: int, message_ids: List[int]):
 
     _history_cache[chat_id] = updated_history
 
+
 async def _get_history_items_redis(chat_id: int) -> List[HistoryItem]:
     """Get all history items from Redis."""
     raw_items = await redis_util.zrange_and_renew(
-        redis_util.chat_history_key(chat_id), 
-        expire_seconds=redis_util.get_very_long_expire_duration()
+        redis_util.chat_history_key(chat_id),
+        expire_seconds=redis_util.get_very_long_expire_duration(),
     )
 
     items = []
@@ -171,11 +185,14 @@ async def _get_history_items_redis(chat_id: int) -> List[HistoryItem]:
 
     return items
 
+
 def _get_history_items_memory(chat_id: int) -> List[HistoryItem]:
     """Get all history items from memory storage."""
     return list(_history_cache.get(chat_id, deque()))
 
+
 # --- Public API ---
+
 
 async def add_message(chat_id: int, message_id: int, timestamp: datetime):
     """Adds a new message to the history storage."""
@@ -190,6 +207,7 @@ async def add_message(chat_id: int, message_id: int, timestamp: datetime):
     if redis_util.FALLBACK_TO_MEMORY:
         _add_message_memory(chat_id, message_id, timestamp)
 
+
 async def mark_as_deleted(chat_id: int, message_ids: List[int]):
     """Marks a list of message IDs as deleted for a specific chat."""
     if redis_util.is_redis_available():
@@ -198,13 +216,18 @@ async def mark_as_deleted(chat_id: int, message_ids: List[int]):
             if success:
                 return
         except Exception as e:
-            print(f"HistoryUtil: Redis mark_as_deleted failed, falling back to memory: {e}")
+            print(
+                f"HistoryUtil: Redis mark_as_deleted failed, falling back to memory: {e}"
+            )
 
     # Fallback to memory storage
     if redis_util.FALLBACK_TO_MEMORY:
         _mark_deleted_memory(chat_id, message_ids)
 
-async def get_last_n_ids(chat_id: int, n: int, skip_deleted_p: bool = True) -> List[int]:
+
+async def get_last_n_ids(
+    chat_id: int, n: int, skip_deleted_p: bool = True
+) -> List[int]:
     """Retrieves the last N message IDs for a given chat."""
     if redis_util.is_redis_available():
         try:
@@ -215,7 +238,9 @@ async def get_last_n_ids(chat_id: int, n: int, skip_deleted_p: bool = True) -> L
             else:
                 return [item.message_id for item in items[-n:]]
         except Exception as e:
-            print(f"HistoryUtil: Redis get_last_n_ids failed, falling back to memory: {e}")
+            print(
+                f"HistoryUtil: Redis get_last_n_ids failed, falling back to memory: {e}"
+            )
 
     # Fallback to memory storage
     if redis_util.FALLBACK_TO_MEMORY:
@@ -227,6 +252,7 @@ async def get_last_n_ids(chat_id: int, n: int, skip_deleted_p: bool = True) -> L
             return [item.message_id for item in items[-n:]]
 
     return []
+
 
 async def get_all_ids(chat_id: int, skip_deleted_p: bool = True) -> List[int]:
     """Retrieves all cached message IDs for a given chat."""
@@ -250,33 +276,41 @@ async def get_all_ids(chat_id: int, skip_deleted_p: bool = True) -> List[int]:
 
     return []
 
-async def get_ids_since(chat_id: int, timestamp: datetime, skip_deleted_p: bool = True) -> List[int]:
+
+async def get_ids_since(
+    chat_id: int, timestamp: datetime, skip_deleted_p: bool = True
+) -> List[int]:
     """Retrieves message IDs for a chat that have occurred since the given timestamp."""
     if redis_util.is_redis_available():
         try:
             items = await _get_history_items_redis(chat_id)
             if skip_deleted_p:
                 return [
-                    item.message_id for item in items
+                    item.message_id
+                    for item in items
                     if item.timestamp > timestamp and not item.deleted
                 ]
             else:
                 return [item.message_id for item in items if item.timestamp > timestamp]
         except Exception as e:
-            print(f"HistoryUtil: Redis get_ids_since failed, falling back to memory: {e}")
+            print(
+                f"HistoryUtil: Redis get_ids_since failed, falling back to memory: {e}"
+            )
 
     # Fallback to memory storage
     if redis_util.FALLBACK_TO_MEMORY:
         items = _get_history_items_memory(chat_id)
         if skip_deleted_p:
             return [
-                item.message_id for item in items
+                item.message_id
+                for item in items
                 if item.timestamp > timestamp and not item.deleted
             ]
         else:
             return [item.message_id for item in items if item.timestamp > timestamp]
 
     return []
+
 
 async def clear_chat_history(chat_id: int):
     """Clears the history for a specific chat."""
@@ -285,16 +319,27 @@ async def clear_chat_history(chat_id: int):
             await redis_util.delete_key(redis_util.chat_history_key(chat_id))
             return
         except Exception as e:
-            print(f"HistoryUtil: Redis clear_chat_history failed, falling back to memory: {e}")
+            print(
+                f"HistoryUtil: Redis clear_chat_history failed, falling back to memory: {e}"
+            )
 
     # Fallback to memory storage
     if redis_util.FALLBACK_TO_MEMORY:
         if chat_id in _history_cache:
             _history_cache[chat_id].clear()
 
+
 # --- File Caching API ---
 
-async def cache_file(file_id: str, data: str, *, data_storage_type: str, filename: str = None, mime_type: str = None) -> bool:
+
+async def cache_file(
+    file_id: str,
+    data: str,
+    *,
+    data_storage_type: str,
+    filename: str = None,
+    mime_type: str = None,
+) -> bool:
     """
     Cache file data with metadata in Redis. Data is expected to be a string
     (either raw text or Base64 encoded).
@@ -310,7 +355,10 @@ async def cache_file(file_id: str, data: str, *, data_storage_type: str, filenam
     if mime_type:
         field_values["mime_type"] = mime_type
 
-    return await redis_util.hset_with_expiry(redis_util.file_cache_key(file_id), field_values)
+    return await redis_util.hset_with_expiry(
+        redis_util.file_cache_key(file_id), field_values
+    )
+
 
 async def get_cached_file(file_id: str) -> Optional[dict]:
     """
@@ -328,13 +376,14 @@ async def get_cached_file(file_id: str) -> Optional[dict]:
 
 # --- Automatic History Population ---
 
+
 async def _lookup_chat_id_for_deleted_message(message_id: int) -> Optional[int]:
     """Look up chat_id for a deleted message, trying Redis first."""
     if redis_util.is_redis_available():
         try:
             chat_id_str = await redis_util.get_and_renew(
                 redis_util.message_lookup_key(message_id),
-                expire_seconds=redis_util.get_very_long_expire_duration()
+                expire_seconds=redis_util.get_very_long_expire_duration(),
             )
             if chat_id_str:
                 return int(chat_id_str)
@@ -343,6 +392,7 @@ async def _lookup_chat_id_for_deleted_message(message_id: int) -> Optional[int]:
 
     # Fallback to memory lookup
     return _message_id_to_chat_id_map.get(message_id)
+
 
 async def initialize_history_handler():
     """
@@ -393,7 +443,9 @@ async def initialize_history_handler():
             sent_message: Message = await original_send_message(*args, **kwargs)
             # After the message is sent, log its ID
             if sent_message:
-                await add_message(sent_message.chat_id, sent_message.id, sent_message.date)
+                await add_message(
+                    sent_message.chat_id, sent_message.id, sent_message.date
+                )
             return sent_message
 
         async def patched_send_file(*args, **kwargs):

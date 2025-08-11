@@ -907,10 +907,12 @@ def humanbytes(size):
         raised_to_pow += 1
     return str(round(size, 2)) + " " + dict_power_n[raised_to_pow] + "B"
 
+
 ##
 def build_menu(buttons, n_cols):
     """Helper to build a menu of inline buttons in a grid."""
     return [buttons[i : i + n_cols] for i in range(0, len(buttons), n_cols)]
+
 
 ##
 async def is_group_admin(event) -> bool:
@@ -923,7 +925,9 @@ async def is_group_admin(event) -> bool:
                 permissions = await event.client.get_permissions(chat, sender)
                 return permissions and (permissions.is_admin or permissions.is_creator)
             except Exception as e:
-                print(f"Could not get permissions for {sender.id} in chat {chat.id}: {e}")
+                print(
+                    f"Could not get permissions for {sender.id} in chat {chat.id}: {e}"
+                )
                 return False
     return False
 
