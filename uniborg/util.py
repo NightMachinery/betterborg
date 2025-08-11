@@ -340,34 +340,42 @@ async def isAdmin(
             admins = admins + additional_admins
 
         msg = msg or getattr(event, "message", None)
-        assert msg != None
-        sender = getattr(msg, "sender", getattr(event, "sender", None))
-        sender_is_admin = sender is not None and (
-            getattr(sender, "is_self", False)
-            or (sender.id) in admins
-            or (sender).username in admins
-        )
+        if msg is None:
+            #: This might be a query call back.
+            ##
+            sender_id = getattr(event, "sender_id", None)
+            sender_username = getattr(event, "sender_username", None)
+            return sender_id in admins or sender_username in admins
+
+        else:
+            sender = getattr(msg, "sender", getattr(event, "sender", None))
+            sender_is_admin = sender is not None and (
+                getattr(sender, "is_self", False)
+                or (sender.id) in admins
+                or (sender).username in admins
+            )
 
         if event:
             chat = await event.get_chat()
 
-            # Doesnt work with private channels' links
-            res = (
-                sender_is_admin
-                or (getattr(msg, "out", False))
-                or (str(chat.id) in adminChats)
-                or (getattr(chat, "username", "NA") in admins)
-            )
+            if chat:
+                # Doesnt work with private channels' links
+                res = (
+                    sender_is_admin
+                    or (getattr(msg, "out", False))
+                    or (str(chat.id) in adminChats)
+                    or (getattr(chat, "username", "NA") in admins)
+                )
 
-            # ix()
-            # embed(using='asyncio')
-            # embed2()
+                # ix()
+                # embed(using='asyncio')
+                # embed2()
 
             return res
         else:
             return sender_is_admin
     except:
-        self._logger.warn(traceback.format_exc())
+        borg._logger.warn(traceback.format_exc())
         return False
 
 
