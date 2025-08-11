@@ -3,6 +3,8 @@ import re
 import tempfile
 import wave
 import os
+import struct
+import mimetypes
 from uniborg import util
 from uniborg.constants import BOT_META_INFO_PREFIX
 import uuid
@@ -76,13 +78,60 @@ def truncate_text_for_tts(text: str) -> tuple[str, bool]:
     return truncated, True
 
 
-def _create_wav_file(pcm_data: bytes, filename: str, channels: int = 1, rate: int = 24000, sample_width: int = 2):
-    """Create a WAV file from PCM data."""
-    with wave.open(filename, "wb") as wf:
-        wf.setnchannels(channels)
-        wf.setsampwidth(sample_width)
-        wf.setframerate(rate)
-        wf.writeframes(pcm_data)
+def _parse_audio_mime_type(mime_type: str) -> dict[str, int]:
+    """Parse bits per sample and rate from an audio MIME type string."""
+    bits_per_sample = 16
+    rate = 24000
+
+    # Extract rate from parameters
+    parts = mime_type.split(";")
+    for param in parts:
+        param = param.strip()
+        if param.lower().startswith("rate="):
+            try:
+                rate_str = param.split("=", 1)[1]
+                rate = int(rate_str)
+            except (ValueError, IndexError):
+                pass  # Keep rate as default
+        elif param.startswith("audio/L"):
+            try:
+                bits_per_sample = int(param.split("L", 1)[1])
+            except (ValueError, IndexError):
+                pass  # Keep bits_per_sample as default
+
+    return {"bits_per_sample": bits_per_sample, "rate": rate}
+
+
+def _convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+    """Generate a WAV file header for the given audio data and parameters."""
+    parameters = _parse_audio_mime_type(mime_type)
+    bits_per_sample = parameters["bits_per_sample"]
+    sample_rate = parameters["rate"]
+    num_channels = 1
+    data_size = len(audio_data)
+    bytes_per_sample = bits_per_sample // 8
+    block_align = num_channels * bytes_per_sample
+    byte_rate = sample_rate * block_align
+    chunk_size = 36 + data_size  # 36 bytes for header fields before data chunk size
+
+    # WAV file header structure
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",          # ChunkID
+        chunk_size,       # ChunkSize (total file size - 8 bytes)
+        b"WAVE",          # Format
+        b"fmt ",          # Subchunk1ID
+        16,               # Subchunk1Size (16 for PCM)
+        1,                # AudioFormat (1 for PCM)
+        num_channels,     # NumChannels
+        sample_rate,      # SampleRate
+        byte_rate,        # ByteRate
+        block_align,      # BlockAlign
+        bits_per_sample,  # BitsPerSample
+        b"data",          # Subchunk2ID
+        data_size         # Subchunk2Size (size of audio data)
+    )
+    return header + audio_data
 
 
 def _convert_wav_to_ogg(wav_path: str, ogg_path: str):
@@ -132,57 +181,92 @@ async def generate_tts_audio(
     # Create client with API key
     client = genai.Client(api_key=api_key)
 
-    # Generate audio using the correct API structure
-    response = client.models.generate_content(
-        model=model,
-        contents=text,
-        config=types.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=voice,
-                    )
+    # Prepare content using the modern API structure
+    contents = [
+        types.Content(
+            role="user",
+            parts=[
+                types.Part.from_text(text=text),
+            ],
+        ),
+    ]
+    
+    generate_content_config = types.GenerateContentConfig(
+        temperature=1,
+        response_modalities=["audio"],
+        speech_config=types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                    voice_name=voice
                 )
-            ),
-        )
+            )
+        ),
     )
 
-    # Extract audio data from response
-    if (response.candidates 
-        and len(response.candidates) > 0 
-        and response.candidates[0].content 
-        and response.candidates[0].content.parts 
-        and len(response.candidates[0].content.parts) > 0
-        and response.candidates[0].content.parts[0].inline_data):
-        
-        pcm_data = response.candidates[0].content.parts[0].inline_data.data
-        
-        # Create temporary WAV file
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as wav_file:
-            wav_filename = wav_file.name
-        
-        # Create temporary OGG file  
-        with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as ogg_file:
-            ogg_filename = ogg_file.name
-        
-        try:
-            # Create WAV file from PCM data
-            _create_wav_file(pcm_data, wav_filename)
-            
-            # Convert WAV to OGG with Opus codec for Telegram
-            _convert_wav_to_ogg(wav_filename, ogg_filename)
-            
-            return ogg_filename
-            
-        finally:
-            # Clean up intermediate WAV file
-            try:
-                os.remove(wav_filename)
-            except Exception:
-                pass  # Ignore cleanup errors
+    # Create temporary OGG file
+    with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as ogg_file:
+        ogg_filename = ogg_file.name
+
+    audio_chunks = []
+    mime_type = None
     
-    raise Exception("No audio data returned from TTS API")
+    # Use streaming API to get audio data
+    for chunk in client.models.generate_content_stream(
+        model=model,
+        contents=contents,
+        config=generate_content_config,
+    ):
+        if (
+            chunk.candidates is None
+            or chunk.candidates[0].content is None
+            or chunk.candidates[0].content.parts is None
+        ):
+            continue
+            
+        if (chunk.candidates[0].content.parts[0].inline_data 
+            and chunk.candidates[0].content.parts[0].inline_data.data):
+            
+            inline_data = chunk.candidates[0].content.parts[0].inline_data
+            audio_chunks.append(inline_data.data)
+            
+            # Store mime type from first chunk
+            if mime_type is None:
+                mime_type = inline_data.mime_type
+
+    if not audio_chunks:
+        raise Exception("No audio data returned from TTS API")
+        
+    # Combine all audio chunks
+    combined_audio_data = b''.join(audio_chunks)
+    
+    # Create temporary WAV file
+    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as wav_file:
+        wav_filename = wav_file.name
+    
+    try:
+        # Convert to WAV format if needed, or use extension from mime type
+        file_extension = mimetypes.guess_extension(mime_type)
+        if file_extension is None or file_extension != '.wav':
+            # Convert to WAV using proper header
+            wav_data = _convert_to_wav(combined_audio_data, mime_type)
+            with open(wav_filename, 'wb') as f:
+                f.write(wav_data)
+        else:
+            # Already WAV format
+            with open(wav_filename, 'wb') as f:
+                f.write(combined_audio_data)
+        
+        # Convert WAV to OGG with Opus codec for Telegram
+        _convert_wav_to_ogg(wav_filename, ogg_filename)
+        
+        return ogg_filename
+        
+    finally:
+        # Clean up intermediate WAV file
+        try:
+            os.remove(wav_filename)
+        except Exception:
+            pass  # Ignore cleanup errors
 
 
 async def handle_tts_error(
