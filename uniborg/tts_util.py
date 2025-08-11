@@ -27,6 +27,11 @@ STYLE_WITCH_DOM = """
 
 """
 
+STYLE_ANXIOUS = """
+**Required Style:** Awkward, flustered, overwhelmed. Voice cracks constantly. Rapid stammering, anxious gulps, and squeaky surprise noises. Simultaneously terrified and absolutely living for it.
+
+"""
+
 DEFAULT_TTS_STYLE_PROMPT = STYLE_WITCH_DOM
 
 #: All Gemini voices from the API documentation
