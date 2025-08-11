@@ -2634,7 +2634,7 @@ async def _handle_tts_response(event, response_text: str):
             return
 
         # Get user's Gemini API key
-        api_key = llm_db.get_api_key(event.sender_id, "gemini")
+        api_key = llm_db.get_api_key(user_id=event.sender_id, service="gemini")
         if not api_key:
             return  # No API key, silently skip TTS
 
