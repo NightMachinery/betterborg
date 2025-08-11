@@ -2116,8 +2116,13 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     # Group chats: must be a mention or a reply to self
     if not event.is_private:
         prefs = user_manager.get_prefs(event.sender_id)
-        if event.text and BOT_USERNAME and re.search(r"\b" + re.escape(BOT_USERNAME) + r"\b", event.text, re.IGNORECASE):
+        mention_re = r"\b" + re.escape(BOT_USERNAME) + r"\b"
+        if event.text and BOT_USERNAME and re.search(mention_re, event.text, re.IGNORECASE):
             return True
+
+        elif event.text and BOT_USERNAME in event.text:
+            print(f"Unmatched mention in group chat: mention_re={mention_re}, text:\n{event.text}\n---")
+
         if prefs.group_activation_mode == "mention_and_reply" and event.is_reply:
             try:
                 reply_msg = await event.get_reply_message()
