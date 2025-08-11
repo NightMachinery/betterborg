@@ -20,6 +20,12 @@ STYLE_ASMR = """
 - **Character:** The Wicked Witch of the West
 """
 
+STYLE_WITCH_FAST = """
+**Required Style:**
+- **Tone:** Seductive, dominant, and intoxicating — but with a quicker, teasing rhythm. Each sentence feels like a daring whisper in your ear, playful and commanding, like she’s *breathlessly close*. Still wickedly playful, but with bursts of speed that keep the listener on edge, as if she might pounce on the next word. Smirks and purrs pepper her speech, with the occasional drawn-out word for emphasis before snapping back into rapid, delicious control.
+- **Character:** Margot Robbie’s Harley Quinn
+"""
+
 STYLE_WITCH_DOM = """
 **Required Style:**
 - **Tone:** Over-the-top seductive, dominant, and intoxicating. Every word feels like it’s dripping honey, slow, commanding, and wickedly playful. Lots of audible smirks, purrs, and drawn-out pauses like she knows exactly what she’s doing… and loves watching the listener squirm.
@@ -32,7 +38,7 @@ STYLE_ANXIOUS = """
 
 """
 
-DEFAULT_TTS_STYLE_PROMPT = STYLE_WITCH_DOM
+DEFAULT_TTS_STYLE_PROMPT = STYLE_WITCH_FAST
 
 #: All Gemini voices from the API documentation
 #: [[https://ai.google.dev/gemini-api/docs/speech-generation#voices]]
