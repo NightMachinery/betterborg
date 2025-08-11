@@ -12,15 +12,22 @@ import uuid
 
 # --- TTS-Specific Shared Constants and Utilities ---
 
-TTS_MAX_LENGTH = 10000  # Very high but not unlimited
+TTS_MAX_LENGTH = 100000  # Very high but not unlimited
 
-DEFAULT_TTS_STYLE_PROMPT = """
+STYLE_ASMR = """
 **Required Style:**
-
-**Tone:** "Sexy ASMR"
-
-**Character:** The Wicked Witch of the West
+- **Tone:** Sexy ASMR
+- **Character:** The Wicked Witch of the West
 """
+
+STYLE_WITCH_DOM = """
+**Required Style:**
+- **Tone:** Over-the-top seductive, dominant, and intoxicating. Every word feels like it’s dripping honey, slow, commanding, and wickedly playful. Lots of audible smirks, purrs, and drawn-out pauses like she knows exactly what she’s doing… and loves watching the listener squirm.
+- **Character:** The Wicked Witch of the West
+
+"""
+
+DEFAULT_TTS_STYLE_PROMPT = STYLE_WITCH_DOM
 
 #: All Gemini voices from the API documentation
 #: [[https://ai.google.dev/gemini-api/docs/speech-generation#voices]]
