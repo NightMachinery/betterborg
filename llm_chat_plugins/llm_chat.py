@@ -247,6 +247,7 @@ BOT_COMMANDS = [
         "description": "Toggle live mode for real-time audio/video chat",
     },
     {"command": "livemodel", "description": "Set your preferred live mode model"},
+    {"command": "testlive", "description": "Test live session connection (admin only)"},
 ]
 # Create a set of command strings (e.g., {"/start", "/help"}) for efficient lookup
 KNOWN_COMMAND_SET = {f"/{cmd['command']}".lower() for cmd in BOT_COMMANDS}
@@ -1506,6 +1507,12 @@ def register_handlers():
             func=lambda e: e.is_private,
         )
     )(livemodel_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/testlive{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(testlive_handler)
 
     # Func-based Handlers
     borg.on(
@@ -2694,6 +2701,93 @@ async def livemodel_handler(event):
         awaiting_key="livemodel_selection",
         n_cols=1,
     )
+
+
+async def testlive_handler(event):
+    """Test live session connection with official example (admin only)."""
+    user_id = event.sender_id
+
+    # Check if user is admin
+    if not await util.isAdmin(user_id):
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}❌ This command is only available to administrators."
+        )
+        return
+
+    # Get API key
+    api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
+    if not api_key:
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}❌ Gemini API key not found. Please set it first with /setgeminikey"
+        )
+        return
+
+    await event.reply(f"{BOT_META_INFO_PREFIX}🧪 Testing live session connection...")
+
+    try:
+        print(f"[TestLive] Starting test for user {user_id}")
+
+        # Import required modules
+        from google import genai
+        from google.genai import types
+        import io
+        import tempfile
+
+        # Create client
+        client = genai.Client(api_key=api_key)
+        model = "gemini-2.5-flash-preview-native-audio-dialog"
+
+        config = {"response_modalities": ["TEXT"]}
+
+        print(f"[TestLive] Created client and config")
+        print(f"[TestLive] Model: {model}")
+        print(f"[TestLive] Config: {config}")
+
+        # Test connection
+        async with client.aio.live.connect(model=model, config=config) as session:
+            print(f"[TestLive] Successfully connected to live session!")
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}✅ Live session connected successfully!"
+            )
+
+            # Send a simple text message
+            await session.send_client_content(
+                turns={
+                    "role": "user",
+                    "parts": [{"text": "Hello, this is a test message"}],
+                },
+                turn_complete=True,
+            )
+            print(f"[TestLive] Sent test message")
+
+            # Wait for response with timeout
+            response_received = False
+            async for response in session.receive():
+                if response.text is not None:
+                    print(f"[TestLive] Received response: {response.text[:100]}...")
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}📨 Received response: {response.text[:200]}..."
+                    )
+                    response_received = True
+                    break
+
+            if not response_received:
+                await event.reply(
+                    f"{BOT_META_INFO_PREFIX}⚠️ No response received from live session"
+                )
+
+        print(f"[TestLive] Test completed successfully")
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}✅ Live session test completed successfully!"
+        )
+
+    except Exception as test_error:
+        error_msg = str(test_error)
+        print(f"[TestLive] Test failed: {error_msg}")
+        traceback.print_exc()
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}❌ Live session test failed: {error_msg}"
+        )
 
 
 async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
