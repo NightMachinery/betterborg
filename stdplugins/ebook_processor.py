@@ -84,7 +84,7 @@ async def ebook_handler(event):
         PROCESSED_GROUP_IDS.add(group_id)
 
     # --- Status message handling ---
-    status_message = await event.reply("`Processing ebook(s)...`")
+    status_message = await event.reply("Processing ebook(s)…")
 
     try:
         # The `run_and_upload` utility handles file download, command execution,
