@@ -340,29 +340,32 @@ async def isAdmin(
             admins = admins + additional_admins
 
         msg = msg or getattr(event, "message", None)
-        if msg is None:
-            #: This might be a query call back.
-            ##
-            sender_id = getattr(event, "sender_id", None)
-            sender_username = getattr(event, "sender_username", None)
-            return sender_id in admins or sender_username in admins
+        sender = getattr(msg, "sender", None) if msg else None
+        sender = sender or getattr(event, "sender", None)
 
-        else:
-            sender = getattr(msg, "sender", getattr(event, "sender", None))
-            sender_is_admin = sender is not None and (
-                getattr(sender, "is_self", False)
-                or (sender.id) in admins
-                or (sender).username in admins
-            )
+        sender_id = getattr(sender, "id", None) or getattr(event, "sender_id", None)
+        sender_username = getattr(sender, "username", None)
+        sender_is_admin = (
+            getattr(sender, "is_self", False)
+            or sender_id in admins
+            or sender_username in admins
+        )
+        res = sender_is_admin
+
+        if msg:
+            res = res or (getattr(msg, "out", False))
 
         if event:
-            chat = await event.get_chat()
+            chat = None
+            try:
+                chat = await event.get_chat()
+            except:
+                pass
 
             if chat:
-                # Doesnt work with private channels' links
+                #: Doesnt work with private channels' links
                 res = (
-                    sender_is_admin
-                    or (getattr(msg, "out", False))
+                    res
                     or (str(chat.id) in adminChats)
                     or (getattr(chat, "username", "NA") in admins)
                 )
@@ -371,9 +374,8 @@ async def isAdmin(
                 # embed(using='asyncio')
                 # embed2()
 
-            return res
-        else:
-            return sender_is_admin
+        return res
+
     except:
         borg._logger.warn(traceback.format_exc())
         return False
