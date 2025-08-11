@@ -801,13 +801,20 @@ async def _get_user_metadata_prefix(message: Message) -> str:
     """Generates the user and timestamp part of the metadata prefix."""
     sender = await message.get_sender()
     sender_name = getattr(sender, "first_name", None) or "Unknown"
+    username = getattr(sender, "username", None)
     timestamp = message.date.isoformat()
 
     if message.sender_id == BOT_ID:
         #: no need to inject useless metadata about the bot itself
         return ""
     else:
-        return f"[Sender: {sender_name} (ID: {message.sender_id}) | Sending Date: {timestamp}]"
+        sender_info = {
+            "name": sender_name,
+            "id": message.sender_id
+        }
+        if username:
+            sender_info["username"] = username
+        return f"[Sender: {sender_info} | Sending Date: {timestamp}]"
 
 
 async def _get_forward_metadata_prefix(message: Message) -> str:
@@ -817,15 +824,23 @@ async def _get_forward_metadata_prefix(message: Message) -> str:
 
     fwd_parts = []
     fwd_from_name = None
+    fwd_username = None
     fwd_entity = message.forward.sender or message.forward.chat
     if fwd_entity:
         fwd_from_name = getattr(
             fwd_entity, "title", getattr(fwd_entity, "first_name", None)
         )
+        fwd_username = getattr(fwd_entity, "username", None)
     if not fwd_from_name:
         fwd_from_name = message.forward.from_name
-    if fwd_from_name:
-        fwd_parts.append(f"From (Name): {fwd_from_name}")
+    
+    if fwd_from_name or fwd_username:
+        from_info = {}
+        if fwd_from_name:
+            from_info["name"] = fwd_from_name
+        if fwd_username:
+            from_info["username"] = fwd_username
+        fwd_parts.append(f"From: {from_info}")
 
     if message.forward.from_id:
         fwd_peer_id = (
