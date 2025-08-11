@@ -1,29 +1,34 @@
 import asyncio
-import json
-import time
+import os
 import uuid
-import base64
-import subprocess
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Optional, Set
-import websockets
+from typing import Dict, Optional, Any
 from dataclasses import dataclass, field
 
 from pynight.common_icecream import ic
 from uniborg import util
 
+try:
+    from google import genai
+    from google.genai import types
+
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+    ic(
+        "Google GenAI SDK not available. Please install with: pip install google-genai[live]"
+    )
+
 # Constants
 LIVE_TIMEOUT = 10 * 60  # 10 minutes in seconds
 CONCURRENT_LIVE_LIMIT = 3
 ADMIN_CONCURRENT_LIVE_LIMIT = 5
-WEBSOCKET_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 
 # Audio format constants for Gemini Live API
 GEMINI_AUDIO_SAMPLE_RATE = 16000
 GEMINI_AUDIO_CHANNELS = 1
-GEMINI_AUDIO_FORMAT = "audio/pcm;rate=16000"
 
 
 @dataclass
@@ -33,12 +38,14 @@ class LiveSession:
     chat_id: int
     user_id: int
     model: str
-    websocket: Optional[websockets.WebSocketServerProtocol] = None
+    api_key: str
+    session: Optional[Any] = None  # genai.live.LiveSession
     session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = field(default_factory=datetime.now)
     last_activity: datetime = field(default_factory=datetime.now)
     is_connected: bool = False
     pending_audio_queue: list = field(default_factory=list)
+    _response_task: Optional[asyncio.Task] = None
 
     def is_expired(self) -> bool:
         """Check if session has expired due to inactivity."""
@@ -54,7 +61,6 @@ class LiveSessionManager:
 
     def __init__(self):
         self.sessions: Dict[int, LiveSession] = {}  # chat_id -> LiveSession
-        self.user_session_count: Dict[int, int] = {}  # user_id -> count
         self._cleanup_task = None
         self._start_cleanup_task()
 
@@ -99,7 +105,12 @@ class LiveSessionManager:
     async def create_session(
         self, chat_id: int, user_id: int, model: str, api_key: str
     ) -> LiveSession:
-        """Create a new live session."""
+        """Create a new live session using Google GenAI SDK."""
+        if not GENAI_AVAILABLE:
+            raise ValueError(
+                "Google GenAI SDK not available. Please install with: pip install google-genai[live]"
+            )
+
         if not self.can_create_session(user_id):
             limit = (
                 ADMIN_CONCURRENT_LIVE_LIMIT
@@ -112,22 +123,37 @@ class LiveSessionManager:
         if chat_id in self.sessions:
             await self.end_session(chat_id)
 
-        # Create session and connect to WebSocket
-        session = LiveSession(chat_id=chat_id, user_id=user_id, model=model)
+        # Create session object
+        session_obj = LiveSession(
+            chat_id=chat_id, user_id=user_id, model=model, api_key=api_key
+        )
 
-        # Initialize Gemini Live API and connect
-        gemini_api = GeminiLiveAPI(api_key)
         try:
-            websocket = await gemini_api.create_websocket_connection(model)
-            session.websocket = websocket
-            session.is_connected = True
-            ic(f"Created live session {session.session_id[:8]}... for chat {chat_id}")
+            # Configure Google GenAI client
+            client = genai.Client(api_key=api_key)
+
+            # Configure session for audio responses
+            config = types.LiveConnectConfig(
+                response_modalities=[
+                    "AUDIO"
+                ],  # Only audio responses to avoid conflicts
+            )
+
+            # Create live session
+            live_session = client.aio.live.connect(model=model, config=config)
+            session_obj.session = live_session
+            session_obj.is_connected = True
+
+            ic(
+                f"Created live session {session_obj.session_id[:8]}... for chat {chat_id} with model {model}"
+            )
+
         except Exception as e:
-            ic(f"Failed to create WebSocket connection: {e}")
+            ic(f"Failed to create live session: {e}")
             raise ValueError(f"Failed to connect to Gemini Live API: {str(e)}")
 
-        self.sessions[chat_id] = session
-        return session
+        self.sessions[chat_id] = session_obj
+        return session_obj
 
     def get_session(self, chat_id: int) -> Optional[LiveSession]:
         """Get active session for a chat."""
@@ -138,17 +164,33 @@ class LiveSessionManager:
         session = self.sessions.pop(chat_id, None)
         if session:
             try:
-                if session.websocket and not session.websocket.closed:
-                    await session.websocket.close()
+                # Cancel response task if running
+                if session._response_task and not session._response_task.done():
+                    session._response_task.cancel()
+                    try:
+                        await session._response_task
+                    except asyncio.CancelledError:
+                        pass
+
+                # Close the live session
+                if session.session:
+                    try:
+                        await session.session.close()
+                    except Exception as e:
+                        ic(f"Error closing live session: {e}")
+
+                session.is_connected = False
+                ic(f"Ended live session for chat {chat_id}")
+
             except Exception as e:
-                ic(f"Error closing websocket: {e}")
+                ic(f"Error ending session: {e}")
             return True
         return False
 
     def is_live_mode_active(self, chat_id: int) -> bool:
         """Check if live mode is active for a chat."""
         session = self.sessions.get(chat_id)
-        return session is not None and not session.is_expired()
+        return session is not None and session.is_connected and not session.is_expired()
 
     def update_session_activity(self, chat_id: int):
         """Update last activity for a session."""
@@ -158,87 +200,30 @@ class LiveSessionManager:
 
 
 class GeminiLiveAPI:
-    """Interface for Gemini Live API WebSocket communication."""
+    """Interface for Gemini Live API using Google GenAI SDK."""
 
     def __init__(self, api_key: str):
         self.api_key = api_key
+        if GENAI_AVAILABLE:
+            self.client = genai.Client(api_key=api_key)
 
-    async def create_websocket_connection(
-        self, model: str
-    ) -> websockets.WebSocketServerProtocol:
-        """Create WebSocket connection to Gemini Live API."""
-        url = f"{WEBSOCKET_URL}?access_token={self.api_key}"
-
-        # Create connection
-        websocket = await websockets.connect(url)
-
-        # Send setup message
-        setup_message = {
-            "setup": {
-                "model": f"models/{model}",
-                "generation_config": {
-                    "response_modalities": ["AUDIO", "TEXT"],
-                    "speech_config": {
-                        "voice_config": {
-                            "prebuilt_voice_config": {"voice_name": "Aoede"}
-                        }
-                    },
-                },
-            }
-        }
-
-        await websocket.send(json.dumps(setup_message))
-
-        # Wait for setup acknowledgment
-        response = await websocket.recv()
-        setup_response = json.loads(response)
-
-        if "setup_complete" not in setup_response:
-            raise ValueError(f"Failed to setup WebSocket connection: {setup_response}")
-
-        return websocket
-
-    async def send_audio_chunk(
-        self,
-        websocket: websockets.WebSocketServerProtocol,
-        audio_data: bytes,
-        mime_type: str = GEMINI_AUDIO_FORMAT,
-    ):
-        """Send audio data to Gemini Live API."""
-        # Encode audio data as base64
-        audio_b64 = base64.b64encode(audio_data).decode("utf-8")
-
-        message = {
-            "realtime_input": {
-                "media_chunks": [{"data": audio_b64, "mime_type": mime_type}]
-            }
-        }
-
-        await websocket.send(json.dumps(message))
-
-    async def send_text(self, websocket: websockets.WebSocketServerProtocol, text: str):
+    async def send_text(self, session: Any, text: str):
         """Send text message to Gemini Live API."""
-        message = {
-            "client_content": {
-                "turns": [{"role": "user", "parts": [{"text": text}]}],
-                "turn_complete": True,
-            }
-        }
-
-        await websocket.send(json.dumps(message))
-
-    async def receive_responses(
-        self, websocket: websockets.WebSocketServerProtocol, callback
-    ):
-        """Listen for responses from Gemini Live API."""
         try:
-            async for message in websocket:
-                data = json.loads(message)
-                await callback(data)
-        except websockets.exceptions.ConnectionClosed:
-            ic("WebSocket connection closed")
+            await session.send(text, end_of_turn=True)
+            ic(f"Sent text: {text[:50]}...")
         except Exception as e:
-            ic(f"Error receiving responses: {e}")
+            ic(f"Error sending text: {e}")
+            raise
+
+    async def send_audio_chunk(self, session: Any, audio_data: bytes):
+        """Send audio data to Gemini Live API."""
+        try:
+            await session.send(audio_data)
+            ic(f"Sent audio chunk: {len(audio_data)} bytes")
+        except Exception as e:
+            ic(f"Error sending audio: {e}")
+            raise
 
 
 class AudioProcessor:
@@ -270,9 +255,10 @@ class AudioProcessor:
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
 
-            await process.communicate()
+            stdout, stderr = await process.communicate()
 
             if process.returncode != 0:
+                ic(f"FFmpeg error: {stderr.decode()}")
                 raise ValueError(
                     f"ffmpeg conversion failed with return code {process.returncode}"
                 )
@@ -319,9 +305,10 @@ class AudioProcessor:
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
 
-            await process.communicate()
+            stdout, stderr = await process.communicate()
 
             if process.returncode != 0:
+                ic(f"FFmpeg error: {stderr.decode()}")
                 raise ValueError(
                     f"ffmpeg conversion failed with return code {process.returncode}"
                 )

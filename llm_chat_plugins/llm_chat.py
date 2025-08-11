@@ -2833,54 +2833,49 @@ async def handle_live_mode_message(event):
 
         gemini_api = gemini_live_util.GeminiLiveAPI(api_key)
 
+        # Start the session context manager if not already started
+        if not hasattr(session, "_session_context"):
+            session._session_context = session.session
+            await session._session_context.__aenter__()
+
+            # Start response listener
+            session._response_task = asyncio.create_task(
+                handle_live_mode_responses(session, event)
+            )
+
+        live_session = session._session_context
+
         # Handle different message types
         if event.text:
             # Text message
-            await gemini_api.send_text(session.websocket, event.text)
-            ic(f"Sent text to live session: {event.text[:50]}...")
+            await gemini_api.send_text(live_session, event.text)
 
-        elif event.audio or event.video or event.voice:
-            # Audio/Video message
+        elif event.audio or event.voice:
+            # Audio message
             media_info = await event.download_media(bytes)
             if media_info:
-                # Convert audio format if needed
-                if event.audio or event.voice:
-                    # Save to temp file for processing
-                    import tempfile
+                # Save to temp file for processing
+                with tempfile.NamedTemporaryFile(
+                    suffix=".ogg", delete=False
+                ) as temp_file:
+                    temp_file.write(media_info)
+                    temp_path = temp_file.name
 
-                    with tempfile.NamedTemporaryFile(
-                        suffix=".ogg", delete=False
-                    ) as temp_file:
-                        temp_file.write(media_info)
-                        temp_path = temp_file.name
-
-                    try:
-                        # Convert OGG to PCM for Gemini
-                        pcm_data = (
-                            await gemini_live_util.AudioProcessor.convert_ogg_to_pcm(
-                                temp_path
-                            )
-                        )
-                        await gemini_api.send_audio_chunk(session.websocket, pcm_data)
-                        ic(f"Sent audio to live session: {len(pcm_data)} bytes")
-                    finally:
-                        # Clean up temp file
-                        from pathlib import Path
-
-                        Path(temp_path).unlink(missing_ok=True)
-
-                elif event.video:
-                    # For now, handle video as audio extraction
-                    # TODO: Add proper video support
-                    ic("Video messages not yet fully supported in live mode")
-                    await event.reply(
-                        f"{BOT_META_INFO_PREFIX}📹 Video messages are not yet fully supported in live mode."
+                try:
+                    # Convert OGG to PCM for Gemini
+                    pcm_data = await gemini_live_util.AudioProcessor.convert_ogg_to_pcm(
+                        temp_path
                     )
+                    await gemini_api.send_audio_chunk(live_session, pcm_data)
+                finally:
+                    # Clean up temp file
+                    Path(temp_path).unlink(missing_ok=True)
 
-        # Set up response listener if not already running
-        if not hasattr(session, "_response_task") or session._response_task.done():
-            session._response_task = asyncio.create_task(
-                handle_live_mode_responses(session, event)
+        elif event.video:
+            # For now, handle video as audio extraction
+            ic("Video messages not yet fully supported in live mode")
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}📹 Video messages are not yet fully supported in live mode."
             )
 
     except Exception as e:
@@ -2893,59 +2888,48 @@ async def handle_live_mode_message(event):
 async def handle_live_mode_responses(session, original_event):
     """Handle responses from Gemini Live API."""
     try:
-        api_key = llm_db.get_api_key(user_id=session.user_id, service="gemini")
-        gemini_api = gemini_live_util.GeminiLiveAPI(api_key)
+        live_session = session._session_context
 
-        async def response_callback(data):
+        async for response in live_session:
             try:
-                if "serverContent" in data:
-                    server_content = data["serverContent"]
+                # Handle different types of responses
+                if hasattr(response, "text") and response.text:
+                    # Text response
+                    await borg.send_message(session.chat_id, response.text)
+                    ic(f"Sent text response: {response.text[:50]}...")
 
-                    # Handle text responses
-                    if "modelTurn" in server_content:
-                        model_turn = server_content["modelTurn"]
-                        if "parts" in model_turn:
-                            for part in model_turn["parts"]:
-                                if "text" in part:
-                                    text_response = part["text"]
-                                    if text_response.strip():
-                                        await borg.send_message(
-                                            session.chat_id, text_response
-                                        )
-                                        ic(
-                                            f"Sent text response: {text_response[:50]}..."
-                                        )
+                elif hasattr(response, "data") and response.data:
+                    # Audio response
+                    audio_data = response.data
 
-                                elif "inlineData" in part and part["inlineData"][
-                                    "mimeType"
-                                ].startswith("audio/"):
-                                    # Handle audio response
-                                    audio_data = base64.b64decode(
-                                        part["inlineData"]["data"]
-                                    )
+                    # Convert audio to OGG format for Telegram
+                    try:
+                        ogg_data = (
+                            await gemini_live_util.AudioProcessor.convert_pcm_to_ogg(
+                                audio_data, sample_rate=24000
+                            )
+                        )
 
-                                    # Convert PCM to OGG for Telegram
-                                    ogg_data = await gemini_live_util.AudioProcessor.convert_pcm_to_ogg(
-                                        audio_data
-                                    )
+                        # Send as voice message
+                        await borg.send_file(
+                            session.chat_id, ogg_data, attributes=[], voice_note=True
+                        )
+                        ic(f"Sent voice response: {len(ogg_data)} bytes")
+                    except Exception as audio_error:
+                        ic(f"Error processing audio response: {audio_error}")
+                        # Fallback: send as text if audio processing fails
+                        await borg.send_message(
+                            session.chat_id, "[Audio response - processing failed]"
+                        )
 
-                                    # Send as voice message
-                                    await borg.send_file(
-                                        session.chat_id,
-                                        ogg_data,
-                                        attributes=[],
-                                        voice_note=True,
-                                    )
-                                    ic(f"Sent voice response: {len(ogg_data)} bytes")
-
-                elif "toolCall" in data:
-                    # Handle tool calls if needed in the future
-                    ic(f"Tool call received: {data['toolCall']}")
+                # Update session activity
+                gemini_live_util.live_session_manager.update_session_activity(
+                    session.chat_id
+                )
 
             except Exception as e:
-                ic(f"Error processing response: {e}")
-
-        await gemini_api.receive_responses(session.websocket, response_callback)
+                ic(f"Error processing individual response: {e}")
+                continue
 
     except Exception as e:
         ic(f"Error in response handler: {e}")

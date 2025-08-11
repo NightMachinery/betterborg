@@ -43,11 +43,9 @@ sqlalchemy
 
 redis
 
-google-genai
+google-genai[live]
 
 typed-ffmpeg
-
-websockets
 
 litellm
 
