@@ -205,7 +205,7 @@ class LiveSessionManager:
     def is_live_mode_active(self, chat_id: int) -> bool:
         """Check if live mode is active for a chat."""
         session = self.sessions.get(chat_id)
-        return session is not None and session.is_connected and not session.is_expired()
+        return session is not None and not session.is_expired()
 
     def update_session_activity(self, chat_id: int):
         """Update last activity for a session."""
