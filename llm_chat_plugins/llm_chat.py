@@ -2817,7 +2817,7 @@ async def handle_live_mode_message(event):
     chat_id = event.chat_id
     session = gemini_live_util.live_session_manager.get_session(chat_id)
 
-    if not session or not session.is_connected:
+    if not session or session.is_expired():
         await event.reply(
             f"{BOT_META_INFO_PREFIX}❌ Live session disconnected. Use `/live` to restart."
         )
@@ -2856,10 +2856,32 @@ async def handle_live_mode_message(event):
 
         live_session = session._session_context
 
-        # Handle different message types
+        # Handle different message types with connection error recovery
         if event.text:
             # Text message
-            await gemini_api.send_text(live_session, event.text)
+            try:
+                await gemini_api.send_text(live_session, event.text)
+            except Exception as send_error:
+                print(f"Error sending to live session: {send_error}")
+                traceback.print_exc()
+
+                # Check if it's a connection error - if so, mark session as disconnected
+                if (
+                    "connection" in str(send_error).lower()
+                    or "websocket" in str(send_error).lower()
+                ):
+                    session.is_connected = False
+                    session._session_context = None
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}❌ Live session connection lost. Use `/live` to restart."
+                    )
+                    return
+                else:
+                    # Other error - still notify user
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}❌ Error in live session: {str(send_error)}"
+                    )
+                    return
 
         elif event.audio or event.voice:
             # Audio message
@@ -2877,7 +2899,32 @@ async def handle_live_mode_message(event):
                     pcm_data = await gemini_live_util.AudioProcessor.convert_ogg_to_pcm(
                         temp_path
                     )
-                    await gemini_api.send_audio_chunk(live_session, pcm_data)
+
+                    # Send audio with connection error handling
+                    try:
+                        await gemini_api.send_audio_chunk(live_session, pcm_data)
+                    except Exception as send_error:
+                        print(f"Error sending audio to live session: {send_error}")
+                        traceback.print_exc()
+
+                        # Check if it's a connection error
+                        if (
+                            "connection" in str(send_error).lower()
+                            or "websocket" in str(send_error).lower()
+                        ):
+                            session.is_connected = False
+                            session._session_context = None
+                            await event.reply(
+                                f"{BOT_META_INFO_PREFIX}❌ Live session connection lost. Use `/live` to restart."
+                            )
+                            return
+                        else:
+                            # Other error - still notify user
+                            await event.reply(
+                                f"{BOT_META_INFO_PREFIX}❌ Error sending audio to live session: {str(send_error)}"
+                            )
+                            return
+
                 finally:
                     # Clean up temp file
                     Path(temp_path).unlink(missing_ok=True)

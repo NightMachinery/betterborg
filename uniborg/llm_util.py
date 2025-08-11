@@ -138,7 +138,9 @@ async def handle_llm_error(
     traceback.print_exc()
 
 
-def create_llm_start_handler(service: str, welcome_message: str, configured_message: str):
+def create_llm_start_handler(
+    service: str, welcome_message: str, configured_message: str
+):
     """
     Creates a generic /start command handler for onboarding and LLM API key checks.
     """

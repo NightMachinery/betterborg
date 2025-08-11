@@ -205,7 +205,14 @@ class LiveSessionManager:
     def is_live_mode_active(self, chat_id: int) -> bool:
         """Check if live mode is active for a chat."""
         session = self.sessions.get(chat_id)
-        return session is not None and not session.is_expired()
+        if session is None or session.is_expired():
+            return False
+
+        # If session context was started but connection lost, consider it inactive
+        if session._session_context is not None and not session.is_connected:
+            return False
+
+        return True
 
     def update_session_activity(self, chat_id: int):
         """Update last activity for a session."""
