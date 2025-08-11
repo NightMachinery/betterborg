@@ -1,0 +1,13 @@
+#+TITLE: tts_plugins/private_readme
+
+* TTS
+#+begin_src zsh :eval never
+borgdir=~/code/betterborg/
+# set this the directory containing betterborg
+##
+# IMPORTANT: needs the same functions as `llm_chat` defined, copy those function definitions here before running!
+##
+
+tmuxnew betterborg_tts "dash -c 'cd $(gq $borgdir) && borg_session=session_tts borg_plugin_path=tts_plugins borg_brish_count=1 $(gq "$(realpath2 python3)") $(gq $borgdir/stdborg.py)'"
+#+end_src
+
