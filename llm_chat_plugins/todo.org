@@ -8,7 +8,7 @@ read https://ai.google.dev/gemini-api/docs/live ,  https://colab.research.google
 #+end_verse
 
 * TTS
-** create a TTS plugin =tts_bot.py= which has its own =/geminiVoice= command and has the commands for setting gemini api key. this bot should simply forward anything the user sends to the tts util with no templating.
+** DONE create a TTS plugin =tts_bot.py= which has its own =/geminiVoice= command and has the commands for setting gemini api key. this bot should simply forward anything the user sends to the tts util with no templating.
 When the user attaches files (grouped messages must be supported), we should find text files (ignore others and print warnings) and concat those text files to the end of the user's message with this template:
 #+begin_example
 File: name_of_file.txt
@@ -19,7 +19,7 @@ TEXT_OF_FILE_HERE
 
 We should then send the resulting audio as a voice note to the user. We should ignore messages that are not private.
 
-*** When the current message is a reply to another message, include that message (as if it was grouped together with the current message).
+*** DONE tts_bot: When the current message is a reply to another message, include that message (together with its grouped messages) (as if they were grouped together with the current message).
 
 ** DONE the display when we show the menu to choose gemini voices is different between the the initial menu and the way it updates after a query callback. both menus should look the same and show both the voice's name and its description: =Zephyr: Bright=.
 
@@ -50,7 +50,7 @@ Add a style argumemt which defaults to:
 ```
 #+END_SRC
 
-** add =/tts= which shows a menu for selecting TTS model (gemini-2.5-flash-preview-tts, pro) or "Disabled" for the current chat. When TTS mode is active, after sending the text reply, use Gemini's TTS API to convert the text into audio and send as a Telegram voice note. First brainstorm with me on the design and say your own ideas and opinions, then plan then execute. ultrathink
+** DONE add =/tts= which shows a menu for selecting TTS model (gemini-2.5-flash-preview-tts, pro) or "Disabled" for the current chat. When TTS mode is active, after sending the text reply, use Gemini's TTS API to convert the text into audio and send as a Telegram voice note. First brainstorm with me on the design and say your own ideas and opinions, then plan then execute. ultrathink
 
 * _
 #+begin_verse
