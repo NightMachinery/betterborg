@@ -316,8 +316,7 @@ def register_handlers():
     borg.on(events.CallbackQuery(pattern=b"voice_"))(voice_callback_handler)
     borg.on(
         events.NewMessage(
-            func=lambda e: e.is_private and (e.text or e.media)  # and not e.forward
-            # let us allow forwarded messages for now
+            func=lambda e: e.is_private and (e.text or e.media) and not e.forward
         )
     )(message_handler)
 
