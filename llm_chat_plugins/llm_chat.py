@@ -37,7 +37,7 @@ from uniborg.constants import BOT_META_INFO_PREFIX
 from uniborg import redis_util
 
 # --- Constants and Configuration ---
-
+NOT_SET_HERE_DISPLAY_NAME = "Not Set for This Chat Specifically"
 
 # Use the litellm model naming convention.
 # See https://docs.litellm.ai/docs/providers/gemini
@@ -202,10 +202,6 @@ BOT_COMMANDS = [
     {
         "command": "contextmodehere",
         "description": "Set context mode for the current chat",
-    },
-    {
-        "command": "resetcontextmodehere",
-        "description": "Reset context mode for the current chat",
     },
     {
         "command": "getcontextmodehere",
@@ -519,6 +515,37 @@ def get_system_prompt_info(event) -> SystemPromptInfo:
         source=source
     )
 
+async def _get_context_mode_status_text(event) -> str:
+    """Generates a user-friendly string explaining the current context mode for a chat."""
+    user_id = event.sender_id
+    prefs = user_manager.get_prefs(user_id)
+    is_private = event.is_private
+
+    # Determine the base mode and its source
+    chat_context_mode = chat_manager.get_context_mode(event.chat_id)
+    if chat_context_mode:
+        effective_mode = chat_context_mode
+        source_text = "a specific setting for **this chat**"
+    else:
+        effective_mode = prefs.context_mode if is_private else prefs.group_context_mode
+        source_text = "your **personal default** for private chats" if is_private else "your **personal default** for group chats"
+
+    mode_name = CONTEXT_MODE_NAMES.get(effective_mode, effective_mode)
+
+    # Build the response message
+    response_parts = [
+        f"∙ **Current Mode:** `{mode_name}`",
+        f"∙ **Source:** This is using {source_text}.",
+    ]
+
+    # If the effective mode is 'smart', add the current state
+    if effective_mode == 'smart':
+        current_smart_state = get_smart_context_mode(user_id)
+        smart_state_name = CONTEXT_MODE_NAMES.get(current_smart_state, current_smart_state)
+        response_parts.append(f"∙ **Smart State:** The bot is currently using the `{smart_state_name}` method.")
+
+    return "\n".join(response_parts)
+
 async def present_options(
     event,
     *,
@@ -541,9 +568,14 @@ async def present_options(
             )
             for key, display_name in options.items()
         ]
+        title_bold = title
+        if not title_bold.startswith("**"):
+            title_bold = f"**{title_bold}**"
+
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}**{title}**",
+            f"{BOT_META_INFO_PREFIX}{title_bold}",
             buttons=util.build_menu(buttons, n_cols=n_cols),
+            parse_mode="md"
         )
     else:
         option_keys = list(options.keys())
@@ -560,7 +592,7 @@ async def present_options(
             "type": awaiting_key,
             "keys": option_keys,
         }
-        await event.reply(f"{BOT_META_INFO_PREFIX}\n".join(menu_text))
+        await event.reply(f"{BOT_META_INFO_PREFIX}\n".join(menu_text), parse_mode="md")
 
 
 
@@ -1194,7 +1226,6 @@ def register_handlers():
     borg.on(events.NewMessage(pattern=rf"(?i)^/resetsystemprompthere{bot_username_suffix_re}\s*$"))(reset_system_prompt_here_handler)
     borg.on(events.NewMessage(pattern=rf"(?i)^/getsystemprompthere{bot_username_suffix_re}\s*$"))(get_system_prompt_here_handler)
     borg.on(events.NewMessage(pattern=rf"(?i)^/contextmodehere{bot_username_suffix_re}\s*$"))(context_mode_here_handler)
-    borg.on(events.NewMessage(pattern=rf"(?i)^/resetcontextmodehere{bot_username_suffix_re}\s*$"))(reset_context_mode_here_handler)
     borg.on(events.NewMessage(pattern=rf"(?i)^/getcontextmodehere{bot_username_suffix_re}\s*$"))(get_context_mode_here_handler)
     borg.on(events.NewMessage(pattern=rf"(?i)^/contextmode{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(context_mode_handler)
     borg.on(events.NewMessage(pattern=rf"(?i)^/groupcontextmode{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(group_context_mode_handler)
@@ -1627,7 +1658,7 @@ async def get_system_prompt_here_handler(event):
 
 
 async def context_mode_here_handler(event):
-    """Sets the context mode for the current chat."""
+    """Sets the context mode for the current chat, including status and a reset option."""
     is_bot_admin = await util.isAdmin(event)
     is_group_admin = await util.is_group_admin(event)
 
@@ -1637,14 +1668,22 @@ async def context_mode_here_handler(event):
         )
         return
 
+    # Get the current status text to display to the user
+    status_text = await _get_context_mode_status_text(event)
+
+    # Get the currently set chat-specific preference
     chat_prefs = chat_manager.get_prefs(event.chat_id)
-    current_mode = chat_prefs.context_mode
+    current_mode = chat_prefs.context_mode  # This will be None if not set
+
+    # Prepare options for the menu, including a "Not Set" option for resetting
+    options_for_menu = CONTEXT_MODE_NAMES.copy()
+    options_for_menu["not_set"] = NOT_SET_HERE_DISPLAY_NAME
 
     await present_options(
         event,
-        title="Set Context Mode for This Chat",
-        options=CONTEXT_MODE_NAMES,
-        current_value=current_mode,
+        title=f"**Current Status:**\n{status_text}\n\n**Set Context Mode for This Chat**",
+        options=options_for_menu,
+        current_value=current_mode if current_mode is not None else "not_set",
         callback_prefix="contexthere_",
         awaiting_key="context_mode_here_selection",
         n_cols=1,
@@ -1653,6 +1692,9 @@ async def context_mode_here_handler(event):
 
 async def reset_context_mode_here_handler(event):
     """Resets the context mode for the current chat."""
+    #: This command has been deprecated and is no longer registered.
+    #: But we have kept its code for possible future use.
+    ##
     is_bot_admin = await util.isAdmin(event)
     is_group_admin = await util.is_group_admin(event)
 
@@ -1670,34 +1712,11 @@ async def reset_context_mode_here_handler(event):
 
 async def get_context_mode_here_handler(event):
     """Gets and displays the context mode for the current chat."""
-    user_id = event.sender_id
-    prefs = user_manager.get_prefs(user_id)
-    is_private = event.is_private
-
-    # Determine the base mode and its source
-    chat_context_mode = chat_manager.get_context_mode(event.chat_id)
-    if chat_context_mode:
-        effective_mode = chat_context_mode
-        source_text = "the current chat setting"
-    else:
-        effective_mode = prefs.context_mode if is_private else prefs.group_context_mode
-        source_text = "your generic private preference" if is_private else "your generic group preference"
-
-    mode_name = CONTEXT_MODE_NAMES.get(effective_mode, effective_mode)
-
-    # Build the response message
-    response_parts = [
-        f"{BOT_META_INFO_PREFIX}**Context mode source:** {source_text}\n"
-        f"**Effective Mode:** `{mode_name}`"
-    ]
-
-    # If the effective mode is 'smart', add the current state
-    if effective_mode == 'smart':
-        current_smart_state = get_smart_context_mode(user_id)
-        smart_state_name = CONTEXT_MODE_NAMES.get(current_smart_state, current_smart_state)
-        response_parts.append(f"**Current Smart State:** `{smart_state_name}`")
-
-    await event.reply("\n".join(response_parts), parse_mode="md")
+    status_text = await _get_context_mode_status_text(event)
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}**Chat Context Mode Status**\n\n{status_text}",
+        parse_mode="md"
+    )
 
 
 # --- New Feature Handlers ---
@@ -1927,16 +1946,35 @@ async def callback_handler(event):
             return
 
         mode = data_str.split("_", 1)[1]
-        chat_manager.set_context_mode(event.chat_id, mode)
+
+        # If user selected "not_set", we store None
+        mode_to_set = None if mode == "not_set" else mode
+        chat_manager.set_context_mode(event.chat_id, mode_to_set)
+
+        # Re-fetch prefs to update the button display correctly
         chat_prefs = chat_manager.get_prefs(event.chat_id)
+        current_mode_for_buttons = chat_prefs.context_mode if chat_prefs.context_mode is not None else "not_set"
+
+        options_for_menu = CONTEXT_MODE_NAMES.copy()
+        options_for_menu["not_set"] = "Not Set (Use Personal Default)"
+
         buttons = [
             KeyboardButtonCallback(
-                f"✅ {name}" if key == chat_prefs.context_mode else name,
+                f"✅ {name}" if key == current_mode_for_buttons else name,
                 data=f"contexthere_{key}",
             )
-            for key, name in CONTEXT_MODE_NAMES.items()
+            for key, name in options_for_menu.items()
         ]
-        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
+
+        # We also need to update the title text after the change
+        new_status_text = await _get_context_mode_status_text(event)
+        new_title = f"**Current Status:**\n{new_status_text}\n\n**Set Context Mode for This Chat**"
+
+        try:
+            await event.edit(text=f"{BOT_META_INFO_PREFIX}{new_title}", buttons=util.build_menu(buttons, n_cols=1), parse_mode="md")
+        except errors.rpcerrorlist.MessageNotModifiedError:
+            pass # Ignore if nothing changed
+
         await event.answer("Chat context mode updated.")
     elif data_str.startswith("groupcontext_"):
         mode = data_str.split("_", 1)[1]
@@ -2038,9 +2076,16 @@ async def generic_input_handler(event):
                         f"{BOT_META_INFO_PREFIX}✅ Group context mode set to: **{CONTEXT_MODE_NAMES[selected_key]}**"
                     )
                 elif input_type == "context_mode_here_selection":
-                    chat_manager.set_context_mode(event.chat_id, selected_key)
+                    mode_to_set = None if selected_key == "not_set" else selected_key
+                    chat_manager.set_context_mode(event.chat_id, mode_to_set)
+
+                    # Fetch the display name for the confirmation message
+                    display_name = NOT_SET_HERE_DISPLAY_NAME
+                    if mode_to_set:
+                        display_name = CONTEXT_MODE_NAMES[mode_to_set]
+
                     await event.reply(
-                        f"{BOT_META_INFO_PREFIX}✅ Chat context mode set to: **{CONTEXT_MODE_NAMES[selected_key]}**"
+                        f"{BOT_META_INFO_PREFIX}✅ This chat's context mode has been set to: **{display_name}**"
                     )
                 elif input_type == "metadata_mode_selection":
                     user_manager.set_metadata_mode(user_id, selected_key)
