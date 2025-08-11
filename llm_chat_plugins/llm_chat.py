@@ -2642,7 +2642,7 @@ async def live_handler(event):
         live_model = prefs.live_model
 
         # Get API key
-        api_key = llm_db.get_key(user_id, "gemini")
+        api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
         if not api_key:
             await event.reply(
                 f"{BOT_META_INFO_PREFIX}❌ Please set your Gemini API key first using `/setgeminikey`."
@@ -2826,7 +2826,7 @@ async def handle_live_mode_message(event):
 
     try:
         # Get API key
-        api_key = llm_db.get_key(event.sender_id, "gemini")
+        api_key = llm_db.get_api_key(user_id=event.sender_id, service="gemini")
         if not api_key:
             await event.reply(f"{BOT_META_INFO_PREFIX}❌ API key not found.")
             return
@@ -2893,7 +2893,7 @@ async def handle_live_mode_message(event):
 async def handle_live_mode_responses(session, original_event):
     """Handle responses from Gemini Live API."""
     try:
-        api_key = llm_db.get_key(session.user_id, "gemini")
+        api_key = llm_db.get_api_key(user_id=session.user_id, service="gemini")
         gemini_api = gemini_live_util.GeminiLiveAPI(api_key)
 
         async def response_callback(data):
