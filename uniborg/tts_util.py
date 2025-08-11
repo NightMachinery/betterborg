@@ -91,47 +91,37 @@ async def generate_tts_audio(
     Raises:
         Exception: On API errors
     """
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
 
-    # Configure the API
-    genai.configure(api_key=api_key)
+    # Create client with API key
+    client = genai.Client(api_key=api_key)
 
-    # Create the model with TTS configuration
-    tts_model = genai.GenerativeModel(
-        model_name=model,
-        generation_config={
-            "speech_config": {
-                "voice_config": {"name": voice}
-            }
-        }
+    # Generate audio using the correct API structure
+    response = client.models.generate_content(
+        model=model,
+        contents=text,
+        config=types.GenerateContentConfig(
+            response_modalities=["AUDIO"],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=voice,
+                    )
+                )
+            ),
+        )
     )
 
-    # Generate audio
-    response = tts_model.generate_content(text)
-
-    # Try different ways to access the audio data
-    if hasattr(response, 'audio') and response.audio:
-        return response.audio.data
-    elif hasattr(response, 'parts') and response.parts:
-        for part in response.parts:
-            if hasattr(part, 'audio_data') and part.audio_data:
-                return part.audio_data
-            if hasattr(part, 'audio') and part.audio:
-                return part.audio.data if hasattr(part.audio, 'data') else part.audio
-    elif hasattr(response, 'candidates') and response.candidates:
-        for candidate in response.candidates:
-            if hasattr(candidate, 'content') and candidate.content:
-                for part in candidate.content.parts:
-                    if hasattr(part, 'audio_data') and part.audio_data:
-                        return part.audio_data
-    
-    # Debug information
-    print(f"TTS Debug: response type: {type(response)}")
-    print(f"TTS Debug: response attributes: {dir(response)}")
-    if hasattr(response, 'parts'):
-        print(f"TTS Debug: parts: {response.parts}")
-        for i, part in enumerate(response.parts):
-            print(f"TTS Debug: part {i} type: {type(part)}, attributes: {dir(part)}")
+    # Extract audio data from response
+    if (response.candidates 
+        and len(response.candidates) > 0 
+        and response.candidates[0].content 
+        and response.candidates[0].content.parts 
+        and len(response.candidates[0].content.parts) > 0
+        and response.candidates[0].content.parts[0].inline_data):
+        
+        return response.candidates[0].content.parts[0].inline_data.data
     
     raise Exception("No audio data returned from TTS API")
 
