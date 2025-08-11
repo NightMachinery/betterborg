@@ -54,19 +54,16 @@ user_manager = UserManager()
 # --- Core Logic ---
 
 
-async def _get_text_from_files(event, temp_dir: Path) -> tuple[str, list[str]]:
+async def _get_text_from_files(
+    all_messages: list, temp_dir: Path
+) -> tuple[str, list[str]]:
     """
-    Downloads media, filters for text files, and extracts their content.
+    Downloads media from a list of messages, filters for text files, and extracts their content.
     Returns the combined text and a list of warnings for ignored files.
     """
     text_content_parts = []
     warnings = []
     text_extensions = {".txt", ".md", ".py", ".json", ".xml", ".log", ".csv"}
-
-    initial_messages = [event.message]
-    all_messages = await bot_util.expand_and_sort_messages_with_groups(
-        event, initial_messages
-    )
 
     for message in all_messages:
         if not message.media:
@@ -100,7 +97,7 @@ async def message_handler(event):
         #: It also conveniently skips file-only messages in general, which will allow the user to reply to them and specify their instructions and style.
         return
 
-    if event.text and event.text.startswith("/"):
+    if event.text.startswith("/"):
         return
     if llm_db.is_awaiting_key(event.sender_id):
         return
@@ -123,9 +120,44 @@ async def message_handler(event):
 
     try:
         temp_dir.mkdir(exist_ok=True)
-        final_text = event.text or ""
 
-        file_text, warnings = await _get_text_from_files(event, temp_dir)
+        # Build the list of initial messages by walking up the entire reply chain
+        initial_messages = [event.message]
+        if event.is_reply:
+            try:
+                message = event.message
+                while message and message.reply_to_msg_id:
+                    message = await event.client.get_messages(
+                        event.chat_id, ids=message.reply_to_msg_id
+                    )
+                    if message:
+                        initial_messages.append(message)
+                    else:
+                        break
+            except Exception as e:
+                print(f"TTS Bot: Could not fetch full reply chain: {e}")
+
+        # Expand to include all messages in media groups and sort chronologically
+        all_messages_to_process = await bot_util.expand_and_sort_messages_with_groups(
+            event, initial_messages
+        )
+
+        # Start with the current message's text (the instructions)
+        final_text = event.text
+
+        # Append text from all other messages in chronological order
+        past_messages_text = [
+            msg.text
+            for msg in all_messages_to_process
+            if msg.id != event.id and msg.text and not msg.text.startswith("/")
+        ]
+        if past_messages_text:
+            final_text += "\n\n" + "\n\n".join(past_messages_text)
+
+        # Extract text from any attached text files from all messages and append it
+        file_text, warnings = await _get_text_from_files(
+            all_messages_to_process, temp_dir
+        )
         if file_text:
             final_text = f"{final_text}\n\n{file_text}".strip()
 
