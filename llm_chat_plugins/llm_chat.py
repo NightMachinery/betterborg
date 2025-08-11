@@ -2735,13 +2735,26 @@ async def testlive_handler(event):
 
         # Create client
         client = genai.Client(api_key=api_key)
-        model = "gemini-2.5-flash-preview-native-audio-dialog"
+        # Try a more basic live model first
+        model = "gemini-2.0-flash-live-001"
 
         config = {"response_modalities": ["TEXT"]}
 
         print(f"[TestLive] Created client and config")
         print(f"[TestLive] Model: {model}")
         print(f"[TestLive] Config: {config}")
+
+        # Test basic API access first
+        try:
+            models = client.models.list()
+            print(f"[TestLive] API key valid, found {len(list(models))} models")
+        except Exception as api_error:
+            print(f"[TestLive] API key validation failed: {api_error}")
+            await event.reply(f"{BOT_META_INFO_PREFIX}❌ API key validation failed: {str(api_error)}")
+            return
+
+        await event.reply(f"{BOT_META_INFO_PREFIX}🔗 Attempting WebSocket connection...")
+        print(f"[TestLive] Attempting WebSocket connection to Gemini Live API...")
 
         # Test connection
         async with client.aio.live.connect(model=model, config=config) as session:
