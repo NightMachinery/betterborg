@@ -47,6 +47,10 @@ google-genai
 
 typed-ffmpeg
 
+websockets
+
+litellm
+
 # junk deps:
 # sortedcontainers
 # jsonpickle

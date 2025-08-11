@@ -9,6 +9,7 @@ import base64
 import mimetypes
 import re
 import json
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from shutil import rmtree
@@ -35,6 +36,9 @@ from uniborg import history_util
 from uniborg import bot_util  # Import the shared utility module
 from uniborg.storage import UserStorage
 from uniborg.constants import BOT_META_INFO_PREFIX
+
+# Import live mode utilities
+from uniborg import gemini_live_util
 
 # Redis utilities for smart context state persistence
 from uniborg import redis_util
@@ -238,6 +242,11 @@ BOT_COMMANDS = [
     {"command": "tts", "description": "Set TTS model for this chat"},
     {"command": "geminivoice", "description": "Set global Gemini voice"},
     {"command": "geminivoicehere", "description": "Set Gemini voice for this chat"},
+    {
+        "command": "live",
+        "description": "Toggle live mode for real-time audio/video chat",
+    },
+    {"command": "livemodel", "description": "Set your preferred live mode model"},
 ]
 # Create a set of command strings (e.g., {"/start", "/help"}) for efficient lookup
 KNOWN_COMMAND_SET = {f"/{cmd['command']}".lower() for cmd in BOT_COMMANDS}
@@ -339,6 +348,7 @@ class UserPrefs(BaseModel):
     metadata_mode: str = Field(default="only_forwarded")
     group_metadata_mode: str = Field(default="full_metadata")
     tts_global_voice: str = Field(default=tts_util.DEFAULT_VOICE)
+    live_model: str = Field(default="gemini-2.5-flash-preview-native-audio-dialog")
 
 
 class ChatPrefs(BaseModel):
@@ -348,6 +358,7 @@ class ChatPrefs(BaseModel):
     context_mode: Optional[str] = Field(default=None)
     tts_model: str = Field(default="Disabled")
     tts_voice_override: Optional[str] = Field(default=None)
+    live_mode_enabled: bool = Field(default=False)
 
 
 class UserManager:
@@ -450,6 +461,11 @@ class UserManager:
         prefs.tts_global_voice = voice
         self._save_prefs(user_id, prefs)
 
+    def set_live_model(self, user_id: int, model: str):
+        prefs = self.get_prefs(user_id)
+        prefs.live_model = model
+        self._save_prefs(user_id, prefs)
+
 
 class ChatManager:
     """High-level manager for chat-specific settings."""
@@ -506,6 +522,14 @@ class ChatManager:
         prefs = self.get_prefs(chat_id)
         prefs.tts_voice_override = voice
         self._save_prefs(chat_id, prefs)
+
+    def set_live_mode_enabled(self, chat_id: int, enabled: bool):
+        prefs = self.get_prefs(chat_id)
+        prefs.live_mode_enabled = enabled
+        self._save_prefs(chat_id, prefs)
+
+    def is_live_mode_enabled(self, chat_id: int) -> bool:
+        return self.get_prefs(chat_id).live_mode_enabled
 
 
 user_manager = UserManager()
@@ -1470,6 +1494,18 @@ def register_handlers():
     borg.on(
         events.NewMessage(pattern=rf"(?i)^/geminivoicehere{bot_username_suffix_re}\s*$")
     )(gemini_voice_here_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/live{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(live_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/livemodel{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(livemodel_handler)
 
     # Func-based Handlers
     borg.on(
@@ -2404,6 +2440,29 @@ async def callback_handler(event):
         await event.edit(buttons=util.build_menu(buttons, n_cols=3))
         voice_name = voice if voice else f"Global Default ({global_voice})"
         await event.answer(f"Chat voice set to {voice_name}")
+    elif data_str.startswith("livemodel_"):
+        model_key = _unsanitize_model_key(data_str.split("_", 1)[1])
+        user_manager.set_live_model(user_id, model_key)
+        cancel_input_flow(user_id)
+        prefs = user_manager.get_prefs(user_id)  # update prefs
+
+        # Rebuild buttons with current selection
+        live_model_options = {
+            "gemini-2.5-flash-preview-native-audio-dialog": "Gemini 2.5 Flash (Native Audio Dialog)",
+            "gemini-2.5-flash-exp-native-audio-thinking-dialog": "Gemini 2.5 Flash (Native Audio + Thinking)",
+            "gemini-live-2.5-flash-preview": "Gemini Live 2.5 Flash Preview",
+            "gemini-2.0-flash-live-001": "Gemini 2.0 Flash Live",
+        }
+
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {display}" if key == prefs.live_model else display,
+                data=f"livemodel_{_sanitize_model_key(key)}",
+            )
+            for key, display in live_model_options.items()
+        ]
+        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
+        await event.answer(f"Live model set to {live_model_options[model_key]}")
 
 
 async def generic_input_handler(event):
@@ -2540,6 +2599,101 @@ async def generic_input_handler(event):
     cancel_input_flow(user_id)
 
 
+# --- Live Mode Handlers ---
+
+
+async def live_handler(event):
+    """Toggle live mode for real-time audio/video chat."""
+    if not event.is_private:
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}❌ Live mode is only available in private chats."
+        )
+        return
+
+    user_id = event.sender_id
+    chat_id = event.chat_id
+
+    # Get current live mode state
+    is_active = gemini_live_util.live_session_manager.is_live_mode_active(chat_id)
+
+    if is_active:
+        # End live session
+        ended = await gemini_live_util.live_session_manager.end_session(chat_id)
+        if ended:
+            chat_manager.set_live_mode_enabled(chat_id, False)
+            await event.reply(f"{BOT_META_INFO_PREFIX}🔴 Live mode disabled.")
+        else:
+            await event.reply(f"{BOT_META_INFO_PREFIX}❌ No active live session found.")
+    else:
+        # Check if user can create a new session
+        if not gemini_live_util.live_session_manager.can_create_session(user_id):
+            limit = (
+                gemini_live_util.ADMIN_CONCURRENT_LIVE_LIMIT
+                if util.isAdmin(user_id)
+                else gemini_live_util.CONCURRENT_LIVE_LIMIT
+            )
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}❌ Maximum concurrent sessions limit reached ({limit})."
+            )
+            return
+
+        # Get user's live model preference and API key
+        prefs = user_manager.get_prefs(user_id)
+        live_model = prefs.live_model
+
+        # Get API key
+        api_key = llm_db.get_key(user_id, "gemini")
+        if not api_key:
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}❌ Please set your Gemini API key first using `/setgeminikey`."
+            )
+            return
+
+        try:
+            # Create new live session
+            session = await gemini_live_util.live_session_manager.create_session(
+                chat_id, user_id, live_model, api_key
+            )
+            chat_manager.set_live_mode_enabled(chat_id, True)
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}🟢 Live mode enabled with model **{live_model}**.\n"
+                f"Send audio, video, or text messages for real-time conversation.\n"
+                f"Session ID: `{session.session_id[:8]}...`"
+            )
+        except Exception as e:
+            ic(f"Error creating live session: {e}")
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}❌ Failed to start live mode: {str(e)}"
+            )
+
+
+async def livemodel_handler(event):
+    """Set your preferred live mode model."""
+    user_id = event.sender_id
+
+    # Available live models with display names
+    live_model_options = {
+        "gemini-2.5-flash-preview-native-audio-dialog": "Gemini 2.5 Flash (Native Audio Dialog)",
+        "gemini-2.5-flash-exp-native-audio-thinking-dialog": "Gemini 2.5 Flash (Native Audio + Thinking)",
+        "gemini-live-2.5-flash-preview": "Gemini Live 2.5 Flash Preview",
+        "gemini-2.0-flash-live-001": "Gemini 2.0 Flash Live",
+    }
+
+    # Get current live model
+    prefs = user_manager.get_prefs(user_id)
+    current_model = prefs.live_model
+
+    await present_options(
+        event,
+        title="Select your preferred live mode model",
+        options=live_model_options,
+        current_value=current_model,
+        callback_prefix="livemodel_",
+        awaiting_key="livemodel_selection",
+        n_cols=1,
+    )
+
+
 async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     """
     Determines if a message is a valid conversational message to be
@@ -2621,23 +2775,29 @@ async def _handle_tts_response(event, response_text: str):
         try:
             # Send as voice message with proper attributes
             from telethon.tl.types import DocumentAttributeAudio
+
             await event.client.send_file(
                 event.chat_id,
                 ogg_file_path,
                 voice_note=True,
                 reply_to=event.id,
-                attributes=[DocumentAttributeAudio(
-                    duration=0,  # Duration will be auto-detected by Telegram
-                    voice=True
-                )]
+                attributes=[
+                    DocumentAttributeAudio(
+                        duration=0,  # Duration will be auto-detected by Telegram
+                        voice=True,
+                    )
+                ],
             )
         finally:
             # Clean up temporary file
             try:
                 import os
+
                 os.remove(ogg_file_path)
             except Exception as cleanup_error:
-                print(f"Warning: Failed to cleanup TTS temp file {ogg_file_path}: {cleanup_error}")
+                print(
+                    f"Warning: Failed to cleanup TTS temp file {ogg_file_path}: {cleanup_error}"
+                )
 
         # Send truncation notice if needed
         if was_truncated:
@@ -2650,12 +2810,161 @@ async def _handle_tts_response(event, response_text: str):
         await tts_util.handle_tts_error(event=event, exception=e, service="gemini")
 
 
+async def handle_live_mode_message(event):
+    """Handle messages when live mode is active."""
+    chat_id = event.chat_id
+    session = gemini_live_util.live_session_manager.get_session(chat_id)
+
+    if not session or not session.is_connected:
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}❌ Live session disconnected. Use `/live` to restart."
+        )
+        return
+
+    # Update session activity
+    gemini_live_util.live_session_manager.update_session_activity(chat_id)
+
+    try:
+        # Get API key
+        api_key = llm_db.get_key(event.sender_id, "gemini")
+        if not api_key:
+            await event.reply(f"{BOT_META_INFO_PREFIX}❌ API key not found.")
+            return
+
+        gemini_api = gemini_live_util.GeminiLiveAPI(api_key)
+
+        # Handle different message types
+        if event.text:
+            # Text message
+            await gemini_api.send_text(session.websocket, event.text)
+            ic(f"Sent text to live session: {event.text[:50]}...")
+
+        elif event.audio or event.video or event.voice:
+            # Audio/Video message
+            media_info = await event.download_media(bytes)
+            if media_info:
+                # Convert audio format if needed
+                if event.audio or event.voice:
+                    # Save to temp file for processing
+                    import tempfile
+
+                    with tempfile.NamedTemporaryFile(
+                        suffix=".ogg", delete=False
+                    ) as temp_file:
+                        temp_file.write(media_info)
+                        temp_path = temp_file.name
+
+                    try:
+                        # Convert OGG to PCM for Gemini
+                        pcm_data = (
+                            await gemini_live_util.AudioProcessor.convert_ogg_to_pcm(
+                                temp_path
+                            )
+                        )
+                        await gemini_api.send_audio_chunk(session.websocket, pcm_data)
+                        ic(f"Sent audio to live session: {len(pcm_data)} bytes")
+                    finally:
+                        # Clean up temp file
+                        from pathlib import Path
+
+                        Path(temp_path).unlink(missing_ok=True)
+
+                elif event.video:
+                    # For now, handle video as audio extraction
+                    # TODO: Add proper video support
+                    ic("Video messages not yet fully supported in live mode")
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}📹 Video messages are not yet fully supported in live mode."
+                    )
+
+        # Set up response listener if not already running
+        if not hasattr(session, "_response_task") or session._response_task.done():
+            session._response_task = asyncio.create_task(
+                handle_live_mode_responses(session, event)
+            )
+
+    except Exception as e:
+        ic(f"Error handling live mode message: {e}")
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}❌ Error processing message: {str(e)}"
+        )
+
+
+async def handle_live_mode_responses(session, original_event):
+    """Handle responses from Gemini Live API."""
+    try:
+        api_key = llm_db.get_key(session.user_id, "gemini")
+        gemini_api = gemini_live_util.GeminiLiveAPI(api_key)
+
+        async def response_callback(data):
+            try:
+                if "serverContent" in data:
+                    server_content = data["serverContent"]
+
+                    # Handle text responses
+                    if "modelTurn" in server_content:
+                        model_turn = server_content["modelTurn"]
+                        if "parts" in model_turn:
+                            for part in model_turn["parts"]:
+                                if "text" in part:
+                                    text_response = part["text"]
+                                    if text_response.strip():
+                                        await borg.send_message(
+                                            session.chat_id, text_response
+                                        )
+                                        ic(
+                                            f"Sent text response: {text_response[:50]}..."
+                                        )
+
+                                elif "inlineData" in part and part["inlineData"][
+                                    "mimeType"
+                                ].startswith("audio/"):
+                                    # Handle audio response
+                                    audio_data = base64.b64decode(
+                                        part["inlineData"]["data"]
+                                    )
+
+                                    # Convert PCM to OGG for Telegram
+                                    ogg_data = await gemini_live_util.AudioProcessor.convert_pcm_to_ogg(
+                                        audio_data
+                                    )
+
+                                    # Send as voice message
+                                    await borg.send_file(
+                                        session.chat_id,
+                                        ogg_data,
+                                        attributes=[],
+                                        voice_note=True,
+                                    )
+                                    ic(f"Sent voice response: {len(ogg_data)} bytes")
+
+                elif "toolCall" in data:
+                    # Handle tool calls if needed in the future
+                    ic(f"Tool call received: {data['toolCall']}")
+
+            except Exception as e:
+                ic(f"Error processing response: {e}")
+
+        await gemini_api.receive_responses(session.websocket, response_callback)
+
+    except Exception as e:
+        ic(f"Error in response handler: {e}")
+        # Mark session as disconnected
+        session.is_connected = False
+
+
 async def chat_handler(event):
     """Main handler for all non-command messages in a private chat."""
     user_id = event.sender_id
+    chat_id = event.chat_id
 
     # Intercept if user is in any waiting state first.
     if llm_db.is_awaiting_key(user_id) or user_id in AWAITING_INPUT_FROM_USERS:
+        return
+
+    # Intercept for live mode if active
+    if gemini_live_util.live_session_manager.is_live_mode_active(chat_id):
+        await handle_live_mode_message(event)
         return
 
     # --- Context and Separator Logic ---

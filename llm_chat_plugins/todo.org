@@ -7,6 +7,8 @@
 read https://ai.google.dev/gemini-api/docs/live ,  https://colab.research.google.com/github/google-gemini/cookbook/blob/main/quickstarts/Get_started_LiveAPI.py . We want to implement a live mode for llm_chat  that is toggled by `/live` and uses the user's live model pref (default to  `gemini-2.5-flash-preview-native-audio-dialog`). we don't do any streaming on  audio data and send audio as voice notes to telegram. we'll use the  Server-to-server live mode mentioned in the links before. the user can send  audio and video, though telegram audio files are in ogg format. ultrathink,  first plan, then ask questions, then execute.
 #+end_verse
 
+** update =/status= to show live mode details
+
 * TTS
 ** Refactor shred logic between =handle_llm_error= and =handle_tts_error=.
 
