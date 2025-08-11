@@ -99,7 +99,7 @@ class LiveSessionManager:
     async def can_create_session(self, user_id: int) -> bool:
         """Check if user can create a new session based on limits."""
         current_count = self.get_user_session_count(user_id)
-        is_admin = await util.isAdmin(user_id)
+        is_admin = util.is_admin_by_id(user_id)
         limit = ADMIN_CONCURRENT_LIVE_LIMIT if is_admin else CONCURRENT_LIVE_LIMIT
         return current_count < limit
 
@@ -113,7 +113,7 @@ class LiveSessionManager:
             )
 
         if not await self.can_create_session(user_id):
-            is_admin = await util.isAdmin(user_id)
+            is_admin = util.is_admin_by_id(user_id)
             limit = ADMIN_CONCURRENT_LIVE_LIMIT if is_admin else CONCURRENT_LIVE_LIMIT
             raise ValueError(f"Maximum concurrent sessions limit reached ({limit})")
 

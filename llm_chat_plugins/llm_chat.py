@@ -2634,7 +2634,7 @@ async def live_handler(event):
     else:
         # Check if user can create a new session
         if not await gemini_live_util.live_session_manager.can_create_session(user_id):
-            is_admin = await util.isAdmin(user_id)
+            is_admin = await util.isAdmin(event)
             limit = (
                 gemini_live_util.ADMIN_CONCURRENT_LIVE_LIMIT
                 if is_admin
@@ -2708,7 +2708,7 @@ async def testlive_handler(event):
     user_id = event.sender_id
 
     # Check if user is admin
-    if not await util.isAdmin(user_id):
+    if not await util.isAdmin(event):
         await event.reply(
             f"{BOT_META_INFO_PREFIX}❌ This command is only available to administrators."
         )

@@ -381,6 +381,15 @@ async def isAdmin(
         return False
 
 
+def is_admin_by_id(user_id: int, admins=admins, additional_admins=[]) -> bool:
+    """Check if a user ID is in the admin list (non-async version)."""
+    try:
+        all_admins = admins + additional_admins
+        return user_id in all_admins
+    except:
+        return False
+
+
 async def is_read(borg, entity, message, is_out=None):
     """
     Returns True if the given message (or id) has been read
