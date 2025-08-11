@@ -92,7 +92,7 @@ async def ebook_handler(event):
         await util.run_and_upload(
             event=event,
             to_await=process_ebooks_and_clean,
-            album_mode=True,  # Send cover and .md file(s) together
+            album_mode=False,  #: It's better to send each book separately, not grouped together
             quiet=True,  # Suppress default status messages from run_and_upload
         )
     finally:
