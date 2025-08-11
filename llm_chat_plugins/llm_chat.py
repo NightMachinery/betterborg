@@ -476,6 +476,21 @@ def _unsanitize_model_key(sanitized_key: str) -> str:
         sanitized_key = sanitized_key.replace(replacement, char)
     return sanitized_key
 
+
+def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
+    """Checks if text starts with a known command, with optional bot username stripping."""
+    if not text:
+        return False
+
+    # Extract first word/command
+    command = text.split(None, 1)[0].lower()
+
+    # Strip bot username if requested (for event.text processing)
+    if strip_bot_username and BOT_USERNAME:
+        command = re.sub(re.escape(BOT_USERNAME) + r"\b", "", command, flags=re.IGNORECASE).strip()
+
+    return command in KNOWN_COMMAND_SET
+
 def is_native_gemini(model: str) -> bool:
     """Check if model is native Gemini (not OpenRouter) and supports context caching."""
     return model.startswith("gemini/")
@@ -833,7 +848,7 @@ async def _get_forward_metadata_prefix(message: Message) -> str:
         fwd_username = getattr(fwd_entity, "username", None)
     if not fwd_from_name:
         fwd_from_name = message.forward.from_name
-    
+
     # Get from_id if available
     fwd_peer_id = None
     if message.forward.from_id:
@@ -911,11 +926,7 @@ async def _process_message_content(
         and message.text.startswith(BOT_META_INFO_PREFIX)
     ):
         return [], []
-    if (
-        role == "user"
-        and message.text
-        and message.text.split(" ", 1)[0].lower() in KNOWN_COMMAND_SET
-    ):
+    if role == "user" and _is_known_command(message.text):
         return [], []
 
     processed_text = message.text
@@ -2160,11 +2171,8 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     if event.forward:
         return False
 
-    if event.text:
-        _text = event.text.split(None, 1)[0].lower()
-        _text = re.sub(re.escape(BOT_USERNAME) + r"\b", "", _text, flags=re.IGNORECASE).strip()
-        if _text in KNOWN_COMMAND_SET:
-            return False
+    if _is_known_command(event.text):
+        return False
 
     # Userbot-specific filters
     if not IS_BOT:
