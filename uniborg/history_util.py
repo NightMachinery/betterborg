@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace, asdict
 from . import redis_util
 
 # --- Configuration ---
-HISTORY_LIMIT = 2000  # Max number of message IDs to store per chat
+HISTORY_LIMIT = 5000  # Max number of message IDs to store per chat
 
 # --- Data Structures ---
 
