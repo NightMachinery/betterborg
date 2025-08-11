@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 # Import uniborg utilities
 from uniborg import util
+from uniborg import llm_db
 from uniborg import bot_util
 from uniborg.storage import UserStorage
 from uniborg.constants import BOT_META_INFO_PREFIX
@@ -153,7 +154,7 @@ async def start_handler(event):
     user_id = event.sender_id
     cancel_input_flow(user_id)
     
-    api_key = bot_util.get_api_key(user_id)
+    api_key = llm_db.get_api_key(user_id)
     if not api_key:
         await event.reply(
             f"{BOT_META_INFO_PREFIX}**Welcome to Image Generation Bot! 🎨**\n\n"
@@ -198,7 +199,7 @@ async def status_handler(event):
     """Handle /status command."""
     user_id = event.sender_id
     prefs = user_manager.get_prefs(user_id)
-    api_key = bot_util.get_api_key(user_id)
+    api_key = llm_db.get_api_key(user_id)
     
     status_text = f"""**Image Generation Settings 🎨**
 
@@ -405,7 +406,7 @@ async def callback_handler(event):
 # --- Image Generation ---
 async def generate_image(prompt: str, user_id: int) -> list:
     """Generate images using Google Gen AI API."""
-    api_key = bot_util.get_api_key(user_id)
+    api_key = llm_db.get_api_key(user_id)
     if not api_key:
         raise ValueError("No API key configured")
     
@@ -448,7 +449,7 @@ async def message_handler(event):
         return
     
     user_id = event.sender_id
-    api_key = bot_util.get_api_key(user_id)
+    api_key = llm_db.get_api_key(user_id)
     
     if not api_key:
         await event.reply(
