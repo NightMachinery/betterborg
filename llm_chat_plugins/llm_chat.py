@@ -2648,23 +2648,31 @@ async def _handle_tts_response(event, response_text: str):
         # Truncate text if needed
         truncated_text, was_truncated = tts_util.truncate_text_for_tts(response_text)
 
-        # Generate TTS audio (returns WAV file path)
-        wav_file_path = await tts_util.generate_tts_audio(
+        # Generate TTS audio (returns OGG file path)
+        ogg_file_path = await tts_util.generate_tts_audio(
             truncated_text, voice=voice, model=tts_model, api_key=api_key
         )
 
         try:
-            # Send as voice message
+            # Send as voice message with proper attributes
+            from telethon.tl.types import DocumentAttributeAudio
             await event.client.send_file(
-                event.chat_id, wav_file_path, voice_note=True, reply_to=event.id
+                event.chat_id, 
+                ogg_file_path, 
+                voice_note=True,
+                reply_to=event.id,
+                attributes=[DocumentAttributeAudio(
+                    duration=0,  # Duration will be auto-detected by Telegram
+                    voice=True
+                )]
             )
         finally:
             # Clean up temporary file
             try:
                 import os
-                os.remove(wav_file_path)
+                os.remove(ogg_file_path)
             except Exception as cleanup_error:
-                print(f"Warning: Failed to cleanup TTS temp file {wav_file_path}: {cleanup_error}")
+                print(f"Warning: Failed to cleanup TTS temp file {ogg_file_path}: {cleanup_error}")
 
         # Send truncation notice if needed
         if was_truncated:

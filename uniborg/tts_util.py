@@ -85,6 +85,29 @@ def _create_wav_file(pcm_data: bytes, filename: str, channels: int = 1, rate: in
         wf.writeframes(pcm_data)
 
 
+def _convert_wav_to_ogg(wav_path: str, ogg_path: str):
+    """Convert WAV file to OGG with Opus codec for Telegram voice messages."""
+    try:
+        import ffmpeg
+        
+        # Convert WAV to OGG with Opus codec using typed-ffmpeg
+        (
+            ffmpeg
+            .input(wav_path)
+            .audio.codec('libopus')
+            .audio.bitrate('32k')
+            .audio.sample_rate(16000)
+            .audio.channels(1)
+            .output(ogg_path)
+            .run(overwrite_output=True, quiet=True)
+        )
+        
+    except ImportError:
+        raise Exception("typed-ffmpeg not found. Please install typed-ffmpeg for TTS voice message support: pip install typed-ffmpeg")
+    except Exception as e:
+        raise Exception(f"Failed to convert WAV to OGG: {str(e)}")
+
+
 async def generate_tts_audio(
     text: str, *, voice: str, model: str, api_key: str
 ) -> str:
@@ -98,7 +121,7 @@ async def generate_tts_audio(
         api_key: Gemini API key
 
     Returns:
-        Path to the generated WAV file
+        Path to the generated OGG file (Telegram voice message format)
 
     Raises:
         Exception: On API errors
@@ -136,13 +159,28 @@ async def generate_tts_audio(
         pcm_data = response.candidates[0].content.parts[0].inline_data.data
         
         # Create temporary WAV file
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-            wav_filename = temp_file.name
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as wav_file:
+            wav_filename = wav_file.name
         
-        # Create WAV file from PCM data
-        _create_wav_file(pcm_data, wav_filename)
+        # Create temporary OGG file  
+        with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as ogg_file:
+            ogg_filename = ogg_file.name
         
-        return wav_filename
+        try:
+            # Create WAV file from PCM data
+            _create_wav_file(pcm_data, wav_filename)
+            
+            # Convert WAV to OGG with Opus codec for Telegram
+            _convert_wav_to_ogg(wav_filename, ogg_filename)
+            
+            return ogg_filename
+            
+        finally:
+            # Clean up intermediate WAV file
+            try:
+                os.remove(wav_filename)
+            except Exception:
+                pass  # Ignore cleanup errors
     
     raise Exception("No audio data returned from TTS API")
 
