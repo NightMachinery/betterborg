@@ -1,6 +1,12 @@
 #+TITLE: llm_chat_plugins/breadcrumbs
 
-* userbot
+* backup user data 
+Add to cron:
+#+begin_example
+@weekly silent backup-borg
+#+end_example
+
+* Run as a userbot
 #+begin_src zsh :eval never
 borgdir=~/code/betterborg/
 # set this the directory containing betterborg
@@ -12,3 +18,4 @@ tmuxnew () {
 
 tmuxnew betterborg_llm_chat_userbot "dash -c 'cd $(gq $borgdir) && borg_session=session_llm_chat_userbot borg_plugin_path=llm_chat_plugins borg_brish_count=1 $(gq "$(realpath2 python3)") $(gq $borgdir/stdborg.py)'"
 #+end_src
+

@@ -3,37 +3,60 @@ The crust of this fork is the advanced_get plugin, which gives you a unix shell 
 
 Needs Python 3.7.2+.
 
+* llm-chat
+#+begin_src zsh :eval never
+# Install dash, zsh, tmux, grealpath (GNU realpath, on Linux you could probably use `alias grealpath=realpath`)
+# Run in Zsh:
+##
+borgdir=~/code/betterborg/
+# set this the directory containing betterborg
+##
+function ec {
+    #: `ec` should almost always be used instead of `echo`.
+    print -r -- "$@"
+}
+
+function ecn {
+    print -rn -- "$@"
+}
+
+function ecerr {
+    ec "$@" >&2
+}
+
+function gquote {
+    ec "${(qq@)@}"
+}
+alias gq=gquote
+
+tmuxnew () {
+    tmux kill-session -t "$1" &> /dev/null
+    tmux new -d -s "$@"
+}
+
+function realpath2 {
+    test -e "$1" && grealpath -e -- "$1" || {
+            (( ${+commands[$1]} )) && grealpath -e -- "${commands[$1]}"
+        }
+    ##
+    # -e, --canonicalize-existing: all components of the path must exist
+    ##
+}
+##
+
+tmuxnew betterborg_llm_chat "dash -c 'cd $(gq $borgdir) && borg_session=session_llm_chat borg_plugin_path=llm_chat_plugins borg_brish_count=1 $(gq "$(realpath2 python3)") $(gq $borgdir/stdborg.py)'"
+#+end_src
+
 * llm-stt
 #+begin_src zsh :eval never
 borgdir=~/code/betterborg/
 # set this the directory containing betterborg
 ##
-tmuxnew () {
-    tmux kill-session -t "$1" &> /dev/null
-    tmux new -d -s "$@"
-}
+# IMPORTANT: needs the same functions as `llm_chat` defined, copy those function definitions here before running!
+##
 
 tmuxnew betterborg_stt "dash -c 'cd $(gq $borgdir) && borg_session=session_stt borg_plugin_path=stt_plugins borg_brish_count=1 $(gq "$(realpath2 python3)") $(gq $borgdir/stdborg.py)'"
 #+end_src
-
-* llm-chat
-#+begin_src zsh :eval never
-borgdir=~/code/betterborg/
-# set this the directory containing betterborg
-##
-tmuxnew () {
-    tmux kill-session -t "$1" &> /dev/null
-    tmux new -d -s "$@"
-}
-
-tmuxnew betterborg_llm_chat "dash -c 'cd $(gq $borgdir) && borg_session=session_llm_chat borg_plugin_path=llm_chat_plugins borg_brish_count=1 $(gq "$(realpath2 python3)") $(gq $borgdir/stdborg.py)'"
-#+end_src
-
-** backup user data :noexport:
-Add to cron:
-#+begin_example
-@weekly silent backup-borg
-#+end_example
 
 * uniborg
 Pluggable [[https://docs.python.org/3/library/asyncio.html][=asyncio=]] [[https://telegram.org][Telegram]] userbot based on [[https://github.com/LonamiWebs/Telethon][Telethon]].
