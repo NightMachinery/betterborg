@@ -97,9 +97,16 @@ class Uniborg(TelegramClient):
 
         self.me = await self.get_me()
         self.uid = telethon.utils.get_peer_id(self.me)
-        util.borg = self
-        llm_db.borg = self
-        history_util.borg = self
+        
+        # Inject borg instance into core modules
+        core_modules = [util, llm_db, history_util]
+        for module in core_modules:
+            module.borg = self
+        
+        # Cache bot information for plugin injection
+        self._is_bot = await self.is_bot()
+        self._bot_id = self.me.id
+        self._bot_username = f"@{self.me.username}" if self.me.username else None
 
     def load_plugin(self, shortname):
         self.load_plugin_from_file(f"{self._plugin_path}/{shortname}.py")

@@ -144,7 +144,7 @@ MODEL_CHOICES = {
     "openrouter/qwen/qwen3-coder:free": "🎁 Qwen3 Coder (Free, OpenRouter)",
     ## Various
     # "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "🎁 Venice Uncensored 24B (Free, OpenRouter)",
-    #: model name is too long for Telegram API's `data` field in `present_options`
+    #: model name is too long for Telegram API's `data` field in callback buttons
     ## Cloaked Models
 }
 LAST_N_MESSAGES_LIMIT = 50
@@ -540,24 +540,6 @@ chat_manager = ChatManager()
 # --- Core Logic & Helpers ---
 
 
-SANITIZATION_MAP = {
-    ":": "__COLON__",
-}
-
-
-def _sanitize_model_key(key: str) -> str:
-    """Replaces problematic characters in model keys for Telegram callback data."""
-    for char, replacement in SANITIZATION_MAP.items():
-        key = key.replace(char, replacement)
-    return key
-
-
-def _unsanitize_model_key(sanitized_key: str) -> str:
-    """Restores original model key from sanitized Telegram callback data."""
-    for char, replacement in SANITIZATION_MAP.items():
-        sanitized_key = sanitized_key.replace(replacement, char)
-    return sanitized_key
-
 
 def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
     """Checks if text starts with a known command, with optional bot username stripping."""
@@ -677,7 +659,7 @@ async def present_options(
         buttons = [
             KeyboardButtonCallback(
                 f"✅ {display_name}" if key == current_value else display_name,
-                data=f"{callback_prefix}{_sanitize_model_key(key)}",
+                data=f"{callback_prefix}{bot_util.sanitize_callback_data(key)}",
             )
             for key, display_name in options.items()
         ]
@@ -2236,14 +2218,14 @@ async def callback_handler(event):
     prefs = user_manager.get_prefs(user_id)
 
     if data_str.startswith("model_"):
-        model_id = _unsanitize_model_key(data_str.split("_", 1)[1])
+        model_id = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
         user_manager.set_model(user_id, model_id)
         cancel_input_flow(user_id)  # Cancel the custom input flow
         prefs = user_manager.get_prefs(user_id)  # update prefs
         buttons = [
             KeyboardButtonCallback(
                 f"✅ {name}" if key == prefs.model else name,
-                data=f"model_{_sanitize_model_key(key)}",
+                data=f"model_{bot_util.sanitize_callback_data(key)}",
             )
             for key, name in MODEL_CHOICES.items()
         ]
@@ -2448,7 +2430,7 @@ async def callback_handler(event):
         voice_name = voice if voice else f"Global Default ({global_voice})"
         await event.answer(f"Chat voice set to {voice_name}")
     elif data_str.startswith("livemodel_"):
-        model_key = _unsanitize_model_key(data_str.split("_", 1)[1])
+        model_key = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
         user_manager.set_live_model(user_id, model_key)
         cancel_input_flow(user_id)
         prefs = user_manager.get_prefs(user_id)  # update prefs
@@ -2464,7 +2446,7 @@ async def callback_handler(event):
         buttons = [
             KeyboardButtonCallback(
                 f"✅ {display}" if key == prefs.live_model else display,
-                data=f"livemodel_{_sanitize_model_key(key)}",
+                data=f"livemodel_{bot_util.sanitize_callback_data(key)}",
             )
             for key, display in live_model_options.items()
         ]
