@@ -834,22 +834,24 @@ async def _get_forward_metadata_prefix(message: Message) -> str:
     if not fwd_from_name:
         fwd_from_name = message.forward.from_name
     
-    if fwd_from_name or fwd_username:
-        from_info = {}
-        if fwd_from_name:
-            from_info["name"] = fwd_from_name
-        if fwd_username:
-            from_info["username"] = fwd_username
-        fwd_parts.append(f"From: {from_info}")
-
+    # Get from_id if available
+    fwd_peer_id = None
     if message.forward.from_id:
         fwd_peer_id = (
             getattr(message.forward.from_id, "user_id", None)
             or getattr(message.forward.from_id, "chat_id", None)
             or getattr(message.forward.from_id, "channel_id", None)
         )
+
+    if fwd_from_name or fwd_username or fwd_peer_id:
+        from_info = {}
+        if fwd_from_name:
+            from_info["name"] = fwd_from_name
+        if fwd_username:
+            from_info["username"] = fwd_username
         if fwd_peer_id:
-            fwd_parts.append(f"From (ID): {fwd_peer_id}")
+            from_info["id"] = fwd_peer_id
+        fwd_parts.append(f"From: {from_info}")
 
     if message.forward.date:
         fwd_parts.append(f"Original Message Date: {message.forward.date.isoformat()}")
