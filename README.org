@@ -29,6 +29,12 @@ tmuxnew () {
 tmuxnew betterborg_llm_chat "dash -c 'cd $(gq $borgdir) && borg_session=session_llm_chat borg_plugin_path=llm_chat_plugins borg_brish_count=1 $(gq "$(realpath2 python3)") $(gq $borgdir/stdborg.py)'"
 #+end_src
 
+** backup user data :noexport:
+Add to cron:
+#+begin_example
+@weekly silent backup-borg
+#+end_example
+
 * uniborg
 Pluggable [[https://docs.python.org/3/library/asyncio.html][=asyncio=]] [[https://telegram.org][Telegram]] userbot based on [[https://github.com/LonamiWebs/Telethon][Telethon]].
 
