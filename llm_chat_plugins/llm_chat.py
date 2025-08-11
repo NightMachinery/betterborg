@@ -2626,10 +2626,11 @@ async def live_handler(event):
             await event.reply(f"{BOT_META_INFO_PREFIX}❌ No active live session found.")
     else:
         # Check if user can create a new session
-        if not gemini_live_util.live_session_manager.can_create_session(user_id):
+        if not await gemini_live_util.live_session_manager.can_create_session(user_id):
+            is_admin = await util.isAdmin(user_id)
             limit = (
                 gemini_live_util.ADMIN_CONCURRENT_LIVE_LIMIT
-                if util.isAdmin(user_id)
+                if is_admin
                 else gemini_live_util.CONCURRENT_LIVE_LIMIT
             )
             await event.reply(
@@ -2834,9 +2835,8 @@ async def handle_live_mode_message(event):
         gemini_api = gemini_live_util.GeminiLiveAPI(api_key)
 
         # Start the session context manager if not already started
-        if not hasattr(session, "_session_context"):
-            session._session_context = session.session
-            await session._session_context.__aenter__()
+        if session._session_context is None:
+            session._session_context = await session.session.__aenter__()
 
             # Start response listener
             session._response_task = asyncio.create_task(

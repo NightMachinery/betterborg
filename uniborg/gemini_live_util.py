@@ -46,6 +46,7 @@ class LiveSession:
     is_connected: bool = False
     pending_audio_queue: list = field(default_factory=list)
     _response_task: Optional[asyncio.Task] = None
+    _session_context: Optional[Any] = None
 
     def is_expired(self) -> bool:
         """Check if session has expired due to inactivity."""
@@ -92,14 +93,11 @@ class LiveSessionManager:
             1 for session in self.sessions.values() if session.user_id == user_id
         )
 
-    def can_create_session(self, user_id: int) -> bool:
+    async def can_create_session(self, user_id: int) -> bool:
         """Check if user can create a new session based on limits."""
         current_count = self.get_user_session_count(user_id)
-        limit = (
-            ADMIN_CONCURRENT_LIVE_LIMIT
-            if util.isAdmin(user_id)
-            else CONCURRENT_LIVE_LIMIT
-        )
+        is_admin = await util.isAdmin(user_id)
+        limit = ADMIN_CONCURRENT_LIVE_LIMIT if is_admin else CONCURRENT_LIVE_LIMIT
         return current_count < limit
 
     async def create_session(
@@ -111,12 +109,9 @@ class LiveSessionManager:
                 "Google GenAI SDK not available. Please install with: pip install google-genai[live]"
             )
 
-        if not self.can_create_session(user_id):
-            limit = (
-                ADMIN_CONCURRENT_LIVE_LIMIT
-                if util.isAdmin(user_id)
-                else CONCURRENT_LIVE_LIMIT
-            )
+        if not await self.can_create_session(user_id):
+            is_admin = await util.isAdmin(user_id)
+            limit = ADMIN_CONCURRENT_LIVE_LIMIT if is_admin else CONCURRENT_LIVE_LIMIT
             raise ValueError(f"Maximum concurrent sessions limit reached ({limit})")
 
         # End existing session for this chat if any
@@ -173,7 +168,12 @@ class LiveSessionManager:
                         pass
 
                 # Close the live session
-                if session.session:
+                if session._session_context:
+                    try:
+                        await session.session.__aexit__(None, None, None)
+                    except Exception as e:
+                        ic(f"Error closing live session context: {e}")
+                elif session.session:
                     try:
                         await session.session.close()
                     except Exception as e:
