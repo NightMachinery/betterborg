@@ -2116,7 +2116,7 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     # Group chats: must be a mention or a reply to self
     if not event.is_private:
         prefs = user_manager.get_prefs(event.sender_id)
-        mention_re = r"\b" + re.escape(BOT_USERNAME) + r"\b"
+        mention_re = r"(?<!\w)" + re.escape(BOT_USERNAME) + r"\b"
         if event.text and BOT_USERNAME and re.search(mention_re, event.text, re.IGNORECASE):
             return True
 
