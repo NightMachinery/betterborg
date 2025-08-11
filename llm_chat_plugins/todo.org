@@ -8,9 +8,24 @@ read https://ai.google.dev/gemini-api/docs/live ,  https://colab.research.google
 #+end_verse
 
 * TTS
-** TODO show tts settings in =/status=
+** create a TTS plugin =tts_bot.py= which has its own =/geminiVoice= command and has the commands for setting gemini api key. this bot should simply forward anything the user sends to the tts util with no templating.
+When the user attaches files (grouped messages must be supported), we should find text files (ignore others and print warnings) and concat those text files to the end of the user's message with this template:
+#+begin_example
+File: name_of_file.txt
+``````
+TEXT_OF_FILE_HERE
+``````
+#+end_example
 
-** TODO style
+We should then send the resulting audio as a voice note to the user. We should ignore messages that are not private.
+
+*** When the current message is a reply to another message, include that message (as if it was grouped together with the current message).
+
+** DONE the display when we show the menu to choose gemini voices is different between the the initial menu and the way it updates after a query callback. both menus should look the same and show both the voice's name and its description: =Zephyr: Bright=.
+
+** DONE show tts settings in =/status=
+
+** DONE style
 #+BEGIN_SRC markdown
 ok, let us template the text input as follows:
 ```
