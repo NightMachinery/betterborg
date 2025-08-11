@@ -96,19 +96,44 @@ async def generate_tts_audio(
     # Configure the API
     genai.configure(api_key=api_key)
 
-    # Create the model
-    tts_model = genai.GenerativeModel(model_name=model)
-
-    # Configure voice
-    voice_config = genai.types.VoiceConfig(name=voice)
-
-    # Generate audio
-    response = tts_model.generate_content(
-        text, generation_config=genai.GenerationConfig(voice_config=voice_config)
+    # Create the model with TTS configuration
+    tts_model = genai.GenerativeModel(
+        model_name=model,
+        generation_config={
+            "speech_config": {
+                "voice_config": {"name": voice}
+            }
+        }
     )
 
-    # Return the audio data
-    return response.parts[0].audio_data
+    # Generate audio
+    response = tts_model.generate_content(text)
+
+    # Try different ways to access the audio data
+    if hasattr(response, 'audio') and response.audio:
+        return response.audio.data
+    elif hasattr(response, 'parts') and response.parts:
+        for part in response.parts:
+            if hasattr(part, 'audio_data') and part.audio_data:
+                return part.audio_data
+            if hasattr(part, 'audio') and part.audio:
+                return part.audio.data if hasattr(part.audio, 'data') else part.audio
+    elif hasattr(response, 'candidates') and response.candidates:
+        for candidate in response.candidates:
+            if hasattr(candidate, 'content') and candidate.content:
+                for part in candidate.content.parts:
+                    if hasattr(part, 'audio_data') and part.audio_data:
+                        return part.audio_data
+    
+    # Debug information
+    print(f"TTS Debug: response type: {type(response)}")
+    print(f"TTS Debug: response attributes: {dir(response)}")
+    if hasattr(response, 'parts'):
+        print(f"TTS Debug: parts: {response.parts}")
+        for i, part in enumerate(response.parts):
+            print(f"TTS Debug: part {i} type: {type(part)}, attributes: {dir(part)}")
+    
+    raise Exception("No audio data returned from TTS API")
 
 
 async def handle_tts_error(
