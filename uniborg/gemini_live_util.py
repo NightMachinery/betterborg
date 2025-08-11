@@ -129,13 +129,11 @@ class LiveSessionManager:
             # Configure Google GenAI client
             client = genai.Client(api_key=api_key)
 
-            # Configure session for audio responses
+            # Configure session for audio responses - disable automatic VAD
             config = types.LiveConnectConfig(
                 response_modalities=["AUDIO"],  # Audio responses
                 realtime_input_config={
-                    "automatic_activity_detection": {
-                        "enable": True,
-                    }
+                    "automatic_activity_detection": {"disabled": True}
                 },
             )
 
@@ -237,14 +235,19 @@ class GeminiLiveAPI:
             raise
 
     async def send_audio_chunk(self, session: Any, audio_data: bytes):
-        """Send audio data to Gemini Live API."""
+        """Send audio data to Gemini Live API with manual VAD."""
         try:
-            # Send audio with proper API format
-            audio_part = types.Part(
-                inline_data=types.Blob(mime_type="audio/pcm", data=audio_data)
+            # Send activity start
+            await session.send_realtime_input(activity_start=types.ActivityStart())
+
+            # Send audio data
+            await session.send_realtime_input(
+                audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
             )
-            content = types.Content(role="user", parts=[audio_part])
-            await session.send_client_content(turns=content)
+
+            # Send activity end
+            await session.send_realtime_input(activity_end=types.ActivityEnd())
+
             print(f"Sent audio chunk: {len(audio_data)} bytes")
         except Exception as e:
             print(f"Error sending audio: {e}")
