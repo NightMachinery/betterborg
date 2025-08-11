@@ -8,6 +8,7 @@ from typing import Dict, Optional, Any
 from dataclasses import dataclass, field
 
 from pynight.common_icecream import ic
+import traceback
 from uniborg import util
 
 try:
@@ -17,7 +18,7 @@ try:
     GENAI_AVAILABLE = True
 except ImportError:
     GENAI_AVAILABLE = False
-    ic(
+    print(
         "Google GenAI SDK not available. Please install with: pip install google-genai[live]"
     )
 
@@ -84,7 +85,8 @@ class LiveSessionManager:
 
                 await asyncio.sleep(60)  # Check every minute
             except Exception as e:
-                ic(f"Error in cleanup task: {e}")
+                print(f"Error in cleanup task: {e}")
+                traceback.print_exc()
                 await asyncio.sleep(60)
 
     def get_user_session_count(self, user_id: int) -> int:
@@ -129,22 +131,30 @@ class LiveSessionManager:
 
             # Configure session for audio responses
             config = types.LiveConnectConfig(
-                response_modalities=[
-                    "AUDIO"
-                ],  # Only audio responses to avoid conflicts
+                response_modalities=["AUDIO"],  # Audio responses
+                realtime_input_config={
+                    "automatic_activity_detection": {
+                        "enable": True,
+                    }
+                },
             )
 
-            # Create live session
+            # Create live session - don't initialize the connection yet
             live_session = client.aio.live.connect(model=model, config=config)
             session_obj.session = live_session
-            session_obj.is_connected = True
+            session_obj.is_connected = (
+                False  # Will be set to True after context manager enters
+            )
 
-            ic(
+            print(f"Live session object created for chat {chat_id}")
+
+            print(
                 f"Created live session {session_obj.session_id[:8]}... for chat {chat_id} with model {model}"
             )
 
         except Exception as e:
-            ic(f"Failed to create live session: {e}")
+            print(f"Failed to create live session: {e}")
+            traceback.print_exc()
             raise ValueError(f"Failed to connect to Gemini Live API: {str(e)}")
 
         self.sessions[chat_id] = session_obj
@@ -167,23 +177,30 @@ class LiveSessionManager:
                     except asyncio.CancelledError:
                         pass
 
-                # Close the live session
+                # Close the live session properly
                 if session._session_context:
                     try:
-                        await session.session.__aexit__(None, None, None)
+                        await session._session_context.__aexit__(None, None, None)
+                        print(f"Live session context closed for chat {chat_id}")
                     except Exception as e:
-                        ic(f"Error closing live session context: {e}")
+                        print(f"Error closing live session context: {e}")
+                        traceback.print_exc()
                 elif session.session:
                     try:
-                        await session.session.close()
+                        # For non-context sessions, close directly
+                        if hasattr(session.session, "close"):
+                            await session.session.close()
+                        print(f"Live session closed for chat {chat_id}")
                     except Exception as e:
-                        ic(f"Error closing live session: {e}")
+                        print(f"Error closing live session: {e}")
+                        traceback.print_exc()
 
                 session.is_connected = False
-                ic(f"Ended live session for chat {chat_id}")
+                print(f"Ended live session for chat {chat_id}")
 
             except Exception as e:
-                ic(f"Error ending session: {e}")
+                print(f"Error ending session: {e}")
+                traceback.print_exc()
             return True
         return False
 
@@ -210,19 +227,28 @@ class GeminiLiveAPI:
     async def send_text(self, session: Any, text: str):
         """Send text message to Gemini Live API."""
         try:
-            await session.send(text, end_of_turn=True)
-            ic(f"Sent text: {text[:50]}...")
+            # Send text with proper API format
+            content = types.Content(role="user", parts=[types.Part(text=text)])
+            await session.send_client_content(turns=content)
+            print(f"Sent text: {text[:50]}...")
         except Exception as e:
-            ic(f"Error sending text: {e}")
+            print(f"Error sending text: {e}")
+            traceback.print_exc()
             raise
 
     async def send_audio_chunk(self, session: Any, audio_data: bytes):
         """Send audio data to Gemini Live API."""
         try:
-            await session.send(audio_data)
-            ic(f"Sent audio chunk: {len(audio_data)} bytes")
+            # Send audio with proper API format
+            audio_part = types.Part(
+                inline_data=types.Blob(mime_type="audio/pcm", data=audio_data)
+            )
+            content = types.Content(role="user", parts=[audio_part])
+            await session.send_client_content(turns=content)
+            print(f"Sent audio chunk: {len(audio_data)} bytes")
         except Exception as e:
-            ic(f"Error sending audio: {e}")
+            print(f"Error sending audio: {e}")
+            traceback.print_exc()
             raise
 
 
@@ -258,7 +284,7 @@ class AudioProcessor:
             stdout, stderr = await process.communicate()
 
             if process.returncode != 0:
-                ic(f"FFmpeg error: {stderr.decode()}")
+                print(f"FFmpeg error: {stderr.decode()}")
                 raise ValueError(
                     f"ffmpeg conversion failed with return code {process.returncode}"
                 )
@@ -308,7 +334,7 @@ class AudioProcessor:
             stdout, stderr = await process.communicate()
 
             if process.returncode != 0:
-                ic(f"FFmpeg error: {stderr.decode()}")
+                print(f"FFmpeg error: {stderr.decode()}")
                 raise ValueError(
                     f"ffmpeg conversion failed with return code {process.returncode}"
                 )

@@ -2662,7 +2662,8 @@ async def live_handler(event):
                 f"Session ID: `{session.session_id[:8]}...`"
             )
         except Exception as e:
-            ic(f"Error creating live session: {e}")
+            print(f"Error creating live session: {e}")
+            traceback.print_exc()
             await event.reply(
                 f"{BOT_META_INFO_PREFIX}❌ Failed to start live mode: {str(e)}"
             )
@@ -2836,12 +2837,22 @@ async def handle_live_mode_message(event):
 
         # Start the session context manager if not already started
         if session._session_context is None:
-            session._session_context = await session.session.__aenter__()
+            try:
+                session._session_context = await session.session.__aenter__()
+                session.is_connected = True
+                print(f"Live session connected for chat {chat_id}")
 
-            # Start response listener
-            session._response_task = asyncio.create_task(
-                handle_live_mode_responses(session, event)
-            )
+                # Start response listener
+                session._response_task = asyncio.create_task(
+                    handle_live_mode_responses(session, event)
+                )
+            except Exception as conn_error:
+                print(f"Failed to connect live session: {conn_error}")
+                traceback.print_exc()
+                await event.reply(
+                    f"{BOT_META_INFO_PREFIX}❌ Failed to connect to live session: {str(conn_error)}"
+                )
+                return
 
         live_session = session._session_context
 
@@ -2873,13 +2884,14 @@ async def handle_live_mode_message(event):
 
         elif event.video:
             # For now, handle video as audio extraction
-            ic("Video messages not yet fully supported in live mode")
+            print("Video messages not yet fully supported in live mode")
             await event.reply(
                 f"{BOT_META_INFO_PREFIX}📹 Video messages are not yet fully supported in live mode."
             )
 
     except Exception as e:
-        ic(f"Error handling live mode message: {e}")
+        print(f"Error handling live mode message: {e}")
+        traceback.print_exc()
         await event.reply(
             f"{BOT_META_INFO_PREFIX}❌ Error processing message: {str(e)}"
         )
@@ -2896,7 +2908,7 @@ async def handle_live_mode_responses(session, original_event):
                 if hasattr(response, "text") and response.text:
                     # Text response
                     await borg.send_message(session.chat_id, response.text)
-                    ic(f"Sent text response: {response.text[:50]}...")
+                    print(f"Sent text response: {response.text[:50]}...")
 
                 elif hasattr(response, "data") and response.data:
                     # Audio response
@@ -2914,9 +2926,10 @@ async def handle_live_mode_responses(session, original_event):
                         await borg.send_file(
                             session.chat_id, ogg_data, attributes=[], voice_note=True
                         )
-                        ic(f"Sent voice response: {len(ogg_data)} bytes")
+                        print(f"Sent voice response: {len(ogg_data)} bytes")
                     except Exception as audio_error:
-                        ic(f"Error processing audio response: {audio_error}")
+                        print(f"Error processing audio response: {audio_error}")
+                        traceback.print_exc()
                         # Fallback: send as text if audio processing fails
                         await borg.send_message(
                             session.chat_id, "[Audio response - processing failed]"
@@ -2928,11 +2941,13 @@ async def handle_live_mode_responses(session, original_event):
                 )
 
             except Exception as e:
-                ic(f"Error processing individual response: {e}")
+                print(f"Error processing individual response: {e}")
+                traceback.print_exc()
                 continue
 
     except Exception as e:
-        ic(f"Error in response handler: {e}")
+        print(f"Error in response handler: {e}")
+        traceback.print_exc()
         # Mark session as disconnected
         session.is_connected = False
 
