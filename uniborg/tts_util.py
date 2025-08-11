@@ -94,11 +94,11 @@ def _convert_wav_to_ogg(wav_path: str, ogg_path: str):
         (
             ffmpeg
             .input(wav_path)
-            .audio.codec('libopus')
-            .audio.bitrate('32k')
-            .audio.sample_rate(16000)
-            .audio.channels(1)
-            .output(ogg_path)
+            .output(ogg_path, 
+                   acodec='libopus',
+                   audio_bitrate='32k', 
+                   ar=16000,  # Sample rate
+                   ac=1)      # Channels (mono)
             .run(overwrite_output=True, quiet=True)
         )
         
