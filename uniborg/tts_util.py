@@ -1,5 +1,8 @@
 import traceback
 import re
+import tempfile
+import wave
+import os
 from uniborg import util
 from uniborg.constants import BOT_META_INFO_PREFIX
 import uuid
@@ -73,9 +76,18 @@ def truncate_text_for_tts(text: str) -> tuple[str, bool]:
     return truncated, True
 
 
+def _create_wav_file(pcm_data: bytes, filename: str, channels: int = 1, rate: int = 24000, sample_width: int = 2):
+    """Create a WAV file from PCM data."""
+    with wave.open(filename, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sample_width)
+        wf.setframerate(rate)
+        wf.writeframes(pcm_data)
+
+
 async def generate_tts_audio(
     text: str, *, voice: str, model: str, api_key: str
-) -> bytes:
+) -> str:
     """
     Generate TTS audio using Gemini's speech generation API.
 
@@ -86,7 +98,7 @@ async def generate_tts_audio(
         api_key: Gemini API key
 
     Returns:
-        Audio data as bytes
+        Path to the generated WAV file
 
     Raises:
         Exception: On API errors
@@ -121,7 +133,16 @@ async def generate_tts_audio(
         and len(response.candidates[0].content.parts) > 0
         and response.candidates[0].content.parts[0].inline_data):
         
-        return response.candidates[0].content.parts[0].inline_data.data
+        pcm_data = response.candidates[0].content.parts[0].inline_data.data
+        
+        # Create temporary WAV file
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+            wav_filename = temp_file.name
+        
+        # Create WAV file from PCM data
+        _create_wav_file(pcm_data, wav_filename)
+        
+        return wav_filename
     
     raise Exception("No audio data returned from TTS API")
 

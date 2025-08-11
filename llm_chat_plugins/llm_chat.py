@@ -2648,15 +2648,23 @@ async def _handle_tts_response(event, response_text: str):
         # Truncate text if needed
         truncated_text, was_truncated = tts_util.truncate_text_for_tts(response_text)
 
-        # Generate TTS audio
-        audio_data = await tts_util.generate_tts_audio(
+        # Generate TTS audio (returns WAV file path)
+        wav_file_path = await tts_util.generate_tts_audio(
             truncated_text, voice=voice, model=tts_model, api_key=api_key
         )
 
-        # Send as voice message
-        await event.client.send_file(
-            event.chat_id, audio_data, voice_note=True, reply_to=event.id
-        )
+        try:
+            # Send as voice message
+            await event.client.send_file(
+                event.chat_id, wav_file_path, voice_note=True, reply_to=event.id
+            )
+        finally:
+            # Clean up temporary file
+            try:
+                import os
+                os.remove(wav_file_path)
+            except Exception as cleanup_error:
+                print(f"Warning: Failed to cleanup TTS temp file {wav_file_path}: {cleanup_error}")
 
         # Send truncation notice if needed
         if was_truncated:
