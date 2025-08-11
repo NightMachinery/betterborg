@@ -1,5 +1,39 @@
 #+TITLE: llm_chat_plugins/todo
 
+* _
+#+begin_verse
+TODO 0, [8/5/2025  18:34]
+Check point current history 
+/save
+/load
+
+Save should give a name automatically if not given
+/Save sth
+Should save as 'sth'. Confirm with menu if overwriting. 
+
+/Load should show a menu of recent saves
+/Load sth should load the given checkpoint directly 
+
+When clearing context, auto checkpoint with a name starting with underline. Don't show these underline names in recent load menu.
+
+When a user sends a message in a private chat in until separator mode, and it's been one minute since the last auto save, save with name _user-id_auto_save. This should be called auto-save in the recent load menu.
+
+TODO 0, [8/5/2025  18:34]
+We can implement a memory system as well.
+
+For the start, we'd need a memory prompt that extracts memories from the current conversation. /MemoryExtract
+
+Then we have to merge this with the previous memory. /MemoryUpdate
+
+
+We have to inject this memory when the user types .mem as a special prompt replacement that loads the memory per user.
+
+To compartmentalize the memory, we could give the above commands a tag input.
+
+TODO 0, [8/6/2025  14:19]
+Add a "Text-Only Last 1000 Messages" context mode. In this mode media and files won't get downloaded.
+#+end_verse
+
 * add image gen models
 ** add TTS models
 
