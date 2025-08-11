@@ -7,6 +7,7 @@ from pathlib import Path
 import os
 import uuid
 
+
 # --- LLM-Specific Shared Constants and Utilities ---
 
 MIME_TYPE_MAP = {
@@ -135,3 +136,23 @@ async def handle_llm_error(
     if error_id:
         print(f"--- ERROR ID: {error_id} ---")
     traceback.print_exc()
+
+
+def create_llm_start_handler(service: str, welcome_message: str, configured_message: str):
+    """
+    Creates a generic /start command handler for onboarding and LLM API key checks.
+    """
+
+    async def start_handler(event):
+        # Cancel any pending input flows from other modules
+        if llm_db.is_awaiting_key(event.sender_id):
+            llm_db.cancel_key_flow(event.sender_id)
+
+        # Check if the required API key is configured
+        if llm_db.get_api_key(user_id=event.sender_id, service=service):
+            await event.reply(configured_message)
+        else:
+            # If not configured, start the key request flow
+            await llm_db.request_api_key_message(event, service)
+
+    return start_handler

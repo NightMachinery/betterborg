@@ -16,7 +16,6 @@ from itertools import groupby
 
 import litellm
 from telethon import events, errors
-from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.types import (
     BotCommand,
     BotCommandScopeDefault,
@@ -33,6 +32,7 @@ from uniborg import llm_db
 from uniborg import llm_util
 from uniborg import tts_util
 from uniborg import history_util
+from uniborg import bot_util  # Import the shared utility module
 from uniborg.storage import UserStorage
 from uniborg.constants import BOT_META_INFO_PREFIX
 
@@ -253,7 +253,6 @@ SAFETY_SETTINGS = [
 # --- State Management ---
 BOT_USERNAME = None
 BOT_ID = None
-PROCESSED_GROUP_IDS = set()
 AWAITING_INPUT_FROM_USERS = {}
 IS_BOT = None
 USERBOT_HISTORY_CACHE = {}
@@ -906,44 +905,6 @@ async def _log_conversation(
         traceback.print_exc()
 
 
-async def _expand_and_sort_messages_with_groups(
-    event, initial_messages: List[Message]
-) -> List[Message]:
-    """
-    Takes a list of messages and ensures all members of any represented media
-    group are included in the final, sorted list.
-    """
-    final_messages_map = {m.id: m for m in initial_messages}
-    processed_group_ids = set()
-
-    # Iterate over a copy, as we might fetch more messages and add to the map
-    messages_to_check = list(initial_messages)
-
-    for msg in messages_to_check:
-        group_id = msg.grouped_id
-        if group_id and group_id not in processed_group_ids:
-            try:
-                # Fetch all messages in the vicinity of the current message to find group members
-                k = 30  # Search range
-                search_ids = range(msg.id - k, msg.id + k + 1)
-                messages_in_vicinity = await event.client.get_messages(
-                    event.chat_id, ids=list(search_ids)
-                )
-
-                group_messages = [
-                    m for m in messages_in_vicinity if m and m.grouped_id == group_id
-                ]
-                for group_msg in group_messages:
-                    final_messages_map[group_msg.id] = group_msg
-
-                processed_group_ids.add(group_id)
-            except Exception as e:
-                print(f"Could not expand message group {group_id}: {e}")
-
-    # Return a sorted, unique list of messages
-    return sorted(final_messages_map.values(), key=lambda m: m.id)
-
-
 async def _get_user_metadata_prefix(message: Message) -> str:
     """Generates the user and timestamp part of the metadata prefix."""
     sender = await message.get_sender()
@@ -1254,7 +1215,7 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
             messages_to_process = await _get_initial_messages_for_reply_chain(event)
             messages_to_process.append(event.message)
             # No further processing needed for this case, jump to the end.
-            expanded_messages = await _expand_and_sort_messages_with_groups(
+            expanded_messages = await bot_util.expand_and_sort_messages_with_groups(
                 event, messages_to_process
             )
             return await _process_turns_to_history(event, expanded_messages, temp_dir)
@@ -1352,7 +1313,7 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
             ]
 
     # --- Universal Post-Processing ---
-    expanded_messages = await _expand_and_sort_messages_with_groups(
+    expanded_messages = await bot_util.expand_and_sort_messages_with_groups(
         event, messages_to_process
     )
     if len(expanded_messages) > HISTORY_MESSAGE_LIMIT:
@@ -1563,21 +1524,7 @@ Your username on Telegram is {BOT_USERNAME}. The user might mention you using th
     if IS_BOT:
         await history_util.initialize_history_handler()
         print("LLM_Chat: Running as a BOT. History utility initialized.")
-
-        print("LLM_Chat: Setting bot commands...")
-        try:
-            await borg(
-                SetBotCommandsRequest(
-                    scope=BotCommandScopeDefault(),
-                    lang_code="en",
-                    commands=[
-                        BotCommand(c["command"], c["description"]) for c in BOT_COMMANDS
-                    ],
-                )
-            )
-            print("LLM_Chat: Bot command menu has been updated.")
-        except Exception as e:
-            print(f"LLM_Chat: Failed to set bot commands: {e}")
+        await bot_util.register_bot_commands(borg, BOT_COMMANDS)
     else:
         print(
             "LLM_Chat: Running as a USERBOT. History utility and bot commands skipped."
@@ -2780,7 +2727,7 @@ async def chat_handler(event):
             await event.reply(f"{BOT_META_INFO_PREFIX}{reply_text}")
             return
 
-    if group_id and group_id in PROCESSED_GROUP_IDS:
+    if group_id and group_id in bot_util.PROCESSED_GROUP_IDS:
         return  # Already being processed
 
     prefs = user_manager.get_prefs(user_id)
@@ -2800,7 +2747,7 @@ async def chat_handler(event):
         return
 
     if group_id:
-        PROCESSED_GROUP_IDS.add(group_id)
+        bot_util.PROCESSED_GROUP_IDS.add(group_id)
 
     if event.text and re.match(r"^\.s\b", event.text):
         RECENT_WAIT_TIME = 1
@@ -2927,7 +2874,7 @@ async def chat_handler(event):
         )
     finally:
         if group_id:
-            PROCESSED_GROUP_IDS.discard(group_id)
+            bot_util.PROCESSED_GROUP_IDS.discard(group_id)
         if temp_dir.exists():
             rmtree(temp_dir, ignore_errors=True)
 
