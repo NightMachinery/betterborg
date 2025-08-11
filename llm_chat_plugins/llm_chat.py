@@ -2838,7 +2838,9 @@ async def handle_live_mode_message(event):
         # Start the session context manager if not already started
         if session._session_context is None:
             try:
-                session._session_context = await session.session.__aenter__()
+                # Store the context manager and enter it properly
+                session._session_context = session.session
+                session._live_connection = await session._session_context.__aenter__()
                 session.is_connected = True
                 print(f"Live session connected for chat {chat_id}")
 
@@ -2849,12 +2851,17 @@ async def handle_live_mode_message(event):
             except Exception as conn_error:
                 print(f"Failed to connect live session: {conn_error}")
                 traceback.print_exc()
+
+                # Clean up on connection failure
+                session._session_context = None
+                session.is_connected = False
+
                 await event.reply(
                     f"{BOT_META_INFO_PREFIX}❌ Failed to connect to live session: {str(conn_error)}"
                 )
                 return
 
-        live_session = session._session_context
+        live_session = session._live_connection
 
         # Handle different message types with connection error recovery
         if event.text:
@@ -2947,7 +2954,7 @@ async def handle_live_mode_message(event):
 async def handle_live_mode_responses(session, original_event):
     """Handle responses from Gemini Live API."""
     try:
-        live_session = session._session_context
+        live_session = session._live_connection
 
         async for response in live_session:
             try:

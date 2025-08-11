@@ -48,6 +48,7 @@ class LiveSession:
     pending_audio_queue: list = field(default_factory=list)
     _response_task: Optional[asyncio.Task] = None
     _session_context: Optional[Any] = None
+    _live_connection: Optional[Any] = None
 
     def is_expired(self) -> bool:
         """Check if session has expired due to inactivity."""
@@ -137,12 +138,9 @@ class LiveSessionManager:
                 },
             )
 
-            # Create live session - don't initialize the connection yet
-            live_session = client.aio.live.connect(model=model, config=config)
-            session_obj.session = live_session
-            session_obj.is_connected = (
-                False  # Will be set to True after context manager enters
-            )
+            # Create live session connection object
+            session_obj.session = client.aio.live.connect(model=model, config=config)
+            session_obj.is_connected = False  # Will be set to True after connection
 
             print(f"Live session object created for chat {chat_id}")
 
