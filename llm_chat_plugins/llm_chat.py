@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from uniborg import util
 from uniborg import llm_db
 from uniborg import llm_util
+from uniborg import tts_util
 from uniborg import history_util
 from uniborg.storage import UserStorage
 from uniborg.constants import BOT_META_INFO_PREFIX
@@ -222,6 +223,9 @@ BOT_COMMANDS = [
     },
     {"command": "tools", "description": "Enable or disable tools like search"},
     {"command": "json", "description": "Toggle JSON output mode"},
+    {"command": "tts", "description": "Set TTS model for this chat"},
+    {"command": "geminivoice", "description": "Set global Gemini voice"},
+    {"command": "geminivoicehere", "description": "Set Gemini voice for this chat"},
 ]
 # Create a set of command strings (e.g., {"/start", "/help"}) for efficient lookup
 KNOWN_COMMAND_SET = {f"/{cmd['command']}".lower() for cmd in BOT_COMMANDS}
@@ -318,6 +322,7 @@ class UserPrefs(BaseModel):
     group_activation_mode: str = Field(default="mention_and_reply")
     metadata_mode: str = Field(default="only_forwarded")
     group_metadata_mode: str = Field(default="full_metadata")
+    tts_global_voice: str = Field(default=tts_util.DEFAULT_VOICE)
 
 
 class ChatPrefs(BaseModel):
@@ -325,6 +330,8 @@ class ChatPrefs(BaseModel):
 
     system_prompt: Optional[str] = Field(default=None)
     context_mode: Optional[str] = Field(default=None)
+    tts_model: str = Field(default="Disabled")
+    tts_voice_override: Optional[str] = Field(default=None)
 
 
 class UserManager:
@@ -416,6 +423,17 @@ class UserManager:
         prefs.group_activation_mode = mode
         self._save_prefs(user_id, prefs)
 
+    def get_tts_global_voice(self, user_id: int) -> str:
+        return self.get_prefs(user_id).tts_global_voice
+
+    def set_tts_global_voice(self, user_id: int, voice: str):
+        if voice not in tts_util.GEMINI_VOICES:
+            print(f"Invalid TTS voice: voice='{voice}', user_id={user_id}")
+            return
+        prefs = self.get_prefs(user_id)
+        prefs.tts_global_voice = voice
+        self._save_prefs(user_id, prefs)
+
 
 class ChatManager:
     """High-level manager for chat-specific settings."""
@@ -449,6 +467,28 @@ class ChatManager:
 
         prefs = self.get_prefs(chat_id)
         prefs.context_mode = mode
+        self._save_prefs(chat_id, prefs)
+
+    def get_tts_model(self, chat_id: int) -> str:
+        return self.get_prefs(chat_id).tts_model
+
+    def set_tts_model(self, chat_id: int, model: str):
+        if model not in tts_util.TTS_MODELS:
+            print(f"Invalid TTS model: model='{model}', chat_id={chat_id}")
+            return
+        prefs = self.get_prefs(chat_id)
+        prefs.tts_model = model
+        self._save_prefs(chat_id, prefs)
+
+    def get_tts_voice_override(self, chat_id: int) -> Optional[str]:
+        return self.get_prefs(chat_id).tts_voice_override
+
+    def set_tts_voice_override(self, chat_id: int, voice: Optional[str]):
+        if voice is not None and voice not in tts_util.GEMINI_VOICES:
+            print(f"Invalid TTS voice override: voice='{voice}', chat_id={chat_id}")
+            return
+        prefs = self.get_prefs(chat_id)
+        prefs.tts_voice_override = voice
         self._save_prefs(chat_id, prefs)
 
 
@@ -1265,6 +1305,9 @@ def register_handlers():
     borg.on(events.NewMessage(pattern=rf"(?i)^/tools{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(tools_handler)
     borg.on(events.NewMessage(pattern=rf"(?i)^/(enable|disable)(?P<tool_name>\w+){bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(toggle_tool_handler)
     borg.on(events.NewMessage(pattern=rf"(?i)^/json{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(json_mode_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/tts{bot_username_suffix_re}\s*$"))(tts_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/geminivoice{bot_username_suffix_re}\s*$", func=lambda e: e.is_private))(gemini_voice_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^/geminivoicehere{bot_username_suffix_re}\s*$"))(gemini_voice_here_handler)
 
     # Func-based Handlers
     borg.on(events.NewMessage(func=lambda e: e.is_private and llm_db.is_awaiting_key(e.sender_id) and e.text and not e.text.startswith("/")))(key_submission_handler)
@@ -1899,6 +1942,63 @@ async def json_mode_handler(event):
     )
 
 
+async def tts_handler(event):
+    """Handle /tts command - per-chat TTS model selection"""
+    current_model = chat_manager.get_tts_model(event.chat_id)
+    await present_options(
+        event,
+        title="🔊 TTS Settings for this chat",
+        options=tts_util.TTS_MODELS,
+        current_value=current_model,
+        callback_prefix="tts_",
+        awaiting_key="tts_selection",
+        n_cols=1,
+    )
+
+
+async def gemini_voice_handler(event):
+    """Handle /geminiVoice - global voice selection"""
+    current_voice = user_manager.get_tts_global_voice(event.sender_id)
+    await present_options(
+        event,
+        title="🎤 Default Gemini voice (all chats)",
+        options=tts_util.GEMINI_VOICES,
+        current_value=current_voice,
+        callback_prefix="voice_",
+        awaiting_key="voice_selection",
+        n_cols=3,
+    )
+
+
+async def gemini_voice_here_handler(event):
+    """Handle /geminiVoiceHere - per-chat voice override"""
+    is_bot_admin = await util.isAdmin(event)
+    is_group_admin = await util.is_group_admin(event)
+
+    if not event.is_private and not (is_bot_admin or is_group_admin):
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}You must be a group admin or bot admin to use this command in a group."
+        )
+        return
+
+    current_voice = chat_manager.get_tts_voice_override(event.chat_id)
+    global_voice = user_manager.get_tts_global_voice(event.sender_id)
+    
+    # Add "Use Global Default" option
+    voice_options = {"": f"Use Global Default ({global_voice})"}
+    voice_options.update(tts_util.GEMINI_VOICES)
+    
+    await present_options(
+        event,
+        title="🎤 Gemini voice for this chat only",
+        options=voice_options,
+        current_value=current_voice or "",
+        callback_prefix="voicehere_",
+        awaiting_key="voice_here_selection",
+        n_cols=3,
+    )
+
+
 async def callback_handler(event):
     """Handles all inline button presses for the plugin (BOT MODE ONLY)."""
     data_str = event.data.decode("utf-8")
@@ -2056,6 +2156,57 @@ async def callback_handler(event):
         ]
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
         await event.answer("Group activation mode updated.")
+    elif data_str.startswith("tts_"):
+        model = data_str.split("_", 1)[1]
+        chat_manager.set_tts_model(event.chat_id, model)
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {name}" if key == model else name,
+                data=f"tts_{key}",
+            )
+            for key, name in tts_util.TTS_MODELS.items()
+        ]
+        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
+        await event.answer(f"TTS set to {tts_util.TTS_MODELS[model]}")
+    elif data_str.startswith("voice_"):
+        voice = data_str.split("_", 1)[1]
+        user_manager.set_tts_global_voice(user_id, voice)
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {name} ({desc})" if name == voice else f"{name} ({desc})",
+                data=f"voice_{name}",
+            )
+            for name, desc in tts_util.GEMINI_VOICES.items()
+        ]
+        await event.edit(buttons=util.build_menu(buttons, n_cols=3))
+        await event.answer(f"Global voice set to {voice}")
+    elif data_str.startswith("voicehere_"):
+        voice = data_str.split("_", 1)[1]
+        # Check admin permissions for chat voice changes
+        is_bot_admin = await util.isAdmin(event)
+        is_group_admin = await util.is_group_admin(event)
+        
+        if not event.is_private and not (is_bot_admin or is_group_admin):
+            await event.answer("Admin access required.", show_alert=True)
+            return
+            
+        chat_manager.set_tts_voice_override(event.chat_id, voice if voice else None)
+        global_voice = user_manager.get_tts_global_voice(user_id)
+        
+        # Rebuild options with current selection
+        voice_options = {"": f"Use Global Default ({global_voice})"}
+        voice_options.update(tts_util.GEMINI_VOICES)
+        
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {display}" if key == voice else display,
+                data=f"voicehere_{key}",
+            )
+            for key, display in voice_options.items()
+        ]
+        await event.edit(buttons=util.build_menu(buttons, n_cols=3))
+        voice_name = voice if voice else f"Global Default ({global_voice})"
+        await event.answer(f"Chat voice set to {voice_name}")
 
 
 async def generic_input_handler(event):
@@ -2143,6 +2294,37 @@ async def generic_input_handler(event):
                     await event.reply(
                         f"{BOT_META_INFO_PREFIX}✅ Tool **{selected_key}** has been {'enabled' if is_enabled else 'disabled'}."
                     )
+                elif input_type == "tts_selection":
+                    chat_manager.set_tts_model(event.chat_id, selected_key)
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}✅ TTS model set to: **{tts_util.TTS_MODELS[selected_key]}**"
+                    )
+                elif input_type == "voice_selection":
+                    user_manager.set_tts_global_voice(user_id, selected_key)
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}✅ Global voice set to: **{selected_key}** ({tts_util.GEMINI_VOICES[selected_key]})"
+                    )
+                elif input_type == "voice_here_selection":
+                    # Check admin permissions
+                    is_bot_admin = await util.isAdmin(event)
+                    is_group_admin = await util.is_group_admin(event)
+                    
+                    if not event.is_private and not (is_bot_admin or is_group_admin):
+                        await event.reply(f"{BOT_META_INFO_PREFIX}You must be a group admin or bot admin to use this command in a group.")
+                        return
+                        
+                    voice_to_set = None if selected_key == "" else selected_key
+                    chat_manager.set_tts_voice_override(event.chat_id, voice_to_set)
+                    
+                    if voice_to_set:
+                        voice_name = f"{voice_to_set} ({tts_util.GEMINI_VOICES[voice_to_set]})"
+                    else:
+                        global_voice = user_manager.get_tts_global_voice(user_id)
+                        voice_name = f"Global Default ({global_voice})"
+                    
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}✅ Chat voice set to: **{voice_name}**"
+                    )
             else:
                 await event.reply(
                     f"{BOT_META_INFO_PREFIX}Invalid number. Please try again."
@@ -2202,6 +2384,60 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
                 return False
 
     return False
+
+
+async def _handle_tts_response(event, response_text: str):
+    """Handle TTS generation for LLM responses."""
+    try:
+        # Check if TTS is enabled for this chat
+        tts_model = chat_manager.get_tts_model(event.chat_id)
+        if tts_model == "Disabled":
+            return
+            
+        # Get user's Gemini API key
+        api_key = llm_db.get_api_key(event.sender_id, "gemini")
+        if not api_key:
+            return  # No API key, silently skip TTS
+            
+        # Determine voice to use (chat override or global default)
+        voice_override = chat_manager.get_tts_voice_override(event.chat_id)
+        if voice_override:
+            voice = voice_override
+        else:
+            voice = user_manager.get_tts_global_voice(event.sender_id)
+            
+        # Truncate text if needed
+        truncated_text, was_truncated = tts_util.truncate_text_for_tts(response_text)
+        
+        # Generate TTS audio
+        audio_data = await tts_util.generate_tts_audio(
+            truncated_text,
+            voice=voice,
+            model=tts_model,
+            api_key=api_key
+        )
+        
+        # Send as voice message
+        await event.client.send_file(
+            event.chat_id,
+            audio_data,
+            voice_note=True,
+            reply_to=event.id
+        )
+        
+        # Send truncation notice if needed
+        if was_truncated:
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}🔊 **TTS Note:** Text was truncated to {tts_util.TTS_MAX_LENGTH} characters for voice generation."
+            )
+            
+    except Exception as e:
+        # Handle TTS errors gracefully
+        await tts_util.handle_tts_error(
+            event=event,
+            exception=e,
+            service="gemini"
+        )
 
 
 async def chat_handler(event):
@@ -2405,6 +2641,10 @@ async def chat_handler(event):
         await util.edit_message(
             response_message, final_text, parse_mode="md", link_preview=False
         )
+        
+        # TTS Integration Hook
+        await _handle_tts_response(event, final_text)
+        
         await _log_conversation(event, prefs, messages, final_text)
 
     except Exception as e:
