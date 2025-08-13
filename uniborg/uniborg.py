@@ -97,12 +97,21 @@ class Uniborg(TelegramClient):
 
         self.me = await self.get_me()
         self.uid = telethon.utils.get_peer_id(self.me)
-        
+
         # Inject borg instance into core modules
-        core_modules = [util, llm_db, history_util]
+        core_modules = [
+            util,
+            bot_util,
+            history_util,
+            llm_util,
+            tts_util,
+            redis_util,
+            gemini_live_util,
+            llm_db,
+        ]
         for module in core_modules:
             module.borg = self
-        
+
         # Cache bot information for plugin injection
         self._is_bot = await self.is_bot()
         self._bot_id = self.me.id
