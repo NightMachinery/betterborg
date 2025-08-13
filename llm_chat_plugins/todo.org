@@ -1,6 +1,7 @@
 #+TITLE: llm_chat_plugins/todo
 
 * add image gen models
+** native flash
 
 * live mode
 #+begin_verse
@@ -14,7 +15,7 @@ read https://ai.google.dev/gemini-api/docs/live ,  https://colab.research.google
 * TTS
 ** Refactor shred logic between =handle_llm_error= and =handle_tts_error=.
 
-** tts_bot: should have =/setModel= which shows a menu to set the TTS model for the user
+** DONE tts_bot: should have =/setModel= which shows a menu to set the TTS model for the user
 
 ** DONE create a TTS plugin =tts_bot.py= which has its own =/geminiVoice= command and has the commands for setting gemini api key. this bot should simply forward anything the user sends to the tts util with no templating.
 When the user attaches files (grouped messages must be supported), we should find text files (ignore others and print warnings) and concat those text files to the end of the user's message with this template:
@@ -89,10 +90,10 @@ Then we have to merge this with the previous memory. /MemoryUpdate
 We have to inject this memory when the user types .mem as a special prompt replacement that loads the memory per user.
 
 To compartmentalize the memory, we could give the above commands a tag input.
-
-TODO 0, [8/6/2025  14:19]
-Add a "Text-Only Last 1000 Messages" context mode. In this mode media and files won't get downloaded.
 #+end_verse
+
+** NO Add a "Text-Only Last 1000 Messages" context mode. In this mode media and files won't get downloaded.
+This is no longer needed as I implemented good caching mechanisms for files.
 
 * DONE error:
 #+begin_example
