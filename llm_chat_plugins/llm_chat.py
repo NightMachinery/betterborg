@@ -33,7 +33,7 @@ from uniborg import llm_db
 from uniborg import llm_util
 from uniborg import tts_util
 from uniborg import history_util
-from uniborg import bot_util  # Import the shared utility module
+from uniborg import bot_util
 from uniborg.storage import UserStorage
 from uniborg.constants import BOT_META_INFO_PREFIX
 
@@ -1772,7 +1772,7 @@ async def set_model_handler(event):
             f"{BOT_META_INFO_PREFIX}Your chat model has been set to: `{model_name}`"
         )
     else:
-        await present_options(
+        await bot_util.present_options(
             event,
             title="Set Chat Model",
             options=MODEL_CHOICES,
@@ -1905,7 +1905,7 @@ async def context_mode_here_handler(event):
     options_for_menu = CONTEXT_MODE_NAMES.copy()
     options_for_menu["not_set"] = NOT_SET_HERE_DISPLAY_NAME
 
-    await present_options(
+    await bot_util.present_options(
         event,
         title=f"**Current Status:**\n{status_text}\n\n**Set Context Mode for This Chat**",
         options=options_for_menu,
@@ -1951,7 +1951,7 @@ async def get_context_mode_here_handler(event):
 async def context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
 
-    await present_options(
+    await bot_util.present_options(
         event,
         title="Set Private Chat Context Mode",
         options=CONTEXT_MODE_NAMES,
@@ -1964,7 +1964,7 @@ async def context_mode_handler(event):
 
 async def group_context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
-    await present_options(
+    await bot_util.present_options(
         event,
         title="Set Group Chat Context Mode",
         options=CONTEXT_MODE_NAMES,
@@ -1977,7 +1977,7 @@ async def group_context_mode_handler(event):
 
 async def metadata_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
-    await present_options(
+    await bot_util.present_options(
         event,
         title="Set Private Chat Metadata Mode",
         options=METADATA_MODES,
@@ -1990,7 +1990,7 @@ async def metadata_mode_handler(event):
 
 async def group_metadata_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
-    await present_options(
+    await bot_util.present_options(
         event,
         title="Set Group Chat Metadata Mode",
         options=METADATA_MODES,
@@ -2019,7 +2019,7 @@ async def sep_handler(event):
 
 async def group_activation_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
-    await present_options(
+    await bot_util.present_options(
         event,
         title="Set Group Chat Activation Mode",
         options=GROUP_ACTIVATION_MODES,
@@ -2034,7 +2034,7 @@ async def set_think_handler(event):
     # Add "clear" option
     think_options = {level: level.capitalize() for level in REASONING_LEVELS}
     think_options["clear"] = "Clear (Default)"
-    await present_options(
+    await bot_util.present_options(
         event,
         title="Set Reasoning Effort",
         options=think_options,
@@ -2101,7 +2101,7 @@ async def json_mode_handler(event):
 async def tts_handler(event):
     """Handle /tts command - per-chat TTS model selection"""
     current_model = chat_manager.get_tts_model(event.chat_id)
-    await present_options(
+    await bot_util.present_options(
         event,
         title="🔊 TTS Settings for this chat",
         options=tts_util.TTS_MODELS,
@@ -2118,7 +2118,7 @@ async def gemini_voice_handler(event):
     voice_options = {
         name: f"{name}: {desc}" for name, desc in tts_util.GEMINI_VOICES.items()
     }
-    await present_options(
+    await bot_util.present_options(
         event,
         title="🎤 Default Gemini voice (all chats)",
         options=voice_options,
@@ -2149,7 +2149,7 @@ async def gemini_voice_here_handler(event):
         {name: f"{name}: {desc}" for name, desc in tts_util.GEMINI_VOICES.items()}
     )
 
-    await present_options(
+    await bot_util.present_options(
         event,
         title="🎤 Gemini voice for this chat only",
         options=voice_options,
@@ -2625,7 +2625,7 @@ async def livemodel_handler(event):
     prefs = user_manager.get_prefs(user_id)
     current_model = prefs.live_model
 
-    await present_options(
+    await bot_util.present_options(
         event,
         title="Select your preferred live mode model",
         options=live_model_options,
