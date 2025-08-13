@@ -150,7 +150,7 @@ def cancel_key_flow(user_id: int):
 # --- Reusable Handler Logic ---
 
 
-async def request_api_key_message(event, service: str):
+async def request_api_key_message(event, service: str = "gemini"):
     """Sends the instructional message to a user to ask for their API key."""
     if not borg:
         print("Error: llm_db.borg not set. This should never happen.")

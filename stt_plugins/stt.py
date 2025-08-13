@@ -298,7 +298,7 @@ async def start_handler(event):
             "Welcome back! Your Gemini API key is already configured. You can send me media files to transcribe."
         )
     else:
-        await llm_db.request_api_key_message(event)
+        await llm_db.request_api_key_message(event, "gemini")
 
 
 @borg.on(events.NewMessage(pattern="/help"))
