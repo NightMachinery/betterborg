@@ -3364,7 +3364,7 @@ async def chat_handler(event):
 
         def get_streaming_delay(prefs):
             """Get streaming delay based on current model preferences."""
-            if "gemini-2.5-pro" in prefs.model.lower():
+            if any(keyword in prefs.model.lower() for keyword in ["gemini-2.5-pro", ":free"]):
                 return 1.2
             return 0.8
 
