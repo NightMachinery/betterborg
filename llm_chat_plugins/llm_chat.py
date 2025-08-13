@@ -3223,10 +3223,16 @@ async def chat_handler(event):
             if prefs.thinking:
                 warnings.append("Reasoning effort is disabled (Gemini-only feature).")
 
+        def get_streaming_delay(prefs):
+            """Get streaming delay based on current model preferences."""
+            if "gemini-2.5-pro" in prefs.model.lower():
+                return 1.2
+            return 0.8
+
         # Make the API call
         response_text = ""
         last_edit_time = asyncio.get_event_loop().time()
-        edit_interval = 0.8
+        edit_interval = get_streaming_delay(prefs)
         response_stream = await litellm.acompletion(**api_kwargs)
         async for chunk in response_stream:
             delta = chunk.choices[0].delta.content
