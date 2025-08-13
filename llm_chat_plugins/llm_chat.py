@@ -261,15 +261,40 @@ SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 ]
 
-# --- State Management ---
+
+# --- State Management & Dataclasses ---
 BOT_USERNAME = None
 BOT_ID = None
 AWAITING_INPUT_FROM_USERS = {}
 IS_BOT = None
 USERBOT_HISTORY_CACHE = {}
 SMART_CONTEXT_STATE = {}
-CURRENT_MODEL_CAPABILITIES = None  # Global variable to store current processing model capabilities
-CURRENT_MEDIA_WARNINGS = []  # Global variable to collect warnings during message processing
+
+
+@dataclass
+class ConversationHistoryResult:
+    """Dataclass to hold the results of building the conversation history."""
+
+    history: List[Dict]
+    warnings: List[str]
+
+
+@dataclass
+class ProcessMediaResult:
+    """Dataclass for the return type of _process_media."""
+
+    media_part: Optional[Dict]
+    warnings: List[str]
+
+
+@dataclass
+class ProcessContentResult:
+    """Dataclass for the return type of _process_message_content."""
+
+    text_parts: List[str]
+    media_parts: List[Dict]
+    warnings: List[str]
+
 
 # --- Smart Context State Management ---
 
@@ -543,7 +568,6 @@ chat_manager = ChatManager()
 # --- Core Logic & Helpers ---
 
 
-
 def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
     """Checks if text starts with a known command, with optional bot username stripping."""
     if not text:
@@ -567,51 +591,37 @@ def is_native_gemini(model: str) -> bool:
 
 
 def get_model_capabilities(model: str) -> Dict[str, bool]:
-    """Get model capabilities for vision, audio input, and audio output support.
-    
-    Returns a dictionary with keys: 'vision', 'audio_input', 'audio_output'
-    """
+    """Get model capabilities for vision, audio input, and audio output support."""
     capabilities = {
-        'vision': False,
-        'audio_input': False, 
-        'audio_output': False
+        "vision": False,
+        "audio_input": False,
+        "audio_output": False,
     }
-    
     try:
-        # Check vision support
-        capabilities['vision'] = litellm.supports_vision(model)
+        capabilities["vision"] = litellm.supports_vision(model)
     except Exception as e:
         print(f"Error checking vision support for {model}: {e}")
-    
     try:
-        # Check audio input support  
-        capabilities['audio_input'] = litellm.supports_audio_input(model)
+        capabilities["audio_input"] = litellm.supports_audio_input(model)
     except Exception as e:
         print(f"Error checking audio input support for {model}: {e}")
-    
     try:
-        # Check audio output support
-        capabilities['audio_output'] = litellm.supports_audio_output(model)
+        capabilities["audio_output"] = litellm.supports_audio_output(model)
     except Exception as e:
         print(f"Error checking audio output support for {model}: {e}")
-    
     return capabilities
 
 
 def get_media_type(mime_type: str) -> Optional[str]:
-    """Determine media type category from MIME type.
-    
-    Returns: 'image', 'audio', 'video', or None for unsupported types
-    """
+    """Determine media type category from MIME type."""
     if not mime_type:
         return None
-        
-    if mime_type.startswith('image/'):
-        return 'image'
-    elif mime_type.startswith('audio/'):
-        return 'audio'  
-    elif mime_type.startswith('video/'):
-        return 'video'
+    if mime_type.startswith("image/"):
+        return "image"
+    elif mime_type.startswith("audio/"):
+        return "audio"
+    elif mime_type.startswith("video/"):
+        return "video"
     else:
         return None
 
@@ -694,20 +704,42 @@ async def _get_context_mode_status_text(event) -> str:
     return "\n".join(response_parts)
 
 
-async def _process_media(message: Message, temp_dir: Path, *, model_capabilities: Dict[str, bool] = None) -> tuple[Optional[dict], List[str]]:
+def _check_media_capability(
+    media_type: str, model_capabilities: Dict[str, bool], issued_warnings: set
+) -> Optional[str]:
+    """
+    Checks if the model supports the given media type and returns a consolidated
+    warning if not, tracking which warnings have been issued.
+    """
+    if media_type == "image" and not model_capabilities.get("vision", False):
+        if "image" not in issued_warnings:
+            issued_warnings.add("image")
+            return (
+                "Images were skipped because the current model does not support vision."
+            )
+    elif media_type == "audio" and not model_capabilities.get("audio_input", False):
+        if "audio" not in issued_warnings:
+            issued_warnings.add("audio")
+            return "Audio files were skipped because the current model does not support audio input."
+    elif media_type == "video":
+        if "video" not in issued_warnings:
+            issued_warnings.add("video")
+            return "Video files were skipped as they are not supported by the current model."
+    return None
+
+
+async def _process_media(
+    message: Message,
+    temp_dir: Path,
+    model_capabilities: Dict[str, bool],
+    issued_warnings: set,
+) -> ProcessMediaResult:
     """
     Downloads or retrieves media from cache, prepares it for litellm,
     and ensures it's cached in a text-safe format (raw text or Base64).
-    
-    Returns:
-        tuple[Optional[dict], List[str]]: (processed_media, warnings)
-        - processed_media: The media dict ready for LiteLLM, or None if skipped/failed
-        - warnings: List of warning messages about skipped files
     """
     if not message or not message.media:
-        return None, []
-        
-    warnings = []
+        return ProcessMediaResult(media_part=None, warnings=[])
 
     try:
         file_id = (
@@ -721,42 +753,38 @@ async def _process_media(message: Message, temp_dir: Path, *, model_capabilities
             data = cached_file_info["data"]  # This is a string (text or base64)
             filename = cached_file_info.get("filename")
             mime_type = cached_file_info.get("mime_type")
-            
-            # Check model capabilities for non-text files
-            if storage_type == "base64" and model_capabilities:
+
+            if storage_type == "base64":
                 media_type = get_media_type(mime_type)
-                if media_type == "image" and not model_capabilities.get("vision", False):
-                    warnings.append(f"Skipped image file '{filename}' - model doesn't support vision")
-                    return None, warnings
-                elif media_type == "audio" and not model_capabilities.get("audio_input", False):
-                    warnings.append(f"Skipped audio file '{filename}' - model doesn't support audio input")
-                    return None, warnings
-                elif media_type == "video":
-                    # Video support is not well-defined in LiteLLM, conservatively skip
-                    warnings.append(f"Skipped video file '{filename}' - video files are not reliably supported")
-                    return None, warnings
+                warning = _check_media_capability(
+                    media_type, model_capabilities, issued_warnings
+                )
+                if warning:
+                    return ProcessMediaResult(media_part=None, warnings=[warning])
 
             if storage_type == "text":
-                return {
+                part = {
                     "type": "text",
                     "text": f"\n--- Attachment: {filename} ---\n{data}",
-                }, warnings
+                }
+                return ProcessMediaResult(media_part=part, warnings=[])
             elif storage_type == "base64":
-                return {
+                part = {
                     "type": "image_url",
                     "image_url": {"url": f"data:{mime_type};base64,{data}"},
-                }, warnings
+                }
+                return ProcessMediaResult(media_part=part, warnings=[])
             else:
                 print(
                     f"Unknown storage type '{storage_type}' in cache for file_id {file_id}"
                 )
-                return None, warnings
+                return ProcessMediaResult(media_part=None, warnings=[])
 
         # --- Branch 2: New File - Download, Process, and Cache ---
         else:
             file_path_str = await message.download_media(file=temp_dir)
             if not file_path_str:
-                return None, warnings
+                return ProcessMediaResult(media_part=None, warnings=[])
 
             file_path = Path(file_path_str)
             original_filename = file_path.name
@@ -850,10 +878,11 @@ async def _process_media(message: Message, temp_dir: Path, *, model_capabilities
                     filename=original_filename,
                     mime_type=mime_type,
                 )
-                return {
+                part = {
                     "type": "text",
                     "text": f"\n--- Attachment: {original_filename} ---\n{text_content}",
-                }, warnings
+                }
+                return ProcessMediaResult(media_part=part, warnings=[])
             else:
                 if not mime_type or not mime_type.startswith(
                     ("image/", "audio/", "video/")
@@ -861,21 +890,14 @@ async def _process_media(message: Message, temp_dir: Path, *, model_capabilities
                     print(
                         f"Unsupported binary media type '{mime_type}' for file {original_filename}"
                     )
-                    return None, warnings
+                    return ProcessMediaResult(media_part=None, warnings=[])
 
-                # Check model capabilities for binary files
-                if model_capabilities:
-                    media_type = get_media_type(mime_type)
-                    if media_type == "image" and not model_capabilities.get("vision", False):
-                        warnings.append(f"Skipped image file '{original_filename}' - model doesn't support vision")
-                        return None, warnings
-                    elif media_type == "audio" and not model_capabilities.get("audio_input", False):
-                        warnings.append(f"Skipped audio file '{original_filename}' - model doesn't support audio input")
-                        return None, warnings
-                    elif media_type == "video":
-                        # Video support is not well-defined in LiteLLM, conservatively skip
-                        warnings.append(f"Skipped video file '{original_filename}' - video files are not reliably supported")
-                        return None, warnings
+                media_type = get_media_type(mime_type)
+                warning = _check_media_capability(
+                    media_type, model_capabilities, issued_warnings
+                )
+                if warning:
+                    return ProcessMediaResult(media_part=None, warnings=[warning])
 
                 b64_content = base64.b64encode(file_bytes).decode("utf-8")
                 await history_util.cache_file(
@@ -885,14 +907,16 @@ async def _process_media(message: Message, temp_dir: Path, *, model_capabilities
                     filename=original_filename,
                     mime_type=mime_type,
                 )
-                return {
+                part = {
                     "type": "image_url",
                     "image_url": {"url": f"data:{mime_type};base64,{b64_content}"},
-                }, warnings
+                }
+                return ProcessMediaResult(media_part=part, warnings=[])
+
     except Exception as e:
         print(f"Error processing media from message {message.id}: {e}")
         traceback.print_exc()
-        return None, warnings
+        return ProcessMediaResult(media_part=None, warnings=[])
 
 
 async def _log_conversation(
@@ -1050,10 +1074,15 @@ async def _get_message_role(message: Message) -> str:
 
 
 async def _process_message_content(
-    message: Message, role: str, temp_dir: Path, metadata_prefix: str = ""
-) -> tuple[list, list]:
+    message: Message,
+    role: str,
+    temp_dir: Path,
+    model_capabilities: Dict[str, bool],
+    issued_warnings: set,
+    metadata_prefix: str = "",
+) -> ProcessContentResult:
     """Processes a single message's text and media into litellm content parts."""
-    text_buffer, media_parts = [], []
+    text_buffer, media_parts, warnings = [], [], []
 
     # Filter out meta-info messages and commands from history
     if (
@@ -1061,9 +1090,9 @@ async def _process_message_content(
         and message.text
         and message.text.startswith(BOT_META_INFO_PREFIX)
     ):
-        return [], []
+        return ProcessContentResult(text_parts=[], media_parts=[], warnings=[])
     if role == "user" and _is_known_command(message.text):
-        return [], []
+        return ProcessContentResult(text_parts=[], media_parts=[], warnings=[])
 
     processed_text = message.text
     if role == "user" and processed_text:
@@ -1091,12 +1120,16 @@ async def _process_message_content(
     if processed_text:
         text_buffer.append(processed_text)
 
-    media_part, media_warnings = await _process_media(message, temp_dir, model_capabilities=CURRENT_MODEL_CAPABILITIES)
-    CURRENT_MEDIA_WARNINGS.extend(media_warnings)
-    if media_part:
-        media_parts.append(media_part)
+    media_result = await _process_media(
+        message, temp_dir, model_capabilities, issued_warnings
+    )
+    warnings.extend(media_result.warnings)
+    if media_result.media_part:
+        media_parts.append(media_result.media_part)
 
-    return text_buffer, media_parts
+    return ProcessContentResult(
+        text_parts=text_buffer, media_parts=media_parts, warnings=warnings
+    )
 
 
 async def _finalize_content_parts(text_buffer: list, media_parts: list) -> list:
@@ -1126,15 +1159,21 @@ async def _finalize_content_parts(text_buffer: list, media_parts: list) -> list:
 
 
 async def _process_turns_to_history(
-    event, message_list: List[Message], temp_dir: Path
-) -> List[dict]:
+    event,
+    message_list: List[Message],
+    temp_dir: Path,
+    model_capabilities: Dict[str, bool],
+) -> tuple[List[dict], List[str]]:
     """
     Processes a final, sorted list of messages into litellm history format,
     respecting the user's chosen metadata and context settings.
+    Returns: (history, warnings)
     """
     history = []
+    all_warnings = []
+    issued_warnings = set()  # Track issued warnings for this turn processing.
     if not message_list:
-        return history
+        return history, all_warnings
 
     user_prefs = user_manager.get_prefs(event.sender_id)
     active_metadata_mode = (
@@ -1155,14 +1194,14 @@ async def _process_turns_to_history(
                 continue
 
             text_buffer, media_parts = [], []
-
             for turn_msg in turn_messages:
                 # Process content without any metadata prefix, passing the known role.
-                msg_texts, msg_media = await _process_message_content(
-                    turn_msg, role, temp_dir
+                content_result = await _process_message_content(
+                    turn_msg, role, temp_dir, model_capabilities, issued_warnings
                 )
-                text_buffer.extend(msg_texts)
-                media_parts.extend(msg_media)
+                text_buffer.extend(content_result.text_parts)
+                media_parts.extend(content_result.media_parts)
+                all_warnings.extend(content_result.warnings)
 
             if not text_buffer and not media_parts:
                 continue
@@ -1185,42 +1224,41 @@ async def _process_turns_to_history(
     else:
         for role, message in message_roles:
             prefix_parts = []
-
             if active_metadata_mode == "full_metadata":
                 prefix_parts.append(await _get_user_metadata_prefix(message))
-
                 if message.forward:
                     prefix_parts.append(await _get_forward_metadata_prefix(message))
-
-            elif active_metadata_mode == "only_forwarded":
-                if message.forward:
-                    prefix_parts.append(await _get_forward_metadata_prefix(message))
+            elif active_metadata_mode == "only_forwarded" and message.forward:
+                prefix_parts.append(await _get_forward_metadata_prefix(message))
 
             metadata_prefix = " ".join(filter(None, prefix_parts))
             #: Return an iterator yielding those items of iterable for which function(item) is true. If function is None, return the items that are true.
-
-            text_buffer, media_parts = await _process_message_content(
-                message, role, temp_dir, metadata_prefix
+            content_result = await _process_message_content(
+                message,
+                role,
+                temp_dir,
+                model_capabilities,
+                issued_warnings,
+                metadata_prefix,
             )
+            all_warnings.extend(content_result.warnings)
 
-            if not text_buffer and not media_parts:
+            if not content_result.text_parts and not content_result.media_parts:
                 continue
 
             final_content_parts = await _finalize_content_parts(
-                text_buffer, media_parts
+                content_result.text_parts, content_result.media_parts
             )
-            if not final_content_parts:
-                continue
+            if final_content_parts:
+                final_content = (
+                    final_content_parts[0]["text"]
+                    if len(final_content_parts) == 1
+                    and final_content_parts[0]["type"] == "text"
+                    else final_content_parts
+                )
+                history.append({"role": role, "content": final_content})
 
-            final_content = (
-                final_content_parts[0]["text"]
-                if len(final_content_parts) == 1
-                and final_content_parts[0]["type"] == "text"
-                else final_content_parts
-            )
-            history.append({"role": role, "content": final_content})
-
-    return history
+    return history, all_warnings
 
 
 async def _get_initial_messages_for_reply_chain(event) -> List[Message]:
@@ -1246,7 +1284,9 @@ async def _get_initial_messages_for_reply_chain(event) -> List[Message]:
     return messages
 
 
-async def build_conversation_history(event, context_mode: str, temp_dir: Path) -> list:
+async def build_conversation_history(
+    event, context_mode: str, temp_dir: Path, model_capabilities: Dict[str, bool]
+) -> ConversationHistoryResult:
     """
     Orchestrates the construction of a conversation history based on the user's
     selected context mode, using the appropriate method for a bot or userbot.
@@ -1265,7 +1305,10 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
             expanded_messages = await bot_util.expand_and_sort_messages_with_groups(
                 event, messages_to_process
             )
-            return await _process_turns_to_history(event, expanded_messages, temp_dir)
+            history, warnings = await _process_turns_to_history(
+                event, expanded_messages, temp_dir, model_capabilities
+            )
+            return ConversationHistoryResult(history=history, warnings=warnings)
 
         elif context_mode == "last_N":
             message_ids = await history_util.get_last_n_ids(
@@ -1346,9 +1389,7 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
                 if msg.text and msg.text.strip() == CONTEXT_SEPARATOR:
                     break
             messages_to_process = list(reversed(context_slice))
-
         elif context_mode == "recent":
-            # Fetch messages from the last 5 seconds
             now = datetime.now(timezone.utc)
             five_seconds_ago = now - timedelta(seconds=5)
             messages_to_process = [
@@ -1366,7 +1407,10 @@ async def build_conversation_history(event, context_mode: str, temp_dir: Path) -
     if len(expanded_messages) > HISTORY_MESSAGE_LIMIT:
         expanded_messages = expanded_messages[-HISTORY_MESSAGE_LIMIT:]
 
-    return await _process_turns_to_history(event, expanded_messages, temp_dir)
+    history, warnings = await _process_turns_to_history(
+        event, expanded_messages, temp_dir, model_capabilities
+    )
+    return ConversationHistoryResult(history=history, warnings=warnings)
 
 
 # --- Bot/Userbot Initialization ---
@@ -2772,10 +2816,14 @@ async def testlive_handler(event):
             print(f"[TestLive] API key valid, found {len(list(models))} models")
         except Exception as api_error:
             print(f"[TestLive] API key validation failed: {api_error}")
-            await event.reply(f"{BOT_META_INFO_PREFIX}❌ API key validation failed: {str(api_error)}")
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}❌ API key validation failed: {str(api_error)}"
+            )
             return
 
-        await event.reply(f"{BOT_META_INFO_PREFIX}🔗 Attempting WebSocket connection...")
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}🔗 Attempting WebSocket connection..."
+        )
         print(f"[TestLive] Attempting WebSocket connection to Gemini Live API...")
 
         # Test connection
@@ -3223,11 +3271,7 @@ async def chat_handler(event):
 
     prefs = user_manager.get_prefs(user_id)
     model_in_use = prefs.model
-    
-    # Get model capabilities for file filtering
-    global CURRENT_MODEL_CAPABILITIES, CURRENT_MEDIA_WARNINGS
-    CURRENT_MODEL_CAPABILITIES = get_model_capabilities(model_in_use)
-    CURRENT_MEDIA_WARNINGS = []  # Reset warnings for this processing session
+    model_capabilities = get_model_capabilities(model_in_use)
 
     # Determine which API key is needed
     service_needed = "gemini"
@@ -3265,17 +3309,17 @@ async def chat_handler(event):
         if group_id:
             await asyncio.sleep(0.1)  # Allow album messages to arrive
 
-        messages = await build_conversation_history(
-            event, context_mode_to_use, temp_dir
+        history_result = await build_conversation_history(
+            event, context_mode_to_use, temp_dir, model_capabilities
         )
+        messages = history_result.history
+        warnings = history_result.warnings
 
         # --- System Prompt Selection Logic ---
         prompt_info = get_system_prompt_info(event)
         system_prompt_to_use = prompt_info.effective_prompt
 
-        # Create system message with context caching for native Gemini models
         system_message = {"role": "system", "content": system_prompt_to_use}
-
         # Add context caching for native Gemini models
         if is_native_gemini(prefs.model):
             # Add cache_control to system message
@@ -3289,7 +3333,6 @@ async def chat_handler(event):
 
         # --- Construct API call arguments ---
         is_gemini_model = re.search(r"\bgemini\b", prefs.model, re.IGNORECASE)
-        warnings = []
 
         api_kwargs = {
             "model": prefs.model,
@@ -3305,7 +3348,7 @@ async def chat_handler(event):
 
         if is_gemini_model:
             api_kwargs["safety_settings"] = SAFETY_SETTINGS
-            # Corrected Logic: Only enable tools if JSON mode is OFF.
+            # Upstream Gemini Limitation: Only enable tools if JSON mode is OFF.
             if prefs.enabled_tools and not prefs.json_mode:
                 api_kwargs["tools"] = [{t: {}} for t in prefs.enabled_tools]
             if prefs.thinking:
@@ -3349,14 +3392,9 @@ async def chat_handler(event):
 
         # Final edit to remove the cursor and show the complete message
         final_text = response_text.strip() or "__[No response]__"
-
-        # Add media capability warnings to existing warnings
-        if WARN_UNSUPPORTED_TO_USER_P and CURRENT_MEDIA_WARNINGS:
-            warnings.extend(CURRENT_MEDIA_WARNINGS)
-
-        if warnings:
+        if WARN_UNSUPPORTED_TO_USER_P and warnings:
             warning_text = "\n\n---\n**Note:**\n" + "\n".join(
-                f"- {w}" for w in warnings
+                f"- {w}" for w in sorted(list(set(warnings)))
             )
             final_text += warning_text
 
