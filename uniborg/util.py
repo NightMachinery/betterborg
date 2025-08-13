@@ -43,6 +43,8 @@ try:
 except ImportError:
     PIL = None
 
+import aiofiles
+
 
 ##
 def _resize_photo_if_needed(
@@ -939,6 +941,25 @@ async def is_group_admin(event) -> bool:
                 )
                 return False
     return False
+
+
+##
+async def async_remove_file(file_path: str):
+    """Async file removal with error handling."""
+    try:
+        await aiofiles.os.remove(file_path)
+    except Exception:
+        traceback.print_exc()
+        pass  # Ignore cleanup errors
+
+
+async def async_remove_dir(dir_path: str):
+    """Async directory removal with error handling."""
+    try:
+        await aiofiles.os.removedirs(dir_path)
+    except Exception:
+        traceback.print_exc()
+        pass  # Ignore cleanup errors
 
 
 ##

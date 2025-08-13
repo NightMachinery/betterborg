@@ -49,6 +49,8 @@ typed-ffmpeg
 
 litellm
 
+aiofiles
+
 # junk deps:
 # sortedcontainers
 # jsonpickle

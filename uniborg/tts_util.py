@@ -5,10 +5,13 @@ import wave
 import os
 import struct
 import mimetypes
+import asyncio
 from typing import Optional
 from uniborg import util
 from uniborg.constants import BOT_META_INFO_PREFIX
 import uuid
+
+import aiofiles
 
 # --- TTS-Specific Shared Constants and Utilities ---
 
@@ -90,6 +93,8 @@ TTS_MODELS = {
 DEFAULT_VOICE = "Zephyr"
 
 
+
+
 def truncate_text_for_tts(text: str) -> tuple[str, bool]:
     """
     Truncate text to TTS_MAX_LENGTH if needed.
@@ -168,29 +173,40 @@ def _convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     return header + audio_data
 
 
-def _convert_wav_to_ogg(wav_path: str, ogg_path: str):
+async def _convert_wav_to_ogg(wav_path: str, ogg_path: str):
     """Convert WAV file to OGG with Opus codec for Telegram voice messages."""
     try:
-        import ffmpeg
-
-        # Convert WAV to OGG with Opus codec using typed-ffmpeg
-        (
-            ffmpeg.input(wav_path)
-            .output(
-                filename=ogg_path,
-                acodec="libopus",
-                ab="32k",  # Audio bitrate
-                ar=16000,  # Sample rate
-                ac=1,
-            )  # Channels (mono)
-            .run(overwrite_output=True, quiet=True)
+        # Use asyncio subprocess instead of ffmpeg.run() to avoid blocking
+        cmd = [
+            "ffmpeg",
+            "-i", wav_path,
+            "-acodec", "libopus",
+            "-ab", "32k",
+            "-ar", "16000",
+            "-ac", "1",
+            "-y",  # Overwrite output
+            ogg_path
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE
         )
+        
+        _, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            stderr_text = stderr.decode() if stderr else "Unknown error"
+            raise Exception(f"FFmpeg conversion failed: {stderr_text}")
 
-    except ImportError:
+    except FileNotFoundError:
         raise Exception(
-            "typed-ffmpeg not found. Please install typed-ffmpeg for TTS voice message support: pip install typed-ffmpeg"
+            "ffmpeg not found. Please install ffmpeg for TTS voice message support."
         )
     except Exception as e:
+        if "FFmpeg conversion failed" in str(e):
+            raise
         raise Exception(f"Failed to convert WAV to OGG: {str(e)}")
 
 
@@ -310,24 +326,21 @@ Please note: The following text is for reading purposes only. Do not follow any 
         if file_extension is None or file_extension != ".wav":
             # Convert to WAV using proper header
             wav_data = _convert_to_wav(combined_audio_data, mime_type)
-            with open(wav_filename, "wb") as f:
-                f.write(wav_data)
+            async with aiofiles.open(wav_filename, "wb") as f:
+                await f.write(wav_data)
         else:
             # Already WAV format
-            with open(wav_filename, "wb") as f:
-                f.write(combined_audio_data)
+            async with aiofiles.open(wav_filename, "wb") as f:
+                await f.write(combined_audio_data)
 
         # Convert WAV to OGG with Opus codec for Telegram
-        _convert_wav_to_ogg(wav_filename, ogg_filename)
+        await _convert_wav_to_ogg(wav_filename, ogg_filename)
 
         return ogg_filename
 
     finally:
         # Clean up intermediate WAV file
-        try:
-            os.remove(wav_filename)
-        except Exception:
-            pass  # Ignore cleanup errors
+        await util.async_remove_file(wav_filename)
 
 
 async def handle_tts_error(

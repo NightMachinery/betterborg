@@ -194,9 +194,9 @@ async def message_handler(event):
         if group_id:
             bot_util.PROCESSED_GROUP_IDS.discard(group_id)
         if ogg_file_path and os.path.exists(ogg_file_path):
-            os.remove(ogg_file_path)
+            await util.async_remove_file(ogg_file_path)
         if temp_dir.exists():
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            await util.async_remove_dir(str(temp_dir))
 
 
 async def help_handler(event):
