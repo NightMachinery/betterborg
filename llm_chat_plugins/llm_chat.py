@@ -153,6 +153,8 @@ LOG_COUNT_LIMIT = 3
 AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
 DEFAULT_ENABLED_TOOLS = ["googleSearch", "urlContext"]
 WARN_UNSUPPORTED_TO_USER_P = True
+WARN_UNAVAILABLE_TOOLS_P = False
+WARN_UNAVAILABLE_THINKING_P = False
 REASONING_LEVELS = ["disable", "low", "medium", "high"]
 CONTEXT_SEPARATOR = "---"
 CONTEXT_MODE_NAMES = {
@@ -3355,9 +3357,9 @@ async def chat_handler(event):
                 api_kwargs["reasoning_effort"] = prefs.thinking
         else:
             # Add warnings if user has Gemini-specific settings enabled
-            if prefs.enabled_tools:
+            if prefs.enabled_tools and WARN_UNAVAILABLE_TOOLS_P:
                 warnings.append("Tools are disabled (Gemini-only feature).")
-            if prefs.thinking:
+            if prefs.thinking and WARN_UNAVAILABLE_THINKING_P:
                 warnings.append("Reasoning effort is disabled (Gemini-only feature).")
 
         def get_streaming_delay(prefs):
