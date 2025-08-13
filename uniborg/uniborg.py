@@ -19,8 +19,6 @@ from uniborg import (
     history_util,
     llm_util,
     tts_util,
-    redis_util,
-    gemini_live_util,
     llm_db,
 )
 from .storage import Storage
@@ -112,8 +110,6 @@ class Uniborg(TelegramClient):
             history_util,
             llm_util,
             tts_util,
-            redis_util,
-            gemini_live_util,
             llm_db,
         ]
         for module in core_modules:
