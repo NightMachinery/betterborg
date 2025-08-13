@@ -20,6 +20,7 @@ BOT_COMMANDS = [
     {"command": "help", "description": "Show help and instructions"},
     {"command": "setgeminikey", "description": "Set or update your Gemini API key"},
     {"command": "geminivoice", "description": "Choose a default voice for TTS"},
+    {"command": "model", "description": "Choose a default TTS model"},
 ]
 
 
@@ -30,6 +31,7 @@ class UserPrefs(BaseModel):
     """Pydantic model for type-safe user preferences for the TTS Bot."""
 
     voice: str = Field(default=tts_util.DEFAULT_VOICE)
+    model: str = Field(default="gemini-2.5-flash-preview-tts")
 
 
 class UserManager:
@@ -45,6 +47,11 @@ class UserManager:
     def set_voice(self, user_id: int, voice: str):
         prefs = self.get_prefs(user_id)
         prefs.voice = voice
+        self.storage.set(user_id, prefs.model_dump())
+
+    def set_model(self, user_id: int, model: str):
+        prefs = self.get_prefs(user_id)
+        prefs.model = model
         self.storage.set(user_id, prefs.model_dump())
 
 
@@ -170,11 +177,11 @@ async def message_handler(event):
             return
 
         await status_message.edit("Generating audio...")
-        user_voice = user_manager.get_prefs(event.sender_id).voice
+        user_prefs = user_manager.get_prefs(event.sender_id)
         ogg_file_path = await tts_util.generate_tts_audio(
             text=final_text,
-            voice=user_voice,
-            model="gemini-2.5-flash-preview-tts",
+            voice=user_prefs.voice,
+            model=user_prefs.model,
             api_key=api_key,
             template_mode=False,
         )
@@ -217,6 +224,7 @@ I convert text into high-quality speech using Google's Gemini models.
 - `/help`: Show this message.
 - `/setgeminikey`: Add or update your Gemini API key.
 - `/geminivoice`: Choose a default TTS voice.
+- `/model`: Choose a default TTS model.
 """
     await event.reply(help_text, link_preview=False)
 
@@ -250,6 +258,23 @@ async def gemini_voice_handler(event):
     )
 
 
+async def gemini_model_handler(event):
+    """Presents the TTS model selection menu."""
+    current_model = user_manager.get_prefs(event.sender_id).model
+    model_options = {
+        model: desc for model, desc in tts_util.TTS_MODELS.items()
+    }
+    await bot_util.present_options(
+        event,
+        title="**Choose a TTS Model**",
+        options=model_options,
+        current_value=current_model,
+        callback_prefix="model_",
+        awaiting_key="model_selection",
+        n_cols=2,
+    )
+
+
 async def voice_callback_handler(event):
     """Handles the user's voice selection from the inline keyboard."""
     voice = event.data.decode("utf-8").split("_", 1)[1]
@@ -266,6 +291,24 @@ async def voice_callback_handler(event):
     except Exception:
         pass
     await event.answer(f"Voice set to {voice}")
+
+
+async def model_callback_handler(event):
+    """Handles the user's model selection from the inline keyboard."""
+    model = event.data.decode("utf-8").split("_", 1)[1]
+    user_manager.set_model(event.sender_id, model)
+    buttons = [
+        KeyboardButtonCallback(
+            f"✅ {model}: {desc}" if model == model else f"{model}: {desc}",
+            data=f"model_{model}",
+        )
+        for model, desc in tts_util.TTS_MODELS.items()
+    ]
+    try:
+        await event.edit(buttons=util.build_menu(buttons, n_cols=2))
+    except Exception:
+        pass
+    await event.answer(f"Model set to {model}")
 
 
 # --- Initialization ---
@@ -313,7 +356,11 @@ def register_handlers():
     borg.on(
         events.NewMessage(pattern=r"(?i)^/geminivoice\s*$", func=lambda e: e.is_private)
     )(gemini_voice_handler)
+    borg.on(
+        events.NewMessage(pattern=r"(?i)^/model\s*$", func=lambda e: e.is_private)
+    )(gemini_model_handler)
     borg.on(events.CallbackQuery(pattern=b"voice_"))(voice_callback_handler)
+    borg.on(events.CallbackQuery(pattern=b"model_"))(model_callback_handler)
     borg.on(
         events.NewMessage(
             func=lambda e: e.is_private and (e.text or e.media) and not e.forward
