@@ -44,6 +44,7 @@ except ImportError:
     PIL = None
 
 import aiofiles
+import aiofiles.os
 
 
 ##
