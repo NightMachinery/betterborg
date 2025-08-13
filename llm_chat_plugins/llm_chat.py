@@ -152,6 +152,7 @@ HISTORY_MESSAGE_LIMIT = 1000
 LOG_COUNT_LIMIT = 3
 AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
 DEFAULT_ENABLED_TOOLS = ["googleSearch", "urlContext"]
+WARN_UNSUPPORTED_TO_USER_P = True
 REASONING_LEVELS = ["disable", "low", "medium", "high"]
 CONTEXT_SEPARATOR = "---"
 CONTEXT_MODE_NAMES = {
@@ -267,6 +268,8 @@ AWAITING_INPUT_FROM_USERS = {}
 IS_BOT = None
 USERBOT_HISTORY_CACHE = {}
 SMART_CONTEXT_STATE = {}
+CURRENT_MODEL_CAPABILITIES = None  # Global variable to store current processing model capabilities
+CURRENT_MEDIA_WARNINGS = []  # Global variable to collect warnings during message processing
 
 # --- Smart Context State Management ---
 
@@ -563,6 +566,56 @@ def is_native_gemini(model: str) -> bool:
     return model.startswith("gemini/")
 
 
+def get_model_capabilities(model: str) -> Dict[str, bool]:
+    """Get model capabilities for vision, audio input, and audio output support.
+    
+    Returns a dictionary with keys: 'vision', 'audio_input', 'audio_output'
+    """
+    capabilities = {
+        'vision': False,
+        'audio_input': False, 
+        'audio_output': False
+    }
+    
+    try:
+        # Check vision support
+        capabilities['vision'] = litellm.supports_vision(model)
+    except Exception as e:
+        print(f"Error checking vision support for {model}: {e}")
+    
+    try:
+        # Check audio input support  
+        capabilities['audio_input'] = litellm.supports_audio_input(model)
+    except Exception as e:
+        print(f"Error checking audio input support for {model}: {e}")
+    
+    try:
+        # Check audio output support
+        capabilities['audio_output'] = litellm.supports_audio_output(model)
+    except Exception as e:
+        print(f"Error checking audio output support for {model}: {e}")
+    
+    return capabilities
+
+
+def get_media_type(mime_type: str) -> Optional[str]:
+    """Determine media type category from MIME type.
+    
+    Returns: 'image', 'audio', 'video', or None for unsupported types
+    """
+    if not mime_type:
+        return None
+        
+    if mime_type.startswith('image/'):
+        return 'image'
+    elif mime_type.startswith('audio/'):
+        return 'audio'  
+    elif mime_type.startswith('video/'):
+        return 'video'
+    else:
+        return None
+
+
 @dataclass
 class SystemPromptInfo:
     """Contains all system prompt information for a chat context."""
@@ -641,13 +694,20 @@ async def _get_context_mode_status_text(event) -> str:
     return "\n".join(response_parts)
 
 
-async def _process_media(message: Message, temp_dir: Path) -> Optional[dict]:
+async def _process_media(message: Message, temp_dir: Path, *, model_capabilities: Dict[str, bool] = None) -> tuple[Optional[dict], List[str]]:
     """
     Downloads or retrieves media from cache, prepares it for litellm,
     and ensures it's cached in a text-safe format (raw text or Base64).
+    
+    Returns:
+        tuple[Optional[dict], List[str]]: (processed_media, warnings)
+        - processed_media: The media dict ready for LiteLLM, or None if skipped/failed
+        - warnings: List of warning messages about skipped files
     """
     if not message or not message.media:
-        return None
+        return None, []
+        
+    warnings = []
 
     try:
         file_id = (
@@ -661,28 +721,42 @@ async def _process_media(message: Message, temp_dir: Path) -> Optional[dict]:
             data = cached_file_info["data"]  # This is a string (text or base64)
             filename = cached_file_info.get("filename")
             mime_type = cached_file_info.get("mime_type")
+            
+            # Check model capabilities for non-text files
+            if storage_type == "base64" and model_capabilities:
+                media_type = get_media_type(mime_type)
+                if media_type == "image" and not model_capabilities.get("vision", False):
+                    warnings.append(f"Skipped image file '{filename}' - model doesn't support vision")
+                    return None, warnings
+                elif media_type == "audio" and not model_capabilities.get("audio_input", False):
+                    warnings.append(f"Skipped audio file '{filename}' - model doesn't support audio input")
+                    return None, warnings
+                elif media_type == "video":
+                    # Video support is not well-defined in LiteLLM, conservatively skip
+                    warnings.append(f"Skipped video file '{filename}' - video files are not reliably supported")
+                    return None, warnings
 
             if storage_type == "text":
                 return {
                     "type": "text",
                     "text": f"\n--- Attachment: {filename} ---\n{data}",
-                }
+                }, warnings
             elif storage_type == "base64":
                 return {
                     "type": "image_url",
                     "image_url": {"url": f"data:{mime_type};base64,{data}"},
-                }
+                }, warnings
             else:
                 print(
                     f"Unknown storage type '{storage_type}' in cache for file_id {file_id}"
                 )
-                return None
+                return None, warnings
 
         # --- Branch 2: New File - Download, Process, and Cache ---
         else:
             file_path_str = await message.download_media(file=temp_dir)
             if not file_path_str:
-                return None
+                return None, warnings
 
             file_path = Path(file_path_str)
             original_filename = file_path.name
@@ -779,7 +853,7 @@ async def _process_media(message: Message, temp_dir: Path) -> Optional[dict]:
                 return {
                     "type": "text",
                     "text": f"\n--- Attachment: {original_filename} ---\n{text_content}",
-                }
+                }, warnings
             else:
                 if not mime_type or not mime_type.startswith(
                     ("image/", "audio/", "video/")
@@ -787,7 +861,21 @@ async def _process_media(message: Message, temp_dir: Path) -> Optional[dict]:
                     print(
                         f"Unsupported binary media type '{mime_type}' for file {original_filename}"
                     )
-                    return None
+                    return None, warnings
+
+                # Check model capabilities for binary files
+                if model_capabilities:
+                    media_type = get_media_type(mime_type)
+                    if media_type == "image" and not model_capabilities.get("vision", False):
+                        warnings.append(f"Skipped image file '{original_filename}' - model doesn't support vision")
+                        return None, warnings
+                    elif media_type == "audio" and not model_capabilities.get("audio_input", False):
+                        warnings.append(f"Skipped audio file '{original_filename}' - model doesn't support audio input")
+                        return None, warnings
+                    elif media_type == "video":
+                        # Video support is not well-defined in LiteLLM, conservatively skip
+                        warnings.append(f"Skipped video file '{original_filename}' - video files are not reliably supported")
+                        return None, warnings
 
                 b64_content = base64.b64encode(file_bytes).decode("utf-8")
                 await history_util.cache_file(
@@ -800,11 +888,11 @@ async def _process_media(message: Message, temp_dir: Path) -> Optional[dict]:
                 return {
                     "type": "image_url",
                     "image_url": {"url": f"data:{mime_type};base64,{b64_content}"},
-                }
+                }, warnings
     except Exception as e:
         print(f"Error processing media from message {message.id}: {e}")
         traceback.print_exc()
-        return None
+        return None, warnings
 
 
 async def _log_conversation(
@@ -1003,7 +1091,8 @@ async def _process_message_content(
     if processed_text:
         text_buffer.append(processed_text)
 
-    media_part = await _process_media(message, temp_dir)
+    media_part, media_warnings = await _process_media(message, temp_dir, model_capabilities=CURRENT_MODEL_CAPABILITIES)
+    CURRENT_MEDIA_WARNINGS.extend(media_warnings)
     if media_part:
         media_parts.append(media_part)
 
@@ -3134,6 +3223,11 @@ async def chat_handler(event):
 
     prefs = user_manager.get_prefs(user_id)
     model_in_use = prefs.model
+    
+    # Get model capabilities for file filtering
+    global CURRENT_MODEL_CAPABILITIES, CURRENT_MEDIA_WARNINGS
+    CURRENT_MODEL_CAPABILITIES = get_model_capabilities(model_in_use)
+    CURRENT_MEDIA_WARNINGS = []  # Reset warnings for this processing session
 
     # Determine which API key is needed
     service_needed = "gemini"
@@ -3256,11 +3350,15 @@ async def chat_handler(event):
         # Final edit to remove the cursor and show the complete message
         final_text = response_text.strip() or "__[No response]__"
 
+        # Add media capability warnings to existing warnings
+        if WARN_UNSUPPORTED_TO_USER_P and CURRENT_MEDIA_WARNINGS:
+            warnings.extend(CURRENT_MEDIA_WARNINGS)
+
         if warnings:
             warning_text = "\n\n---\n**Note:**\n" + "\n".join(
                 f"- {w}" for w in warnings
             )
-            # final_text += warning_text # No need to clutter the response
+            final_text += warning_text
 
         await util.edit_message(
             response_message, final_text, parse_mode="md", link_preview=False
