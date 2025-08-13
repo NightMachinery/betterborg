@@ -641,55 +641,6 @@ async def _get_context_mode_status_text(event) -> str:
     return "\n".join(response_parts)
 
 
-async def present_options(
-    event,
-    *,
-    title: str,
-    options: Dict[str, str],
-    current_value: any,
-    callback_prefix: str,
-    awaiting_key: str,
-    n_cols: int = 2,
-):
-    """
-    Presents options to the user either as buttons (bot) or a text menu (userbot).
-    """
-    user_id = event.sender_id
-    if IS_BOT:
-        buttons = [
-            KeyboardButtonCallback(
-                f"✅ {display_name}" if key == current_value else display_name,
-                data=f"{callback_prefix}{bot_util.sanitize_callback_data(key)}",
-            )
-            for key, display_name in options.items()
-        ]
-        title_bold = title
-        if not title_bold.startswith("**"):
-            title_bold = f"**{title_bold}**"
-
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}{title_bold}",
-            buttons=util.build_menu(buttons, n_cols=n_cols),
-            parse_mode="md",
-        )
-    else:
-        option_keys = list(options.keys())
-        menu_text = [f"**{title}**\n"]
-        for i, key in enumerate(option_keys):
-            display_name = options[key]
-            prefix = "✅ " if key == current_value else ""
-            menu_text.append(f"{i + 1}. {prefix}{display_name}")
-
-        menu_text.append("\nPlease reply with the number of your choice.")
-        menu_text.append("(Type `cancel` to stop.)")
-
-        AWAITING_INPUT_FROM_USERS[user_id] = {
-            "type": awaiting_key,
-            "keys": option_keys,
-        }
-        await event.reply(f"{BOT_META_INFO_PREFIX}\n".join(menu_text), parse_mode="md")
-
-
 async def _process_media(message: Message, temp_dir: Path) -> Optional[dict]:
     """
     Downloads or retrieves media from cache, prepares it for litellm,

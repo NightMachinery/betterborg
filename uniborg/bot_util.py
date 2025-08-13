@@ -142,7 +142,8 @@ async def present_options(
 
     # Determine if we're running as a bot
     if is_bot is None:
-        is_bot = await event.client.is_bot()
+        # is_bot = await event.client.is_bot()
+        is_bot = borg._is_bot
 
     if is_bot:
         # Bot mode: show buttons

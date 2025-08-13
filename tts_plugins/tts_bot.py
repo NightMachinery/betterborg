@@ -239,7 +239,7 @@ async def gemini_voice_handler(event):
     voice_options = {
         name: f"{name}: {desc}" for name, desc in tts_util.GEMINI_VOICES.items()
     }
-    await util.present_options(
+    await bot_util.present_options(
         event,
         title="**Choose a TTS Voice**",
         options=voice_options,
