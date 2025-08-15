@@ -1,7 +1,17 @@
 #+TITLE: llm_chat_plugins/todo
 
 * add image gen models
-** native flash
+** TODO native flash
+*** _
+#+begin_verse
+llm_chat:
+```
+Error: 400 INVALID_ARGUMENT. {'error': {'code': 400, 'message': 'Developer instruction is not enabled for models/gemini-2.0-flash-exp-image-generation', 'status': 'INVALID_ARGUMENT'}}
+```
+Add `GEMINI_IMAGE_GEN_SYSTEM_MODE`:
+- "SKIP": Skip the system message for native gemini image model.
+- "PREPEND": Prepend the system message to the first prompt and add "\n\n---\n".
+#+end_verse
 
 * live mode
 #+begin_verse
@@ -13,7 +23,7 @@ read https://ai.google.dev/gemini-api/docs/live ,  https://colab.research.google
 ** WAIT [[id:772f7610-04e4-4d41-8580-ea34e703a7cb][TimeoutError: timed out during handshake · Issue #384 · google-gemini/cookbook]]
 
 * TTS
-** Refactor shred logic between =handle_llm_error= and =handle_tts_error=.
+** DONE Refactor shared logic between =handle_llm_error= and =handle_tts_error=.
 
 ** DONE tts_bot: should have =/setModel= which shows a menu to set the TTS model for the user
 
