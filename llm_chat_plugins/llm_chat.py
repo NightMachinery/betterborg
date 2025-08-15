@@ -620,6 +620,53 @@ def is_native_gemini_image_generation(model: str) -> bool:
     """Check if model is native Gemini image generation (not via litellm)."""
     return model == "gemini/gemini-2.0-flash-exp-image-generation"
 
+async def _send_image_to_telegram(
+    event, 
+    image_data: bytes, 
+    *,
+    filename_base: str = "generated_image",
+    file_extension: str = ".png",
+    file_index: Optional[int] = None
+) -> bool:
+    """
+    Send image data to Telegram with proper resource management.
+    
+    Args:
+        event: Telegram event object
+        image_data: Raw image bytes
+        filename_base: Base name for the file (keyword-only)
+        file_extension: File extension including dot (keyword-only)
+        file_index: Optional index to append to filename (keyword-only)
+    
+    Returns:
+        bool: True if image was sent successfully, False otherwise
+    """
+    try:
+        # Create filename with optional index
+        if file_index is not None:
+            filename = f"{filename_base}_{file_index}{file_extension}"
+        else:
+            filename = f"{filename_base}{file_extension}"
+        
+        # Create BytesIO object for Telegram
+        image_io = io.BytesIO(image_data)
+        image_io.name = filename
+        
+        try:
+            # Send image to Telegram
+            await event.client.send_file(
+                event.chat_id,
+                file=image_io,
+                reply_to=event.id,
+            )
+            return True
+        finally:
+            image_io.close()
+            
+    except Exception as e:
+        print(f"Error sending image to Telegram: {e}")
+        return False
+
 
 async def _process_image_response(event, response_content: str) -> tuple[str, bool]:
     """Process response content that may contain base64 image data.
@@ -659,24 +706,20 @@ async def _process_image_response(event, response_content: str) -> tuple[str, bo
             print(f"Decoded image too large: {len(image_bytes)} bytes")
             return response_content, False
 
-        # Create BytesIO object for Telegram
-        image_io = io.BytesIO(image_bytes)
-        image_io.name = f"generated_image.{image_format}"
+        # Send image using shared utility function
+        image_sent = await _send_image_to_telegram(
+            event, 
+            image_bytes,
+            filename_base="generated_image",
+            file_extension=f".{image_format}"
+        )
 
-        try:
-            # Send image to Telegram
-            await event.client.send_file(
-                event.chat_id,
-                file=image_io,
-                reply_to=event.id,
-            )
-        finally:
-            image_io.close()
-
-        # Remove image data from text response using the same pattern
-        text_without_image = IMAGE_PATTERN.sub("", response_content).strip()
-
-        return text_without_image, True
+        if image_sent:
+            # Remove image data from text response using the same pattern
+            text_without_image = IMAGE_PATTERN.sub("", response_content).strip()
+            return text_without_image, True
+        else:
+            return response_content, False
 
     except binascii.Error as e:
         print(f"Base64 decoding error: {e}")
@@ -779,21 +822,18 @@ async def _handle_native_gemini_image_generation(
                     mimetypes.guess_extension(inline_data.mime_type) or ".png"
                 )
 
-                # Create BytesIO object for Telegram
-                image_io = io.BytesIO(data_buffer)
-                image_io.name = f"generated_image_{file_index}{file_extension}"
-                file_index += 1
-
-                try:
-                    # Send image to Telegram
-                    await event.client.send_file(
-                        event.chat_id,
-                        file=image_io,
-                        reply_to=event.id,
-                    )
+                # Send image using shared utility function
+                image_sent = await _send_image_to_telegram(
+                    event,
+                    data_buffer,
+                    filename_base="generated_image",
+                    file_extension=file_extension,
+                    file_index=file_index
+                )
+                
+                if image_sent:
                     has_image = True
-                finally:
-                    image_io.close()
+                    file_index += 1
 
             # Handle text data
             if hasattr(chunk, "text") and chunk.text:
