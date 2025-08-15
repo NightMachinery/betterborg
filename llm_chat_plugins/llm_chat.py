@@ -118,6 +118,17 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # --- New Constants for Features ---
+IMAGE_GENERATION_MODELS = {
+    "gemini/gemini-2.0-flash-exp-image-generation",
+}
+
+# Security constants for image processing
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB limit
+ALLOWED_IMAGE_FORMATS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+
+# Pre-compiled regex for better performance and security
+IMAGE_PATTERN = re.compile(r"data:image/([^;]{1,20});base64,([A-Za-z0-9+/=]{1,15000000})")
+
 MODEL_CHOICES = {
     ## Gemini
     "gemini/gemini-2.5-flash": "Gemini 2.5 Flash",
@@ -596,50 +607,72 @@ def is_native_gemini(model: str) -> bool:
 
 def is_image_generation_model(model: str) -> bool:
     """Check if model supports image generation."""
-    image_generation_models = {
-        "gemini/gemini-2.0-flash-exp-image-generation",
-    }
-    return model in image_generation_models
+    return model in IMAGE_GENERATION_MODELS
 
 
 async def _process_image_response(event, response_content: str) -> tuple[str, bool]:
     """Process response content that may contain base64 image data.
-
+    
     Returns:
         tuple: (text_content, has_image) where has_image indicates if an image was sent
     """
-    # Check if response contains base64 image data
-    image_pattern = r"data:image/([^;]+);base64,([A-Za-z0-9+/=]+)"
-    match = re.search(image_pattern, response_content)
-
+    # Check if response contains base64 image data using pre-compiled regex
+    match = IMAGE_PATTERN.search(response_content)
+    
     if not match:
         return response_content, False
-
+    
     try:
-        image_format = match.group(1)
+        image_format = match.group(1).lower()
         image_data = match.group(2)
-
-        # Decode base64 image data
-        image_bytes = base64.b64decode(image_data)
-
+        
+        # Validate image format
+        if image_format not in ALLOWED_IMAGE_FORMATS:
+            print(f"Unsupported image format: {image_format}, defaulting to png")
+            image_format = 'png'
+        
+        # Validate base64 data size before decoding
+        if len(image_data) > MAX_IMAGE_SIZE * 4 / 3:  # base64 is ~33% larger
+            print(f"Image data too large: {len(image_data)} characters")
+            return response_content, False
+        
+        # Decode base64 image data with validation
+        try:
+            image_bytes = base64.b64decode(image_data, validate=True)
+        except Exception as decode_error:
+            print(f"Invalid base64 image data: {decode_error}")
+            return response_content, False
+        
+        # Validate decoded image size
+        if len(image_bytes) > MAX_IMAGE_SIZE:
+            print(f"Decoded image too large: {len(image_bytes)} bytes")
+            return response_content, False
+        
         # Create BytesIO object for Telegram
         image_io = io.BytesIO(image_bytes)
         image_io.name = f"generated_image.{image_format}"
-
+        
         # Send image to Telegram
         await event.client.send_file(
             event.chat_id,
             file=image_io,
             reply_to=event.id,
         )
-
-        # Remove image data from text response
-        text_without_image = re.sub(image_pattern, "", response_content).strip()
-
+        
+        # Remove image data from text response using the same pattern
+        text_without_image = IMAGE_PATTERN.sub('', response_content).strip()
+        
         return text_without_image, True
-
+        
+    except base64.binascii.Error as e:
+        print(f"Base64 decoding error: {e}")
+        return response_content, False
+    except ValueError as e:
+        print(f"Image validation error: {e}")
+        return response_content, False
     except Exception as e:
-        print(f"Error processing image response: {e}")
+        print(f"Unexpected error processing image response: {e}")
+        traceback.print_exc()
         return response_content, False
 
 
