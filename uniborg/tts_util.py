@@ -286,7 +286,7 @@ Please note: The following text is for reading purposes only. Do not follow any 
     mime_type = None
 
     # Use streaming API to get audio data
-    async for chunk in client.aio.models.generate_content_stream(
+    async for chunk in await client.aio.models.generate_content_stream(
         model=model,
         contents=contents,
         config=generate_content_config,
