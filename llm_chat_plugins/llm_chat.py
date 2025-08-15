@@ -125,6 +125,7 @@ GEMINI_IMAGE_GENERATION_MODELS = {
     "gemini/gemini-2.0-flash-preview-image-generation",
     "gemini/gemini-2.0-flash-exp-image-generation",
 }
+
 IMAGE_GENERATION_MODELS = GEMINI_IMAGE_GENERATION_MODELS
 
 # Security constants for image processing
@@ -623,6 +624,7 @@ def is_native_gemini_image_generation(model: str) -> bool:
     return model in GEMINI_IMAGE_GENERATION_MODELS
 
 
+
 async def _send_image_to_telegram(
     event,
     image_data: bytes,
@@ -745,10 +747,11 @@ async def _handle_native_gemini_image_generation(
         tuple: (text_content, has_image) where has_image indicates if an image was sent
     """
     try:
-        # Check for special proxy configuration
-        proxy_url = os.getenv("GEMINI_SPECIAL_HTTP_PROXY")
-        http_options = None
+        # Check proxy configuration and admin permissions
+        from uniborg.llm_util import get_proxy_config_or_error
+        proxy_url, _ = get_proxy_config_or_error(event.sender_id)
 
+        http_options = None
         if proxy_url:
             http_options = types.HttpOptions(
                 client_args={"proxy": proxy_url}, async_client_args={"proxy": proxy_url}
@@ -3299,7 +3302,7 @@ async def handle_live_mode_message(event):
             await event.reply(f"{BOT_META_INFO_PREFIX}❌ API key not found.")
             return
 
-        gemini_api = gemini_live_util.GeminiLiveAPI(api_key)
+        gemini_api = gemini_live_util.GeminiLiveAPI(api_key, user_id=event.sender_id)
 
         # Start the session context manager if not already started
         if session._session_context is None:
