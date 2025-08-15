@@ -799,7 +799,7 @@ async def _handle_native_gemini_image_generation(
 
         # Stream the response
         for chunk in client.models.generate_content_stream(
-            model=model.replace("gemini/", ""),  # Remove prefix for native API
+            model=re.sub(r"^gemini/", "", model),  # Remove prefix for native API
             contents=contents,
             config=generate_content_config,
         ):
