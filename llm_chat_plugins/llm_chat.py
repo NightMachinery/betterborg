@@ -128,6 +128,11 @@ GEMINI_IMAGE_GENERATION_MODELS = {
 
 IMAGE_GENERATION_MODELS = GEMINI_IMAGE_GENERATION_MODELS
 
+# Configuration for how to handle system messages with Gemini image generation models
+# "SKIP": Skip the system message for native gemini image models
+# "PREPEND": Prepend the system message to the first prompt and add "\n\n---\n"
+GEMINI_IMAGE_GEN_SYSTEM_MODE = os.getenv("GEMINI_IMAGE_GEN_SYSTEM_MODE", "SKIP")
+
 # Security constants for image processing
 MAX_IMAGE_SIZE = 50 * 1024 * 1024  # 50MB limit
 ALLOWED_IMAGE_FORMATS = {"png", "jpg", "jpeg", "gif", "webp"}
@@ -624,7 +629,6 @@ def is_native_gemini_image_generation(model: str) -> bool:
     return model in GEMINI_IMAGE_GENERATION_MODELS
 
 
-
 async def _send_image_to_telegram(
     event,
     image_data: bytes,
@@ -749,6 +753,7 @@ async def _handle_native_gemini_image_generation(
     try:
         # Check proxy configuration and admin permissions
         from uniborg.llm_util import get_proxy_config_or_error
+
         proxy_url, _ = get_proxy_config_or_error(event.sender_id)
 
         http_options = None
@@ -761,17 +766,27 @@ async def _handle_native_gemini_image_generation(
 
         # Convert messages to Gemini format
         contents = []
-        system_instruction = None
+        system_prompt = None
 
-        # Extract system instruction if present
+        # Extract system prompt if present
         for msg in messages:
             if msg["role"] == "system":
-                system_instruction = msg["content"]
+                system_prompt = msg["content"]
                 break
 
+        # Handle system message based on GEMINI_IMAGE_GEN_SYSTEM_MODE
+        system_instruction_for_config = system_prompt
+        prepend_system_to_first_user = False
+        if system_prompt:
+            if GEMINI_IMAGE_GEN_SYSTEM_MODE == "SKIP":
+                system_instruction_for_config = None  # Skip system instruction entirely
+            elif GEMINI_IMAGE_GEN_SYSTEM_MODE == "PREPEND":
+                prepend_system_to_first_user = True
+                system_instruction_for_config = None  # Don't use as system_instruction
+
         for msg in messages:
             if msg["role"] == "system":
-                # Skip system messages - handled via system_instruction
+                # Skip system messages - handled via system_instruction or prepending
                 continue
             elif msg["role"] == "user":
                 role = "user"
@@ -782,24 +797,51 @@ async def _handle_native_gemini_image_generation(
 
             # Handle content - could be string or list of parts
             if isinstance(msg["content"], str):
-                parts = [types.Part.from_text(text=msg["content"])]
+                message_content = msg["content"]
+
+                # Prepend system message to first user message if configured
+                if prepend_system_to_first_user and role == "user":
+                    message_content = f"{system_prompt}\n\n---\n\n{message_content}"
+                    prepend_system_to_first_user = (
+                        False  # Only prepend to first user message
+                    )
+
+                parts = [types.Part.from_text(text=message_content)]
             elif isinstance(msg["content"], list):
                 parts = []
                 for part in msg["content"]:
                     if part.get("type") == "text":
-                        parts.append(types.Part.from_text(text=part["text"]))
+                        text_content = part["text"]
+
+                        # Prepend system message to first user message if configured
+                        if prepend_system_to_first_user and role == "user":
+                            text_content = f"{system_prompt}\n\n---\n\n{text_content}"
+                            prepend_system_to_first_user = (
+                                False  # Only prepend to first user message
+                            )
+
+                        parts.append(types.Part.from_text(text=text_content))
                     elif part.get("type") == "image_url":
                         # Handle image parts if needed
                         pass
             else:
-                parts = [types.Part.from_text(text=str(msg["content"]))]
+                message_content = str(msg["content"])
+
+                # Prepend system message to first user message if configured
+                if prepend_system_to_first_user and role == "user":
+                    message_content = f"{system_prompt}\n\n---\n\n{message_content}"
+                    prepend_system_to_first_user = (
+                        False  # Only prepend to first user message
+                    )
+
+                parts = [types.Part.from_text(text=message_content)]
 
             contents.append(types.Content(role=role, parts=parts))
 
-        # Create config with system instruction if available
+        # Create config with system instruction if available (only if not SKIP mode)
         config_kwargs = {"response_modalities": ["IMAGE", "TEXT"]}
-        if system_instruction:
-            config_kwargs["system_instruction"] = system_instruction
+        if system_instruction_for_config:
+            config_kwargs["system_instruction"] = system_instruction_for_config
 
         generate_content_config = types.GenerateContentConfig(**config_kwargs)
 
