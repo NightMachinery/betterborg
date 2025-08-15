@@ -1,0 +1,12 @@
+#+TITLE: image_gen_plugins/todo
+
+* MODEL_CHOICES's keys are too long for Telegram:
+#+begin_example
+telethon.errors.rpcerrorlist.ButtonDataInvalidError: The provided button data is inva lid (caused by SendMessageRequest) 
+#+end_example
+
+* free does not work:
+#+begin_example
+Error: Image generation failed: 404 NOT_FOUND. {'error': {'code': 404, 'message': 'models/imagen-3.0-fast-generate-001 is not found for API version v1beta, or is not supported for predict. Call ListModels to see the list of available models and their supported methods.', 'status': 'NOT_FOUND'}}
+#+end_example
+

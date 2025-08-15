@@ -137,8 +137,8 @@ MODEL_CHOICES = {
     "openrouter/google/gemini-2.5-pro": "Gemini 2.5 Pro (OpenRouter)",
     "gemini/gemini-2.0-flash-exp-image-generation": "Gemini 2.0 Flash Image Generation",
     ## Anthropic Claude
-    "openrouter/anthropic/claude-sonnet-4": "Claude 4 Sonnet (OpenRouter)",
-    "openrouter/anthropic/claude-opus-4": "Claude 4 Opus (OpenRouter)",
+    "openrouter/anthropic/claude-sonnet-4": "Claude Sonnet 4 (OpenRouter)",
+    "openrouter/anthropic/claude-opus-4.1": "Claude Opus 4.1 (OpenRouter)",
     ## Grok
     "openrouter/x-ai/grok-4": "Grok 4 (OpenRouter)",
     ## OpenAI
@@ -148,8 +148,8 @@ MODEL_CHOICES = {
     # openai/chatgpt-4o-latest: OpenAI ChatGPT 4o is continually updated by OpenAI to point to the current version of GPT-4o used by ChatGPT. It therefore differs slightly from the API version of GPT-4o in that it has additional RLHF. It is intended for research and evaluation.  OpenAI notes that this model is not suited for production use-cases as it may be removed or redirected to another model in the future.
     # "openrouter/openai/gpt-4o-mini": "GPT-4o Mini (OpenRouter)",
     # "openrouter/openai/gpt-4.1-mini": "GPT-4.1 Mini (OpenRouter)",
-    "openrouter/openai/gpt-4.1": "GPT-4.1 (OpenRouter)",
-    "openrouter/openai/o4-mini-high": "o4-mini-high (OpenRouter)",
+    # "openrouter/openai/gpt-4.1": "GPT-4.1 (OpenRouter)",
+    # "openrouter/openai/o4-mini-high": "o4-mini-high (OpenRouter)",
     ## Kimi
     # moonshotai/kimi-k2:free
     "openrouter/moonshotai/kimi-k2:free": "🎁 Kimi K2 (Free, OpenRouter)",
