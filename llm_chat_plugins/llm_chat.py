@@ -156,6 +156,9 @@ MODEL_CHOICES = {
     ## Qwen
     # qwen/qwen3-coder:free
     "openrouter/qwen/qwen3-coder:free": "🎁 Qwen3 Coder (Free, OpenRouter)",
+    ## Z.AI
+    # z-ai/glm-4.5-air:free
+    "openrouter/z-ai/glm-4.5-air:free": "🎁 GLM-4.5 Air (Free, OpenRouter)",
     ## Various
     # "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "🎁 Venice Uncensored 24B (Free, OpenRouter)",
     #: model name is too long for Telegram API's `data` field in callback buttons
