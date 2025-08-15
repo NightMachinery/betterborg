@@ -9,6 +9,7 @@ import asyncio
 from typing import Optional
 from uniborg import util
 from uniborg.constants import BOT_META_INFO_PREFIX
+from uniborg.llm_util import handle_error
 import uuid
 
 import aiofiles
@@ -351,37 +352,12 @@ async def handle_tts_error(
     error_id_p: bool = True,
 ):
     """A generic error handler for TTS related operations."""
-    error_id = uuid.uuid4() if error_id_p else None
-    error_message = str(exception)
-
-    base_user_facing_error = f"{BOT_META_INFO_PREFIX}TTS generation failed."
-
-    user_facing_error = (
-        f"{base_user_facing_error} (Error ID: `{error_id}`)"
-        if error_id
-        else base_user_facing_error
+    await handle_error(
+        event=event,
+        exception=exception,
+        error_type="TTS",
+        response_message=None,  # TTS errors don't have response messages to edit
+        service=service,
+        base_error_message=None,  # Use default TTS message
+        error_id_p=error_id_p,
     )
-
-    should_show_error_to_user = False
-    if "quota" in error_message.lower() or "exceeded" in error_message.lower():
-        should_show_error_to_user = True
-    elif "api key not valid" in error_message.lower():
-        user_facing_error = f"{BOT_META_INFO_PREFIX}TTS failed: Invalid Gemini API key. Use /setgeminikey to update."
-        should_show_error_to_user = True
-
-    is_admin = await util.isAdmin(event)
-    is_private = event.is_private
-    if is_private and is_admin:
-        should_show_error_to_user = True
-
-    if should_show_error_to_user:
-        user_facing_error = f"{user_facing_error}\n\n**Error:** {error_message}"
-
-    try:
-        await event.reply(user_facing_error)
-    except Exception as e:
-        print(f"Error while sending TTS error message: {e}")
-
-    if error_id:
-        print(f"--- TTS ERROR ID: {error_id} ---")
-    traceback.print_exc()
