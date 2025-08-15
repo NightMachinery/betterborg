@@ -663,12 +663,15 @@ async def _process_image_response(event, response_content: str) -> tuple[str, bo
         image_io = io.BytesIO(image_bytes)
         image_io.name = f"generated_image.{image_format}"
 
-        # Send image to Telegram
-        await event.client.send_file(
-            event.chat_id,
-            file=image_io,
-            reply_to=event.id,
-        )
+        try:
+            # Send image to Telegram
+            await event.client.send_file(
+                event.chat_id,
+                file=image_io,
+                reply_to=event.id,
+            )
+        finally:
+            image_io.close()
 
         # Remove image data from text response using the same pattern
         text_without_image = IMAGE_PATTERN.sub("", response_content).strip()
@@ -781,13 +784,16 @@ async def _handle_native_gemini_image_generation(
                 image_io.name = f"generated_image_{file_index}{file_extension}"
                 file_index += 1
 
-                # Send image to Telegram
-                await event.client.send_file(
-                    event.chat_id,
-                    file=image_io,
-                    reply_to=event.id,
-                )
-                has_image = True
+                try:
+                    # Send image to Telegram
+                    await event.client.send_file(
+                        event.chat_id,
+                        file=image_io,
+                        reply_to=event.id,
+                    )
+                    has_image = True
+                finally:
+                    image_io.close()
 
             # Handle text data
             if hasattr(chunk, "text") and chunk.text:
@@ -3565,10 +3571,9 @@ async def chat_handler(event):
         # --- Construct API call arguments ---
         is_gemini_model = re.search(r"\bgemini\b", prefs.model, re.IGNORECASE)
 
-        # Image generation models don't support streaming, except native Gemini image generation
-        use_streaming = not model_capabilities.get(
-            "image_generation", False
-        ) or is_native_gemini_image_generation(prefs.model)
+        # Image generation models don't support streaming
+        # Note: Native Gemini image generation has separate handling with its own streaming
+        use_streaming = not model_capabilities.get("image_generation", False)
 
         api_kwargs = {
             "model": prefs.model,
