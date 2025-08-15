@@ -127,19 +127,31 @@ class LiveSessionManager:
         )
 
         try:
+            # Base configuration for live session
+            config_kwargs = {
+                "response_modalities": ["AUDIO"],  # Audio responses
+                "realtime_input_config": {
+                    "automatic_activity_detection": {"disabled": True}
+                },
+            }
+
+            # Add proxy configuration if available
+            proxy_url = os.getenv("GEMINI_SPECIAL_HTTP_PROXY")
+            if proxy_url:
+                config_kwargs["http_options"] = types.HttpOptions(
+                    client_args={"proxy": proxy_url},
+                    async_client_args={"proxy": proxy_url},
+                )
+
+            live_connect_config = types.LiveConnectConfig(**config_kwargs)
+
             # Configure Google GenAI client
             client = genai.Client(api_key=api_key)
 
-            # Configure session for audio responses - disable automatic VAD
-            config = types.LiveConnectConfig(
-                response_modalities=["AUDIO"],  # Audio responses
-                realtime_input_config={
-                    "automatic_activity_detection": {"disabled": True}
-                },
-            )
-
             # Create live session connection object
-            session_obj.session = client.aio.live.connect(model=model, config=config)
+            session_obj.session = client.aio.live.connect(
+                model=model, config=live_connect_config
+            )
             session_obj.is_connected = False  # Will be set to True after connection
 
             print(f"Live session object created for chat {chat_id}")
@@ -225,7 +237,17 @@ class GeminiLiveAPI:
     def __init__(self, api_key: str):
         self.api_key = api_key
         if GENAI_AVAILABLE:
-            self.client = genai.Client(api_key=api_key)
+            # Check for special proxy configuration
+            proxy_url = os.getenv("GEMINI_SPECIAL_HTTP_PROXY")
+            http_options = None
+
+            if proxy_url:
+                http_options = types.HttpOptions(
+                    client_args={"proxy": proxy_url},
+                    async_client_args={"proxy": proxy_url},
+                )
+
+            self.client = genai.Client(api_key=api_key, http_options=http_options)
 
     async def send_text(self, session: Any, text: str):
         """Send text message to Gemini Live API."""

@@ -622,24 +622,25 @@ def is_native_gemini_image_generation(model: str) -> bool:
     """Check if model is native Gemini image generation (not via litellm)."""
     return model in GEMINI_IMAGE_GENERATION_MODELS
 
+
 async def _send_image_to_telegram(
-    event, 
-    image_data: bytes, 
+    event,
+    image_data: bytes,
     *,
     filename_base: str = "generated_image",
     file_extension: str = ".png",
-    file_index: Optional[int] = None
+    file_index: Optional[int] = None,
 ) -> bool:
     """
     Send image data to Telegram with proper resource management.
-    
+
     Args:
         event: Telegram event object
         image_data: Raw image bytes
         filename_base: Base name for the file (keyword-only)
         file_extension: File extension including dot (keyword-only)
         file_index: Optional index to append to filename (keyword-only)
-    
+
     Returns:
         bool: True if image was sent successfully, False otherwise
     """
@@ -649,11 +650,11 @@ async def _send_image_to_telegram(
             filename = f"{filename_base}_{file_index}{file_extension}"
         else:
             filename = f"{filename_base}{file_extension}"
-        
+
         # Create BytesIO object for Telegram
         image_io = io.BytesIO(image_data)
         image_io.name = filename
-        
+
         try:
             # Send image to Telegram
             await event.client.send_file(
@@ -664,7 +665,7 @@ async def _send_image_to_telegram(
             return True
         finally:
             image_io.close()
-            
+
     except Exception as e:
         print(f"Error sending image to Telegram: {e}")
         return False
@@ -710,10 +711,10 @@ async def _process_image_response(event, response_content: str) -> tuple[str, bo
 
         # Send image using shared utility function
         image_sent = await _send_image_to_telegram(
-            event, 
+            event,
             image_bytes,
             filename_base="generated_image",
-            file_extension=f".{image_format}"
+            file_extension=f".{image_format}",
         )
 
         if image_sent:
@@ -744,7 +745,16 @@ async def _handle_native_gemini_image_generation(
         tuple: (text_content, has_image) where has_image indicates if an image was sent
     """
     try:
-        client = genai.Client(api_key=api_key)
+        # Check for special proxy configuration
+        proxy_url = os.getenv("GEMINI_SPECIAL_HTTP_PROXY")
+        http_options = None
+
+        if proxy_url:
+            http_options = types.HttpOptions(
+                client_args={"proxy": proxy_url}, async_client_args={"proxy": proxy_url}
+            )
+
+        client = genai.Client(api_key=api_key, http_options=http_options)
 
         # Convert messages to Gemini format
         contents = []
@@ -830,9 +840,9 @@ async def _handle_native_gemini_image_generation(
                     data_buffer,
                     filename_base="generated_image",
                     file_extension=file_extension,
-                    file_index=file_index
+                    file_index=file_index,
                 )
-                
+
                 if image_sent:
                     has_image = True
                     file_index += 1
