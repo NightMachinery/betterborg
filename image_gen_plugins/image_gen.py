@@ -679,6 +679,9 @@ async def initialize_image_gen():
             if not IS_BOT:
                 print("ImageGen: Running as USERBOT.")
 
+    # Populate callback hash map for persistent button handling
+    bot_util.populate_callback_hash_map(MODEL_CHOICES)
+    
     # Register handlers
     register_handlers()
 

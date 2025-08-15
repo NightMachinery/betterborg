@@ -4,6 +4,7 @@ This includes command registration, generic handlers, and message processing hel
 """
 
 import asyncio
+import hashlib
 from telethon import events
 from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.types import BotCommand, BotCommandScopeDefault
@@ -94,19 +95,67 @@ SANITIZATION_MAP = {
     ".": "__DOT__",
 }
 
+# Global mapping for hash-to-key resolution
+_callback_hash_map: Dict[str, str] = {}
+
+# Telegram callback_data limit (64 bytes) minus prefix space
+MAX_CALLBACK_DATA_LENGTH = 50
+
+# Hash length for callback keys
+CALLBACK_HASH_LENGTH = 10
+
+
+def generate_callback_hash(key: str) -> str:
+    """Generate a short hash for long callback keys."""
+    hash_obj = hashlib.sha256(key.encode('utf-8'))
+    hash_str = hash_obj.hexdigest()[:CALLBACK_HASH_LENGTH]
+    _callback_hash_map[hash_str] = key
+    return hash_str
+
+
+def resolve_callback_hash(hash_key: str) -> str:
+    """Resolve a hash back to the original key."""
+    return _callback_hash_map.get(hash_key, hash_key)
+
 
 def sanitize_callback_data(key: str) -> str:
-    """Sanitize key for use in Telegram callback data."""
+    """Sanitize key for use in Telegram callback data, using hash for long keys."""
+    # First try regular sanitization
+    sanitized = key
     for char, replacement in SANITIZATION_MAP.items():
-        key = key.replace(char, replacement)
-    return key
+        sanitized = sanitized.replace(char, replacement)
+    
+    # If the result is too long, use hash instead
+    if len(sanitized) > MAX_CALLBACK_DATA_LENGTH:
+        return generate_callback_hash(key)
+    
+    return sanitized
 
 
 def unsanitize_callback_data(sanitized_key: str) -> str:
     """Restore original key from sanitized callback data."""
+    # Check if it's a hash first
+    if len(sanitized_key) == CALLBACK_HASH_LENGTH and sanitized_key in _callback_hash_map:
+        return _callback_hash_map[sanitized_key]
+    
+    # Otherwise, reverse normal sanitization
     for char, replacement in SANITIZATION_MAP.items():
         sanitized_key = sanitized_key.replace(replacement, char)
     return sanitized_key
+
+
+def populate_callback_hash_map(*model_choices_dicts):
+    """Populate the callback hash map with all known model choices at startup."""
+    for model_choices in model_choices_dicts:
+        if model_choices:
+            for key in model_choices.keys():
+                # Pre-generate hashes for all keys that would need them
+                sanitized = key
+                for char, replacement in SANITIZATION_MAP.items():
+                    sanitized = sanitized.replace(char, replacement)
+                
+                if len(sanitized) > MAX_CALLBACK_DATA_LENGTH:
+                    generate_callback_hash(key)
 
 
 # --- Shared UI Components ---

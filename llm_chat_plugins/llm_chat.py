@@ -1734,6 +1734,10 @@ Your username on Telegram is {BOT_USERNAME}. The user might mention you using th
 
     # Load smart context states from Redis on startup (both bot and userbot)
     await load_smart_context_states()
+    
+    # Populate callback hash map for persistent button handling
+    bot_util.populate_callback_hash_map(MODEL_CHOICES)
+    
     register_handlers()
 
 
