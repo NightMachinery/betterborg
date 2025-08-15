@@ -6,6 +6,7 @@ import traceback
 import os
 import uuid
 import base64
+import io
 import mimetypes
 import re
 import json
@@ -122,6 +123,7 @@ MODEL_CHOICES = {
     "gemini/gemini-2.5-flash": "Gemini 2.5 Flash",
     "gemini/gemini-2.5-pro": "Gemini 2.5 Pro",
     "openrouter/google/gemini-2.5-pro": "Gemini 2.5 Pro (OpenRouter)",
+    "gemini/gemini-2.0-flash-exp-image-generation": "Gemini 2.0 Flash Image Generation",
     ## Anthropic Claude
     "openrouter/anthropic/claude-sonnet-4": "Claude 4 Sonnet (OpenRouter)",
     "openrouter/anthropic/claude-opus-4": "Claude 4 Opus (OpenRouter)",
@@ -592,12 +594,62 @@ def is_native_gemini(model: str) -> bool:
     return model.startswith("gemini/")
 
 
+def is_image_generation_model(model: str) -> bool:
+    """Check if model supports image generation."""
+    image_generation_models = {
+        "gemini/gemini-2.0-flash-exp-image-generation",
+    }
+    return model in image_generation_models
+
+
+async def _process_image_response(event, response_content: str) -> tuple[str, bool]:
+    """Process response content that may contain base64 image data.
+
+    Returns:
+        tuple: (text_content, has_image) where has_image indicates if an image was sent
+    """
+    # Check if response contains base64 image data
+    image_pattern = r"data:image/([^;]+);base64,([A-Za-z0-9+/=]+)"
+    match = re.search(image_pattern, response_content)
+
+    if not match:
+        return response_content, False
+
+    try:
+        image_format = match.group(1)
+        image_data = match.group(2)
+
+        # Decode base64 image data
+        image_bytes = base64.b64decode(image_data)
+
+        # Create BytesIO object for Telegram
+        image_io = io.BytesIO(image_bytes)
+        image_io.name = f"generated_image.{image_format}"
+
+        # Send image to Telegram
+        await event.client.send_file(
+            event.chat_id,
+            file=image_io,
+            reply_to=event.id,
+        )
+
+        # Remove image data from text response
+        text_without_image = re.sub(image_pattern, "", response_content).strip()
+
+        return text_without_image, True
+
+    except Exception as e:
+        print(f"Error processing image response: {e}")
+        return response_content, False
+
+
 def get_model_capabilities(model: str) -> Dict[str, bool]:
-    """Get model capabilities for vision, audio input, and audio output support."""
+    """Get model capabilities for vision, audio input, audio output, and image generation support."""
     capabilities = {
         "vision": False,
         "audio_input": False,
         "audio_output": False,
+        "image_generation": False,
     }
     try:
         capabilities["vision"] = litellm.supports_vision(model)
@@ -611,6 +663,8 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
         capabilities["audio_output"] = litellm.supports_audio_output(model)
     except Exception as e:
         print(f"Error checking audio output support for {model}: {e}")
+
+    capabilities["image_generation"] = is_image_generation_model(model)
     return capabilities
 
 
@@ -3336,11 +3390,14 @@ async def chat_handler(event):
         # --- Construct API call arguments ---
         is_gemini_model = re.search(r"\bgemini\b", prefs.model, re.IGNORECASE)
 
+        # Image generation models don't support streaming
+        use_streaming = not model_capabilities.get("image_generation", False)
+
         api_kwargs = {
             "model": prefs.model,
             "messages": messages,
             "api_key": api_key,
-            "stream": True,
+            "stream": use_streaming,
         }
 
         if prefs.json_mode:
@@ -3355,6 +3412,9 @@ async def chat_handler(event):
                 api_kwargs["tools"] = [{t: {}} for t in prefs.enabled_tools]
             if prefs.thinking:
                 api_kwargs["reasoning_effort"] = prefs.thinking
+            # Add modalities for image generation models
+            if model_capabilities.get("image_generation", False):
+                api_kwargs["modalities"] = ["image", "text"]
         else:
             # Add warnings if user has Gemini-specific settings enabled
             if prefs.enabled_tools and WARN_UNAVAILABLE_TOOLS_P:
@@ -3384,39 +3444,64 @@ async def chat_handler(event):
 
         # Make the API call
         response_text = ""
-        last_edit_time = asyncio.get_event_loop().time()
-        edit_interval = get_streaming_delay(prefs)
-        response_stream = await litellm.acompletion(**api_kwargs)
-        async for chunk in response_stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                response_text += delta
-                current_time = asyncio.get_event_loop().time()
-                if (current_time - last_edit_time) > edit_interval:
-                    try:
-                        # Add a cursor to indicate the bot is still "typing"
-                        await util.edit_message(
-                            response_message, f"{response_text}▌", parse_mode="md"
-                        )
-                        last_edit_time = current_time
-                    except errors.rpcerrorlist.MessageNotModifiedError:
-                        # This error is expected if the content hasn't changed
-                        pass
-                    except Exception as e:
-                        # Log other edit errors but don't stop the stream
-                        print(f"Error during message edit: {e}")
+        has_image = False
 
-        # Final edit to remove the cursor and show the complete message
-        final_text = response_text.strip() or "__[No response]__"
+        if use_streaming:
+            # Streaming response handling
+            last_edit_time = asyncio.get_event_loop().time()
+            edit_interval = get_streaming_delay(prefs)
+            response_stream = await litellm.acompletion(**api_kwargs)
+            async for chunk in response_stream:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    response_text += delta
+                    current_time = asyncio.get_event_loop().time()
+                    if (current_time - last_edit_time) > edit_interval:
+                        try:
+                            # Add a cursor to indicate the bot is still "typing"
+                            await util.edit_message(
+                                response_message, f"{response_text}▌", parse_mode="md"
+                            )
+                            last_edit_time = current_time
+                        except errors.rpcerrorlist.MessageNotModifiedError:
+                            # This error is expected if the content hasn't changed
+                            pass
+                        except Exception as e:
+                            # Log other edit errors but don't stop the stream
+                            print(f"Error during message edit: {e}")
+        else:
+            # Non-streaming response handling (for image generation)
+            response = await litellm.acompletion(**api_kwargs)
+            response_text = response.choices[0].message.content or ""
+
+            # Process image content if present
+            if model_capabilities.get("image_generation", False):
+                response_text, has_image = await _process_image_response(
+                    event, response_text
+                )
+
+        # Final text processing
+        final_text = response_text.strip()
+        if not final_text and not has_image:
+            final_text = "__[No response]__"
+
         if WARN_UNSUPPORTED_TO_USER_P and warnings:
             warning_text = "\n\n---\n**Note:**\n" + "\n".join(
                 f"- {w}" for w in sorted(list(set(warnings)))
             )
             final_text += warning_text
 
-        await util.edit_message(
-            response_message, final_text, parse_mode="md", link_preview=False
-        )
+        # Only send text message if there's actual content or if no image was sent
+        if final_text.strip() or not has_image:
+            await util.edit_message(
+                response_message, final_text, parse_mode="md", link_preview=False
+            )
+        else:
+            # If we sent an image but have no text, delete the "..." message
+            try:
+                await response_message.delete()
+            except Exception as e:
+                print(f"Error deleting placeholder message: {e}")
 
         # TTS Integration Hook
         await _handle_tts_response(event, final_text)
