@@ -98,17 +98,18 @@ SANITIZATION_MAP = {
 # Global mapping for hash-to-key resolution
 _callback_hash_map: Dict[str, str] = {}
 
-# Telegram callback_data limit (64 bytes) minus prefix space
-MAX_CALLBACK_DATA_LENGTH = 50
+# Telegram callback_data limit (64 bytes) minus buffer for prefix space
+MAX_CALLBACK_DATA_LENGTH = 40
 
-# Hash length for callback keys
-CALLBACK_HASH_LENGTH = 10
+# Hash prefix and length for callback keys
+CALLBACK_HASH_PREFIX = "HASH_"
+CALLBACK_HASH_LENGTH = 30
 
 
 def generate_callback_hash(key: str) -> str:
     """Generate a short hash for long callback keys."""
     hash_obj = hashlib.sha256(key.encode('utf-8'))
-    hash_str = hash_obj.hexdigest()[:CALLBACK_HASH_LENGTH]
+    hash_str = f"{CALLBACK_HASH_PREFIX}{hash_obj.hexdigest()[:CALLBACK_HASH_LENGTH]}"
     _callback_hash_map[hash_str] = key
     return hash_str
 
@@ -134,8 +135,8 @@ def sanitize_callback_data(key: str) -> str:
 
 def unsanitize_callback_data(sanitized_key: str) -> str:
     """Restore original key from sanitized callback data."""
-    # Check if it's a hash first
-    if len(sanitized_key) == CALLBACK_HASH_LENGTH and sanitized_key in _callback_hash_map:
+    # Check if it's a hash first (by prefix)
+    if sanitized_key.startswith(CALLBACK_HASH_PREFIX) and sanitized_key in _callback_hash_map:
         return _callback_hash_map[sanitized_key]
     
     # Otherwise, reverse normal sanitization
