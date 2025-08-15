@@ -8,6 +8,42 @@ import os
 import uuid
 
 
+# --- Custom Exceptions ---
+
+
+class ProxyRestrictedException(Exception):
+    """Exception raised when proxy access is restricted for non-admin users."""
+
+    pass
+
+
+# --- Proxy Configuration ---
+
+GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P = os.getenv(
+    "GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P", ""
+).lower() in ("true", "y")
+
+
+def get_proxy_config_or_error(user_id: int) -> tuple[str | None, str | None]:
+    """Get proxy configuration or return error message if blocked.
+
+    Returns:
+        tuple: (proxy_url, error_message) - one will be None
+    """
+    proxy_url = os.getenv("GEMINI_SPECIAL_HTTP_PROXY")
+    if not proxy_url:
+        return None, None
+
+    if GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P and not util.is_admin_by_id(user_id):
+        raise ProxyRestrictedException(
+            "🚫 This Gemini feature is currently unavailable due to regional restrictions. "
+            "Our servers operate within EU jurisdiction where certain advanced AI capabilities "
+            "require special compliance measures. Please try again later or contact support."
+        )
+
+    return proxy_url, None
+
+
 # --- LLM-Specific Shared Constants and Utilities ---
 
 MIME_TYPE_MAP = {
@@ -77,35 +113,34 @@ def create_attachments_from_dir(directory: Path) -> list[llm.Attachment]:
     return attachments
 
 
-async def handle_llm_error(
+async def _handle_common_error_cases(
     *,
     event,
     exception,
     response_message=None,
     service: str = None,
-    base_error_message: str = None,
-    error_id_p: bool = True,
-):
-    """A generic error handler for LLM related operations."""
-    error_id = uuid.uuid4() if error_id_p else None
-    error_message = str(exception)
+    error_id: str = None,
+) -> bool:
+    """Handle common error cases that apply to both LLM and TTS errors.
 
-    if base_error_message:
-        base_user_facing_error = f"{BOT_META_INFO_PREFIX}{base_error_message}"
-    else:
-        base_user_facing_error = f"{BOT_META_INFO_PREFIX}An error occurred."
+    Returns:
+        bool: True if the error was handled and processing should stop, False otherwise
+    """
+    error_message = f"{BOT_META_INFO_PREFIX}{str(exception)}"
 
-    user_facing_error = (
-        f"{base_user_facing_error} (Error ID: `{error_id}`)"
-        if error_id
-        else base_user_facing_error
-    )
+    # Special handling for ProxyRestrictedException
+    if isinstance(exception, ProxyRestrictedException):
+        try:
+            if response_message:
+                await response_message.edit(error_message)
+            else:
+                await event.reply(error_message)
+        except Exception as e:
+            print(f"Error while sending/editing proxy restriction message: {e}")
+        return True
 
-    should_show_error_to_user = False
-    if "quota" in error_message.lower() or "exceeded" in error_message.lower():
-        should_show_error_to_user = True
-    elif service and "api key not valid" in error_message.lower():
-        # Special handling for invalid API key
+    # Special handling for invalid API key
+    if service and "api key not valid" in error_message.lower():
         if response_message:
             try:
                 await response_message.delete()
@@ -115,14 +150,64 @@ async def handle_llm_error(
         if error_id:
             print(f"--- ERROR ID: {error_id} ---")
         traceback.print_exc()
+        return True
+
+    return False
+
+
+def _should_show_error_details(
+    error_message: str, is_admin: bool, is_private: bool
+) -> bool:
+    """Determine if error details should be shown to the user."""
+    if "quota" in error_message.lower() or "exceeded" in error_message.lower():
+        return True
+    if is_private and is_admin:
+        return True
+    return False
+
+
+async def handle_error(
+    *,
+    event,
+    exception,
+    error_type: str = "LLM",
+    response_message=None,
+    service: str = None,
+    base_error_message: str = None,
+    error_id_p: bool = True,
+):
+    """A unified error handler for LLM and TTS related operations."""
+    error_id = uuid.uuid4() if error_id_p else None
+    error_message = str(exception)
+
+    # Handle common error cases
+    if await _handle_common_error_cases(
+        event=event,
+        exception=exception,
+        response_message=response_message,
+        service=service,
+        error_id=str(error_id) if error_id else None,
+    ):
         return
+
+    # Determine default error message based on type
+    if base_error_message:
+        base_user_facing_error = f"{BOT_META_INFO_PREFIX}{base_error_message}"
+    elif error_type.upper() == "TTS":
+        base_user_facing_error = f"{BOT_META_INFO_PREFIX}TTS generation failed."
+    else:
+        base_user_facing_error = f"{BOT_META_INFO_PREFIX}An error occurred."
+
+    user_facing_error = (
+        f"{base_user_facing_error} (Error ID: `{error_id}`)"
+        if error_id
+        else base_user_facing_error
+    )
 
     is_admin = await util.isAdmin(event)
     is_private = event.is_private
-    if is_private and is_admin:
-        should_show_error_to_user = True
 
-    if should_show_error_to_user:
+    if _should_show_error_details(error_message, is_admin, is_private):
         user_facing_error = f"{user_facing_error}\n\n**Error:** {error_message}"
 
     try:
@@ -134,8 +219,32 @@ async def handle_llm_error(
         print(f"Error while sending/editing error message: {e}")
 
     if error_id:
-        print(f"--- ERROR ID: {error_id} ---")
+        error_type_prefix = (
+            f"{error_type.upper()} " if error_type.upper() != "LLM" else ""
+        )
+        print(f"--- {error_type_prefix}ERROR ID: {error_id} ---")
     traceback.print_exc()
+
+
+async def handle_llm_error(
+    *,
+    event,
+    exception,
+    response_message=None,
+    service: str = None,
+    base_error_message: str = None,
+    error_id_p: bool = True,
+):
+    """A generic error handler for LLM related operations."""
+    await handle_error(
+        event=event,
+        exception=exception,
+        error_type="LLM",
+        response_message=response_message,
+        service=service,
+        base_error_message=base_error_message,
+        error_id_p=error_id_p,
+    )
 
 
 def create_llm_start_handler(
