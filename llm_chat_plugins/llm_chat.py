@@ -121,9 +121,11 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # --- New Constants for Features ---
-IMAGE_GENERATION_MODELS = {
+GEMINI_IMAGE_GENERATION_MODELS = {
+    "gemini/gemini-2.0-flash-preview-image-generation",
     "gemini/gemini-2.0-flash-exp-image-generation",
 }
+IMAGE_GENERATION_MODELS = GEMINI_IMAGE_GENERATION_MODELS
 
 # Security constants for image processing
 MAX_IMAGE_SIZE = 50 * 1024 * 1024  # 50MB limit
@@ -137,7 +139,7 @@ MODEL_CHOICES = {
     "gemini/gemini-2.5-flash": "Gemini 2.5 Flash",
     "gemini/gemini-2.5-pro": "Gemini 2.5 Pro",
     "openrouter/google/gemini-2.5-pro": "Gemini 2.5 Pro (OpenRouter)",
-    "gemini/gemini-2.0-flash-exp-image-generation": "Gemini 2.0 Flash Image Generation",
+    "gemini/gemini-2.0-flash-preview-image-generation": "Gemini 2.0 Flash Image Generation",
     ## Anthropic Claude
     "openrouter/anthropic/claude-sonnet-4": "Claude Sonnet 4 (OpenRouter)",
     "openrouter/anthropic/claude-opus-4.1": "Claude Opus 4.1 (OpenRouter)",
@@ -618,7 +620,7 @@ def is_image_generation_model(model: str) -> bool:
 
 def is_native_gemini_image_generation(model: str) -> bool:
     """Check if model is native Gemini image generation (not via litellm)."""
-    return model == "gemini/gemini-2.0-flash-exp-image-generation"
+    return model in GEMINI_IMAGE_GENERATION_MODELS
 
 async def _send_image_to_telegram(
     event, 
