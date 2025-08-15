@@ -18,6 +18,8 @@ from shutil import rmtree
 from itertools import groupby
 
 import litellm
+from google import genai
+from google.genai import types
 from telethon import events, errors
 from telethon.tl.types import (
     BotCommand,
@@ -614,6 +616,11 @@ def is_image_generation_model(model: str) -> bool:
     return model in IMAGE_GENERATION_MODELS
 
 
+def is_native_gemini_image_generation(model: str) -> bool:
+    """Check if model is native Gemini image generation (not via litellm)."""
+    return model == "gemini/gemini-2.0-flash-exp-image-generation"
+
+
 async def _process_image_response(event, response_content: str) -> tuple[str, bool]:
     """Process response content that may contain base64 image data.
 
@@ -678,6 +685,133 @@ async def _process_image_response(event, response_content: str) -> tuple[str, bo
         print(f"Unexpected error processing image response: {e}")
         traceback.print_exc()
         return response_content, False
+
+
+async def _handle_native_gemini_image_generation(
+    event, messages: list, api_key: str, model: str, response_message
+) -> tuple[str, bool]:
+    """Handle native Gemini image generation with streaming support.
+
+    Returns:
+        tuple: (text_content, has_image) where has_image indicates if an image was sent
+    """
+    try:
+        client = genai.Client(api_key=api_key)
+
+        # Convert messages to Gemini format
+        contents = []
+        system_instruction = None
+
+        # Extract system instruction if present
+        for msg in messages:
+            if msg["role"] == "system":
+                system_instruction = msg["content"]
+                break
+
+        for msg in messages:
+            if msg["role"] == "system":
+                # Skip system messages - handled via system_instruction
+                continue
+            elif msg["role"] == "user":
+                role = "user"
+            elif msg["role"] == "assistant":
+                role = "model"
+            else:
+                continue
+
+            # Handle content - could be string or list of parts
+            if isinstance(msg["content"], str):
+                parts = [types.Part.from_text(text=msg["content"])]
+            elif isinstance(msg["content"], list):
+                parts = []
+                for part in msg["content"]:
+                    if part.get("type") == "text":
+                        parts.append(types.Part.from_text(text=part["text"]))
+                    elif part.get("type") == "image_url":
+                        # Handle image parts if needed
+                        pass
+            else:
+                parts = [types.Part.from_text(text=str(msg["content"]))]
+
+            contents.append(types.Content(role=role, parts=parts))
+
+        # Create config with system instruction if available
+        config_kwargs = {"response_modalities": ["IMAGE", "TEXT"]}
+        if system_instruction:
+            config_kwargs["system_instruction"] = system_instruction
+
+        generate_content_config = types.GenerateContentConfig(**config_kwargs)
+
+        response_text = ""
+        has_image = False
+        file_index = 0
+
+        # Get streaming delay for updating message
+        prefs = user_manager.get_prefs(event.sender_id)
+        edit_interval = 0.8  # Default delay
+        last_edit_time = asyncio.get_event_loop().time()
+
+        # Stream the response
+        for chunk in client.models.generate_content_stream(
+            model=model.replace("gemini/", ""),  # Remove prefix for native API
+            contents=contents,
+            config=generate_content_config,
+        ):
+            if (
+                chunk.candidates is None
+                or chunk.candidates[0].content is None
+                or chunk.candidates[0].content.parts is None
+            ):
+                continue
+
+            # Handle image data
+            if (
+                chunk.candidates[0].content.parts[0].inline_data
+                and chunk.candidates[0].content.parts[0].inline_data.data
+            ):
+
+                inline_data = chunk.candidates[0].content.parts[0].inline_data
+                data_buffer = inline_data.data
+                file_extension = (
+                    mimetypes.guess_extension(inline_data.mime_type) or ".png"
+                )
+
+                # Create BytesIO object for Telegram
+                image_io = io.BytesIO(data_buffer)
+                image_io.name = f"generated_image_{file_index}{file_extension}"
+                file_index += 1
+
+                # Send image to Telegram
+                await event.client.send_file(
+                    event.chat_id,
+                    file=image_io,
+                    reply_to=event.id,
+                )
+                has_image = True
+
+            # Handle text data
+            if hasattr(chunk, "text") and chunk.text:
+                response_text += chunk.text
+
+                # Update message periodically during streaming
+                current_time = asyncio.get_event_loop().time()
+                if (current_time - last_edit_time) > edit_interval:
+                    try:
+                        await util.edit_message(
+                            response_message, f"{response_text}▌", parse_mode="md"
+                        )
+                        last_edit_time = current_time
+                    except errors.rpcerrorlist.MessageNotModifiedError:
+                        pass
+                    except Exception as e:
+                        print(f"Error during message edit: {e}")
+
+        return response_text.strip(), has_image
+
+    except Exception as e:
+        print(f"Error in native Gemini image generation: {e}")
+        traceback.print_exc()
+        raise
 
 
 def get_model_capabilities(model: str) -> Dict[str, bool]:
@@ -1734,10 +1868,10 @@ Your username on Telegram is {BOT_USERNAME}. The user might mention you using th
 
     # Load smart context states from Redis on startup (both bot and userbot)
     await load_smart_context_states()
-    
+
     # Populate callback hash map for persistent button handling
     bot_util.populate_callback_hash_map(MODEL_CHOICES)
-    
+
     register_handlers()
 
 
@@ -3431,8 +3565,10 @@ async def chat_handler(event):
         # --- Construct API call arguments ---
         is_gemini_model = re.search(r"\bgemini\b", prefs.model, re.IGNORECASE)
 
-        # Image generation models don't support streaming
-        use_streaming = not model_capabilities.get("image_generation", False)
+        # Image generation models don't support streaming, except native Gemini image generation
+        use_streaming = not model_capabilities.get(
+            "image_generation", False
+        ) or is_native_gemini_image_generation(prefs.model)
 
         api_kwargs = {
             "model": prefs.model,
@@ -3487,7 +3623,13 @@ async def chat_handler(event):
         response_text = ""
         has_image = False
 
-        if use_streaming:
+        # Check if this is a native Gemini image generation model
+        if is_native_gemini_image_generation(prefs.model):
+            # Use native Gemini API for image generation with streaming
+            response_text, has_image = await _handle_native_gemini_image_generation(
+                event, messages, api_key, prefs.model, response_message
+            )
+        elif use_streaming:
             # Streaming response handling
             last_edit_time = asyncio.get_event_loop().time()
             edit_interval = get_streaming_delay(prefs)
