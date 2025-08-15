@@ -1,8 +1,11 @@
 import asyncio
+import json
 import os
 import shutil
 import tempfile
 import traceback
+import uuid
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -15,6 +18,10 @@ from uniborg.storage import UserStorage
 # --- Bot Configuration ---
 
 STORAGE_PURPOSE = "tts_bot_preferences"
+
+# Logging configuration
+LOG_DIR = Path(os.path.expanduser("~/.borg/tts_bot/log/"))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 BOT_COMMANDS = [
     {"command": "start", "description": "Onboard and set API key"},
     {"command": "help", "description": "Show help and instructions"},
@@ -94,10 +101,55 @@ async def _get_text_from_files(
     return "\n\n".join(text_content_parts), warnings
 
 
+async def _log_tts_generation(
+    event, prefs: UserPrefs, text_input: str, audio_file_generated: bool
+):
+    """Formats and writes the TTS generation log to a user-specific file."""
+    try:
+        user = await event.get_sender()
+        user_id = user.id
+        first_name = user.first_name or ""
+        last_name = user.last_name or ""
+        username = user.username or "N/A"
+        full_name = f"{first_name} {last_name}".strip()
+
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        unique_id = uuid.uuid4().hex
+        log_filename = f"{timestamp}_{unique_id}.txt"
+
+        user_log_dir = LOG_DIR / str(user_id)
+        user_log_dir.mkdir(exist_ok=True)
+        log_file_path = user_log_dir / log_filename
+
+        # Log prefs object as JSON
+        prefs_dict = prefs.model_dump()
+        prefs_json = json.dumps(prefs_dict, indent=2)
+
+        log_parts = [
+            f"Date: {timestamp}",
+            f"User ID: {user_id}",
+            f"Name: {full_name}",
+            f"Username: @{username}",
+            "--- Preferences ---",
+            prefs_json,
+            "--- TTS Generation ---",
+            f"\n[User Text Input]:",
+            text_input,
+            f"\n[Generation Result]:",
+            f"Audio file generated: {'Yes' if audio_file_generated else 'No'}",
+        ]
+
+        with open(log_file_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(log_parts))
+    except Exception as e:
+        print(f"Failed to write TTS generation log for user {event.sender_id}: {e}")
+        traceback.print_exc()
+
+
 # --- Event and Command Handlers ---
 
 
-async def message_handler(event):
+async def message_handler(event, *, log_p=True):
     """Main handler for generating TTS from user messages and files."""
     if not event.text:
         #: This skips messages in a group that are file-only.
@@ -193,6 +245,10 @@ async def message_handler(event):
         if warnings:
             await event.reply(f"**Note:**\n" + "\n".join(f"- {w}" for w in warnings))
 
+        # Log the interaction if logging is enabled
+        if log_p:
+            await _log_tts_generation(event, user_prefs, final_text, True)
+
     except Exception as e:
         await status_message.delete()
         await tts_util.handle_tts_error(event=event, exception=e, service="gemini")
@@ -261,9 +317,7 @@ async def gemini_voice_handler(event):
 async def gemini_model_handler(event):
     """Presents the TTS model selection menu."""
     current_model = user_manager.get_prefs(event.sender_id).model
-    model_options = {
-        model: desc for model, desc in tts_util.TTS_MODELS.items()
-    }
+    model_options = {model: desc for model, desc in tts_util.TTS_MODELS.items()}
     await bot_util.present_options(
         event,
         title="**Choose a TTS Model**",
@@ -356,9 +410,9 @@ def register_handlers():
     borg.on(
         events.NewMessage(pattern=r"(?i)^/geminivoice\s*$", func=lambda e: e.is_private)
     )(gemini_voice_handler)
-    borg.on(
-        events.NewMessage(pattern=r"(?i)^/model\s*$", func=lambda e: e.is_private)
-    )(gemini_model_handler)
+    borg.on(events.NewMessage(pattern=r"(?i)^/model\s*$", func=lambda e: e.is_private))(
+        gemini_model_handler
+    )
     borg.on(events.CallbackQuery(pattern=b"voice_"))(voice_callback_handler)
     borg.on(events.CallbackQuery(pattern=b"model_"))(model_callback_handler)
     borg.on(
