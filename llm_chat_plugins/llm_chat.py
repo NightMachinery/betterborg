@@ -6,6 +6,7 @@ import traceback
 import os
 import uuid
 import base64
+import binascii
 import io
 import mimetypes
 import re
@@ -664,7 +665,7 @@ async def _process_image_response(event, response_content: str) -> tuple[str, bo
         
         return text_without_image, True
         
-    except base64.binascii.Error as e:
+    except binascii.Error as e:
         print(f"Base64 decoding error: {e}")
         return response_content, False
     except ValueError as e:
