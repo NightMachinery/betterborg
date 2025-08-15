@@ -32,6 +32,8 @@ GEMINI_AUDIO_SAMPLE_RATE = 16000
 GEMINI_AUDIO_CHANNELS = 1
 
 
+
+
 @dataclass
 class LiveSession:
     """Represents an active live session with Gemini Live API."""
@@ -117,6 +119,10 @@ class LiveSessionManager:
             limit = ADMIN_CONCURRENT_LIVE_LIMIT if is_admin else CONCURRENT_LIVE_LIMIT
             raise ValueError(f"Maximum concurrent sessions limit reached ({limit})")
 
+        # Check proxy configuration and admin permissions
+        from uniborg.llm_util import get_proxy_config_or_error
+        proxy_url, _ = get_proxy_config_or_error(user_id)
+
         # End existing session for this chat if any
         if chat_id in self.sessions:
             await self.end_session(chat_id)
@@ -136,7 +142,6 @@ class LiveSessionManager:
             }
 
             # Add proxy configuration if available
-            proxy_url = os.getenv("GEMINI_SPECIAL_HTTP_PROXY")
             if proxy_url:
                 config_kwargs["http_options"] = types.HttpOptions(
                     client_args={"proxy": proxy_url},
@@ -234,18 +239,29 @@ class LiveSessionManager:
 class GeminiLiveAPI:
     """Interface for Gemini Live API using Google GenAI SDK."""
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, *, user_id: int = None):
         self.api_key = api_key
         if GENAI_AVAILABLE:
-            # Check for special proxy configuration
-            proxy_url = os.getenv("GEMINI_SPECIAL_HTTP_PROXY")
             http_options = None
 
-            if proxy_url:
-                http_options = types.HttpOptions(
-                    client_args={"proxy": proxy_url},
-                    async_client_args={"proxy": proxy_url},
-                )
+            if user_id is not None:
+                # Check proxy configuration and admin permissions
+                from uniborg.llm_util import get_proxy_config_or_error
+                proxy_url, _ = get_proxy_config_or_error(user_id)
+
+                if proxy_url:
+                    try:
+                        http_options = types.HttpOptions(
+                            client_args={"proxy": proxy_url},
+                            async_client_args={"proxy": proxy_url},
+                        )
+                        print(f"GeminiLiveAPI: Using proxy: {proxy_url}")
+                    except Exception as e:
+                        print(
+                            f"GeminiLiveAPI: Error configuring proxy {proxy_url}: {e}"
+                        )
+                        print("GeminiLiveAPI: Falling back to no proxy")
+                        http_options = None
 
             self.client = genai.Client(api_key=api_key, http_options=http_options)
 
