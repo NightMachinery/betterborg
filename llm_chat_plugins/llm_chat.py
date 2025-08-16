@@ -650,18 +650,28 @@ def _create_retry_logger():
 
     def retry_logger(model_call_dict):
         # Create a temporary file to save the model call details
-        temp_fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="llm_retry_")
+        temp_fd = None
+        temp_path = None
         try:
+            temp_fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="llm_retry_")
             with os.fdopen(temp_fd, "w") as f:
+                temp_fd = None  # Successfully handed to fdopen, don't close manually
                 json.dump(model_call_dict, f, indent=2, default=str)
             print(f"LLM retry call details saved to: {temp_path}")
         except Exception as e:
             print(f"Failed to save retry call details: {e}")
-            # Close the file descriptor if json.dump failed
-            try:
-                os.close(temp_fd)
-            except:
-                pass
+            # Close the file descriptor if it wasn't successfully handed to fdopen
+            if temp_fd is not None:
+                try:
+                    os.close(temp_fd)
+                except:
+                    pass
+            # Clean up the temp file if it was created but writing failed
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
 
     return retry_logger
 
