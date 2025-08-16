@@ -1,17 +1,70 @@
 #+TITLE: llm_chat_plugins/todo
 
-* Write a separate tool that reads the logged json file and lists the most token intensive messages and gives a nice overview.
+* _
+#+begin_verse
+Read:
+- https://ai.google.dev/gemini-api/docs/files
+
+When the model being used is a native Gemini model, and `GEMINI_NATIVE_FILE_MODE == "files"` (add this constant), use the Files API to attach files when building the history. Cache the gemini returned `file_name` and avoid re-uploads when the file is still available (check). 
+
+LiteLLM supports sending gemini files like this:
+```
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": gemini_file_name,
+                        "filename": file_display_name,
+                        "format": MIME_type
+                    }
+                }
+```
+
+#+end_verse
+
+#+begin_verse
+Task:
+
+When the model being used is a native Gemini model, and `GEMINI_NATIVE_FILE_MODE == "files"` (add this constant), use the Files API to attach files when building the history.
+
+Cache the gemini returned `file_name` and avoid re-uploads when the file is still available (check).
+We should cache a Gemini file name per user_id, as different users cannot access the files uploaded by different users.
+We should still re-use the cached data in redis to avoid downloading media again from Telegram.
+
+Here is the object the gemini file api returns:
+```
+<class 'google.genai.types.File'>
+    uploaded: File(
+                create_time=datetime.datetime(2025, 8, 16, 22, 34, 38, 732768, tzinfo=TzInfo(UTC)),
+                expiration_time=datetime.datetime(2025, 8, 18, 22, 34, 37, 848577, tzinfo=TzInfo(UTC)),
+                mime_type='video/mp4',
+                name='files/w4ngh9vpcpf2',
+                sha256_hash='NTQ5YzVkYjk2OWIwZWJhMDM1NzU3YjBhNDE1ZGYzMGUwZDc4Y2E3NDI4MTQ4MTFlNTZiMDg3ZTYzNWE5NjY3Nw==',
+                size_bytes=152104,
+                source=<FileSource.UPLOADED: 'UPLOADED'>,
+                state=<FileState.PROCESSING: 'PROCESSING'>,
+                update_time=datetime.datetime(2025, 8, 16, 22, 34, 38, 732768, tzinfo=TzInfo(UTC)),
+                uri='https://generativelanguage.googleapis.com/v1beta/files/w4ngh9vpcpf2'
+              )
+```
+
+LiteLLM supports sending gemini files like this:
+```
+                {
+                    "type": "file",
+                              {"file_data":{"mime_type": "${MIME_TYPE}", "file_uri": '$file_uri'}}]
+                }
+```
+
+,* Give the complete updated file(s).
+
+IMPORTANT: Do not change the parts of the code compared to the original that are unrelated. Do not even add comments there.
+#+end_verse
 
 * Add `ALWAYS_INCLUDE_REPLY_CHAIN_P=True` which makes the reply chain of the current message to be always included in the context, even if we are in other context modes.
 
 * callback query updater: should display proper limit for Last_N
 
 * Unsupported binary media type 'application/x-tgsticker' for file AnimatedSticker.tgs
-
-* DONE Add video input detection to model_capabilities. Use context7 to find how. It is probably `supports_video_input`.
-Update `_check_media_capability`.
-
-Hardcode gemini/gemini-2.5-flash to have video input support (just like we do for its audio input support).
 
 * Make =llm_chat= an MCP client
 ** We can enable a memory MCP.
@@ -29,7 +82,7 @@ Traceback (most recent call last):
     response.raise_for_status()
   File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/httpx/_models.py", line 829, in raise_for_status
     raise HTTPStatusError(message, request=request, response=self)
-httpx.HTTPStatusError: Server error '500 Internal Server Error' for url 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?key=AIzaSyABZ78OqNscO_iwf1j8iKseAx4G1ClwVOM&alt=sse'
+httpx.HTTPStatusError: Server error '500 Internal Server Error' for url 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?key=...&alt=sse'
 For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500
 #+end_example
 
@@ -198,6 +251,13 @@ Create an OCR bot: waits for 1 second for messages to arrive (unless already wai
 :PROPERTIES:
 :visibility: folded
 :END:
+** DONE Write a separate tool that reads the logged json file and lists the most token intensive messages and gives a nice overview.
+
+** DONE Add video input detection to model_capabilities. Use context7 to find how. It is probably `supports_video_input`.
+Update `_check_media_capability`.
+
+Hardcode gemini/gemini-2.5-flash to have video input support (just like we do for its audio input support).
+
 ** DONE Forwarded messages from our own bot should have the Assistant role.
 
 ** DONE llm_chat: should skip deleted messages in history_util. we should probably do this in the code section where we retrieve the actual message objects from the message ids.
