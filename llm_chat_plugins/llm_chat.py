@@ -147,6 +147,7 @@ MODEL_CHOICES = {
     "gemini/gemini-2.5-pro": "Gemini 2.5 Pro",
     "openrouter/google/gemini-2.5-pro": "Gemini 2.5 Pro (OpenRouter)",
     "gemini/gemini-2.0-flash-preview-image-generation": "Gemini 2.0 Flash Image Generation",
+    "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
     ## Anthropic Claude
     "openrouter/anthropic/claude-sonnet-4": "Claude Sonnet 4 (OpenRouter)",
     "openrouter/anthropic/claude-opus-4.1": "Claude Opus 4.1 (OpenRouter)",
