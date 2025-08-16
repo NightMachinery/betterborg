@@ -1471,10 +1471,13 @@ async def _process_media(
                         None, lambda: gemini_client.files.get(name=cached_gemini_name)
                     )
                     part = {
-                        "file_data": {
-                            "mime_type": gemini_file.mime_type,
-                            "file_uri": gemini_file.uri,
-                        }
+                        "type": "file",
+                        "file": {
+                            "file_id": gemini_file.uri,
+                            "filename": "some_file",
+                            #: `filename` doesn't seem to be actually used in LiteLLM's _gemini_convert_messages_with_history anyway.
+                        "format": gemini_file.mime_type,
+                        },
                     }
                     return ProcessMediaResult(media_part=part, warnings=[])
                 except google_exceptions.NotFound:
@@ -2101,12 +2104,17 @@ async def _process_turns_to_history(
                 content_result.text_parts, content_result.media_parts
             )
             if final_content_parts:
-                final_content = (
-                    final_content_parts[0]["text"]
-                    if len(final_content_parts) == 1
-                    and final_content_parts[0]["type"] == "text"
-                    else final_content_parts
-                )
+                try:
+                    final_content = (
+                        final_content_parts[0]["text"]
+                        if len(final_content_parts) == 1
+                        and final_content_parts[0]["type"] == "text"
+                        else final_content_parts
+                    )
+                except:
+                    ic(final_content_parts[0])
+                    raise
+                
                 history.append({"role": role, "content": final_content})
 
     return history, all_warnings
