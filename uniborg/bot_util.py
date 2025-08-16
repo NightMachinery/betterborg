@@ -3,6 +3,7 @@ Shared utilities for implementing bot features within the Uniborg framework.
 This includes command registration, generic handlers, and message processing helpers.
 """
 
+from pynight.common_icecream import ic
 import asyncio
 import hashlib
 from telethon import events

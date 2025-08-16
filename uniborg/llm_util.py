@@ -1,3 +1,4 @@
+from pynight.common_icecream import ic
 import traceback
 from uniborg import util
 from uniborg import llm_db
@@ -147,9 +148,9 @@ async def _handle_common_error_cases(
             except Exception as delete_e:
                 print(f"Error deleting message: {delete_e}")
         await llm_db.request_api_key_message(event, service)
-        if error_id:
-            print(f"--- ERROR ID: {error_id} ---")
-        traceback.print_exc()
+        # if error_id:
+        #     print(f"--- ERROR ID: {error_id} ---")
+        # traceback.print_exc()
         return True
 
     return False

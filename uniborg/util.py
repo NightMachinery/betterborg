@@ -3,7 +3,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from brish import z, zp, zs, bsh, Brish
-from icecream import ic
+from pynight.common_icecream import ic
 from collections.abc import Iterable
 from IPython.terminal.embed import InteractiveShellEmbed, InteractiveShell
 from IPython.terminal.ipapp import load_default_config
