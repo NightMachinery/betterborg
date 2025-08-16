@@ -1459,7 +1459,6 @@ async def _process_media(
         # --- Branch 1: Gemini Files API Mode ---
         if is_native_gemini_files_mode(model_in_use):
             gemini_client = genai.Client(api_key=api_key)
-            loop = asyncio.get_running_loop()
 
             # Check for a cached and still valid Gemini file name
             cached_gemini_name = await history_util.get_cached_gemini_file_name(
@@ -1467,8 +1466,8 @@ async def _process_media(
             )
             if cached_gemini_name:
                 try:
-                    gemini_file = await loop.run_in_executor(
-                        None, lambda: gemini_client.files.get(name=cached_gemini_name)
+                    gemini_file = await gemini_client.aio.files.get(
+                        name=cached_gemini_name
                     )
                     part = {
                         "type": "file",
@@ -1476,7 +1475,7 @@ async def _process_media(
                             "file_id": gemini_file.uri,
                             "filename": "some_file",
                             #: `filename` doesn't seem to be actually used in LiteLLM's _gemini_convert_messages_with_history anyway.
-                        "format": gemini_file.mime_type,
+                            "format": gemini_file.mime_type,
                         },
                     }
                     return ProcessMediaResult(media_part=part, warnings=[])
@@ -1522,19 +1521,16 @@ async def _process_media(
                 temp_f.write(file_bytes)
                 temp_path = temp_f.name
             try:
-                gemini_file = await loop.run_in_executor(
-                    None,
-                    lambda: gemini_client.files.upload(
-                        path=temp_path, display_name=filename
-                    ),
+                gemini_file = await gemini_client.aio.files.upload(
+                    path=temp_path, display_name=filename
                 )
                 while gemini_file.state.name in (
                     "PROCESSING",
                     "STATE_UNSPECIFIED",
                 ):
                     await asyncio.sleep(1)
-                    gemini_file = await loop.run_in_executor(
-                        None, lambda: gemini_client.files.get(name=gemini_file.name)
+                    gemini_file = await gemini_client.aio.files.get(
+                        name=gemini_file.name
                     )
                 if gemini_file.state.name == "FAILED":
                     raise Exception("Gemini file processing failed.")
@@ -2114,7 +2110,7 @@ async def _process_turns_to_history(
                 except:
                     ic(final_content_parts[0])
                     raise
-                
+
                 history.append({"role": role, "content": final_content})
 
     return history, all_warnings
