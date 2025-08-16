@@ -895,7 +895,7 @@ async def _handle_native_gemini_image_generation(
         last_edit_time = asyncio.get_event_loop().time()
 
         # Stream the response
-        for chunk in client.models.generate_content_stream(
+        async for chunk in await client.aio.models.generate_content_stream(
             model=re.sub(r"^gemini/", "", model),  # Remove prefix for native API
             contents=contents,
             config=generate_content_config,
