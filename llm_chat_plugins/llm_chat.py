@@ -998,7 +998,7 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
         print(f"Error checking audio output support for {model}: {e}")
 
     try:
-        capabilities["pdf_input"] = litellm.supports_pdf_input(model)
+        capabilities["pdf_input"] = litellm.utils.supports_pdf_input(model)
 
     except Exception as e:
         print(f"Error checking PDF input support for {model}: {e}")
