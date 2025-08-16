@@ -198,7 +198,7 @@ CONTEXT_SEPARATOR = "---"
 CONTEXT_MODE_NAMES = {
     "reply_chain": "Reply Chain",
     "until_separator": f"Until Separator (`{CONTEXT_SEPARATOR}`)",
-    "last_N": f"Last {LAST_N_MESSAGES_LIMIT} Messages",
+    "last_N": "Last N Messages",
     "smart": "Smart Mode (Auto-Switches)",
 }
 CONTEXT_MODES = list(CONTEXT_MODE_NAMES.keys())
@@ -262,6 +262,22 @@ BOT_COMMANDS = [
     {
         "command": "getcontextmodehere",
         "description": "View context mode for the current chat",
+    },
+    {
+        "command": "setlastn",
+        "description": "Set your default 'Last N' message limit",
+    },
+    {
+        "command": "getlastn",
+        "description": "View your default 'Last N' message limit",
+    },
+    {
+        "command": "setlastnhere",
+        "description": "Set 'Last N' message limit for this chat",
+    },
+    {
+        "command": "getlastnhere",
+        "description": "View 'Last N' message limit for this chat",
     },
     {
         "command": "sep",
@@ -427,6 +443,7 @@ class UserPrefs(BaseModel):
     group_metadata_mode: str = Field(default="full_metadata")
     tts_global_voice: str = Field(default=tts_util.DEFAULT_VOICE)
     live_model: str = Field(default="gemini-2.5-flash-preview-native-audio-dialog")
+    last_n_messages_limit: Optional[int] = Field(default=None)
 
 
 class ChatPrefs(BaseModel):
@@ -438,6 +455,7 @@ class ChatPrefs(BaseModel):
     tts_model: str = Field(default="Disabled")
     tts_voice_override: Optional[str] = Field(default=None)
     live_mode_enabled: bool = Field(default=False)
+    last_n_messages_limit: Optional[int] = Field(default=None)
 
 
 class UserManager:
@@ -545,6 +563,14 @@ class UserManager:
         prefs.live_model = model
         self._save_prefs(user_id, prefs)
 
+    def get_last_n_messages_limit(self, user_id: int) -> Optional[int]:
+        return self.get_prefs(user_id).last_n_messages_limit
+
+    def set_last_n_messages_limit(self, user_id: int, limit: Optional[int]):
+        prefs = self.get_prefs(user_id)
+        prefs.last_n_messages_limit = limit
+        self._save_prefs(user_id, prefs)
+
 
 class ChatManager:
     """High-level manager for chat-specific settings."""
@@ -618,12 +644,33 @@ class ChatManager:
     def is_live_mode_enabled(self, chat_id: int) -> bool:
         return self.get_prefs(chat_id).live_mode_enabled
 
+    def get_last_n_messages_limit(self, chat_id: int) -> Optional[int]:
+        return self.get_prefs(chat_id).last_n_messages_limit
+
+    def set_last_n_messages_limit(self, chat_id: int, limit: Optional[int]):
+        prefs = self.get_prefs(chat_id)
+        prefs.last_n_messages_limit = limit
+        self._save_prefs(chat_id, prefs)
+
 
 user_manager = UserManager()
 chat_manager = ChatManager()
 
 
 # --- Core Logic & Helpers ---
+
+
+def _get_effective_last_n_limit(chat_id: int, user_id: int) -> int:
+    """Gets the effective 'Last N' limit, prioritizing chat, then user, then global default."""
+    chat_limit = chat_manager.get_last_n_messages_limit(chat_id)
+    if chat_limit is not None:
+        return chat_limit
+
+    user_limit = user_manager.get_last_n_messages_limit(user_id)
+    if user_limit is not None:
+        return user_limit
+
+    return LAST_N_MESSAGES_LIMIT
 
 
 def _get_effective_model_and_service(chat_id: int, user_id: int) -> tuple[str, str]:
@@ -1261,11 +1308,12 @@ def get_system_prompt_info(event) -> SystemPromptInfo:
 async def _get_context_mode_status_text(event) -> str:
     """Generates a user-friendly string explaining the current context mode for a chat."""
     user_id = event.sender_id
-    prefs = user_manager.get_prefs(user_id)
     is_private = event.is_private
+    chat_id = event.chat_id
+    prefs = user_manager.get_prefs(user_id)
 
     # Determine the base mode and its source
-    chat_context_mode = chat_manager.get_context_mode(event.chat_id)
+    chat_context_mode = chat_manager.get_context_mode(chat_id)
     if chat_context_mode:
         effective_mode = chat_context_mode
         source_text = "a specific setting for **this chat**"
@@ -1277,7 +1325,12 @@ async def _get_context_mode_status_text(event) -> str:
             else "your **personal default** for group chats"
         )
 
-    mode_name = CONTEXT_MODE_NAMES.get(effective_mode, effective_mode)
+    # Dynamically generate mode name
+    mode_name_base = CONTEXT_MODE_NAMES.get(effective_mode, effective_mode)
+    mode_name = mode_name_base
+    if effective_mode == "last_N":
+        effective_last_n_limit = _get_effective_last_n_limit(chat_id, user_id)
+        mode_name = f"{mode_name_base} (Limit: {effective_last_n_limit})"
 
     # Build the response message
     response_parts = [
@@ -1288,9 +1341,14 @@ async def _get_context_mode_status_text(event) -> str:
     # If the effective mode is 'smart', add the current state
     if effective_mode == "smart":
         current_smart_state = get_smart_context_mode(user_id)
-        smart_state_name = CONTEXT_MODE_NAMES.get(
+        smart_state_name_base = CONTEXT_MODE_NAMES.get(
             current_smart_state, current_smart_state
         )
+        smart_state_name = smart_state_name_base
+        if current_smart_state == "last_N":
+            effective_last_n_limit = _get_effective_last_n_limit(chat_id, user_id)
+            smart_state_name = f"{smart_state_name_base} (Limit: {effective_last_n_limit})"
+
         response_parts.append(
             f"∙ **Smart State:** The bot is currently using the `{smart_state_name}` method."
         )
@@ -1920,6 +1978,10 @@ async def build_conversation_history(
     """
     messages_to_process = []
     chat_id = event.chat_id
+    user_id = event.sender_id
+
+    # Get effective LAST_N limit using the new helper function
+    effective_last_n_limit = _get_effective_last_n_limit(chat_id, user_id)
 
     if IS_BOT:
         # --- Bot Logic (using history_util cache) ---
@@ -1939,7 +2001,7 @@ async def build_conversation_history(
 
         elif context_mode == "last_N":
             message_ids = await history_util.get_last_n_ids(
-                chat_id, LAST_N_MESSAGES_LIMIT
+                chat_id, effective_last_n_limit
             )
         elif context_mode == "until_separator":
             message_ids = await history_util.get_all_ids(chat_id)
@@ -1980,7 +2042,7 @@ async def build_conversation_history(
 
         elif context_mode == "last_N":
             history_iter = event.client.iter_messages(
-                chat_id, limit=LAST_N_MESSAGES_LIMIT
+                chat_id, limit=effective_last_n_limit
             )
             messages_to_process = [msg async for msg in history_iter]
             messages_to_process.reverse()
@@ -2127,6 +2189,26 @@ def register_handlers():
             pattern=rf"(?i)^/getcontextmodehere{bot_username_suffix_re}\s*$"
         )
     )(get_context_mode_here_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/setlastn{bot_username_suffix_re}(?:\s+(.*))?$",
+            func=lambda e: e.is_private,
+        )
+    )(set_last_n_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/getlastn{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(get_last_n_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/setlastnhere{bot_username_suffix_re}(?:\s+(.*))?$"
+        )
+    )(set_last_n_here_handler)
+    borg.on(
+        events.NewMessage(pattern=rf"(?i)^/getlastnhere{bot_username_suffix_re}\s*$")
+    )(get_last_n_here_handler)
     borg.on(
         events.NewMessage(
             pattern=rf"(?i)^/contextmode{bot_username_suffix_re}\s*$",
@@ -2346,7 +2428,7 @@ I remember our conversations based on your chosen settings. You can configure th
 - **Context Mode:** This controls *which* messages are included.
   - `Reply Chain (Default)`: Only messages in the current reply thread.
   - `Until Separator`: The reply chain up to a message containing only `{CONTEXT_SEPARATOR}`.
-  - `Last {LAST_N_MESSAGES_LIMIT} Messages`: The most recent messages in the chat.
+  - `Last N Messages`: The most recent messages in the chat.
 
 - **Metadata Mode:** This controls *how* messages are formatted for the AI.
   - `No Metadata`: Merges consecutive messages and adds no extra info.
@@ -2366,6 +2448,10 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setSystemPrompt: Change my core instructions or reset to default.
 - /setModelHere: Set the AI model for the current chat only.
 - /getModelHere: View the effective AI model for the current chat.
+- /setLastN: Set your default 'Last N' message limit.
+- /getLastN: View your default 'Last N' message limit.
+- /setLastNHere: Set 'Last N' message limit for this chat.
+- /getLastNHere: View 'Last N' message limit for this chat.
 - /contextMode: Change how **private** chat history is gathered.
 - /groupContextMode: Change how **group** chat history is gathered.
 - /metadataMode: Change how **private** chat metadata is handled.
@@ -2409,28 +2495,54 @@ async def status_handler(event):
     if chat_model:
         model_status += f" (overridden in this chat)"
 
-    # Get context mode name and handle smart mode
+    # 'Last N' limit status
+    user_last_n_limit = (
+        f"`{prefs.last_n_messages_limit}`"
+        if prefs.last_n_messages_limit is not None
+        else f"Default (`{LAST_N_MESSAGES_LIMIT}`)"
+    )
+    chat_last_n_limit = chat_manager.get_last_n_messages_limit(chat_id)
+    chat_last_n_status = (
+        f"`{chat_last_n_limit}`" if chat_last_n_limit is not None else "Not set"
+    )
+
+    # Get context mode names and handle smart/last_N modes
     context_mode_name = CONTEXT_MODE_NAMES.get(
         prefs.context_mode, prefs.context_mode.replace("_", " ").title()
     )
+    if prefs.context_mode == "last_N":
+        effective_limit = prefs.last_n_messages_limit or LAST_N_MESSAGES_LIMIT
+        context_mode_name += f" (Limit: {effective_limit})"
+
     smart_mode_status_str = ""
     if prefs.context_mode == "smart":
         current_smart_state = get_smart_context_mode(user_id)
-        smart_state_name = CONTEXT_MODE_NAMES.get(
+        smart_state_name_base = CONTEXT_MODE_NAMES.get(
             current_smart_state, current_smart_state
         )
+        smart_state_name = smart_state_name_base
+        if current_smart_state == "last_N":
+            effective_last_n_limit = _get_effective_last_n_limit(chat_id, user_id)
+            smart_state_name = f"{smart_state_name_base} (Limit: {effective_last_n_limit})"
         smart_mode_status_str = f" (State: `{smart_state_name}`)"
 
     group_context_mode_name = CONTEXT_MODE_NAMES.get(
         prefs.group_context_mode, prefs.group_context_mode.replace("_", " ").title()
     )
+    if prefs.group_context_mode == "last_N":
+        effective_limit = prefs.last_n_messages_limit or LAST_N_MESSAGES_LIMIT
+        group_context_mode_name += f" (Limit: {effective_limit})"
+
     group_smart_mode_status_str = ""
     if prefs.group_context_mode == "smart":
         current_smart_state = get_smart_context_mode(user_id)
-        smart_state_name = CONTEXT_MODE_NAMES.get(
+        smart_state_name_base = CONTEXT_MODE_NAMES.get(
             current_smart_state, current_smart_state
         )
-        group_smart_mode_status_str = f" (State: `{smart_state_name}`)"
+        smart_state_name = smart_state_name_base
+        if current_smart_state == "last_N":
+            effective_last_n_limit = _get_effective_last_n_limit(chat_id, user_id)
+            group_smart_mode_status_str = f" (State: `{smart_state_name}`)"
 
     metadata_mode_name = METADATA_MODES.get(
         prefs.metadata_mode, prefs.metadata_mode.replace("_", " ").title()
@@ -2458,10 +2570,12 @@ async def status_handler(event):
         f"• **Reasoning Level:** `{thinking_level}`\n"
         f"• **Enabled Tools:** `{enabled_tools_str}`\n"
         f"• **JSON Mode:** `{'Enabled' if prefs.json_mode else 'Disabled'}`\n"
-        f"• **Personal System Prompt:** `{user_system_prompt_status}`\n\n"
+        f"• **Personal System Prompt:** `{user_system_prompt_status}`\n"
+        f"• **Personal 'Last N' Limit:** {user_last_n_limit}\n\n"
         f"**This Chat's Settings**\n"
         f"• **Chat Model:** `{chat_model or 'Not set'}`\n"
-        f"• **Chat System Prompt:** `{chat_system_prompt_status}`\n\n"
+        f"• **Chat System Prompt:** `{chat_system_prompt_status}`\n"
+        f"• **Chat 'Last N' Limit:** {chat_last_n_status}\n\n"
         f"**TTS Settings (This Chat)**\n"
         f"• **TTS Model:** `{tts_model_display}`\n"
         f"• **Voice:** {effective_voice_display}\n\n"
@@ -2745,7 +2859,15 @@ async def context_mode_here_handler(event):
     current_mode = chat_prefs.context_mode  # This will be None if not set
 
     # Prepare options for the menu, including a "Not Set" option for resetting
-    options_for_menu = CONTEXT_MODE_NAMES.copy()
+    options_for_menu = {}
+    for key, name in CONTEXT_MODE_NAMES.items():
+        if key == "last_N":
+            effective_last_n_limit = _get_effective_last_n_limit(
+                event.chat_id, event.sender_id
+            )
+            options_for_menu[key] = f"{name} (Limit: {effective_last_n_limit})"
+        else:
+            options_for_menu[key] = name
     options_for_menu["not_set"] = NOT_SET_HERE_DISPLAY_NAME
 
     await bot_util.present_options(
@@ -2788,16 +2910,133 @@ async def get_context_mode_here_handler(event):
     )
 
 
+async def set_last_n_handler(event):
+    """Sets a user's personal default for 'Last N Messages' limit."""
+    user_id = event.sender_id
+    limit_match = event.pattern_match.group(1)
+
+    if not limit_match or not limit_match.strip():
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}**Usage:** `/setLastN <number>` or `/setLastN reset`"
+        )
+        return
+
+    limit_str = limit_match.strip()
+    if limit_str.lower() in RESET_KEYWORDS:
+        user_manager.set_last_n_messages_limit(user_id, None)
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}✅ Your personal 'Last N' limit has been reset. "
+            f"The global default of `{LAST_N_MESSAGES_LIMIT}` will be used."
+        )
+        return
+
+    try:
+        limit = int(limit_str)
+        if not (1 < limit <= 200):
+            raise ValueError("Limit out of range.")
+        user_manager.set_last_n_messages_limit(user_id, limit)
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}✅ Your personal default for 'Last N Messages' is now **{limit}**."
+        )
+    except ValueError:
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}❌ Please provide a valid number between 2 and 200."
+        )
+
+
+async def get_last_n_handler(event):
+    """Gets the user's personal default for 'Last N Messages' limit."""
+    user_id = event.sender_id
+    user_limit = user_manager.get_last_n_messages_limit(user_id)
+
+    if user_limit is not None:
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}Your personal 'Last N Messages' limit is set to **{user_limit}**."
+        )
+    else:
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}You have not set a personal 'Last N Messages' limit. "
+            f"The global default is **{LAST_N_MESSAGES_LIMIT}**."
+        )
+
+
+async def set_last_n_here_handler(event):
+    """Sets a chat-specific limit for the 'Last N Messages' context mode."""
+    is_bot_admin = await util.isAdmin(event)
+    is_group_admin = await util.is_group_admin(event)
+
+    if not event.is_private and not (is_bot_admin or is_group_admin):
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}You must be a group admin or bot admin to use this command in a group."
+        )
+        return
+
+    limit_match = event.pattern_match.group(1)
+    if not limit_match or not limit_match.strip():
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}**Usage:** `/setLastNHere <number>` or `/setLastNHere reset`"
+        )
+        return
+
+    limit_str = limit_match.strip()
+    if limit_str.lower() in RESET_KEYWORDS:
+        chat_manager.set_last_n_messages_limit(event.chat_id, None)
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}✅ Chat-specific 'Last N' limit has been reset. "
+            f"Your personal or the global default will be used."
+        )
+        return
+
+    try:
+        limit = int(limit_str)
+        if not (1 < limit <= 200):
+            raise ValueError("Limit out of range.")
+        chat_manager.set_last_n_messages_limit(event.chat_id, limit)
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}✅ This chat will now use the last **{limit}** messages for context when in 'Last N' mode."
+        )
+    except ValueError:
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}❌ Please provide a valid number between 2 and 200."
+        )
+
+
+async def get_last_n_here_handler(event):
+    """Gets the chat-specific limit for the 'Last N Messages' context mode."""
+    effective_limit = _get_effective_last_n_limit(event.chat_id, event.sender_id)
+    chat_limit = chat_manager.get_last_n_messages_limit(event.chat_id)
+
+    if chat_limit is not None:
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}The 'Last N Messages' limit for this chat is set to **{chat_limit}**."
+        )
+    else:
+        user_limit = user_manager.get_last_n_messages_limit(event.sender_id)
+        if user_limit is not None:
+            source = f"your personal default of **{user_limit}**"
+        else:
+            source = f"the global default of **{LAST_N_MESSAGES_LIMIT}**"
+
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}This chat has no specific 'Last N' limit and uses {source}."
+        )
+
+
 # --- New Feature Handlers ---
 
 
 async def context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
+    user_last_n_limit = prefs.last_n_messages_limit or LAST_N_MESSAGES_LIMIT
+
+    options = CONTEXT_MODE_NAMES.copy()
+    if "last_N" in options:
+        options["last_N"] += f" (Limit: {user_last_n_limit})"
 
     await bot_util.present_options(
         event,
         title="Set Private Chat Context Mode",
-        options=CONTEXT_MODE_NAMES,
+        options=options,
         current_value=prefs.context_mode,
         callback_prefix="context_",
         awaiting_key="context_mode_selection",
@@ -2807,10 +3046,16 @@ async def context_mode_handler(event):
 
 async def group_context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
+    user_last_n_limit = prefs.last_n_messages_limit or LAST_N_MESSAGES_LIMIT
+
+    options = CONTEXT_MODE_NAMES.copy()
+    if "last_N" in options:
+        options["last_N"] += f" (Limit: {user_last_n_limit})"
+
     await bot_util.present_options(
         event,
         title="Set Group Chat Context Mode",
-        options=CONTEXT_MODE_NAMES,
+        options=options,
         current_value=prefs.group_context_mode,
         callback_prefix="groupcontext_",
         awaiting_key="group_context_mode_selection",
