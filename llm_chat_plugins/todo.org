@@ -1,5 +1,7 @@
 #+TITLE: llm_chat_plugins/todo
 
+* llm_chat: use context7 to see how to add PDF input support for models with the capability ="supports_pdf_input"=
+
 * add image gen models
 ** DONE native flash
 *** _
