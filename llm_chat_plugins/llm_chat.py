@@ -1539,10 +1539,12 @@ async def _process_media(
                     file_id, user_id, gemini_file.name
                 )
                 part = {
-                    "file_data": {
-                        "mime_type": gemini_file.mime_type,
-                        "file_uri": gemini_file.uri,
-                    }
+                    "type": "file",
+                    "file": {
+                        "file_id": gemini_file.uri,
+                        "filename": filename,
+                        "format": gemini_file.mime_type,
+                    },
                 }
                 return ProcessMediaResult(media_part=part, warnings=[])
             finally:
