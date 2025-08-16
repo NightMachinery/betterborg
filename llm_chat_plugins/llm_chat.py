@@ -3755,7 +3755,7 @@ async def chat_handler(event):
                     "gemini-2.5-pro",
                 ]
             ):
-                return 1.2
+                return 2
 
             return 0.8
 
