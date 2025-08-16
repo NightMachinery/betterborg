@@ -822,6 +822,8 @@ async def _handle_native_gemini_image_generation(
     model: str,
     response_message,
     model_capabilities: Dict[str, bool] = None,
+    *,
+    max_retries: int = MAX_RETRIES,
 ) -> tuple[str, bool]:
     """Handle native Gemini image generation with streaming support.
 
@@ -970,59 +972,84 @@ async def _handle_native_gemini_image_generation(
         last_edit_time = asyncio.get_event_loop().time()
 
         # Stream the response
-        async for chunk in await client.aio.models.generate_content_stream(
-            model=re.sub(r"^gemini/", "", model),  # Remove prefix for native API
-            contents=contents,
-            config=generate_content_config,
-        ):
-            if (
-                chunk.candidates is None
-                or chunk.candidates[0].content is None
-                or chunk.candidates[0].content.parts is None
+        try:
+            async for chunk in await client.aio.models.generate_content_stream(
+                model=re.sub(r"^gemini/", "", model),  # Remove prefix for native API
+                contents=contents,
+                config=generate_content_config,
             ):
-                continue
+                if (
+                    chunk.candidates is None
+                    or chunk.candidates[0].content is None
+                    or chunk.candidates[0].content.parts is None
+                ):
+                    continue
 
-            # Handle image data
-            if (
-                chunk.candidates[0].content.parts[0].inline_data
-                and chunk.candidates[0].content.parts[0].inline_data.data
-            ):
+                # Handle image data
+                if (
+                    chunk.candidates[0].content.parts[0].inline_data
+                    and chunk.candidates[0].content.parts[0].inline_data.data
+                ):
 
-                inline_data = chunk.candidates[0].content.parts[0].inline_data
-                data_buffer = inline_data.data
-                file_extension = (
-                    mimetypes.guess_extension(inline_data.mime_type) or ".png"
+                    inline_data = chunk.candidates[0].content.parts[0].inline_data
+                    data_buffer = inline_data.data
+                    file_extension = (
+                        mimetypes.guess_extension(inline_data.mime_type) or ".png"
+                    )
+
+                    # Send image using shared utility function
+                    image_sent = await _send_image_to_telegram(
+                        event,
+                        data_buffer,
+                        filename_base="generated_image",
+                        file_extension=file_extension,
+                        file_index=file_index,
+                    )
+
+                    if image_sent:
+                        has_image = True
+                        file_index += 1
+
+                # Handle text data
+                if hasattr(chunk, "text") and chunk.text:
+                    response_text += chunk.text
+
+                    # Update message periodically during streaming
+                    current_time = asyncio.get_event_loop().time()
+                    if (current_time - last_edit_time) > edit_interval:
+                        try:
+                            await util.edit_message(
+                                response_message, f"{response_text}▌", parse_mode="md"
+                            )
+                            last_edit_time = current_time
+                        except errors.rpcerrorlist.MessageNotModifiedError:
+                            pass
+                        except Exception as e:
+                            print(f"Error during message edit: {e}")
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 500 and max_retries > 0:
+                print(
+                    f"Gemini image generation failed with 500 error. Retrying ({MAX_RETRIES - max_retries + 2}/{MAX_RETRIES})..."
                 )
-
-                # Send image using shared utility function
-                image_sent = await _send_image_to_telegram(
+                await asyncio.sleep(1)  # Small delay before retrying
+                return await _handle_native_gemini_image_generation(
                     event,
-                    data_buffer,
-                    filename_base="generated_image",
-                    file_extension=file_extension,
-                    file_index=file_index,
+                    messages,
+                    api_key,
+                    model,
+                    response_message,
+                    model_capabilities,
+                    max_retries=max_retries - 1,
                 )
-
-                if image_sent:
-                    has_image = True
-                    file_index += 1
-
-            # Handle text data
-            if hasattr(chunk, "text") and chunk.text:
-                response_text += chunk.text
-
-                # Update message periodically during streaming
-                current_time = asyncio.get_event_loop().time()
-                if (current_time - last_edit_time) > edit_interval:
-                    try:
-                        await util.edit_message(
-                            response_message, f"{response_text}▌", parse_mode="md"
-                        )
-                        last_edit_time = current_time
-                    except errors.rpcerrorlist.MessageNotModifiedError:
-                        pass
-                    except Exception as e:
-                        print(f"Error during message edit: {e}")
+            elif e.response.status_code == 500:
+                print(f"Gemini image generation failed after {MAX_RETRIES} attempts.")
+                raise llm_util.TelegramUserReplyException(
+                    "The Gemini model's server is currently unavailable (500 Internal Server Error). This is likely an upstream issue. Please try again later."
+                )
+            else:
+                # Re-raise other HTTP errors
+                raise
 
         return response_text.strip(), has_image
 
