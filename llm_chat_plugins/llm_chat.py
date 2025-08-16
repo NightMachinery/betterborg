@@ -2204,12 +2204,12 @@ async def status_handler(event):
         chat_system_prompt_status = "Custom (Overrides your personal prompt)"
 
     # Determine model status - check for chat-specific model
+    model_status = f"`{prefs.model}`"
     chat_model = chat_manager.get_model(chat_id)
     if chat_model:
-        model_status = f"`{chat_model}` (this chat)"
+        model_status += f" (overridden in this chat)"
         effective_model = chat_model
     else:
-        model_status = f"`{prefs.model}` (your default)"
         effective_model = prefs.model
 
     # Get context mode name and handle smart mode
@@ -2257,14 +2257,13 @@ async def status_handler(event):
 
     status_message = (
         f"**Your Personal Bot Settings**\n\n"
-        f"• **Effective Model:** {model_status}\n"
-        f"• **Personal Model:** `{prefs.model}`\n"
+        f"• **Model:** {model_status}\n"
         f"• **Reasoning Level:** `{thinking_level}`\n"
         f"• **Enabled Tools:** `{enabled_tools_str}`\n"
         f"• **JSON Mode:** `{'Enabled' if prefs.json_mode else 'Disabled'}`\n"
         f"• **Personal System Prompt:** `{user_system_prompt_status}`\n\n"
         f"**This Chat's Settings**\n"
-        f"• **Chat Model:** `{'Custom' if chat_model else 'Not set'}`\n"
+        f"• **Chat Model:** `{chat_model or 'Not set'}`\n"
         f"• **Chat System Prompt:** `{chat_system_prompt_status}`\n\n"
         f"**TTS Settings (This Chat)**\n"
         f"• **TTS Model:** `{tts_model_display}`\n"
@@ -2469,7 +2468,7 @@ async def get_system_prompt_here_handler(event):
 
 
 async def set_model_here_handler(event):
-    """Sets a model for the current chat only."""
+    """Sets a model for the current chat only, now with an interactive flow."""
     is_bot_admin = await util.isAdmin(event)
     is_group_admin = await util.is_group_admin(event)
 
@@ -2480,17 +2479,33 @@ async def set_model_here_handler(event):
         return
 
     model_match = event.pattern_match.group(1)
-    if not model_match or not model_match.strip():
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}**Usage:** `/setModelHere <model name>`"
-        )
-        return
+    chat_id = event.chat_id
+    user_id = event.sender_id
+    current_chat_model = chat_manager.get_model(chat_id)
 
-    model = model_match.strip()
-    chat_manager.set_model(event.chat_id, model)
-    await event.reply(
-        f"{BOT_META_INFO_PREFIX}✅ This chat's model has been set to: `{model}`"
-    )
+    if model_match and model_match.strip():
+        model = model_match.strip()
+        chat_manager.set_model(chat_id, model)
+        cancel_input_flow(user_id)
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}✅ This chat's model has been set to: `{model}`"
+        )
+    else:
+        await bot_util.present_options(
+            event,
+            title="Set Chat Model",
+            options=MODEL_CHOICES,
+            current_value=current_chat_model or "",
+            callback_prefix="chatmodel_",
+            awaiting_key="chatmodel_selection",
+            n_cols=2,
+        )
+        # Also prompt for custom model
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}Or, send a custom model ID below."
+            "\n(Type `cancel` to stop.)"
+        )
+        AWAITING_INPUT_FROM_USERS[user_id] = {"type": "chatmodel", "chat_id": chat_id}
 
 
 async def get_model_here_handler(event):
@@ -2812,7 +2827,26 @@ async def callback_handler(event):
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
         await event.answer(f"Model set to {MODEL_CHOICES[model_id]}")
 
-    if data_str.startswith("think_"):
+    elif data_str.startswith("chatmodel_"):
+        model_id = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
+        # Get chat_id from the original message context or stored state
+        chat_id = event.message.chat_id
+        chat_manager.set_model(chat_id, model_id)
+        cancel_input_flow(user_id)  # Cancel the custom input flow
+
+        # Update the menu to show the new selection
+        current_chat_model = chat_manager.get_model(chat_id)
+        buttons = [
+            KeyboardButtonCallback(
+                f"✅ {name}" if key == current_chat_model else name,
+                data=f"chatmodel_{bot_util.sanitize_callback_data(key)}",
+            )
+            for key, name in MODEL_CHOICES.items()
+        ]
+        await event.edit(buttons=util.build_menu(buttons, n_cols=2))
+        await event.answer(f"Chat model set to {MODEL_CHOICES[model_id]}")
+
+    elif data_str.startswith("think_"):
         level = data_str.split("_")[1]
         user_manager.set_thinking(user_id, None if level == "clear" else level)
         prefs = user_manager.get_prefs(user_id)  # update prefs
@@ -3053,6 +3087,12 @@ async def generic_input_handler(event):
     if input_type == "model":
         user_manager.set_model(user_id, text)
         await event.reply(f"{BOT_META_INFO_PREFIX}✅ Model updated to: `{text}`")
+    elif input_type == "chatmodel":
+        chat_id = flow_data.get("chat_id", event.chat_id)
+        chat_manager.set_model(chat_id, text)
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}✅ This chat's model updated to: `{text}`"
+        )
     elif input_type == "system_prompt":
         if text.lower() == "reset":
             user_manager.set_system_prompt(user_id, "")
