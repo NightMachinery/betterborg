@@ -1255,14 +1255,14 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
     try:
         video_input_p = False
         if hasattr(litellm, "supports_video_input"):
-            res = litellm.supports_video_input(model)
+            video_input_p = litellm.supports_video_input(model)
         elif hasattr(litellm.utils, "supports_video_input"):
-            res = litellm.utils.supports_video_input(model)
+            video_input_p = litellm.utils.supports_video_input(model)
         #: This function seems to not have been written yet in LiteLLM.
 
-        res = res or is_gemini_model(model)
+        video_input_p = video_input_p or is_gemini_model(model)
 
-        capabilities["video_input"] = res
+        capabilities["video_input"] = video_input_p
     except Exception as e:
         print(f"Error checking video input support for {model}: {e}")
     try:
