@@ -1216,10 +1216,11 @@ async def _handle_native_gemini_image_generation(
 
 
 def get_model_capabilities(model: str) -> Dict[str, bool]:
-    """Get model capabilities for vision, audio input, audio output, PDF input, and image generation support."""
+    """Get model capabilities for vision, audio input, video input, audio output, PDF input, and image generation support."""
     capabilities = {
         "vision": False,
         "audio_input": False,
+        "video_input": False,
         "audio_output": False,
         "pdf_input": False,
         "image_generation": False,
@@ -1235,6 +1236,12 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
         #: hardcoding some models because of upstream bugs
     except Exception as e:
         print(f"Error checking audio input support for {model}: {e}")
+    try:
+        capabilities["video_input"] = litellm.supports_video_input(model) or model in (
+            "gemini/gemini-2.5-flash",
+        )
+    except Exception as e:
+        print(f"Error checking video input support for {model}: {e}")
     try:
         capabilities["audio_output"] = litellm.supports_audio_output(model)
     except Exception as e:
@@ -1312,6 +1319,11 @@ async def _get_context_mode_status_text(event) -> str:
     chat_id = event.chat_id
     prefs = user_manager.get_prefs(user_id)
 
+    effective_last_n_limit = _get_effective_last_n_limit(
+        chat_id,
+        user_id,
+    )
+
     # Determine the base mode and its source
     chat_context_mode = chat_manager.get_context_mode(chat_id)
     if chat_context_mode:
@@ -1329,7 +1341,6 @@ async def _get_context_mode_status_text(event) -> str:
     mode_name_base = CONTEXT_MODE_NAMES.get(effective_mode, effective_mode)
     mode_name = mode_name_base
     if effective_mode == "last_N":
-        effective_last_n_limit = _get_effective_last_n_limit(chat_id, user_id)
         mode_name = f"{mode_name_base} (Limit: {effective_last_n_limit})"
 
     # Build the response message
@@ -1346,8 +1357,9 @@ async def _get_context_mode_status_text(event) -> str:
         )
         smart_state_name = smart_state_name_base
         if current_smart_state == "last_N":
-            effective_last_n_limit = _get_effective_last_n_limit(chat_id, user_id)
-            smart_state_name = f"{smart_state_name_base} (Limit: {effective_last_n_limit})"
+            smart_state_name = (
+                f"{smart_state_name_base} (Limit: {effective_last_n_limit})"
+            )
 
         response_parts.append(
             f"∙ **Smart State:** The bot is currently using the `{smart_state_name}` method."
@@ -1373,10 +1385,10 @@ def _check_media_capability(
         if "audio" not in issued_warnings:
             issued_warnings.add("audio")
             return "Audio files were skipped because the current model does not support audio input."
-    elif media_type == "video":
+    elif media_type == "video" and not model_capabilities.get("video_input", False):
         if "video" not in issued_warnings:
             issued_warnings.add("video")
-            return "Video files were skipped as they are not supported by the current model."
+            return "Video files were skipped because the current model does not support video input."
     elif media_type == "pdf" and not model_capabilities.get("pdf_input", False):
         if "pdf" not in issued_warnings:
             issued_warnings.add("pdf")
@@ -2501,6 +2513,10 @@ async def status_handler(event):
         if prefs.last_n_messages_limit is not None
         else f"Default (`{LAST_N_MESSAGES_LIMIT}`)"
     )
+    effective_last_n_limit = _get_effective_last_n_limit(
+        chat_id,
+        user_id,
+    )
     chat_last_n_limit = chat_manager.get_last_n_messages_limit(chat_id)
     chat_last_n_status = (
         f"`{chat_last_n_limit}`" if chat_last_n_limit is not None else "Not set"
@@ -2511,8 +2527,7 @@ async def status_handler(event):
         prefs.context_mode, prefs.context_mode.replace("_", " ").title()
     )
     if prefs.context_mode == "last_N":
-        effective_limit = prefs.last_n_messages_limit or LAST_N_MESSAGES_LIMIT
-        context_mode_name += f" (Limit: {effective_limit})"
+        context_mode_name += f" (Limit: {effective_last_n_limit})"
 
     smart_mode_status_str = ""
     if prefs.context_mode == "smart":
@@ -2522,16 +2537,16 @@ async def status_handler(event):
         )
         smart_state_name = smart_state_name_base
         if current_smart_state == "last_N":
-            effective_last_n_limit = _get_effective_last_n_limit(chat_id, user_id)
-            smart_state_name = f"{smart_state_name_base} (Limit: {effective_last_n_limit})"
+            smart_state_name = (
+                f"{smart_state_name_base} (Limit: {effective_last_n_limit})"
+            )
         smart_mode_status_str = f" (State: `{smart_state_name}`)"
 
     group_context_mode_name = CONTEXT_MODE_NAMES.get(
         prefs.group_context_mode, prefs.group_context_mode.replace("_", " ").title()
     )
     if prefs.group_context_mode == "last_N":
-        effective_limit = prefs.last_n_messages_limit or LAST_N_MESSAGES_LIMIT
-        group_context_mode_name += f" (Limit: {effective_limit})"
+        group_context_mode_name += f" (Limit: {effective_last_n_limit})"
 
     group_smart_mode_status_str = ""
     if prefs.group_context_mode == "smart":
@@ -2541,8 +2556,9 @@ async def status_handler(event):
         )
         smart_state_name = smart_state_name_base
         if current_smart_state == "last_N":
-            effective_last_n_limit = _get_effective_last_n_limit(chat_id, user_id)
-            group_smart_mode_status_str = f" (State: `{smart_state_name}`)"
+            group_smart_mode_status_str = (
+                f" (State: `{smart_state_name}`, Limit: {effective_last_n_limit})"
+            )
 
     metadata_mode_name = METADATA_MODES.get(
         prefs.metadata_mode, prefs.metadata_mode.replace("_", " ").title()
@@ -2863,7 +2879,8 @@ async def context_mode_here_handler(event):
     for key, name in CONTEXT_MODE_NAMES.items():
         if key == "last_N":
             effective_last_n_limit = _get_effective_last_n_limit(
-                event.chat_id, event.sender_id
+                event.chat_id,
+                event.sender_id,
             )
             options_for_menu[key] = f"{name} (Limit: {effective_last_n_limit})"
         else:
@@ -3329,12 +3346,20 @@ async def callback_handler(event):
         mode = data_str.split("_", 1)[1]
         user_manager.set_context_mode(user_id, mode)
         prefs = user_manager.get_prefs(user_id)  # update prefs
+
+        user_last_n_limit = prefs.last_n_messages_limit or LAST_N_MESSAGES_LIMIT
+        effective_last_n_limit = _get_effective_last_n_limit(
+            event.chat_id, event.sender_id
+        )
+        options = CONTEXT_MODE_NAMES.copy()
+        if "last_N" in options:
+            options["last_N"] += f" (Limit: {effective_last_n_limit})"
         buttons = [
             KeyboardButtonCallback(
                 f"✅ {name}" if key == prefs.context_mode else name,
                 data=f"context_{key}",
             )
-            for key, name in CONTEXT_MODE_NAMES.items()
+            for key, name in options.items()
         ]
         await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer("Private context mode updated.")
@@ -3363,8 +3388,17 @@ async def callback_handler(event):
             else "not_set"
         )
 
-        options_for_menu = CONTEXT_MODE_NAMES.copy()
-        options_for_menu["not_set"] = "Not Set (Use Personal Default)"
+        # Prepare options for the menu, including a "Not Set" option for resetting
+        options_for_menu = {}
+        for key, name in CONTEXT_MODE_NAMES.items():
+            if key == "last_N":
+                effective_last_n_limit = _get_effective_last_n_limit(
+                    event.chat_id, event.sender_id
+                )
+                options_for_menu[key] = f"{name} (Limit: {effective_last_n_limit})"
+            else:
+                options_for_menu[key] = name
+        options_for_menu["not_set"] = NOT_SET_HERE_DISPLAY_NAME
 
         buttons = [
             KeyboardButtonCallback(
@@ -3392,12 +3426,16 @@ async def callback_handler(event):
         mode = data_str.split("_", 1)[1]
         user_manager.set_group_context_mode(user_id, mode)
         prefs = user_manager.get_prefs(user_id)  # update prefs
+        user_last_n_limit = prefs.last_n_messages_limit or LAST_N_MESSAGES_LIMIT
+        options = CONTEXT_MODE_NAMES.copy()
+        if "last_N" in options:
+            options["last_N"] += f" (Limit: {user_last_n_limit})"
         buttons = [
             KeyboardButtonCallback(
                 f"✅ {name}" if key == prefs.group_context_mode else name,
                 data=f"groupcontext_{key}",
             )
-            for key, name in CONTEXT_MODE_NAMES.items()
+            for key, name in options.items()
         ]
         await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer("Group context mode updated.")
