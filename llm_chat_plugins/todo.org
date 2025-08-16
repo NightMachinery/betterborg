@@ -2,12 +2,16 @@
 
 * Write a separate tool that reads the logged json file and lists the most token intensive messages and gives a nice overview.
 
-* Add video input detection to model_capabilities. Use context7 to find how. It is probably `supports_video_input`.
+* Add `ALWAYS_INCLUDE_REPLY_CHAIN_P=True` which makes the reply chain of the current message to be always included in the context, even if we are in other context modes.
+
+* callback query updater: should display proper limit for Last_N
+
+* Unsupported binary media type 'application/x-tgsticker' for file AnimatedSticker.tgs
+
+* DONE Add video input detection to model_capabilities. Use context7 to find how. It is probably `supports_video_input`.
 Update `_check_media_capability`.
 
 Hardcode gemini/gemini-2.5-flash to have video input support (just like we do for its audio input support).
-
-* callback query updater: should display proper limit for Last_N
 
 * Make =llm_chat= an MCP client
 ** We can enable a memory MCP.
