@@ -14,11 +14,13 @@ import uuid
 
 class TelegramUserReplyException(Exception):
     """Base exception for errors that should be sent directly to the user as diagnostic messages."""
+
     pass
 
 
 class ProxyRestrictedException(TelegramUserReplyException):
     """Exception raised when proxy access is restricted for non-admin users."""
+
     pass
 
 

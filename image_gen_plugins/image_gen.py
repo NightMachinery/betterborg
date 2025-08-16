@@ -682,7 +682,7 @@ async def initialize_image_gen():
 
     # Populate callback hash map for persistent button handling
     bot_util.populate_callback_hash_map(MODEL_CHOICES)
-    
+
     # Register handlers
     register_handlers()
 

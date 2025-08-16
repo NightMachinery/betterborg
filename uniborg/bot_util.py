@@ -109,7 +109,7 @@ CALLBACK_HASH_LENGTH = 30
 
 def generate_callback_hash(key: str) -> str:
     """Generate a short hash for long callback keys."""
-    hash_obj = hashlib.sha256(key.encode('utf-8'))
+    hash_obj = hashlib.sha256(key.encode("utf-8"))
     hash_str = f"{CALLBACK_HASH_PREFIX}{hash_obj.hexdigest()[:CALLBACK_HASH_LENGTH]}"
     _callback_hash_map[hash_str] = key
     return hash_str
@@ -126,20 +126,23 @@ def sanitize_callback_data(key: str) -> str:
     sanitized = key
     for char, replacement in SANITIZATION_MAP.items():
         sanitized = sanitized.replace(char, replacement)
-    
+
     # If the result is too long, use hash instead
     if len(sanitized) > MAX_CALLBACK_DATA_LENGTH:
         return generate_callback_hash(key)
-    
+
     return sanitized
 
 
 def unsanitize_callback_data(sanitized_key: str) -> str:
     """Restore original key from sanitized callback data."""
     # Check if it's a hash first (by prefix)
-    if sanitized_key.startswith(CALLBACK_HASH_PREFIX) and sanitized_key in _callback_hash_map:
+    if (
+        sanitized_key.startswith(CALLBACK_HASH_PREFIX)
+        and sanitized_key in _callback_hash_map
+    ):
         return _callback_hash_map[sanitized_key]
-    
+
     # Otherwise, reverse normal sanitization
     for char, replacement in SANITIZATION_MAP.items():
         sanitized_key = sanitized_key.replace(replacement, char)
@@ -155,7 +158,7 @@ def populate_callback_hash_map(*model_choices_dicts):
                 sanitized = key
                 for char, replacement in SANITIZATION_MAP.items():
                     sanitized = sanitized.replace(char, replacement)
-                
+
                 if len(sanitized) > MAX_CALLBACK_DATA_LENGTH:
                     generate_callback_hash(key)
 
