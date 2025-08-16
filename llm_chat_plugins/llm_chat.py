@@ -1670,6 +1670,10 @@ async def _process_turns_to_history(
             )
             all_warnings.extend(content_result.warnings)
 
+            # Skip messages that have no original text and no processable media.
+            if not message.text and not content_result.media_parts:
+                continue
+
             if not content_result.text_parts and not content_result.media_parts:
                 continue
 
@@ -3853,6 +3857,17 @@ async def chat_handler(event):
         )
         messages = history_result.history
         warnings = history_result.warnings
+
+        if not messages:
+            unique_warnings = sorted(list(set(warnings)))
+            warning_text = "\n".join(f"• {w}" for w in unique_warnings)
+
+            error_message = f"{BOT_META_INFO_PREFIX}I couldn't find any valid text or supported media to process."
+            if warning_text:
+                error_message += f"\n\n**Notes:**\n{warning_text}"
+
+            await util.edit_message(response_message, error_message, parse_mode="md")
+            return
 
         # --- System Prompt Selection Logic ---
         prompt_info = get_system_prompt_info(event)
