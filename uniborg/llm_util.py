@@ -12,9 +12,13 @@ import uuid
 # --- Custom Exceptions ---
 
 
-class ProxyRestrictedException(Exception):
-    """Exception raised when proxy access is restricted for non-admin users."""
+class TelegramUserReplyException(Exception):
+    """Base exception for errors that should be sent directly to the user as diagnostic messages."""
+    pass
 
+
+class ProxyRestrictedException(TelegramUserReplyException):
+    """Exception raised when proxy access is restricted for non-admin users."""
     pass
 
 
@@ -129,15 +133,14 @@ async def _handle_common_error_cases(
     """
     error_message = f"{BOT_META_INFO_PREFIX}{str(exception)}"
 
-    # Special handling for ProxyRestrictedException
-    if isinstance(exception, ProxyRestrictedException):
+    if isinstance(exception, TelegramUserReplyException):
         try:
             if response_message:
                 await response_message.edit(error_message)
             else:
                 await event.reply(error_message)
         except Exception as e:
-            print(f"Error while sending/editing proxy restriction message: {e}")
+            print(f"Error while sending/editing user reply exception message: {e}")
         return True
 
     # Special handling for invalid API key

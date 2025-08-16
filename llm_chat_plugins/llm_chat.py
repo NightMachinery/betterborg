@@ -752,7 +752,9 @@ async def _handle_native_gemini_image_generation(
     """
     try:
         # Check proxy configuration and admin permissions
-        from uniborg.llm_util import get_proxy_config_or_error
+        from uniborg.llm_util import (
+            get_proxy_config_or_error,
+        )
 
         proxy_url, _ = get_proxy_config_or_error(event.sender_id)
 

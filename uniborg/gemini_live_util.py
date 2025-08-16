@@ -33,8 +33,6 @@ GEMINI_AUDIO_SAMPLE_RATE = 16000
 GEMINI_AUDIO_CHANNELS = 1
 
 
-
-
 @dataclass
 class LiveSession:
     """Represents an active live session with Gemini Live API."""
@@ -122,6 +120,7 @@ class LiveSessionManager:
 
         # Check proxy configuration and admin permissions
         from uniborg.llm_util import get_proxy_config_or_error
+
         proxy_url, _ = get_proxy_config_or_error(user_id)
 
         # End existing session for this chat if any
@@ -248,6 +247,7 @@ class GeminiLiveAPI:
             if user_id is not None:
                 # Check proxy configuration and admin permissions
                 from uniborg.llm_util import get_proxy_config_or_error
+
                 proxy_url, _ = get_proxy_config_or_error(user_id)
 
                 if proxy_url:
