@@ -826,6 +826,11 @@ def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
     return command in KNOWN_COMMAND_SET
 
 
+def is_gemini_model(model_name):
+    """Check if model is a Gemini model."""
+
+    return re.search(r"\bgemini\b", model_name, re.IGNORECASE)
+
 def is_native_gemini(model: str) -> bool:
     """Check if model is native Gemini (not OpenRouter) and supports context caching."""
     return model.startswith("gemini/")
@@ -1237,9 +1242,16 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
     except Exception as e:
         print(f"Error checking audio input support for {model}: {e}")
     try:
-        capabilities["video_input"] = litellm.supports_video_input(model) or model in (
-            "gemini/gemini-2.5-flash",
-        )
+        video_input_p = False
+        if hasattr(litellm, "supports_video_input"):
+            res = litellm.supports_video_input(model)
+        elif hasattr(litellm.util, "supports_video_input"):
+            res = litellm.util.supports_video_input(model)
+        #: This function seems to not have been written yet in LiteLLM.
+
+        res = res or is_gemini_model(model)
+
+        capabilities["video_input"] = res
     except Exception as e:
         print(f"Error checking video input support for {model}: {e}")
     try:
@@ -4386,7 +4398,7 @@ async def chat_handler(event):
         messages.insert(0, system_message)
 
         # --- Construct API call arguments ---
-        is_gemini_model = re.search(r"\bgemini\b", model_in_use, re.IGNORECASE)
+        is_gemini_model_p = is_gemini_model(model_in_use)
 
         # Image generation models don't support streaming
         # Note: Native Gemini image generation has separate handling with its own streaming
@@ -4404,7 +4416,7 @@ async def chat_handler(event):
             if prefs.enabled_tools:
                 warnings.append("Tools are disabled (not supported in JSON mode).")
 
-        if is_gemini_model:
+        if is_gemini_model_p:
             api_kwargs["safety_settings"] = SAFETY_SETTINGS
             # Upstream Gemini Limitation: Only enable tools if JSON mode is OFF.
             if prefs.enabled_tools and not prefs.json_mode:
