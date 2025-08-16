@@ -1,7 +1,7 @@
 #+TITLE: llm_chat_plugins/todo
 
 * add image gen models
-** TODO native flash
+** DONE native flash
 *** _
 #+begin_verse
 llm_chat:

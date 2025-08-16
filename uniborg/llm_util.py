@@ -20,7 +20,7 @@ class ProxyRestrictedException(Exception):
 # --- Proxy Configuration ---
 
 GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P = os.getenv(
-    "GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P", ""
+    "GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P", "y"
 ).lower() in ("true", "y")
 
 
