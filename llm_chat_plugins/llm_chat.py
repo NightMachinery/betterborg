@@ -811,6 +811,7 @@ async def _call_llm_with_retry(
                 max_retries=max_retries - 1,
             )
         elif is_500_error:
+            traceback.print_exc()
             print(f"LLM call failed after {MAX_RETRIES} attempts.")
             raise llm_util.TelegramUserReplyException(
                 "The AI model's server is currently unavailable. This is likely an upstream issue. Please try again later."
@@ -1218,6 +1219,7 @@ async def _handle_native_gemini_image_generation(
                     max_retries=max_retries - 1,
                 )
             elif is_500_error:
+                traceback.print_exc()
                 print(f"Gemini image generation failed after {MAX_RETRIES} attempts.")
                 raise llm_util.TelegramUserReplyException(
                     "The Gemini model's server is currently unavailable (500 Internal Server Error). This is likely an upstream issue. Please try again later."
