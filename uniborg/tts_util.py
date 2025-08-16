@@ -95,8 +95,6 @@ TTS_MODELS = {
 DEFAULT_VOICE = "Zephyr"
 
 
-
-
 def truncate_text_for_tts(text: str) -> tuple[str, bool]:
     """
     Truncate text to TTS_MAX_LENGTH if needed.
@@ -181,23 +179,28 @@ async def _convert_wav_to_ogg(wav_path: str, ogg_path: str):
         # Use asyncio subprocess instead of ffmpeg.run() to avoid blocking
         cmd = [
             "ffmpeg",
-            "-i", wav_path,
-            "-acodec", "libopus",
-            "-ab", "32k",
-            "-ar", "16000",
-            "-ac", "1",
+            "-i",
+            wav_path,
+            "-acodec",
+            "libopus",
+            "-ab",
+            "32k",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
             "-y",  # Overwrite output
-            ogg_path
+            ogg_path,
         ]
-        
+
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
-        
+
         _, stderr = await process.communicate()
-        
+
         if process.returncode != 0:
             stderr_text = stderr.decode() if stderr else "Unknown error"
             raise Exception(f"FFmpeg conversion failed: {stderr_text}")
