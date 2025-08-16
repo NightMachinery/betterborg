@@ -842,6 +842,7 @@ def is_gemini_model(model_name):
 
     return re.search(r"\bgemini\b", model_name, re.IGNORECASE)
 
+
 def is_native_gemini(model: str) -> bool:
     """Check if model is native Gemini (not OpenRouter) and supports context caching."""
     return model.startswith("gemini/")
@@ -2580,7 +2581,7 @@ async def status_handler(event):
         smart_state_name = smart_state_name_base
         if current_smart_state == "last_N":
             group_smart_mode_status_str = (
-                f" (State: `{smart_state_name}`, Limit: {effective_last_n_limit})"
+                f" (State: `{smart_state_name}`, Limit: `{effective_last_n_limit}`)"
             )
 
     metadata_mode_name = METADATA_MODES.get(
@@ -2898,16 +2899,7 @@ async def context_mode_here_handler(event):
     current_mode = chat_prefs.context_mode  # This will be None if not set
 
     # Prepare options for the menu, including a "Not Set" option for resetting
-    options_for_menu = {}
-    for key, name in CONTEXT_MODE_NAMES.items():
-        if key == "last_N":
-            effective_last_n_limit = _get_effective_last_n_limit(
-                event.chat_id,
-                event.sender_id,
-            )
-            options_for_menu[key] = f"{name} (Limit: {effective_last_n_limit})"
-        else:
-            options_for_menu[key] = name
+    options_for_menu = _build_context_mode_menu_options(event.chat_id, event.sender_id)
     options_for_menu["not_set"] = NOT_SET_HERE_DISPLAY_NAME
 
     await bot_util.present_options(
@@ -3067,11 +3059,8 @@ async def get_last_n_here_handler(event):
 
 async def context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
-    user_last_n_limit = prefs.last_n_messages_limit or LAST_N_MESSAGES_LIMIT
 
-    options = CONTEXT_MODE_NAMES.copy()
-    if "last_N" in options:
-        options["last_N"] += f" (Limit: {user_last_n_limit})"
+    options = _build_context_mode_menu_options(event.chat_id, event.sender_id)
 
     await bot_util.present_options(
         event,
@@ -3086,11 +3075,8 @@ async def context_mode_handler(event):
 
 async def group_context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
-    user_last_n_limit = prefs.last_n_messages_limit or LAST_N_MESSAGES_LIMIT
 
-    options = CONTEXT_MODE_NAMES.copy()
-    if "last_N" in options:
-        options["last_N"] += f" (Limit: {user_last_n_limit})"
+    options = _build_context_mode_menu_options(event.chat_id, event.sender_id)
 
     await bot_util.present_options(
         event,
