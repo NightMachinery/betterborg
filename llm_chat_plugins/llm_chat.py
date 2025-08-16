@@ -2833,8 +2833,7 @@ async def callback_handler(event):
 
     elif data_str.startswith("chatmodel_"):
         model_id = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
-        # Get chat_id from the original message context or stored state
-        chat_id = event.message.chat_id
+        chat_id = event.chat_id
         chat_manager.set_model(chat_id, model_id)
         cancel_input_flow(user_id)  # Cancel the custom input flow
 
