@@ -1030,7 +1030,7 @@ async def _handle_native_gemini_image_generation(
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 500 and max_retries > 0:
                 print(
-                    f"Gemini image generation failed with 500 error. Retrying ({MAX_RETRIES - max_retries + 2}/{MAX_RETRIES})..."
+                    f"Gemini image generation failed with 500 error. Retrying (attempt {MAX_RETRIES - max_retries + 1}/{MAX_RETRIES})..."
                 )
                 await asyncio.sleep(1)  # Small delay before retrying
                 return await _handle_native_gemini_image_generation(
