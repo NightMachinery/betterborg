@@ -912,8 +912,6 @@ async def _handle_native_gemini_image_generation(
         return response_text.strip(), has_image
 
     except Exception as e:
-        print(f"Error in native Gemini image generation: {e}")
-        traceback.print_exc()
         raise
 
 
