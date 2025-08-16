@@ -141,17 +141,18 @@ class LiveSessionManager:
                 },
             }
 
-            # Add proxy configuration if available
+            # Configure Google GenAI client
+            http_options = None
             if proxy_url:
-                config_kwargs["http_options"] = types.HttpOptions(
+                # Move HTTP options to client-level per SDK requirements
+                http_options = types.HttpOptions(
                     client_args={"proxy": proxy_url},
                     async_client_args={"proxy": proxy_url},
                 )
 
             live_connect_config = types.LiveConnectConfig(**config_kwargs)
 
-            # Configure Google GenAI client
-            client = genai.Client(api_key=api_key)
+            client = genai.Client(api_key=api_key, http_options=http_options)
 
             # Create live session connection object
             session_obj.session = client.aio.live.connect(
