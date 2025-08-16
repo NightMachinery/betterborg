@@ -278,6 +278,14 @@ BOT_COMMANDS = [
     },
     {"command": "livemodel", "description": "Set your preferred live mode model"},
     {"command": "testlive", "description": "Test live session connection (admin only)"},
+    {
+        "command": "setmodelhere",
+        "description": "Set the model for the current chat only",
+    },
+    {
+        "command": "getmodelhere",
+        "description": "View the effective model for the current chat",
+    },
 ]
 # Create a set of command strings (e.g., {"/start", "/help"}) for efficient lookup
 KNOWN_COMMAND_SET = {f"/{cmd['command']}".lower() for cmd in BOT_COMMANDS}
@@ -414,6 +422,7 @@ class ChatPrefs(BaseModel):
 
     system_prompt: Optional[str] = Field(default=None)
     context_mode: Optional[str] = Field(default=None)
+    model: Optional[str] = Field(default=None)
     tts_model: str = Field(default="Disabled")
     tts_voice_override: Optional[str] = Field(default=None)
     live_mode_enabled: bool = Field(default=False)
@@ -557,6 +566,14 @@ class ChatManager:
 
         prefs = self.get_prefs(chat_id)
         prefs.context_mode = mode
+        self._save_prefs(chat_id, prefs)
+
+    def get_model(self, chat_id: int) -> Optional[str]:
+        return self.get_prefs(chat_id).model
+
+    def set_model(self, chat_id: int, model: Optional[str]):
+        prefs = self.get_prefs(chat_id)
+        prefs.model = model
         self._save_prefs(chat_id, prefs)
 
     def get_tts_model(self, chat_id: int) -> str:
@@ -1853,6 +1870,14 @@ def register_handlers():
         )
     )(get_system_prompt_here_handler)
     borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/setmodelhere{bot_username_suffix_re}(?:\s+(.*))?$"
+        )
+    )(set_model_here_handler)
+    borg.on(
+        events.NewMessage(pattern=rf"(?i)^/getmodelhere{bot_username_suffix_re}\s*$")
+    )(get_model_here_handler)
+    borg.on(
         events.NewMessage(pattern=rf"(?i)^/contextmodehere{bot_username_suffix_re}\s*$")
     )(context_mode_here_handler)
     borg.on(
@@ -2097,6 +2122,8 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setgeminikey: Sets or updates your Gemini API key.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
 - /setSystemPrompt: Change my core instructions or reset to default.
+- /setModelHere: Set the AI model for the current chat only.
+- /getModelHere: View the effective AI model for the current chat.
 - /contextMode: Change how **private** chat history is gathered.
 - /groupContextMode: Change how **group** chat history is gathered.
 - /metadataMode: Change how **private** chat metadata is handled.
@@ -2133,6 +2160,15 @@ async def status_handler(event):
     chat_system_prompt_status = "Not set"
     if chat_prompt:
         chat_system_prompt_status = "Custom (Overrides your personal prompt)"
+
+    # Determine model status - check for chat-specific model
+    chat_model = chat_manager.get_model(chat_id)
+    if chat_model:
+        model_status = f"`{chat_model}` (this chat)"
+        effective_model = chat_model
+    else:
+        model_status = f"`{prefs.model}` (your default)"
+        effective_model = prefs.model
 
     # Get context mode name and handle smart mode
     context_mode_name = CONTEXT_MODE_NAMES.get(
@@ -2179,23 +2215,25 @@ async def status_handler(event):
 
     status_message = (
         f"**Your Personal Bot Settings**\n\n"
-        f"∙ **Model:** `{prefs.model}`\n"
-        f"∙ **Reasoning Level:** `{thinking_level}`\n"
-        f"∙ **Enabled Tools:** `{enabled_tools_str}`\n"
-        f"∙ **JSON Mode:** `{'Enabled' if prefs.json_mode else 'Disabled'}`\n"
-        f"∙ **Personal System Prompt:** `{user_system_prompt_status}`\n\n"
+        f"• **Effective Model:** {model_status}\n"
+        f"• **Personal Model:** `{prefs.model}`\n"
+        f"• **Reasoning Level:** `{thinking_level}`\n"
+        f"• **Enabled Tools:** `{enabled_tools_str}`\n"
+        f"• **JSON Mode:** `{'Enabled' if prefs.json_mode else 'Disabled'}`\n"
+        f"• **Personal System Prompt:** `{user_system_prompt_status}`\n\n"
         f"**This Chat's Settings**\n"
-        f"∙ **Chat System Prompt:** `{chat_system_prompt_status}`\n\n"
+        f"• **Chat Model:** `{'Custom' if chat_model else 'Not set'}`\n"
+        f"• **Chat System Prompt:** `{chat_system_prompt_status}`\n\n"
         f"**TTS Settings (This Chat)**\n"
-        f"∙ **TTS Model:** `{tts_model_display}`\n"
-        f"∙ **Voice:** {effective_voice_display}\n\n"
+        f"• **TTS Model:** `{tts_model_display}`\n"
+        f"• **Voice:** {effective_voice_display}\n\n"
         f"**Private Chat Context**\n"
-        f"∙ **Context Mode:** `{context_mode_name}`{smart_mode_status_str}\n"
-        f"∙ **Metadata Mode:** `{metadata_mode_name}`\n\n"
+        f"• **Context Mode:** `{context_mode_name}`{smart_mode_status_str}\n"
+        f"• **Metadata Mode:** `{metadata_mode_name}`\n\n"
         f"**Group Chat Context**\n"
-        f"∙ **Context Mode:** `{group_context_mode_name}`{group_smart_mode_status_str}\n"
-        f"∙ **Metadata Mode:** `{group_metadata_mode_name}`\n"
-        f"∙ **Activation:** `{group_activation_mode_name}`\n"
+        f"• **Context Mode:** `{group_context_mode_name}`{group_smart_mode_status_str}\n"
+        f"• **Metadata Mode:** `{group_metadata_mode_name}`\n"
+        f"• **Activation:** `{group_activation_mode_name}`\n"
     )
     await event.reply(f"{BOT_META_INFO_PREFIX}{status_message}", parse_mode="md")
 
@@ -2384,6 +2422,50 @@ async def get_system_prompt_here_handler(event):
         )
         await event.reply(
             f"{BOT_META_INFO_PREFIX}This chat has no custom system prompt set. Using {source_text}:\n\n```\n{prompt_info.effective_prompt}\n```",
+            parse_mode="md",
+        )
+
+
+async def set_model_here_handler(event):
+    """Sets a model for the current chat only."""
+    is_bot_admin = await util.isAdmin(event)
+    is_group_admin = await util.is_group_admin(event)
+
+    if not event.is_private and not (is_bot_admin or is_group_admin):
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}You must be a group admin or bot admin to use this command in a group."
+        )
+        return
+
+    model_match = event.pattern_match.group(1)
+    if not model_match or not model_match.strip():
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}**Usage:** `/setModelHere <model name>`"
+        )
+        return
+
+    model = model_match.strip()
+    chat_manager.set_model(event.chat_id, model)
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}✅ This chat's model has been set to: `{model}`"
+    )
+
+
+async def get_model_here_handler(event):
+    """Gets and displays the effective model for the current chat."""
+    user_id = event.sender_id
+    chat_model = chat_manager.get_model(event.chat_id)
+    user_prefs = user_manager.get_prefs(user_id)
+
+    if chat_model:
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}**Current chat model:** `{chat_model}`",
+            parse_mode="md",
+        )
+    else:
+        effective_model = user_prefs.model or DEFAULT_MODEL
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}This chat has no custom model set. Using {'your personal model' if user_prefs.model else 'default model'}: `{effective_model}`",
             parse_mode="md",
         )
 
@@ -3642,7 +3724,10 @@ async def chat_handler(event):
         return  # Already being processed
 
     prefs = user_manager.get_prefs(user_id)
-    model_in_use = prefs.model
+
+    # Check for chat-specific model first, then user model, then default
+    chat_model = chat_manager.get_model(chat_id)
+    model_in_use = chat_model or prefs.model
     model_capabilities = get_model_capabilities(model_in_use)
 
     # Determine which API key is needed
