@@ -21,6 +21,7 @@ import httpx
 import litellm
 from google import genai
 from google.genai import types
+from google.api_core import exceptions as google_exceptions
 from telethon import events, errors
 from telethon.tl.types import (
     BotCommand,
@@ -49,6 +50,11 @@ from uniborg import gemini_live_util
 from uniborg import redis_util
 
 # --- Constants and Configuration ---
+GEMINI_NATIVE_FILE_MODE = os.getenv(
+    "GEMINI_NATIVE_FILE_MODE",
+    "files",
+    # "base64",
+)
 NOT_SET_HERE_DISPLAY_NAME = "Not Set for This Chat Specifically"
 
 # Use the litellm model naming convention.
@@ -658,6 +664,11 @@ chat_manager = ChatManager()
 
 
 # --- Core Logic & Helpers ---
+
+
+def is_native_gemini_files_mode(model: str) -> bool:
+    """Check if we should use the native Gemini Files API for attachments."""
+    return is_native_gemini(model) and GEMINI_NATIVE_FILE_MODE == "files"
 
 
 def _get_effective_last_n_limit(chat_id: int, user_id: int) -> int:
@@ -1427,10 +1438,15 @@ async def _process_media(
     temp_dir: Path,
     model_capabilities: Dict[str, bool],
     issued_warnings: set,
+    *,
+    user_id: int,
+    api_key: str,
+    model_in_use: str,
 ) -> ProcessMediaResult:
     """
     Downloads or retrieves media from cache, prepares it for litellm,
     and ensures it's cached in a text-safe format (raw text or Base64).
+    Uses the Gemini Files API for native models if configured.
     """
     if not message or not message.media:
         return ProcessMediaResult(media_part=None, warnings=[])
@@ -1439,12 +1455,104 @@ async def _process_media(
         file_id = (
             f"{message.chat_id}_{message.id}_{getattr(message.media, 'id', 'unknown')}"
         )
-        cached_file_info = await history_util.get_cached_file(file_id)
 
-        # --- Branch 1: Use Cached File ---
+        # --- Branch 1: Gemini Files API Mode ---
+        if is_native_gemini_files_mode(model_in_use):
+            gemini_client = genai.Client(api_key=api_key)
+            loop = asyncio.get_running_loop()
+
+            # Check for a cached and still valid Gemini file name
+            cached_gemini_name = await history_util.get_cached_gemini_file_name(
+                file_id, user_id
+            )
+            if cached_gemini_name:
+                try:
+                    gemini_file = await loop.run_in_executor(
+                        None, lambda: gemini_client.files.get(name=cached_gemini_name)
+                    )
+                    part = {
+                        "file_data": {
+                            "mime_type": gemini_file.mime_type,
+                            "file_uri": gemini_file.uri,
+                        }
+                    }
+                    return ProcessMediaResult(media_part=part, warnings=[])
+                except google_exceptions.NotFound:
+                    pass  # File expired, proceed to upload
+                except Exception as e:
+                    print(f"Error validating Gemini file {cached_gemini_name}: {e}")
+                    # Don't proceed with this file if validation fails
+                    return ProcessMediaResult(
+                        media_part=None,
+                        warnings=["Failed to verify cached Gemini file."],
+                    )
+
+            # Get file bytes (from our base64 cache or download)
+            cached_file_info = await history_util.get_cached_file(file_id)
+            if cached_file_info and cached_file_info["data_storage_type"] == "base64":
+                file_bytes = base64.b64decode(cached_file_info["data"])
+                mime_type = cached_file_info.get("mime_type")
+                filename = cached_file_info.get("filename", "file")
+            else:
+                file_path_str = await message.download_media(file=temp_dir)
+                if not file_path_str:
+                    return ProcessMediaResult(media_part=None, warnings=[])
+                file_path = Path(file_path_str)
+                filename = file_path.name
+                mime_type, _ = mimetypes.guess_type(file_path)
+                with open(file_path, "rb") as f:
+                    file_bytes = f.read()
+                if cached_file_info is None:  # Cache for future base64 use
+                    b64_content = base64.b64encode(file_bytes).decode("utf-8")
+                    await history_util.cache_file(
+                        file_id,
+                        b64_content,
+                        data_storage_type="base64",
+                        filename=filename,
+                        mime_type=mime_type,
+                    )
+
+            # Upload to Gemini Files API
+            with tempfile.NamedTemporaryFile(
+                delete=False, suffix=Path(filename).suffix
+            ) as temp_f:
+                temp_f.write(file_bytes)
+                temp_path = temp_f.name
+            try:
+                gemini_file = await loop.run_in_executor(
+                    None,
+                    lambda: gemini_client.files.upload(
+                        path=temp_path, display_name=filename
+                    ),
+                )
+                while gemini_file.state.name in (
+                    "PROCESSING",
+                    "STATE_UNSPECIFIED",
+                ):
+                    await asyncio.sleep(1)
+                    gemini_file = await loop.run_in_executor(
+                        None, lambda: gemini_client.files.get(name=gemini_file.name)
+                    )
+                if gemini_file.state.name == "FAILED":
+                    raise Exception("Gemini file processing failed.")
+                await history_util.cache_gemini_file_name(
+                    file_id, user_id, gemini_file.name
+                )
+                part = {
+                    "file_data": {
+                        "mime_type": gemini_file.mime_type,
+                        "file_uri": gemini_file.uri,
+                    }
+                }
+                return ProcessMediaResult(media_part=part, warnings=[])
+            finally:
+                os.unlink(temp_path)
+
+        # --- Branch 2: Base64 Mode (Original Logic) ---
+        cached_file_info = await history_util.get_cached_file(file_id)
         if cached_file_info:
             storage_type = cached_file_info["data_storage_type"]
-            data = cached_file_info["data"]  # This is a string (text or base64)
+            data = cached_file_info["data"]
             filename = cached_file_info.get("filename")
             mime_type = cached_file_info.get("mime_type")
 
@@ -1485,7 +1593,7 @@ async def _process_media(
                 )
                 return ProcessMediaResult(media_part=None, warnings=[])
 
-        # --- Branch 2: New File - Download, Process, and Cache ---
+        # --- Branch 3: New File (Base64 Mode) - Download, Process, Cache ---
         else:
             file_path_str = await message.download_media(file=temp_dir)
             if not file_path_str:
@@ -1615,7 +1723,6 @@ async def _process_media(
                     mime_type=mime_type,
                 )
 
-                # Handle PDF files with the new file format for litellm
                 if mime_type == "application/pdf":
                     part = {
                         "type": "file",
@@ -1799,6 +1906,9 @@ async def _process_message_content(
     model_capabilities: Dict[str, bool],
     issued_warnings: set,
     metadata_prefix: str = "",
+    *,
+    api_key: str,
+    model_in_use: str,
 ) -> ProcessContentResult:
     """Processes a single message's text and media into litellm content parts."""
     text_buffer, media_parts, warnings = [], [], []
@@ -1840,7 +1950,13 @@ async def _process_message_content(
         text_buffer.append(processed_text)
 
     media_result = await _process_media(
-        message, temp_dir, model_capabilities, issued_warnings
+        message,
+        temp_dir,
+        model_capabilities,
+        issued_warnings,
+        user_id=message.sender_id,
+        api_key=api_key,
+        model_in_use=model_in_use,
     )
     warnings.extend(media_result.warnings)
     if media_result.media_part:
@@ -1882,6 +1998,8 @@ async def _process_turns_to_history(
     message_list: List[Message],
     temp_dir: Path,
     model_capabilities: Dict[str, bool],
+    api_key: str,
+    model_in_use: str,
 ) -> tuple[List[dict], List[str]]:
     """
     Processes a final, sorted list of messages into litellm history format,
@@ -1916,7 +2034,13 @@ async def _process_turns_to_history(
             for turn_msg in turn_messages:
                 # Process content without any metadata prefix, passing the known role.
                 content_result = await _process_message_content(
-                    turn_msg, role, temp_dir, model_capabilities, issued_warnings
+                    turn_msg,
+                    role,
+                    temp_dir,
+                    model_capabilities,
+                    issued_warnings,
+                    api_key=api_key,
+                    model_in_use=model_in_use,
                 )
                 text_buffer.extend(content_result.text_parts)
                 media_parts.extend(content_result.media_parts)
@@ -1959,6 +2083,8 @@ async def _process_turns_to_history(
                 model_capabilities,
                 issued_warnings,
                 metadata_prefix,
+                api_key=api_key,
+                model_in_use=model_in_use,
             )
             all_warnings.extend(content_result.warnings)
 
@@ -2008,7 +2134,12 @@ async def _get_initial_messages_for_reply_chain(event) -> List[Message]:
 
 
 async def build_conversation_history(
-    event, context_mode: str, temp_dir: Path, model_capabilities: Dict[str, bool]
+    event,
+    context_mode: str,
+    temp_dir: Path,
+    model_capabilities: Dict[str, bool],
+    api_key: str,
+    model_in_use: str,
 ) -> ConversationHistoryResult:
     """
     Orchestrates the construction of a conversation history based on the user's
@@ -2033,7 +2164,12 @@ async def build_conversation_history(
                 event, messages_to_process
             )
             history, warnings = await _process_turns_to_history(
-                event, expanded_messages, temp_dir, model_capabilities
+                event,
+                expanded_messages,
+                temp_dir,
+                model_capabilities,
+                api_key,
+                model_in_use,
             )
             return ConversationHistoryResult(history=history, warnings=warnings)
 
@@ -2135,7 +2271,7 @@ async def build_conversation_history(
         expanded_messages = expanded_messages[-HISTORY_MESSAGE_LIMIT:]
 
     history, warnings = await _process_turns_to_history(
-        event, expanded_messages, temp_dir, model_capabilities
+        event, expanded_messages, temp_dir, model_capabilities, api_key, model_in_use
     )
     return ConversationHistoryResult(history=history, warnings=warnings)
 
@@ -4352,7 +4488,12 @@ async def chat_handler(event):
             await asyncio.sleep(0.1)  # Allow album messages to arrive
 
         history_result = await build_conversation_history(
-            event, context_mode_to_use, temp_dir, model_capabilities
+            event,
+            context_mode_to_use,
+            temp_dir,
+            model_capabilities,
+            api_key,
+            model_in_use,
         )
         messages = history_result.history
         warnings = history_result.warnings

@@ -85,6 +85,11 @@ def file_cache_key(file_id: str) -> str:
     return f"borg:files:{file_id}"
 
 
+def gemini_file_cache_key(file_id: str, user_id: int) -> str:
+    """Redis key for Gemini File API name cache."""
+    return f"borg:files:gemini:{user_id}:{file_id}"
+
+
 def smart_context_key(user_id: int) -> str:
     """Redis key for smart context state."""
     return f"borg:smart_context:{user_id}"

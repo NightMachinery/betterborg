@@ -19,6 +19,8 @@ from . import redis_util
 
 # --- Configuration ---
 HISTORY_LIMIT = 5000  # Max number of message IDs to store per chat
+GEMINI_FILE_CACHE_DURATION = 47 * 3600  # 47 hours, just under the 48h expiry
+
 
 # --- Data Structures ---
 
@@ -372,6 +374,25 @@ async def get_cached_file(file_id: str) -> Optional[dict]:
         # We return the whole dictionary for the caller to process.
         return cached_data
     return None
+
+
+async def cache_gemini_file_name(
+    file_id: str, user_id: int, gemini_file_name: str
+) -> bool:
+    """Cache a Gemini File API file name for a specific user."""
+    return await redis_util.set_with_expiry(
+        redis_util.gemini_file_cache_key(file_id, user_id),
+        gemini_file_name,
+        expire_seconds=GEMINI_FILE_CACHE_DURATION,
+    )
+
+
+async def get_cached_gemini_file_name(file_id: str, user_id: int) -> Optional[str]:
+    """Get a cached Gemini File API file name for a specific user."""
+    return await redis_util.get_and_renew(
+        redis_util.gemini_file_cache_key(file_id, user_id),
+        expire_seconds=GEMINI_FILE_CACHE_DURATION,
+    )
 
 
 # --- Automatic History Population ---
