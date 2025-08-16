@@ -673,6 +673,17 @@ def _get_effective_last_n_limit(chat_id: int, user_id: int) -> int:
     return LAST_N_MESSAGES_LIMIT
 
 
+def _build_context_mode_menu_options(chat_id: int, user_id: int) -> Dict[str, str]:
+    """Build context mode menu options with appropriate limit displays."""
+    effective_last_n_limit = _get_effective_last_n_limit(chat_id, user_id)
+    options = CONTEXT_MODE_NAMES.copy()
+    if "last_N" in options:
+        options["last_N"] = (
+            f"{CONTEXT_MODE_NAMES['last_N']} (Limit: {effective_last_n_limit})"
+        )
+    return options
+
+
 def _get_effective_model_and_service(chat_id: int, user_id: int) -> tuple[str, str]:
     """
     Gets the effective model and the corresponding service ('gemini' or 'openrouter').
@@ -1245,8 +1256,8 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
         video_input_p = False
         if hasattr(litellm, "supports_video_input"):
             res = litellm.supports_video_input(model)
-        elif hasattr(litellm.util, "supports_video_input"):
-            res = litellm.util.supports_video_input(model)
+        elif hasattr(litellm.utils, "supports_video_input"):
+            res = litellm.utils.supports_video_input(model)
         #: This function seems to not have been written yet in LiteLLM.
 
         res = res or is_gemini_model(model)
@@ -3359,13 +3370,7 @@ async def callback_handler(event):
         user_manager.set_context_mode(user_id, mode)
         prefs = user_manager.get_prefs(user_id)  # update prefs
 
-        user_last_n_limit = prefs.last_n_messages_limit or LAST_N_MESSAGES_LIMIT
-        effective_last_n_limit = _get_effective_last_n_limit(
-            event.chat_id, event.sender_id
-        )
-        options = CONTEXT_MODE_NAMES.copy()
-        if "last_N" in options:
-            options["last_N"] += f" (Limit: {effective_last_n_limit})"
+        options = _build_context_mode_menu_options(event.chat_id, event.sender_id)
         buttons = [
             KeyboardButtonCallback(
                 f"✅ {name}" if key == prefs.context_mode else name,
@@ -3401,15 +3406,9 @@ async def callback_handler(event):
         )
 
         # Prepare options for the menu, including a "Not Set" option for resetting
-        options_for_menu = {}
-        for key, name in CONTEXT_MODE_NAMES.items():
-            if key == "last_N":
-                effective_last_n_limit = _get_effective_last_n_limit(
-                    event.chat_id, event.sender_id
-                )
-                options_for_menu[key] = f"{name} (Limit: {effective_last_n_limit})"
-            else:
-                options_for_menu[key] = name
+        options_for_menu = _build_context_mode_menu_options(
+            event.chat_id, event.sender_id
+        )
         options_for_menu["not_set"] = NOT_SET_HERE_DISPLAY_NAME
 
         buttons = [
