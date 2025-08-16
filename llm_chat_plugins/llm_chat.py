@@ -973,11 +973,12 @@ async def _handle_native_gemini_image_generation(
 
 
 def get_model_capabilities(model: str) -> Dict[str, bool]:
-    """Get model capabilities for vision, audio input, audio output, and image generation support."""
+    """Get model capabilities for vision, audio input, audio output, PDF input, and image generation support."""
     capabilities = {
         "vision": False,
         "audio_input": False,
         "audio_output": False,
+        "pdf_input": False,
         "image_generation": False,
     }
     try:
@@ -996,6 +997,13 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
     except Exception as e:
         print(f"Error checking audio output support for {model}: {e}")
 
+    try:
+        capabilities["pdf_input"] = litellm.supports_pdf_input(model)
+
+    except Exception as e:
+        print(f"Error checking PDF input support for {model}: {e}")
+        capabilities["pdf_input"] = False
+
     capabilities["image_generation"] = is_image_generation_model(model)
     return capabilities
 
@@ -1010,6 +1018,8 @@ def get_media_type(mime_type: str) -> Optional[str]:
         return "audio"
     elif mime_type.startswith("video/"):
         return "video"
+    elif mime_type == "application/pdf":
+        return "pdf"
     else:
         return None
 
@@ -1113,6 +1123,10 @@ def _check_media_capability(
         if "video" not in issued_warnings:
             issued_warnings.add("video")
             return "Video files were skipped as they are not supported by the current model."
+    elif media_type == "pdf" and not model_capabilities.get("pdf_input", False):
+        if "pdf" not in issued_warnings:
+            issued_warnings.add("pdf")
+            return "PDF files were skipped because the current model does not support PDF input."
     return None
 
 
@@ -1157,10 +1171,21 @@ async def _process_media(
                 }
                 return ProcessMediaResult(media_part=part, warnings=[])
             elif storage_type == "base64":
-                part = {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime_type};base64,{data}"},
-                }
+                # Handle PDF files with the new file format for litellm
+                if mime_type == "application/pdf":
+                    part = {
+                        "type": "file",
+                        "file": {
+                            "file_id": f"data:{mime_type};base64,{data}",
+                            "format": "application/pdf",
+                        },
+                    }
+                else:
+                    # Handle other media types (images, audio, video) with existing format
+                    part = {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime_type};base64,{data}"},
+                    }
                 return ProcessMediaResult(media_part=part, warnings=[])
             else:
                 print(
@@ -1272,8 +1297,10 @@ async def _process_media(
                 }
                 return ProcessMediaResult(media_part=part, warnings=[])
             else:
-                if not mime_type or not mime_type.startswith(
-                    ("image/", "audio/", "video/")
+                if (
+                    not mime_type
+                    or not mime_type.startswith(("image/", "audio/", "video/"))
+                    and mime_type != "application/pdf"
                 ):
                     print(
                         f"Unsupported binary media type '{mime_type}' for file {original_filename}"
@@ -1295,10 +1322,22 @@ async def _process_media(
                     filename=original_filename,
                     mime_type=mime_type,
                 )
-                part = {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime_type};base64,{b64_content}"},
-                }
+
+                # Handle PDF files with the new file format for litellm
+                if mime_type == "application/pdf":
+                    part = {
+                        "type": "file",
+                        "file": {
+                            "file_id": f"data:{mime_type};base64,{b64_content}",
+                            "format": "application/pdf",
+                        },
+                    }
+                else:
+                    # Handle other media types (images, audio, video) with existing format
+                    part = {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime_type};base64,{b64_content}"},
+                    }
                 return ProcessMediaResult(media_part=part, warnings=[])
 
     except Exception as e:
