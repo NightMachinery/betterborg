@@ -174,6 +174,15 @@ MODEL_CHOICES = {
     #: model name is too long for Telegram API's `data` field in callback buttons
     ## Cloaked Models
 }
+
+# Chat model options including "Not Set" option for removing chat-specific model
+CHAT_MODEL_OPTIONS = {"": "Not Set (Use Personal Default)"}
+CHAT_MODEL_OPTIONS.update(MODEL_CHOICES)
+
+# Text input patterns for clearing/resetting values
+CANCEL_KEYWORDS = ["cancel"]
+RESET_KEYWORDS = ["not set", "none", "clear", "remove", "reset"]
+
 LAST_N_MESSAGES_LIMIT = 50
 HISTORY_MESSAGE_LIMIT = 1000
 LOG_COUNT_LIMIT = 3
@@ -2498,7 +2507,7 @@ async def set_model_here_handler(event):
         await bot_util.present_options(
             event,
             title="Set Chat Model",
-            options=MODEL_CHOICES,
+            options=CHAT_MODEL_OPTIONS,
             current_value=current_chat_model or "",
             callback_prefix="chatmodel_",
             awaiting_key="chatmodel_selection",
@@ -2507,7 +2516,7 @@ async def set_model_here_handler(event):
         # Also prompt for custom model
         await event.reply(
             f"{BOT_META_INFO_PREFIX}Or, send a custom model ID below."
-            "\n(Type `cancel` to stop.)"
+            "\n(Type `cancel` or `not set` to stop/clear.)"
         )
         AWAITING_INPUT_FROM_USERS[user_id] = {"type": "chatmodel", "chat_id": chat_id}
 
@@ -2834,20 +2843,27 @@ async def callback_handler(event):
     elif data_str.startswith("chatmodel_"):
         model_id = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
         chat_id = event.chat_id
-        chat_manager.set_model(chat_id, model_id)
+        # Handle "Not Set" option (empty string means remove chat-specific model)
+        if model_id == "":
+            chat_manager.set_model(chat_id, None)
+            feedback_msg = "Chat model cleared (using personal default)"
+        else:
+            chat_manager.set_model(chat_id, model_id)
+            feedback_msg = f"Chat model set to {MODEL_CHOICES[model_id]}"
         cancel_input_flow(user_id)  # Cancel the custom input flow
 
         # Update the menu to show the new selection
         current_chat_model = chat_manager.get_model(chat_id)
+
         buttons = [
             KeyboardButtonCallback(
-                f"✅ {name}" if key == current_chat_model else name,
+                f"✅ {name}" if key == (current_chat_model or "") else name,
                 data=f"chatmodel_{bot_util.sanitize_callback_data(key)}",
             )
-            for key, name in MODEL_CHOICES.items()
+            for key, name in CHAT_MODEL_OPTIONS.items()
         ]
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
-        await event.answer(f"Chat model set to {MODEL_CHOICES[model_id]}")
+        await event.answer(feedback_msg)
 
     elif data_str.startswith("think_"):
         level = data_str.split("_")[1]
@@ -3081,7 +3097,7 @@ async def generic_input_handler(event):
 
     input_type = flow_data.get("type")
 
-    if text.lower() == "cancel":
+    if text.lower() in CANCEL_KEYWORDS:
         cancel_input_flow(user_id)
         await event.reply(f"{BOT_META_INFO_PREFIX}Process cancelled.")
         return
@@ -3092,12 +3108,18 @@ async def generic_input_handler(event):
         await event.reply(f"{BOT_META_INFO_PREFIX}✅ Model updated to: `{text}`")
     elif input_type == "chatmodel":
         chat_id = flow_data.get("chat_id", event.chat_id)
-        chat_manager.set_model(chat_id, text)
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}✅ This chat's model updated to: `{text}`"
-        )
+        if text.lower() in RESET_KEYWORDS:
+            chat_manager.set_model(chat_id, None)
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}✅ This chat's model cleared (using personal default)"
+            )
+        else:
+            chat_manager.set_model(chat_id, text)
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}✅ This chat's model updated to: `{text}`"
+            )
     elif input_type == "system_prompt":
-        if text.lower() == "reset":
+        if text.lower() in RESET_KEYWORDS:
             user_manager.set_system_prompt(user_id, "")
             await event.reply(
                 f"{BOT_META_INFO_PREFIX}✅ System prompt reset to default."
