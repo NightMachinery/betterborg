@@ -22,6 +22,18 @@ read https://ai.google.dev/gemini-api/docs/live ,  https://colab.research.google
 
 ** WAIT [[id:772f7610-04e4-4d41-8580-ea34e703a7cb][TimeoutError: timed out during handshake · Issue #384 · google-gemini/cookbook]]
 
+** TODO _
+#+begin_verse
+Traceback (most recent call last):
+  File "/home/eva/code/betterborg/llm_chat_plugins/llm_chat.py", line 3354, in handle_live_mode_message
+    session._live_connection = await session._session_context.__aenter__()
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/contextlib.py", line 199, in __aenter__
+    return await anext(self.gen)
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/live.py", line 918, in connect
+    raise ValueError(
+ValueError: google.genai.client.aio.live.connect() does not support http_options at request-level in LiveConnectConfig yet. Please use the client-level http_options configuration instead.
+#+end_verse
+
 * TTS
 ** DONE Refactor shared logic between =handle_llm_error= and =handle_tts_error=.
 

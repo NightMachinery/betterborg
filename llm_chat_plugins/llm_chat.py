@@ -743,7 +743,12 @@ async def _process_image_response(event, response_content: str) -> tuple[str, bo
 
 
 async def _handle_native_gemini_image_generation(
-    event, messages: list, api_key: str, model: str, response_message
+    event,
+    messages: list,
+    api_key: str,
+    model: str,
+    response_message,
+    model_capabilities: Dict[str, bool] = None,
 ) -> tuple[str, bool]:
     """Handle native Gemini image generation with streaming support.
 
@@ -765,6 +770,12 @@ async def _handle_native_gemini_image_generation(
             )
 
         client = genai.Client(api_key=api_key, http_options=http_options)
+
+        # Initialize model capabilities and warnings tracking if not provided
+        if model_capabilities is None:
+            model_capabilities = get_model_capabilities(model)
+        issued_warnings = set()
+        #: issued_warnings and model_capabilities checks should be redundant, as the message history built already processed these. remove in future commits?
 
         # Convert messages to Gemini format
         contents = []
@@ -824,8 +835,35 @@ async def _handle_native_gemini_image_generation(
 
                         parts.append(types.Part.from_text(text=text_content))
                     elif part.get("type") == "image_url":
-                        # Handle image parts if needed
-                        pass
+                        # Handle media parts (image, audio, video)
+                        image_url = part["image_url"]["url"]
+                        if image_url.startswith("data:"):
+                            try:
+                                # Parse data URL: data:{mime_type};base64,{data}
+                                header, base64_data = image_url.split(",", 1)
+                                mime_type = header.split(":")[1].split(";")[0]
+                                media_bytes = base64.b64decode(base64_data)
+
+                                # Check if model supports this media type
+                                media_type = get_media_type(mime_type)
+                                if media_type:
+                                    warning = _check_media_capability(
+                                        media_type, model_capabilities, issued_warnings
+                                    )
+                                    if warning:
+                                        # print(f"Skipping media: {warning}")
+                                        continue
+
+                                # Create GenAI Part with raw bytes and MIME type
+                                parts.append(
+                                    types.Part.from_bytes(
+                                        data=media_bytes, mime_type=mime_type
+                                    )
+                                )
+                            except Exception as e:
+                                print(f"Error processing media part: {e}")
+                                # Continue without this media part
+                                pass
             else:
                 message_content = str(msg["content"])
 
@@ -3729,7 +3767,12 @@ async def chat_handler(event):
         if is_native_gemini_image_generation(prefs.model):
             # Use native Gemini API for image generation with streaming
             response_text, has_image = await _handle_native_gemini_image_generation(
-                event, messages, api_key, prefs.model, response_message
+                event,
+                messages,
+                api_key,
+                prefs.model,
+                response_message,
+                model_capabilities,
             )
         elif use_streaming:
             # Streaming response handling
