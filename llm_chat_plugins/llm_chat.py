@@ -17,6 +17,7 @@ from pathlib import Path
 from shutil import rmtree
 from itertools import groupby
 
+import httpx
 import litellm
 from google import genai
 from google.genai import types
@@ -210,6 +211,7 @@ METADATA_MODES = {
     "only_forwarded": "Only Forwarded Metadata",
     "full_metadata": "Full Metadata",
 }
+MAX_RETRIES = 3
 
 
 # --- Single Source of Truth for Bot Commands ---
@@ -623,6 +625,51 @@ chat_manager = ChatManager()
 # --- Core Logic & Helpers ---
 
 
+def _get_effective_model_and_service(chat_id: int, user_id: int) -> tuple[str, str]:
+    """
+    Gets the effective model and the corresponding service ('gemini' or 'openrouter').
+    Prioritizes chat-specific settings over user-default settings.
+    """
+    prefs = user_manager.get_prefs(user_id)
+    chat_model = chat_manager.get_model(chat_id)
+
+    model_in_use = chat_model or prefs.model
+
+    service_needed = "gemini"
+    if model_in_use.startswith("openrouter/"):
+        service_needed = "openrouter"
+    elif model_in_use.startswith("openai/"):
+        service_needed = "openai"
+
+    return model_in_use, service_needed
+
+
+async def _call_litellm_with_retry(**kwargs):
+    """Calls litellm.acompletion with retries for 500 server errors."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = await litellm.acompletion(**kwargs)
+            return response
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 500 and attempt < MAX_RETRIES - 1:
+                print(
+                    f"LLM call failed with 500 error. Retrying (attempt {attempt + 2}/{MAX_RETRIES})..."
+                )
+                await asyncio.sleep(1)  # Small delay before retrying
+                continue
+            elif e.response.status_code == 500:
+                print(f"LLM call failed after {MAX_RETRIES} attempts.")
+                raise llm_util.TelegramUserReplyException(
+                    "The AI model's server is currently unavailable (500 Internal Server Error). This is likely an upstream issue. Please try again later."
+                )
+            else:
+                # Re-raise other HTTP errors
+                raise e
+        except Exception:
+            # Re-raise non-HTTP errors
+            raise
+
+
 def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
     """Checks if text starts with a known command, with optional bot username stripping."""
     if not text:
@@ -916,8 +963,10 @@ async def _handle_native_gemini_image_generation(
         file_index = 0
 
         # Get streaming delay for updating message
-        prefs = user_manager.get_prefs(event.sender_id)
-        edit_interval = 0.8  # Default delay
+        model_in_use, _ = _get_effective_model_and_service(
+            event.chat_id, event.sender_id
+        )
+        edit_interval = get_streaming_delay(model_in_use)
         last_edit_time = asyncio.get_event_loop().time()
 
         # Stream the response
@@ -1356,7 +1405,7 @@ async def _process_media(
 
 
 async def _log_conversation(
-    event, prefs: UserPrefs, messages: list, final_response: str
+    event, prefs: UserPrefs, model_in_use: str, messages: list, final_response: str
 ):
     """Formats and writes the conversation log to a user-specific file."""
     try:
@@ -1385,7 +1434,7 @@ async def _log_conversation(
             f"User ID: {user_id}",
             f"Name: {full_name}",
             f"Username: @{username}",
-            f"Model: {prefs.model}",
+            f"Model: {model_in_use}",
             "--- Preferences ---",
             prefs_json,
             "--- Conversation ---",
@@ -2221,9 +2270,6 @@ async def status_handler(event):
     chat_model = chat_manager.get_model(chat_id)
     if chat_model:
         model_status += f" (overridden in this chat)"
-        effective_model = chat_model
-    else:
-        effective_model = prefs.model
 
     # Get context mode name and handle smart mode
     context_mode_name = CONTEXT_MODE_NAMES.get(
@@ -2524,18 +2570,20 @@ async def set_model_here_handler(event):
 async def get_model_here_handler(event):
     """Gets and displays the effective model for the current chat."""
     user_id = event.sender_id
-    chat_model = chat_manager.get_model(event.chat_id)
-    user_prefs = user_manager.get_prefs(user_id)
+    chat_id = event.chat_id
+    effective_model, _ = _get_effective_model_and_service(chat_id, user_id)
+    chat_model = chat_manager.get_model(chat_id)
 
     if chat_model:
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}**Current chat model:** `{chat_model}`",
+            f"{BOT_META_INFO_PREFIX}**Current chat model:** `{effective_model}`",
             parse_mode="md",
         )
     else:
-        effective_model = user_prefs.model or DEFAULT_MODEL
+        user_prefs = user_manager.get_prefs(user_id)
+        source_text = "your personal model" if user_prefs.model else "the default model"
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}This chat has no custom model set. Using {'your personal model' if user_prefs.model else 'default model'}: `{effective_model}`",
+            f"{BOT_META_INFO_PREFIX}This chat has no custom model set. Using {source_text}: `{effective_model}`",
             parse_mode="md",
         )
 
@@ -3744,6 +3792,27 @@ async def handle_live_mode_responses(session, original_event):
         session.is_connected = False
 
 
+def get_streaming_delay(model_name: str) -> float:
+    """Get streaming delay based on current model name."""
+    if any(
+        keyword in model_name.lower()
+        for keyword in [
+            ":free",
+        ]
+    ):
+        return 2.0
+
+    elif any(
+        keyword in model_name.lower()
+        for keyword in [
+            "gemini-2.5-pro",
+        ]
+    ):
+        return 2.0
+
+    return 0.8
+
+
 async def chat_handler(event):
     """Main handler for all non-command messages in a private chat."""
     user_id = event.sender_id
@@ -3830,20 +3899,9 @@ async def chat_handler(event):
     if group_id and group_id in bot_util.PROCESSED_GROUP_IDS:
         return  # Already being processed
 
-    prefs = user_manager.get_prefs(user_id)
-
-    # Check for chat-specific model first, then user model, then default
-    chat_model = chat_manager.get_model(chat_id)
-    model_in_use = chat_model or prefs.model
+    # Determine effective model and service
+    model_in_use, service_needed = _get_effective_model_and_service(chat_id, user_id)
     model_capabilities = get_model_capabilities(model_in_use)
-
-    # Determine which API key is needed
-    service_needed = "gemini"
-    if model_in_use.startswith("openrouter/"):
-        service_needed = "openrouter"
-    elif model_in_use.startswith("openai/"):
-        service_needed = "openai"  # Assuming you might add this later
-
     api_key = llm_db.get_api_key(user_id=user_id, service=service_needed)
 
     if not api_key:
@@ -3896,7 +3954,7 @@ async def chat_handler(event):
 
         system_message = {"role": "system", "content": system_prompt_to_use}
         # Add context caching for native Gemini models
-        if is_native_gemini(prefs.model):
+        if is_native_gemini(model_in_use):
             # Add cache_control to system message
             system_message["cache_control"] = {"type": "ephemeral"}
 
@@ -3907,14 +3965,14 @@ async def chat_handler(event):
         messages.insert(0, system_message)
 
         # --- Construct API call arguments ---
-        is_gemini_model = re.search(r"\bgemini\b", prefs.model, re.IGNORECASE)
+        is_gemini_model = re.search(r"\bgemini\b", model_in_use, re.IGNORECASE)
 
         # Image generation models don't support streaming
         # Note: Native Gemini image generation has separate handling with its own streaming
         use_streaming = not model_capabilities.get("image_generation", False)
 
         api_kwargs = {
-            "model": prefs.model,
+            "model": model_in_use,
             "messages": messages,
             "api_key": api_key,
             "stream": use_streaming,
@@ -3942,46 +4000,26 @@ async def chat_handler(event):
             if prefs.thinking and WARN_UNAVAILABLE_THINKING_P:
                 warnings.append("Reasoning effort is disabled (Gemini-only feature).")
 
-        def get_streaming_delay(prefs):
-            """Get streaming delay based on current model preferences."""
-            if any(
-                keyword in prefs.model.lower()
-                for keyword in [
-                    ":free",
-                ]
-            ):
-                return 2
-
-            elif any(
-                keyword in prefs.model.lower()
-                for keyword in [
-                    "gemini-2.5-pro",
-                ]
-            ):
-                return 2
-
-            return 0.8
-
         # Make the API call
         response_text = ""
         has_image = False
 
         # Check if this is a native Gemini image generation model
-        if is_native_gemini_image_generation(prefs.model):
+        if is_native_gemini_image_generation(model_in_use):
             # Use native Gemini API for image generation with streaming
             response_text, has_image = await _handle_native_gemini_image_generation(
                 event,
                 messages,
                 api_key,
-                prefs.model,
+                model_in_use,
                 response_message,
                 model_capabilities,
             )
         elif use_streaming:
             # Streaming response handling
             last_edit_time = asyncio.get_event_loop().time()
-            edit_interval = get_streaming_delay(prefs)
-            response_stream = await litellm.acompletion(**api_kwargs)
+            edit_interval = get_streaming_delay(model_in_use)
+            response_stream = await _call_litellm_with_retry(**api_kwargs)
             async for chunk in response_stream:
                 delta = chunk.choices[0].delta.content
                 if delta:
@@ -4002,7 +4040,7 @@ async def chat_handler(event):
                             print(f"Error during message edit: {e}")
         else:
             # Non-streaming response handling (for image generation)
-            response = await litellm.acompletion(**api_kwargs)
+            response = await _call_litellm_with_retry(**api_kwargs)
             response_text = response.choices[0].message.content or ""
 
             # Process image content if present
@@ -4037,7 +4075,7 @@ async def chat_handler(event):
         # TTS Integration Hook
         await _handle_tts_response(event, final_text)
 
-        await _log_conversation(event, prefs, messages, final_text)
+        await _log_conversation(event, prefs, model_in_use, messages, final_text)
 
     except Exception as e:
         await llm_util.handle_llm_error(
