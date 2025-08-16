@@ -985,7 +985,10 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
     except Exception as e:
         print(f"Error checking vision support for {model}: {e}")
     try:
-        capabilities["audio_input"] = litellm.supports_audio_input(model)
+        capabilities["audio_input"] = litellm.supports_audio_input(model) or model in (
+            "gemini/gemini-2.5-flash",
+        )
+        #: hardcoding some models because of upstream bugs
     except Exception as e:
         print(f"Error checking audio input support for {model}: {e}")
     try:
