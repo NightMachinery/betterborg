@@ -644,29 +644,110 @@ def _get_effective_model_and_service(chat_id: int, user_id: int) -> tuple[str, s
     return model_in_use, service_needed
 
 
-async def _call_litellm_with_retry(**kwargs):
-    """Calls litellm.acompletion with retries for 500 server errors."""
-    for attempt in range(MAX_RETRIES):
+def _create_retry_logger():
+    """Create a logger function that saves model call details to a temp file."""
+
+    def retry_logger(model_call_dict):
+        # Create a temporary file to save the model call details
+        temp_fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="llm_retry_")
         try:
-            response = await litellm.acompletion(**kwargs)
-            return response
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 500 and attempt < MAX_RETRIES - 1:
-                print(
-                    f"LLM call failed with 500 error. Retrying (attempt {attempt + 2}/{MAX_RETRIES})..."
-                )
-                await asyncio.sleep(1)  # Small delay before retrying
-                continue
-            elif e.response.status_code == 500:
-                print(f"LLM call failed after {MAX_RETRIES} attempts.")
-                raise llm_util.TelegramUserReplyException(
-                    "The AI model's server is currently unavailable (500 Internal Server Error). This is likely an upstream issue. Please try again later."
-                )
-            else:
-                # Re-raise other HTTP errors
-                raise e
-        except Exception:
-            # Re-raise non-HTTP errors
+            with os.fdopen(temp_fd, "w") as f:
+                json.dump(model_call_dict, f, indent=2, default=str)
+            print(f"LLM retry call details saved to: {temp_path}")
+        except Exception as e:
+            print(f"Failed to save retry call details: {e}")
+            # Close the file descriptor if json.dump failed
+            try:
+                os.close(temp_fd)
+            except:
+                pass
+
+    return retry_logger
+
+
+async def _call_llm_with_retry(
+    response_message,
+    api_kwargs: dict,
+    edit_interval: float = None,
+    *,
+    max_retries: int = MAX_RETRIES,
+) -> str:
+    """Call LLM with retry logic for both streaming and non-streaming responses."""
+    try:
+        response = await litellm.acompletion(**api_kwargs)
+
+        # Check if streaming mode based on edit_interval parameter
+        if edit_interval is not None:
+            # Streaming mode
+            response_text = ""
+            last_edit_time = asyncio.get_event_loop().time()
+
+            async for chunk in response:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    response_text += delta
+                    current_time = asyncio.get_event_loop().time()
+                    if (current_time - last_edit_time) > edit_interval:
+                        try:
+                            # Add a cursor to indicate the bot is still "typing"
+                            await util.edit_message(
+                                response_message, f"{response_text}▌", parse_mode="md"
+                            )
+                            last_edit_time = current_time
+                        except errors.rpcerrorlist.MessageNotModifiedError:
+                            # This error is expected if the content hasn't changed
+                            pass
+                        except Exception as e:
+                            # Log other edit errors but don't stop the stream
+                            print(f"Error during message edit: {e}")
+
+            return response_text
+        else:
+            # Non-streaming mode
+            return response.choices[0].message.content or ""
+
+    except (
+        httpx.HTTPStatusError,
+        litellm.exceptions.MidStreamFallbackError,
+        litellm.exceptions.InternalServerError,
+    ) as e:
+        is_500_error = False
+
+        # Check if it's a 500 error from different exception types
+        if isinstance(e, httpx.HTTPStatusError):
+            is_500_error = e.response.status_code == 500
+        elif isinstance(
+            e,
+            (
+                litellm.exceptions.MidStreamFallbackError,
+                litellm.exceptions.InternalServerError,
+            ),
+        ):
+            # These litellm exceptions typically indicate 500-type server errors
+            is_500_error = True
+
+        if is_500_error and max_retries > 0:
+            print(
+                f"LLM call failed with server error. Retrying (attempt {MAX_RETRIES - max_retries + 1}/{MAX_RETRIES})..."
+            )
+            # Add logger to api_kwargs for the retry
+            retry_api_kwargs = api_kwargs.copy()
+            retry_api_kwargs["logger_fn"] = _create_retry_logger()
+
+            await asyncio.sleep(1)  # Small delay before retrying
+            return await _call_llm_with_retry(
+                response_message,
+                retry_api_kwargs,
+                edit_interval,
+                max_retries=max_retries - 1,
+            )
+        elif is_500_error:
+            print(f"LLM call failed after {MAX_RETRIES} attempts.")
+            raise llm_util.TelegramUserReplyException(
+                "The AI model's server is currently unavailable. This is likely an upstream issue. Please try again later."
+            )
+        else:
+            # Re-raise other errors
             raise
 
 
@@ -1027,8 +1108,27 @@ async def _handle_native_gemini_image_generation(
                         except Exception as e:
                             print(f"Error during message edit: {e}")
 
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 500 and max_retries > 0:
+        except (
+            httpx.HTTPStatusError,
+            litellm.exceptions.MidStreamFallbackError,
+            litellm.exceptions.InternalServerError,
+        ) as e:
+            is_500_error = False
+
+            # Check if it's a 500 error from different exception types
+            if isinstance(e, httpx.HTTPStatusError):
+                is_500_error = e.response.status_code == 500
+            elif isinstance(
+                e,
+                (
+                    litellm.exceptions.MidStreamFallbackError,
+                    litellm.exceptions.InternalServerError,
+                ),
+            ):
+                # These litellm exceptions typically indicate 500-type server errors
+                is_500_error = True
+
+            if is_500_error and max_retries > 0:
                 print(
                     f"Gemini image generation failed with 500 error. Retrying (attempt {MAX_RETRIES - max_retries + 1}/{MAX_RETRIES})..."
                 )
@@ -1042,13 +1142,13 @@ async def _handle_native_gemini_image_generation(
                     model_capabilities,
                     max_retries=max_retries - 1,
                 )
-            elif e.response.status_code == 500:
+            elif is_500_error:
                 print(f"Gemini image generation failed after {MAX_RETRIES} attempts.")
                 raise llm_util.TelegramUserReplyException(
                     "The Gemini model's server is currently unavailable (500 Internal Server Error). This is likely an upstream issue. Please try again later."
                 )
             else:
-                # Re-raise other HTTP errors
+                # Re-raise other errors
                 raise
 
         return response_text.strip(), has_image
@@ -4043,32 +4143,14 @@ async def chat_handler(event):
                 model_capabilities,
             )
         elif use_streaming:
-            # Streaming response handling
-            last_edit_time = asyncio.get_event_loop().time()
+            # Streaming response handling with retries
             edit_interval = get_streaming_delay(model_in_use)
-            response_stream = await _call_litellm_with_retry(**api_kwargs)
-            async for chunk in response_stream:
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    response_text += delta
-                    current_time = asyncio.get_event_loop().time()
-                    if (current_time - last_edit_time) > edit_interval:
-                        try:
-                            # Add a cursor to indicate the bot is still "typing"
-                            await util.edit_message(
-                                response_message, f"{response_text}▌", parse_mode="md"
-                            )
-                            last_edit_time = current_time
-                        except errors.rpcerrorlist.MessageNotModifiedError:
-                            # This error is expected if the content hasn't changed
-                            pass
-                        except Exception as e:
-                            # Log other edit errors but don't stop the stream
-                            print(f"Error during message edit: {e}")
+            response_text = await _call_llm_with_retry(
+                response_message, api_kwargs, edit_interval
+            )
         else:
-            # Non-streaming response handling (for image generation)
-            response = await _call_litellm_with_retry(**api_kwargs)
-            response_text = response.choices[0].message.content or ""
+            # Non-streaming response handling with retries
+            response_text = await _call_llm_with_retry(response_message, api_kwargs)
 
             # Process image content if present
             if model_capabilities.get("image_generation", False):
