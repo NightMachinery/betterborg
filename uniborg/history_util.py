@@ -377,10 +377,10 @@ async def get_cached_file(file_id: str) -> Optional[dict]:
 
 
 async def cache_gemini_file_info(
-    file_id: str, user_id: int, uri: str, mime_type: str
+    file_id: str, user_id: int, name: str, uri: str, mime_type: str
 ) -> bool:
-    """Cache a Gemini File API file's URI and MIME type for a specific user."""
-    field_values = {"uri": uri, "mime_type": mime_type}
+    """Cache a Gemini File API file's name, URI and MIME type for a specific user."""
+    field_values = {"name": name, "uri": uri, "mime_type": mime_type}
     return await redis_util.hset_with_expiry(
         redis_util.gemini_file_cache_key(file_id, user_id),
         field_values,
@@ -404,9 +404,11 @@ async def _lookup_chat_id_for_deleted_message(message_id: int) -> Optional[int]:
     """Look up chat_id for a deleted message, trying Redis first."""
     if redis_util.is_redis_available():
         try:
+            # No need to renew expiry on deletion lookup
             chat_id_str = await redis_util.get_and_renew(
                 redis_util.message_lookup_key(message_id),
                 expire_seconds=redis_util.get_very_long_expire_duration(),
+                renew=False,
             )
             if chat_id_str:
                 return int(chat_id_str)
