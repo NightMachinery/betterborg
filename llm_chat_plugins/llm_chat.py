@@ -1299,6 +1299,91 @@ def get_media_type(mime_type: str) -> Optional[str]:
         return None
 
 
+async def _get_and_cache_media_info(message, file_id, temp_dir):
+    """
+    Downloads media if not cached, determines its type, and caches it in a
+    text-safe format (raw text or Base64).
+
+    Returns a tuple of:
+    (storage_type, content, filename, mime_type)
+    - storage_type: 'text' or 'base64'
+    - content: content (string for text, base64 string for base64)
+    - filename: name of the file
+    - mime_type: detected mime type
+    Returns (None, None, None, None) on failure.
+    """
+    cached_file_info = await history_util.get_cached_file(file_id)
+    if cached_file_info:
+        return (
+            cached_file_info["data_storage_type"],
+            cached_file_info["data"],
+            cached_file_info.get("filename"),
+            cached_file_info.get("mime_type"),
+        )
+
+    # File not cached, download and process
+    file_path_str = await message.download_media(file=temp_dir)
+    if not file_path_str:
+        return None, None, None, None
+
+    file_path = Path(file_path_str)
+    original_filename = file_path.name
+
+    mime_type, _ = mimetypes.guess_type(file_path)
+    if (
+        not mime_type
+        and hasattr(message.media, "document")
+        and hasattr(message.media.document, "mime_type")
+    ):
+        mime_type = message.media.document.mime_type
+
+    if not mime_type:
+        for ext, m_type in llm_util.MIME_TYPE_MAP.items():
+            if original_filename.lower().endswith(ext):
+                mime_type = m_type
+                break
+
+    with open(file_path, "rb") as f:
+        file_bytes = f.read()
+
+    is_text_file = False
+    text_extensions = {
+        ".txt", ".md", ".py", ".js", ".html", ".css", ".json", ".xml",
+        ".log", ".yaml", ".csv", ".sql", ".java", ".c", ".h", ".cpp",
+        ".go", ".sh", ".rb", ".swift", ".toml", ".conf", ".ini", ".org",
+        ".m", ".applescript", ".as", ".osa", ".nu", ".nush", ".el", ".ss",
+        ".scm", ".lisp", ".rkt", ".jl", ".scala", ".sc", ".kt", ".clj",
+        ".cljs", ".jxa", ".dart", ".rs", ".cr", ".zsh", ".dash", ".bash",
+        ".php", ".lua", ".glsl", ".frag", ".cson", ".plist",
+    }
+    if mime_type and mime_type.startswith("text/"):
+        is_text_file = True
+    elif not mime_type and file_path.suffix.lower() in text_extensions:
+        is_text_file = True
+        mime_type = "text/plain"
+
+    if is_text_file:
+        text_content = file_bytes.decode("utf-8", errors="ignore")
+        await history_util.cache_file(
+            file_id,
+            data=text_content,
+            data_storage_type="text",
+            filename=original_filename,
+            mime_type=mime_type,
+        )
+        return "text", text_content, original_filename, mime_type
+    else:
+        b64_content = base64.b64encode(file_bytes).decode("utf-8")
+        await history_util.cache_file(
+            file_id,
+            data=b64_content,
+            data_storage_type="base64",
+            filename=original_filename,
+            mime_type=mime_type,
+        )
+        return "base64", b64_content, original_filename, mime_type
+
+
 @dataclass
 class SystemPromptInfo:
     """Contains all system prompt information for a chat context."""
@@ -1421,17 +1506,7 @@ def _check_media_capability(
     return None
 
 
-async def _process_media(
-    message: Message,
-    temp_dir: Path,
-    model_capabilities: Dict[str, bool],
-    issued_warnings: set,
-    *,
-    user_id: int,
-    api_key: str,
-    model_in_use: str,
-    check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
-) -> ProcessMediaResult:
+async def _process_media(message: Message, temp_dir: Path, model_capabilities: Dict[str, bool], issued_warnings: set, *, user_id: int, api_key: str, model_in_use: str, check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P) -> ProcessMediaResult:
     """
     Downloads or retrieves media from cache, prepares it for litellm,
     and ensures it's cached in a text-safe format (raw text or Base64).
@@ -1454,6 +1529,15 @@ async def _process_media(
             )
 
             if cached_info and "name" in cached_info and "uri" in cached_info:
+                # New: check media capability before proceeding
+                cached_mime_type = cached_info.get("mime_type")
+                media_type = get_media_type(cached_mime_type)
+                warning = _check_media_capability(
+                    media_type, model_capabilities, issued_warnings
+                )
+                if warning:
+                    return ProcessMediaResult(media_part=None, warnings=[warning])
+
                 # If we need to check, verify the file still exists on Gemini's servers
                 if check_gemini_cached_files_p:
                     try:
@@ -1496,38 +1580,36 @@ async def _process_media(
                     return ProcessMediaResult(media_part=part, warnings=[])
 
             # --- File not cached in Gemini format, proceed to upload ---
+            storage_type, content, filename, mime_type = await _get_and_cache_media_info(
+                message, file_id, temp_dir
+            )
 
-            # Get file bytes (from our base64 cache or download)
-            cached_file_info = await history_util.get_cached_file(file_id)
-            if cached_file_info and cached_file_info["data_storage_type"] == "base64":
-                file_bytes = base64.b64decode(cached_file_info["data"])
-                mime_type = cached_file_info.get("mime_type")
-                filename = cached_file_info.get("filename", "file")
-            else:
-                file_path_str = await message.download_media(file=temp_dir)
-                if not file_path_str:
-                    return ProcessMediaResult(media_part=None, warnings=[])
-                file_path = Path(file_path_str)
-                filename = file_path.name
-                mime_type, _ = mimetypes.guess_type(file_path)
-                with open(file_path, "rb") as f:
-                    file_bytes = f.read()
-                if cached_file_info is None:  # Cache for future base64 use
-                    b64_content = base64.b64encode(file_bytes).decode("utf-8")
-                    await history_util.cache_file(
-                        file_id,
-                        b64_content,
-                        data_storage_type="base64",
-                        filename=filename,
-                        mime_type=mime_type,
-                    )
+            if not storage_type:
+                return ProcessMediaResult(media_part=None, warnings=[])
+
+            if storage_type == "text":
+                part = {
+                    "type": "text",
+                    "text": f"\n--- Attachment: {filename} ---\n{content}",
+                }
+                return ProcessMediaResult(media_part=part, warnings=[])
+
+            # It must be 'base64' type. 'content' is a b64 string.
+            # Check capability before uploading.
+            media_type = get_media_type(mime_type)
+            warning = _check_media_capability(media_type, model_capabilities, issued_warnings)
+            if warning:
+                return ProcessMediaResult(media_part=None, warnings=[warning])
 
             # Upload to Gemini Files API
             gemini_client = gemini_client or genai.Client(api_key=api_key)
             with tempfile.NamedTemporaryFile(
                 delete=False, suffix=Path(filename).suffix
             ) as temp_f:
-                temp_f.write(file_bytes)
+                # The helper returns a base64 string for binary files,
+                # so we decode it back to raw bytes before writing to a temp file.
+                raw_bytes = base64.b64decode(content)
+                temp_f.write(raw_bytes)
                 temp_path = temp_f.name
             try:
                 gemini_file = await gemini_client.aio.files.upload(
@@ -1565,196 +1647,54 @@ async def _process_media(
             finally:
                 os.unlink(temp_path)
 
-        # --- Branch 2: Base64 Mode (Original Logic) ---
-        cached_file_info = await history_util.get_cached_file(file_id)
-        if cached_file_info:
-            storage_type = cached_file_info["data_storage_type"]
-            data = cached_file_info["data"]
-            filename = cached_file_info.get("filename")
-            mime_type = cached_file_info.get("mime_type")
+        # --- Branch 2: Base64 Mode ---
+        storage_type, content, filename, mime_type = await _get_and_cache_media_info(
+            message, file_id, temp_dir
+        )
 
-            if storage_type == "base64":
-                media_type = get_media_type(mime_type)
-                warning = _check_media_capability(
-                    media_type, model_capabilities, issued_warnings
-                )
-                if warning:
-                    return ProcessMediaResult(media_part=None, warnings=[warning])
+        if not storage_type:
+            return ProcessMediaResult(media_part=None, warnings=[])
 
-            if storage_type == "text":
-                part = {
-                    "type": "text",
-                    "text": f"\n--- Attachment: {filename} ---\n{data}",
-                }
-                return ProcessMediaResult(media_part=part, warnings=[])
-            elif storage_type == "base64":
-                # Handle PDF files with the new file format for litellm
-                if mime_type == "application/pdf":
-                    part = {
-                        "type": "file",
-                        "file": {
-                            "file_id": f"data:{mime_type};base64,{data}",
-                            "format": "application/pdf",
-                        },
-                    }
-                else:
-                    # Handle other media types (images, audio, video) with existing format
-                    part = {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime_type};base64,{data}"},
-                    }
-                return ProcessMediaResult(media_part=part, warnings=[])
-            else:
-                print(
-                    f"Unknown storage type '{storage_type}' in cache for file_id {file_id}"
-                )
-                return ProcessMediaResult(media_part=None, warnings=[])
+        if storage_type == "text":
+            part = {
+                "type": "text",
+                "text": f"\n--- Attachment: {filename} ---\n{content}",
+            }
+            return ProcessMediaResult(media_part=part, warnings=[])
+        elif storage_type == "base64":
+            media_type = get_media_type(mime_type)
+            warning = _check_media_capability(
+                media_type, model_capabilities, issued_warnings
+            )
+            if warning:
+                return ProcessMediaResult(media_part=None, warnings=[warning])
 
-        # --- Branch 3: New File (Base64 Mode) - Download, Process, Cache ---
-        else:
-            file_path_str = await message.download_media(file=temp_dir)
-            if not file_path_str:
-                return ProcessMediaResult(media_part=None, warnings=[])
-
-            file_path = Path(file_path_str)
-            original_filename = file_path.name
-
-            mime_type, _ = mimetypes.guess_type(file_path)
             if (
                 not mime_type
-                and hasattr(message.media, "document")
-                and hasattr(message.media.document, "mime_type")
+                or not mime_type.startswith(("image/", "audio/", "video/"))
+                and mime_type != "application/pdf"
             ):
-                mime_type = message.media.document.mime_type
-
-            if not mime_type:
-                for ext, m_type in llm_util.MIME_TYPE_MAP.items():
-                    if original_filename.lower().endswith(ext):
-                        mime_type = m_type
-                        break
-
-            with open(file_path, "rb") as f:
-                file_bytes = f.read()
-
-            is_text_file = False
-            text_extensions = {
-                ".txt",
-                ".md",
-                ".py",
-                ".js",
-                ".html",
-                ".css",
-                ".json",
-                ".xml",
-                ".log",
-                ".yaml",
-                ".csv",
-                ".sql",
-                ".java",
-                ".c",
-                ".h",
-                ".cpp",
-                ".go",
-                ".sh",
-                ".rb",
-                ".swift",
-                ".toml",
-                ".conf",
-                ".ini",
-                ".org",
-                ".m",
-                ".applescript",
-                ".as",
-                ".osa",
-                ".nu",
-                ".nush",
-                ".el",
-                ".ss",
-                ".scm",
-                ".lisp",
-                ".rkt",
-                ".jl",
-                ".scala",
-                ".sc",
-                ".kt",
-                ".clj",
-                ".cljs",
-                ".jxa",
-                ".dart",
-                ".rs",
-                ".cr",
-                ".zsh",
-                ".dash",
-                ".bash",
-                ".php",
-                ".lua",
-                ".glsl",
-                ".frag",
-                ".cson",
-                ".plist",
-            }
-            if mime_type and mime_type.startswith("text/"):
-                is_text_file = True
-            elif not mime_type and file_path.suffix.lower() in text_extensions:
-                is_text_file = True
-                mime_type = "text/plain"
-
-            if is_text_file:
-                text_content = file_bytes.decode("utf-8", errors="ignore")
-                await history_util.cache_file(
-                    file_id,
-                    data=text_content,
-                    data_storage_type="text",
-                    filename=original_filename,
-                    mime_type=mime_type,
+                print(
+                    f"Unsupported binary media type '{mime_type}' for file {filename}"
                 )
+                return ProcessMediaResult(media_part=None, warnings=[])
+
+            # Handle PDF files with the new file format for litellm
+            if mime_type == "application/pdf":
                 part = {
-                    "type": "text",
-                    "text": f"\n--- Attachment: {original_filename} ---\n{text_content}",
+                    "type": "file",
+                    "file": {
+                        "file_id": f"data:{mime_type};base64,{content}",
+                        "format": "application/pdf",
+                    },
                 }
-                return ProcessMediaResult(media_part=part, warnings=[])
             else:
-                if (
-                    not mime_type
-                    or not mime_type.startswith(("image/", "audio/", "video/"))
-                    and mime_type != "application/pdf"
-                ):
-                    print(
-                        f"Unsupported binary media type '{mime_type}' for file {original_filename}"
-                    )
-                    return ProcessMediaResult(media_part=None, warnings=[])
-
-                media_type = get_media_type(mime_type)
-                warning = _check_media_capability(
-                    media_type, model_capabilities, issued_warnings
-                )
-                if warning:
-                    return ProcessMediaResult(media_part=None, warnings=[warning])
-
-                b64_content = base64.b64encode(file_bytes).decode("utf-8")
-                await history_util.cache_file(
-                    file_id,
-                    data=b64_content,
-                    data_storage_type="base64",
-                    filename=original_filename,
-                    mime_type=mime_type,
-                )
-
-                if mime_type == "application/pdf":
-                    part = {
-                        "type": "file",
-                        "file": {
-                            "file_id": f"data:{mime_type};base64,{b64_content}",
-                            "format": "application/pdf",
-                        },
-                    }
-                else:
-                    # Handle other media types (images, audio, video) with existing format
-                    part = {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime_type};base64,{b64_content}"},
-                    }
-                return ProcessMediaResult(media_part=part, warnings=[])
+                # Handle other media types (images, audio, video) with existing format
+                part = {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{content}"},
+                }
+            return ProcessMediaResult(media_part=part, warnings=[])
 
     except Exception as e:
         print(f"Error processing media from message {message.id}: {e}")
