@@ -58,6 +58,7 @@ GEMINI_NATIVE_FILE_MODE = os.getenv(
     "files",
     # "base64",
 )
+DEFAULT_CHECK_GEMINI_CACHED_FILES_P = True
 NOT_SET_HERE_DISPLAY_NAME = "Not Set for This Chat Specifically"
 
 # Use the litellm model naming convention.
@@ -221,7 +222,7 @@ METADATA_MODES = {
     "only_forwarded": "Only Forwarded Metadata",
     "full_metadata": "Full Metadata",
 }
-MAX_RETRIES = 3
+MAX_RETRIES = 2
 
 
 # --- Single Source of Truth for Bot Commands ---
@@ -1410,7 +1411,7 @@ async def _process_media(
     user_id: int,
     api_key: str,
     model_in_use: str,
-    check_gemini_cached_files_p: bool = False,
+    check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
 ) -> ProcessMediaResult:
     """
     Downloads or retrieves media from cache, prepares it for litellm,
@@ -1906,6 +1907,7 @@ async def _process_message_content(
     *,
     api_key: str,
     model_in_use: str,
+    check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
 ) -> ProcessContentResult:
     """Processes a single message's text and media into litellm content parts."""
     text_buffer, media_parts, warnings = [], [], []
@@ -1954,6 +1956,7 @@ async def _process_message_content(
         user_id=message.sender_id,
         api_key=api_key,
         model_in_use=model_in_use,
+        check_gemini_cached_files_p=check_gemini_cached_files_p,
     )
     warnings.extend(media_result.warnings)
     if media_result.media_part:
@@ -1997,6 +2000,7 @@ async def _process_turns_to_history(
     model_capabilities: Dict[str, bool],
     api_key: str,
     model_in_use: str,
+    check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
 ) -> tuple[List[dict], List[str]]:
     """
     Processes a final, sorted list of messages into litellm history format,
@@ -2038,6 +2042,7 @@ async def _process_turns_to_history(
                     issued_warnings,
                     api_key=api_key,
                     model_in_use=model_in_use,
+                    check_gemini_cached_files_p=check_gemini_cached_files_p,
                 )
                 text_buffer.extend(content_result.text_parts)
                 media_parts.extend(content_result.media_parts)
@@ -2082,6 +2087,7 @@ async def _process_turns_to_history(
                 metadata_prefix,
                 api_key=api_key,
                 model_in_use=model_in_use,
+                check_gemini_cached_files_p=check_gemini_cached_files_p,
             )
             all_warnings.extend(content_result.warnings)
 
@@ -2142,6 +2148,7 @@ async def build_conversation_history(
     model_capabilities: Dict[str, bool],
     api_key: str,
     model_in_use: str,
+    check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
 ) -> ConversationHistoryResult:
     """
     Orchestrates the construction of a conversation history based on the user's
@@ -2172,6 +2179,7 @@ async def build_conversation_history(
                 model_capabilities,
                 api_key,
                 model_in_use,
+                check_gemini_cached_files_p=check_gemini_cached_files_p,
             )
             return ConversationHistoryResult(history=history, warnings=warnings)
 
@@ -2273,7 +2281,13 @@ async def build_conversation_history(
         expanded_messages = expanded_messages[-HISTORY_MESSAGE_LIMIT:]
 
     history, warnings = await _process_turns_to_history(
-        event, expanded_messages, temp_dir, model_capabilities, api_key, model_in_use
+        event,
+        expanded_messages,
+        temp_dir,
+        model_capabilities,
+        api_key,
+        model_in_use,
+        check_gemini_cached_files_p=check_gemini_cached_files_p,
     )
     return ConversationHistoryResult(history=history, warnings=warnings)
 
