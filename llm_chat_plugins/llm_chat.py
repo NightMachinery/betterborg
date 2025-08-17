@@ -45,7 +45,7 @@ from uniborg import history_util
 from uniborg.history_util import LAST_N_MAX
 from uniborg import bot_util
 from uniborg.storage import UserStorage
-from uniborg.constants import BOT_META_INFO_PREFIX
+from uniborg.constants import BOT_META_INFO_PREFIX, BOT_META_INFO_LINE
 
 # Import live mode utilities
 from uniborg import gemini_live_util
@@ -202,7 +202,9 @@ HISTORY_MESSAGE_LIMIT = 1000
 LOG_COUNT_LIMIT = 3
 AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
 DEFAULT_ENABLED_TOOLS = ["googleSearch", "urlContext"]
-WARN_UNSUPPORTED_TO_USER_P = True
+# Controls when to show warnings about unsupported media, etc. to the user.
+# "always": Show in all chats. "private_only": Show only in private chats. "never": Never show.
+WARN_UNSUPPORTED_TO_USER_P = os.getenv("WARN_UNSUPPORTED_TO_USER_P", "private_only")
 WARN_UNAVAILABLE_TOOLS_P = False
 WARN_UNAVAILABLE_THINKING_P = False
 REASONING_LEVELS = ["disable", "low", "medium", "high"]
@@ -1629,7 +1631,10 @@ async def _process_media(
                 cached_mime_type = cached_info.get("mime_type")
                 media_type = get_media_type(cached_mime_type)
                 check_result = _check_media_capability(
-                    media_type, model_capabilities, issued_warnings, private_p=is_private
+                    media_type,
+                    model_capabilities,
+                    issued_warnings,
+                    private_p=is_private,
                 )
                 if check_result.has_warning:
                     return ProcessMediaResult(
@@ -1987,6 +1992,9 @@ async def _process_message_content(
         return ProcessContentResult(text_parts=[], media_parts=[], warnings=[])
 
     processed_text = message.text
+
+    if processed_text:
+        processed_text = processed_text.split(BOT_META_INFO_LINE, 1)[0].strip()
     if role == "user" and processed_text:
         if re.match(r"^\.s\b", processed_text):
             processed_text = processed_text[2:].strip()
@@ -4704,9 +4712,15 @@ async def chat_handler(event):
         if not final_text and not has_image:
             final_text = "__[No response]__"
 
-        if WARN_UNSUPPORTED_TO_USER_P and warnings:
-            warning_text = "\n\n---\n**Note:**\n" + "\n".join(
-                f"- {w}" for w in sorted(list(set(warnings)))
+        should_warn = WARN_UNSUPPORTED_TO_USER_P == "always" or (
+            WARN_UNSUPPORTED_TO_USER_P == "private_only"
+            and getattr(event, "is_private", False)
+        )
+
+        if should_warn and warnings:
+            unique_warnings = sorted(list(set(warnings)))
+            warning_text = f"\n\n{BOT_META_INFO_LINE}\n**Note:**\n" + "\n".join(
+                f"- {w}" for w in unique_warnings
             )
             final_text += warning_text
 
