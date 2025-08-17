@@ -1511,7 +1511,7 @@ async def _process_media(
                 temp_path = temp_f.name
             try:
                 gemini_file = await gemini_client.aio.files.upload(
-                    path=temp_path, display_name=filename
+                    file=temp_path,
                 )
                 while gemini_file.state.name in (
                     "PROCESSING",
