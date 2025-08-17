@@ -58,7 +58,8 @@ GEMINI_NATIVE_FILE_MODE = os.getenv(
     "files",
     # "base64",
 )
-DEFAULT_CHECK_GEMINI_CACHED_FILES_P = True
+# DEFAULT_CHECK_GEMINI_CACHED_FILES_P = True
+DEFAULT_CHECK_GEMINI_CACHED_FILES_P = False
 NOT_SET_HERE_DISPLAY_NAME = "Not Set for This Chat Specifically"
 
 # Use the litellm model naming convention.
