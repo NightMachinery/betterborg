@@ -34,7 +34,7 @@ from telethon.tl.types import (
 )
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # Import uniborg utilities and storage
 from uniborg import util
@@ -371,6 +371,14 @@ class ProcessContentResult:
     text_parts: List[str]
     media_parts: List[Dict]
     warnings: List[str]
+
+
+@dataclass
+class MediaCapabilityCheckResult:
+    """Dataclass for the return type of _check_media_capability."""
+
+    has_warning: bool = False
+    warnings: List[str] = field(default_factory=list)
 
 
 # --- Smart Context State Management ---
@@ -1535,34 +1543,52 @@ def _check_media_capability(
     media_type: str,
     model_capabilities: Dict[str, bool],
     issued_warnings: set,
-) -> Optional[str]:
+    *,
+    private_p: bool,
+) -> MediaCapabilityCheckResult:
     """
     Checks if the model supports the given media type and returns a consolidated
     warning if not, tracking which warnings have been issued.
     """
+    result = MediaCapabilityCheckResult()
+
     if media_type == "image" and not model_capabilities.get("vision", False):
         if "image" not in issued_warnings:
             issued_warnings.add("image")
-            return (
+            result.has_warning = True
+            result.warnings.append(
                 "Images were skipped because the current model does not support vision."
             )
     elif media_type == "audio" and not model_capabilities.get("audio_input", False):
         if "audio" not in issued_warnings:
             issued_warnings.add("audio")
-            return "Audio files were skipped because the current model does not support audio input."
+            result.has_warning = True
+            result.warnings.append(
+                "Audio files were skipped because the current model does not support audio input."
+            )
     elif media_type == "video" and not model_capabilities.get("video_input", False):
         if "video" not in issued_warnings:
             issued_warnings.add("video")
-            return "Video files were skipped because the current model does not support video input."
+            result.has_warning = True
+            result.warnings.append(
+                "Video files were skipped because the current model does not support video input."
+            )
     elif media_type == "pdf" and not model_capabilities.get("pdf_input", False):
         if "pdf" not in issued_warnings:
             issued_warnings.add("pdf")
-            return "PDF files were skipped because the current model does not support PDF input."
+            result.has_warning = True
+            result.warnings.append(
+                "PDF files were skipped because the current model does not support PDF input."
+            )
     elif media_type is None:
         if "unknown" not in issued_warnings:
             issued_warnings.add("unknown")
-            return "Files with unknown or unsupported media types were skipped."
-    return None
+            result.has_warning = True
+            if private_p:
+                result.warnings.append(
+                    "Files with unknown or unsupported media types were skipped."
+                )
+    return result
 
 
 async def _process_media(
@@ -1570,10 +1596,11 @@ async def _process_media(
     temp_dir: Path,
     model_capabilities: Dict[str, bool],
     issued_warnings: set,
-    *,
     sender_id: int,
     api_key: str,
     model_in_use: str,
+    *,
+    is_private: bool,
     check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
 ) -> ProcessMediaResult:
     """
@@ -1601,11 +1628,13 @@ async def _process_media(
                 # New: check media capability before proceeding
                 cached_mime_type = cached_info.get("mime_type")
                 media_type = get_media_type(cached_mime_type)
-                warning = _check_media_capability(
-                    media_type, model_capabilities, issued_warnings
+                check_result = _check_media_capability(
+                    media_type, model_capabilities, issued_warnings, private_p=is_private
                 )
-                if warning:
-                    return ProcessMediaResult(media_part=None, warnings=[warning])
+                if check_result.has_warning:
+                    return ProcessMediaResult(
+                        media_part=None, warnings=check_result.warnings
+                    )
 
                 # If we need to check, verify the file still exists on Gemini's servers
                 if check_gemini_cached_files_p:
@@ -1666,11 +1695,13 @@ async def _process_media(
             # It must be 'base64' type. 'content' is a b64 string.
             # Check capability before uploading.
             media_type = get_media_type(mime_type)
-            warning = _check_media_capability(
-                media_type, model_capabilities, issued_warnings
+            check_result = _check_media_capability(
+                media_type, model_capabilities, issued_warnings, private_p=is_private
             )
-            if warning:
-                return ProcessMediaResult(media_part=None, warnings=[warning])
+            if check_result.has_warning:
+                return ProcessMediaResult(
+                    media_part=None, warnings=check_result.warnings
+                )
 
             # Upload to Gemini Files API
             gemini_client = gemini_client or genai.Client(api_key=api_key)
@@ -1734,11 +1765,13 @@ async def _process_media(
             return ProcessMediaResult(media_part=part, warnings=[])
         elif storage_type == "base64":
             media_type = get_media_type(mime_type)
-            warning = _check_media_capability(
-                media_type, model_capabilities, issued_warnings
+            check_result = _check_media_capability(
+                media_type, model_capabilities, issued_warnings, private_p=is_private
             )
-            if warning:
-                return ProcessMediaResult(media_part=None, warnings=[warning])
+            if check_result.has_warning:
+                return ProcessMediaResult(
+                    media_part=None, warnings=check_result.warnings
+                )
 
             if not mime_type or (
                 not mime_type.startswith(("image/", "audio/", "video/"))
@@ -1932,12 +1965,13 @@ async def _process_message_content(
     temp_dir: Path,
     model_capabilities: Dict[str, bool],
     issued_warnings: set,
-    metadata_prefix: str = "",
-    *,
     api_key: str,
     model_in_use: str,
-    check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
     sender_id,
+    *,
+    metadata_prefix: str = "",
+    check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
+    is_private: bool,
 ) -> ProcessContentResult:
     """Processes a single message's text and media into litellm content parts."""
     text_buffer, media_parts, warnings = [], [], []
@@ -1983,9 +2017,10 @@ async def _process_message_content(
         temp_dir,
         model_capabilities,
         issued_warnings,
-        sender_id=sender_id,
-        api_key=api_key,
-        model_in_use=model_in_use,
+        sender_id,
+        api_key,
+        model_in_use,
+        is_private=is_private,
         check_gemini_cached_files_p=check_gemini_cached_files_p,
     )
     warnings.extend(media_result.warnings)
@@ -2031,6 +2066,8 @@ async def _process_turns_to_history(
     api_key: str,
     model_in_use: str,
     check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
+    *,
+    is_private: bool,
 ) -> tuple[List[dict], List[str]]:
     """
     Processes a final, sorted list of messages into litellm history format,
@@ -2071,10 +2108,12 @@ async def _process_turns_to_history(
                     temp_dir,
                     model_capabilities,
                     issued_warnings,
-                    api_key=api_key,
-                    model_in_use=model_in_use,
+                    api_key,
+                    model_in_use,
+                    sender_id,
+                    metadata_prefix="",
                     check_gemini_cached_files_p=check_gemini_cached_files_p,
-                    sender_id=sender_id,
+                    is_private=is_private,
                 )
                 text_buffer.extend(content_result.text_parts)
                 media_parts.extend(content_result.media_parts)
@@ -2116,11 +2155,12 @@ async def _process_turns_to_history(
                 temp_dir,
                 model_capabilities,
                 issued_warnings,
-                metadata_prefix,
-                api_key=api_key,
-                model_in_use=model_in_use,
+                api_key,
+                model_in_use,
+                sender_id,
+                metadata_prefix=metadata_prefix,
                 check_gemini_cached_files_p=check_gemini_cached_files_p,
-                sender_id=sender_id,
+                is_private=is_private,
             )
             all_warnings.extend(content_result.warnings)
 
@@ -2182,6 +2222,8 @@ async def build_conversation_history(
     api_key: str,
     model_in_use: str,
     check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
+    *,
+    is_private: bool,
 ) -> ConversationHistoryResult:
     """
     Orchestrates the construction of a conversation history based on the user's
@@ -2213,6 +2255,7 @@ async def build_conversation_history(
                 api_key,
                 model_in_use,
                 check_gemini_cached_files_p=check_gemini_cached_files_p,
+                is_private=is_private,
             )
             return ConversationHistoryResult(history=history, warnings=warnings)
 
@@ -2321,6 +2364,7 @@ async def build_conversation_history(
         api_key,
         model_in_use,
         check_gemini_cached_files_p=check_gemini_cached_files_p,
+        is_private=is_private,
     )
     return ConversationHistoryResult(history=history, warnings=warnings)
 
@@ -4556,6 +4600,7 @@ async def chat_handler(event):
             model_capabilities,
             api_key,
             model_in_use,
+            is_private=event.is_private,
         )
         messages = history_result.history
         warnings = history_result.warnings
