@@ -162,7 +162,10 @@ def h_extract_exception_json_safely(text):
 
     if json_end > 0:
         valid_json = clean_json[:json_end]
-        return json.loads(valid_json)
+        try:
+            return json.loads(valid_json)
+        except:
+            return None
 
     return None
 
@@ -241,12 +244,6 @@ async def _handle_common_error_cases(
                                 if "url" in link:
                                     error_message += f"**More info:** {link['url']}\n\n"
 
-                # Show full JSON for admins
-                is_admin = await util.isAdmin(event)
-                if is_admin:
-                    formatted_json = json.dumps(error_data, indent=2)
-                    error_message += f"**Full error details (admin only):**\n```\n{formatted_json}\n```"
-
             except (json.JSONDecodeError, KeyError) as parse_error:
                 print(f"Error parsing rate limit JSON: {parse_error}")
                 # Fallback to simple message extraction
@@ -261,6 +258,14 @@ async def _handle_common_error_cases(
                     error_message += (
                         f"**Suggested wait time:** `{delay_match.group(1)}`"
                     )
+
+            finally:
+                # Show full JSON for admins
+                is_admin = await util.isAdmin(event)
+                if is_admin:
+                    formatted_json = json.dumps(error_data, indent=2)
+                    error_message += f"**Full error details (admin only):**\n```\n{formatted_json}\n```"
+
         else:
             # Fallback if no JSON found - put whole message in code block for admins
             is_admin = await util.isAdmin(event)
