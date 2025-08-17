@@ -792,10 +792,20 @@ async def _call_llm_with_retry(
             return response.choices[0].message.content or ""
 
     except (
+        litellm.exceptions.RateLimitError,
         httpx.HTTPStatusError,
         litellm.exceptions.MidStreamFallbackError,
         litellm.exceptions.InternalServerError,
     ) as e:
+        # Handle RateLimitError separately and do not retry
+        if (
+            isinstance(e, litellm.exceptions.RateLimitError)
+            or "RateLimitError" in str(e)
+            or "quota" in str(e).lower()
+        ):
+            raise llm_util.RateLimitException(
+                "API rate limit exceeded.", original_exception=e
+            )
         is_500_error = False
 
         # Check if it's a 500 error from different exception types

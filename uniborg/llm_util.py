@@ -6,7 +6,9 @@ from uniborg.constants import BOT_META_INFO_PREFIX
 import llm
 from pathlib import Path
 import os
+import re
 import uuid
+import json
 
 
 # --- Custom Exceptions ---
@@ -16,6 +18,14 @@ class TelegramUserReplyException(Exception):
     """Base exception for errors that should be sent directly to the user as diagnostic messages."""
 
     pass
+
+
+class RateLimitException(TelegramUserReplyException):
+    """Exception raised for API rate limit errors, containing the original exception."""
+
+    def __init__(self, message, original_exception=None):
+        super().__init__(message)
+        self.original_exception = original_exception
 
 
 class ProxyRestrictedException(TelegramUserReplyException):
@@ -133,6 +143,90 @@ async def _handle_common_error_cases(
     Returns:
         bool: True if the error was handled and processing should stop, False otherwise
     """
+    # New block for RateLimitException
+    if isinstance(exception, RateLimitException):
+        error_message = f"{BOT_META_INFO_PREFIX}🚫 **API Rate Limit Exceeded**\n\n"
+        original_msg = str(getattr(exception, "original_exception", ""))
+
+        # Extract JSON from the exception if present
+        json_match = re.search(r'b\'({.*?})\n\'', original_msg, re.DOTALL)
+        if json_match:
+            try:
+                json_str = json_match.group(1)
+                error_data = json.loads(json_str)
+                
+                # Extract main error message
+                if "error" in error_data and "message" in error_data["error"]:
+                    error_message += f"**Details:** {error_data['error']['message']}\n\n"
+                
+                # Extract quota information
+                if "error" in error_data and "details" in error_data["error"]:
+                    for detail in error_data["error"]["details"]:
+                        if detail.get("@type") == "type.googleapis.com/google.rpc.QuotaFailure":
+                            violations = detail.get("violations", [])
+                            for violation in violations:
+                                quota_metric = violation.get("quotaMetric", "").split("/")[-1]
+                                quota_id = violation.get("quotaId", "")
+                                quota_value = violation.get("quotaValue", "")
+                                model = violation.get("quotaDimensions", {}).get("model", "")
+                                
+                                if quota_metric and quota_value:
+                                    error_message += f"**Quota exceeded:** {quota_metric.replace('_', ' ').title()}\n"
+                                    error_message += f"**Limit:** {quota_value} tokens per minute\n"
+                                    if model:
+                                        error_message += f"**Model:** {model}\n"
+                                    error_message += "\n"
+                        
+                        elif detail.get("@type") == "type.googleapis.com/google.rpc.RetryInfo":
+                            retry_delay = detail.get("retryDelay", "")
+                            if retry_delay:
+                                error_message += f"**Suggested wait time:** `{retry_delay}`\n\n"
+                        
+                        elif detail.get("@type") == "type.googleapis.com/google.rpc.Help":
+                            links = detail.get("links", [])
+                            for link in links:
+                                if "url" in link:
+                                    error_message += f"**More info:** {link['url']}\n\n"
+                
+                # Show full JSON for admins
+                is_admin = await util.isAdmin(event)
+                if is_admin:
+                    formatted_json = json.dumps(error_data, indent=2)
+                    error_message += f"**Full error details (admin only):**\n```json\n{formatted_json}\n```"
+            
+            except (json.JSONDecodeError, KeyError) as parse_error:
+                print(f"Error parsing rate limit JSON: {parse_error}")
+                # Fallback to simple message extraction
+                match = re.search(r'"message":\s*"([^"]+)"', original_msg)
+                if match:
+                    error_message += f"**Details:** {match.group(1)}\n\n"
+                else:
+                    error_message += "You have sent too many requests in a short period. Please wait and try again.\n\n"
+                
+                delay_match = re.search(r'"retryDelay":\s*"([^"]+)"', original_msg)
+                if delay_match:
+                    error_message += f"**Suggested wait time:** `{delay_match.group(1)}`"
+        else:
+            # Fallback if no JSON found
+            match = re.search(r'"message":\s*"([^"]+)"', original_msg)
+            if match:
+                error_message += f"**Details:** {match.group(1)}\n\n"
+            else:
+                error_message += "You have sent too many requests in a short period. Please wait and try again.\n\n"
+            
+            delay_match = re.search(r'"retryDelay":\s*"([^"]+)"', original_msg)
+            if delay_match:
+                error_message += f"**Suggested wait time:** `{delay_match.group(1)}`"
+
+        try:
+            if response_message:
+                await response_message.edit(error_message, parse_mode="md")
+            else:
+                await event.reply(error_message, parse_mode="md")
+        except Exception as e:
+            print(f"Error while sending/editing rate limit exception message: {e}")
+        return True
+
     error_message = f"{BOT_META_INFO_PREFIX}{str(exception)}"
 
     if isinstance(exception, TelegramUserReplyException):
