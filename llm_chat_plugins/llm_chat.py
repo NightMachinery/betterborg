@@ -2540,6 +2540,19 @@ Your username on Telegram is {BOT_USERNAME}. The user might mention you using th
 
     register_handlers()
 
+    # Notify log chat that the plugin initialized successfully
+    try:
+        chat = getattr(borg, "log_chat", None)
+        if chat:
+            mode = "BOT" if IS_BOT else "USERBOT"
+            await borg.send_message(
+                chat,
+                f"{BOT_META_INFO_PREFIX}LLM_Chat initialized successfully. Running as {mode}.",
+            )
+    except Exception:
+        # Silently ignore logging errors to avoid breaking startup
+        pass
+
 
 # --- Telethon Event Handlers ---
 
