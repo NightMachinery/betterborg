@@ -19,6 +19,9 @@ from itertools import groupby
 
 import httpx
 import litellm
+from litellm.llms.vertex_ai.gemini.transformation import (
+    _gemini_convert_messages_with_history,
+)
 from google import genai
 from google.genai import types
 from google.api_core import exceptions as google_exceptions
@@ -1020,108 +1023,73 @@ async def _handle_native_gemini_image_generation(
         issued_warnings = set()
         #: issued_warnings and model_capabilities checks should be redundant, as the message history built already processed these. remove in future commits?
 
-        # Convert messages to Gemini format
-        contents = []
+        # Extract system prompt and apply GEMINI_IMAGE_GEN_SYSTEM_MODE preprocessing
         system_prompt = None
-
-        # Extract system prompt if present
         for msg in messages:
             if msg["role"] == "system":
                 system_prompt = msg["content"]
                 break
 
-        # Handle system message based on GEMINI_IMAGE_GEN_SYSTEM_MODE
+        # Preprocess messages based on GEMINI_IMAGE_GEN_SYSTEM_MODE
+        processed_messages = messages
         system_instruction_for_config = system_prompt
-        prepend_system_to_first_user = False
+
         if system_prompt:
             if GEMINI_IMAGE_GEN_SYSTEM_MODE == "SKIP":
-                system_instruction_for_config = None  # Skip system instruction entirely
+                # Remove system messages entirely
+                processed_messages = [
+                    msg for msg in messages if msg["role"] != "system"
+                ]
+                system_instruction_for_config = None
             elif GEMINI_IMAGE_GEN_SYSTEM_MODE == "PREPEND":
-                prepend_system_to_first_user = True
-                system_instruction_for_config = None  # Don't use as system_instruction
-
-        for msg in messages:
-            if msg["role"] == "system":
-                # Skip system messages - handled via system_instruction or prepending
-                continue
-            elif msg["role"] == "user":
-                role = "user"
-            elif msg["role"] == "assistant":
-                role = "model"
-            else:
-                continue
-
-            # Handle content - could be string or list of parts
-            if isinstance(msg["content"], str):
-                message_content = msg["content"]
-
-                # Prepend system message to first user message if configured
-                if prepend_system_to_first_user and role == "user":
-                    message_content = f"{system_prompt}\n\n---\n\n{message_content}"
-                    prepend_system_to_first_user = (
-                        False  # Only prepend to first user message
-                    )
-
-                parts = [types.Part.from_text(text=message_content)]
-            elif isinstance(msg["content"], list):
-                parts = []
-                for part in msg["content"]:
-                    if part.get("type") == "text":
-                        text_content = part["text"]
-
-                        # Prepend system message to first user message if configured
-                        if prepend_system_to_first_user and role == "user":
-                            text_content = f"{system_prompt}\n\n---\n\n{text_content}"
-                            prepend_system_to_first_user = (
-                                False  # Only prepend to first user message
+                # Prepend system to first user message and remove system messages
+                modified_messages = []
+                first_user_found = False
+                for msg in messages:
+                    if msg["role"] == "system":
+                        continue  # Skip system messages
+                    elif msg["role"] == "user" and not first_user_found:
+                        # Prepend system to first user message
+                        if isinstance(msg["content"], str):
+                            content = f"{system_prompt}\n\n---\n\n{msg['content']}"
+                        else:
+                            # Handle list content by prepending to first text part
+                            content = (
+                                msg["content"].copy()
+                                if isinstance(msg["content"], list)
+                                else [msg["content"]]
                             )
-
-                        parts.append(types.Part.from_text(text=text_content))
-                    elif part.get("type") == "image_url":
-                        # Handle media parts (image, audio, video)
-                        image_url = part["image_url"]["url"]
-                        if image_url.startswith("data:"):
-                            try:
-                                # Parse data URL: data:{mime_type};base64,{data}
-                                header, base64_data = image_url.split(",", 1)
-                                mime_type = header.split(":")[1].split(";")[0]
-                                media_bytes = base64.b64decode(base64_data)
-
-                                # Check if model supports this media type
-                                media_type = get_media_type(mime_type)
-                                if media_type:
-                                    warning = _check_media_capability(
-                                        media_type, model_capabilities, issued_warnings
-                                    )
-                                    if warning:
-                                        # print(f"Skipping media: {warning}")
-                                        continue
-
-                                # Create GenAI Part with raw bytes and MIME type
-                                parts.append(
-                                    types.Part.from_bytes(
-                                        data=media_bytes, mime_type=mime_type
-                                    )
+                            for i, part in enumerate(content):
+                                if (
+                                    isinstance(part, dict)
+                                    and part.get("type") == "text"
+                                ):
+                                    content[i] = {
+                                        **part,
+                                        "text": f"{system_prompt}\n\n---\n\n{part['text']}",
+                                    }
+                                    break
+                            else:
+                                # No text part found, add system as first text part
+                                content.insert(
+                                    0,
+                                    {
+                                        "type": "text",
+                                        "text": f"{system_prompt}\n\n---\n\n",
+                                    },
                                 )
-                            except Exception as e:
-                                print(f"Error processing media part: {e}")
-                                # Continue without this media part
-                                pass
-            else:
-                message_content = str(msg["content"])
 
-                # Prepend system message to first user message if configured
-                if prepend_system_to_first_user and role == "user":
-                    message_content = f"{system_prompt}\n\n---\n\n{message_content}"
-                    prepend_system_to_first_user = (
-                        False  # Only prepend to first user message
-                    )
+                        modified_messages.append({"role": "user", "content": content})
+                        first_user_found = True
+                    else:
+                        modified_messages.append(msg)
+                processed_messages = modified_messages
+                system_instruction_for_config = None
 
-                parts = [types.Part.from_text(text=message_content)]
+        # Convert messages using litellm's proven conversion function
+        contents = _gemini_convert_messages_with_history(processed_messages)
 
-            contents.append(types.Content(role=role, parts=parts))
-
-        # Create config with system instruction if available (only if not SKIP mode)
+        # Create config with system instruction if available
         config_kwargs = {"response_modalities": ["IMAGE", "TEXT"]}
         if system_instruction_for_config:
             config_kwargs["system_instruction"] = system_instruction_for_config
@@ -1487,7 +1455,9 @@ async def _process_media(
                         # File has expired or was deleted from Gemini, so we'll proceed to re-upload.
                         pass
                     except Exception as e:
-                        print(f"Error validating Gemini file {cached_info['name']}: {e}")
+                        print(
+                            f"Error validating Gemini file {cached_info['name']}: {e}"
+                        )
                         # If validation fails for another reason, don't proceed with this file.
                         return ProcessMediaResult(
                             media_part=None,
@@ -1556,7 +1526,11 @@ async def _process_media(
 
                 # Cache the name, URI and mime_type
                 await history_util.cache_gemini_file_info(
-                    file_id, user_id, gemini_file.name, gemini_file.uri, gemini_file.mime_type
+                    file_id,
+                    user_id,
+                    gemini_file.name,
+                    gemini_file.uri,
+                    gemini_file.mime_type,
                 )
 
                 part = {
