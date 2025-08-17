@@ -1,6 +1,30 @@
 #+TITLE: llm_chat_plugins/todo
 
 * _
+#+begin_verse
+In `_process_media`, when using gemini files, we should check if the mimetype of the file is ctually supported by model_capabilities of the given model. The logic should be reused from later in the same function. Indeed, there is already some shared logic in this function that can be refactored. 
+
+Give your edits as diffs.
+#+end_verse
+
+* _
+#+begin_verse
+```
+Traceback (most recent call last):
+  File "/home/eva/code/betterborg/llm_chat_plugins/llm_chat.py", line 770, in _call_llm_with_retry
+    async for chunk in response:
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/litellm/litellm_core_utils/streaming_handler.py", line 1875, in __anext__
+    raise MidStreamFallbackError(
+litellm.exceptions.MidStreamFallbackError: litellm.ServiceUnavailableError: litellm.MidStreamFallbackError: litellm.BadRequestError: VertexAIException BadRequestError - b'{\n  "error": {\n    "code": 400,\n    "message": "Request contains an invalid argument.",\n    "status": "INVALID_ARGUMENT"\n  }\n}\n' Original exception: BadRequestError: litellm.BadRequestError: VertexAIException BadRequestError - b'{\n  "error": {\n    "code": 400,\n    "message": "Request contains an invalid argument.",\n    "status": "INVALID_ARGUMENT"\n  }\n}\n'
+```
+
+llm_chat: BadRequestErrors should not be retried.
+#+end_verse
+
+* DONE _
+:PROPERTIES:
+:visibility: folded
+:END:
 #+begin_example python
 ic| type(original_exception): <class 'litellm.exceptions.MidStreamFallbackError'>
     original_exception.__dict__: {'body': None,
