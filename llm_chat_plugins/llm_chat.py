@@ -806,6 +806,13 @@ async def _call_llm_with_retry(
             raise llm_util.RateLimitException(
                 "API rate limit exceeded.", original_exception=e
             )
+
+        # Handle BadRequestError (400-level) separately and do not retry
+        if "BadRequestError" in str(e):
+            # A 400 error indicates a problem with the request itself.
+            # Retrying won't help. Re-raise to be handled by the caller.
+            raise
+
         is_500_error = False
 
         # Check if it's a 500 error from different exception types
