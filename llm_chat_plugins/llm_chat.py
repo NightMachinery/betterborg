@@ -1458,36 +1458,25 @@ async def _process_media(
 
         # --- Branch 1: Gemini Files API Mode ---
         if is_native_gemini_files_mode(model_in_use):
-            gemini_client = genai.Client(api_key=api_key)
-
-            # Check for a cached and still valid Gemini file name
-            cached_gemini_name = await history_util.get_cached_gemini_file_name(
+            # Check for a cached Gemini file URI
+            cached_info = await history_util.get_cached_gemini_file_info(
                 file_id, user_id
             )
-            if cached_gemini_name:
-                try:
-                    gemini_file = await gemini_client.aio.files.get(
-                        name=cached_gemini_name
-                    )
-                    part = {
-                        "type": "file",
-                        "file": {
-                            "file_id": gemini_file.uri,
-                            "filename": "some_file",
-                            #: `filename` doesn't seem to be actually used in LiteLLM's _gemini_convert_messages_with_history anyway.
-                            "format": gemini_file.mime_type,
-                        },
-                    }
-                    return ProcessMediaResult(media_part=part, warnings=[])
-                except google_exceptions.NotFound:
-                    pass  # File expired, proceed to upload
-                except Exception as e:
-                    print(f"Error validating Gemini file {cached_gemini_name}: {e}")
-                    # Don't proceed with this file if validation fails
-                    return ProcessMediaResult(
-                        media_part=None,
-                        warnings=["Failed to verify cached Gemini file."],
-                    )
+            if cached_info and "uri" in cached_info and "mime_type" in cached_info:
+                # Use the cached URI directly without checking for existence on Gemini's side.
+                # This assumes the file is still valid, as per the 48h lifecycle.
+                part = {
+                    "type": "file",
+                    "file": {
+                        "file_id": cached_info["uri"],
+                        "filename": "some_file",
+                        "format": cached_info["mime_type"],
+                    },
+                }
+                return ProcessMediaResult(media_part=part, warnings=[])
+
+            # --- File not cached in Gemini format, proceed to upload ---
+            gemini_client = genai.Client(api_key=api_key)
 
             # Get file bytes (from our base64 cache or download)
             cached_file_info = await history_util.get_cached_file(file_id)
@@ -1534,9 +1523,12 @@ async def _process_media(
                     )
                 if gemini_file.state.name == "FAILED":
                     raise Exception("Gemini file processing failed.")
-                await history_util.cache_gemini_file_name(
-                    file_id, user_id, gemini_file.name
+
+                # Cache the URI and mime_type
+                await history_util.cache_gemini_file_info(
+                    file_id, user_id, gemini_file.uri, gemini_file.mime_type
                 )
+
                 part = {
                     "type": "file",
                     "file": {

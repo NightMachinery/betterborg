@@ -376,22 +376,24 @@ async def get_cached_file(file_id: str) -> Optional[dict]:
     return None
 
 
-async def cache_gemini_file_name(
-    file_id: str, user_id: int, gemini_file_name: str
+async def cache_gemini_file_info(
+    file_id: str, user_id: int, uri: str, mime_type: str
 ) -> bool:
-    """Cache a Gemini File API file name for a specific user."""
-    return await redis_util.set_with_expiry(
+    """Cache a Gemini File API file's URI and MIME type for a specific user."""
+    field_values = {"uri": uri, "mime_type": mime_type}
+    return await redis_util.hset_with_expiry(
         redis_util.gemini_file_cache_key(file_id, user_id),
-        gemini_file_name,
+        field_values,
         expire_seconds=GEMINI_FILE_CACHE_DURATION,
     )
 
 
-async def get_cached_gemini_file_name(file_id: str, user_id: int) -> Optional[str]:
-    """Get a cached Gemini File API file name for a specific user."""
-    return await redis_util.get_and_renew(
+async def get_cached_gemini_file_info(file_id: str, user_id: int) -> Optional[dict]:
+    """Get a cached Gemini File API file's info for a specific user without renewing expiry."""
+    return await redis_util.hgetall_and_renew(
         redis_util.gemini_file_cache_key(file_id, user_id),
         expire_seconds=GEMINI_FILE_CACHE_DURATION,
+        renew=False,
     )
 
 

@@ -112,15 +112,17 @@ async def set_with_expiry(key: str, value: str, *, expire_seconds: int = None) -
         return False
 
 
-async def get_and_renew(key: str, *, expire_seconds: int = None) -> Optional[str]:
-    """Get a value and renew its expiration."""
+async def get_and_renew(
+    key: str, *, expire_seconds: int = None, renew: bool = True
+) -> Optional[str]:
+    """Get a value and renew its expiration if specified."""
     redis_client = await get_redis()
     if not redis_client:
         return None
 
     try:
         value = await redis_client.get(key)
-        if value:
+        if value and renew:
             # Renew expiry on access
             await redis_client.expire(key, expire_seconds or REDIS_EXPIRE_DURATION)
         return value
@@ -180,15 +182,17 @@ async def hset_with_expiry(
         return False
 
 
-async def hgetall_and_renew(key: str, *, expire_seconds: int = None) -> Optional[dict]:
-    """Get all hash fields and renew expiration."""
+async def hgetall_and_renew(
+    key: str, *, expire_seconds: int = None, renew: bool = True
+) -> Optional[dict]:
+    """Get all hash fields and renew expiration if specified."""
     redis_client = await get_redis()
     if not redis_client:
         return None
 
     try:
         data = await redis_client.hgetall(key)
-        if data:
+        if data and renew:
             # Renew expiry on access
             await redis_client.expire(key, expire_seconds or REDIS_EXPIRE_DURATION)
         return data if data else None
