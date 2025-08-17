@@ -7,6 +7,8 @@ These uploaded files are available for exactly 48 hours after the initial upload
 
 ** add a kwarg `check_gemini_cached_files_p=False`. when true, check if the files exist. if false, assume they do without running the check. mime and filename etc. should already be available in the cache, right?
 
+* =_handle_native_gemini_image_generation=: use litellm's =_gemini_convert_messages_with_history= at =litellm/llms/vertex_ai/gemini/transformation.py= to convert the litellm messages into messages Gemini wants.
+
 * _
 #+begin_verse
 Read:
