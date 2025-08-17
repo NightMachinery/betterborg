@@ -130,6 +130,43 @@ def create_attachments_from_dir(directory: Path) -> list[llm.Attachment]:
     return attachments
 
 
+def h_extract_exception_json_safely(text):
+    # Find b'{ start
+    b_start = text.find("b'{")
+    if b_start == -1:
+        return None
+
+    # Get content after b'
+    remaining = text[b_start + 2 :]  # Skip "b'"
+
+    # Find the last quote (end of the b'...' block)
+    last_quote = remaining.rfind("'")
+    if last_quote == -1:
+        return None
+
+    # Extract and clean the raw JSON
+    raw_json = remaining[:last_quote]
+    clean_json = raw_json.replace("\\n", "\n")
+
+    # Find actual JSON end by counting braces
+    brace_count = 0
+    json_end = -1
+    for i, char in enumerate(clean_json):
+        if char == "{":
+            brace_count += 1
+        elif char == "}":
+            brace_count -= 1
+            if brace_count == 0:
+                json_end = i + 1
+                break
+
+    if json_end > 0:
+        valid_json = clean_json[:json_end]
+        return json.loads(valid_json)
+
+    return None
+
+
 async def _handle_common_error_cases(
     *,
     event,
@@ -143,80 +180,102 @@ async def _handle_common_error_cases(
     Returns:
         bool: True if the error was handled and processing should stop, False otherwise
     """
+
     # New block for RateLimitException
     if isinstance(exception, RateLimitException):
         error_message = f"{BOT_META_INFO_PREFIX}🚫 **API Rate Limit Exceeded**\n\n"
         original_msg = str(getattr(exception, "original_exception", ""))
 
         # Extract JSON from the exception if present
-        json_match = re.search(r'b\'({.*?})\n\'', original_msg, re.DOTALL)
-        if json_match:
+        error_data = h_extract_exception_json_safely(original_msg)
+        if error_data:
             try:
-                json_str = json_match.group(1)
-                error_data = json.loads(json_str)
-                
                 # Extract main error message
                 if "error" in error_data and "message" in error_data["error"]:
-                    error_message += f"**Details:** {error_data['error']['message']}\n\n"
-                
+                    error_message += (
+                        f"**Details:** {error_data['error']['message']}\n\n"
+                    )
+
                 # Extract quota information
                 if "error" in error_data and "details" in error_data["error"]:
                     for detail in error_data["error"]["details"]:
-                        if detail.get("@type") == "type.googleapis.com/google.rpc.QuotaFailure":
+                        if (
+                            detail.get("@type")
+                            == "type.googleapis.com/google.rpc.QuotaFailure"
+                        ):
                             violations = detail.get("violations", [])
                             for violation in violations:
-                                quota_metric = violation.get("quotaMetric", "").split("/")[-1]
+                                quota_metric = violation.get("quotaMetric", "").split(
+                                    "/"
+                                )[-1]
                                 quota_id = violation.get("quotaId", "")
                                 quota_value = violation.get("quotaValue", "")
-                                model = violation.get("quotaDimensions", {}).get("model", "")
-                                
+                                model = violation.get("quotaDimensions", {}).get(
+                                    "model", ""
+                                )
+
                                 if quota_metric and quota_value:
                                     error_message += f"**Quota exceeded:** {quota_metric.replace('_', ' ').title()}\n"
-                                    error_message += f"**Limit:** {quota_value} tokens per minute\n"
+                                    error_message += (
+                                        f"**Limit:** {quota_value} tokens per minute\n"
+                                    )
                                     if model:
                                         error_message += f"**Model:** {model}\n"
                                     error_message += "\n"
-                        
-                        elif detail.get("@type") == "type.googleapis.com/google.rpc.RetryInfo":
+
+                        elif (
+                            detail.get("@type")
+                            == "type.googleapis.com/google.rpc.RetryInfo"
+                        ):
                             retry_delay = detail.get("retryDelay", "")
                             if retry_delay:
-                                error_message += f"**Suggested wait time:** `{retry_delay}`\n\n"
-                        
-                        elif detail.get("@type") == "type.googleapis.com/google.rpc.Help":
+                                error_message += (
+                                    f"**Suggested wait time:** `{retry_delay}`\n\n"
+                                )
+
+                        elif (
+                            detail.get("@type") == "type.googleapis.com/google.rpc.Help"
+                        ):
                             links = detail.get("links", [])
                             for link in links:
                                 if "url" in link:
                                     error_message += f"**More info:** {link['url']}\n\n"
-                
+
                 # Show full JSON for admins
                 is_admin = await util.isAdmin(event)
                 if is_admin:
                     formatted_json = json.dumps(error_data, indent=2)
                     error_message += f"**Full error details (admin only):**\n```json\n{formatted_json}\n```"
-            
+
             except (json.JSONDecodeError, KeyError) as parse_error:
                 print(f"Error parsing rate limit JSON: {parse_error}")
                 # Fallback to simple message extraction
-                match = re.search(r'"message":\s*"([^"]+)"', original_msg)
-                if match:
-                    error_message += f"**Details:** {match.group(1)}\n\n"
-                else:
-                    error_message += "You have sent too many requests in a short period. Please wait and try again.\n\n"
-                
+                # match = re.search(r'"message":\s*"([^"]+)"', original_msg)
+                # if match:
+                #     error_message += f"**Details:** {match.group(1)}\n\n"
+                # else:
+                #     error_message += "You have sent too many requests in a short period. Please wait and try again.\n\n"
+
                 delay_match = re.search(r'"retryDelay":\s*"([^"]+)"', original_msg)
                 if delay_match:
-                    error_message += f"**Suggested wait time:** `{delay_match.group(1)}`"
+                    error_message += (
+                        f"**Suggested wait time:** `{delay_match.group(1)}`"
+                    )
         else:
-            # Fallback if no JSON found
-            match = re.search(r'"message":\s*"([^"]+)"', original_msg)
-            if match:
-                error_message += f"**Details:** {match.group(1)}\n\n"
+            # Fallback if no JSON found - put whole message in code block for admins
+            is_admin = await util.isAdmin(event)
+            if is_admin:
+                error_message += (
+                    f"**Raw error message (admin only):**\n```\n{original_msg}\n```"
+                )
             else:
-                error_message += "You have sent too many requests in a short period. Please wait and try again.\n\n"
-            
-            delay_match = re.search(r'"retryDelay":\s*"([^"]+)"', original_msg)
-            if delay_match:
-                error_message += f"**Suggested wait time:** `{delay_match.group(1)}`"
+                # error_message += "You have sent too many requests in a short period. Please wait and try again.\n\n"
+
+                delay_match = re.search(r'"retryDelay":\s*"([^"]+)"', original_msg)
+                if delay_match:
+                    error_message += (
+                        f"**Suggested wait time:** `{delay_match.group(1)}`"
+                    )
 
         try:
             if response_message:
