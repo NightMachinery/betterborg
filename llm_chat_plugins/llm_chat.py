@@ -42,6 +42,7 @@ from uniborg import llm_db
 from uniborg import llm_util
 from uniborg import tts_util
 from uniborg import history_util
+from uniborg.history_util import LAST_N_MAX
 from uniborg import bot_util
 from uniborg.storage import UserStorage
 from uniborg.constants import BOT_META_INFO_PREFIX
@@ -3094,7 +3095,7 @@ async def set_last_n_handler(event):
 
     try:
         limit = int(limit_str)
-        if not (1 < limit <= 200):
+        if not (1 < limit <= LAST_N_MAX):
             raise ValueError("Limit out of range.")
         user_manager.set_last_n_messages_limit(user_id, limit)
         await event.reply(
@@ -3102,7 +3103,7 @@ async def set_last_n_handler(event):
         )
     except ValueError:
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}❌ Please provide a valid number between 2 and 200."
+            f"{BOT_META_INFO_PREFIX}❌ Please provide a valid number between 2 and {LAST_N_MAX}."
         )
 
 
@@ -3151,7 +3152,7 @@ async def set_last_n_here_handler(event):
 
     try:
         limit = int(limit_str)
-        if not (1 < limit <= 200):
+        if not (1 < limit <= LAST_N_MAX):
             raise ValueError("Limit out of range.")
         chat_manager.set_last_n_messages_limit(event.chat_id, limit)
         await event.reply(
@@ -3159,7 +3160,7 @@ async def set_last_n_here_handler(event):
         )
     except ValueError:
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}❌ Please provide a valid number between 2 and 200."
+            f"{BOT_META_INFO_PREFIX}❌ Please provide a valid number between 2 and {LAST_N_MAX}."
         )
 
 

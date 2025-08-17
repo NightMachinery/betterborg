@@ -19,6 +19,7 @@ from . import redis_util
 
 # --- Configuration ---
 HISTORY_LIMIT = 5000  # Max number of message IDs to store per chat
+LAST_N_MAX = HISTORY_LIMIT  # Max number of messages user can request in "last N" mode
 GEMINI_FILE_CACHE_DURATION = 47 * 3600  # 47 hours, just under the 48h expiry
 
 
