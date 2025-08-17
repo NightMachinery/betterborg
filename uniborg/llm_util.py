@@ -245,7 +245,7 @@ async def _handle_common_error_cases(
                 is_admin = await util.isAdmin(event)
                 if is_admin:
                     formatted_json = json.dumps(error_data, indent=2)
-                    error_message += f"**Full error details (admin only):**\n```json\n{formatted_json}\n```"
+                    error_message += f"**Full error details (admin only):**\n```\n{formatted_json}\n```"
 
             except (json.JSONDecodeError, KeyError) as parse_error:
                 print(f"Error parsing rate limit JSON: {parse_error}")
