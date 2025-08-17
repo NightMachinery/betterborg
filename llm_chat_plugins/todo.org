@@ -1,17 +1,326 @@
 #+TITLE: llm_chat_plugins/todo
 
-* do not increase expire time of Gemini Files when reading them from the cache
+* _
+#+begin_example python
+ic| type(original_exception): <class 'litellm.exceptions.MidStreamFallbackError'>
+    original_exception.__dict__: {'body': None,
+                                  'code': None,
+                                  'generated_content': '',
+                                  'is_pre_first_chunk': True,
+                                  'litellm_debug_info': None,
+                                  'llm_provider': 'vertex_ai_beta',
+                                  'max_retries': None,
+                                  'message': 'litellm.ServiceUnavailableError: litellm.MidStreamFallbackError: '
+                                             'litellm.RateLimitError: litellm.RateLimitError: VertexAIException '
+                                             '- b\'{\
+                                   "error": {\
+                                     "code": 429,\
+                                     "message": "You '
+                                             'exceeded your current quota, please check your plan and billing '
+                                             'details. For more information on this error, head to: '
+                                             'https://ai.google.dev/gemini-api/docs/rate-limits.",\
+                                     '
+                                             '"status": "RESOURCE_EXHAUSTED",\
+                                     "details": [\
+                                       '
+                                             '{\
+                                         "@type": '
+                                             '"type.googleapis.com/google.rpc.QuotaFailure",\
+                                         '
+                                             '"violations": [\
+                                           {\
+                                             "quotaMetric": '
+                                             '"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count",\
+                                             '
+                                             '"quotaId": '
+                                             '"GenerateContentInputTokensPerModelPerMinute-FreeTier",\
+                                             '
+                                             '"quotaDimensions": {\
+                                               "model": '
+                                             '"gemini-2.5-flash-lite",\
+                                               "location": '
+                                             '"global"\
+                                             },\
+                                             "quotaValue": '
+                                             '"250000"\
+                                           }\
+                                         ]\
+                                       },\
+                                       {\
+                                         '
+                                             '"@type": "type.googleapis.com/google.rpc.Help",\
+                                         '
+                                             '"links": [\
+                                           {\
+                                             "description": "Learn more '
+                                             'about Gemini API quotas",\
+                                             "url": '
+                                             '"https://ai.google.dev/gemini-api/docs/rate-limits"\
+                                           '
+                                             '}\
+                                         ]\
+                                       },\
+                                       {\
+                                         "@type": '
+                                             '"type.googleapis.com/google.rpc.RetryInfo",\
+                                         '
+                                             '"retryDelay": "18s"\
+                                       }\
+                                     ]\
+                                   }\
+                                 }\
+                                 \'',
+                                  'model': 'gemini-2.5-flash-lite',
+                                  'num_retries': None,
+                                  'original_exception': litellm.RateLimitError: litellm.RateLimitError: VertexAIException - b'{
+                                   "error": {
+                                     "code": 429,
+                                     "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.",
+                                     "status": "RESOURCE_EXHAUSTED",
+                                     "details": [
+                                       {
+                                         "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                                         "violations": [
+                                           {
+                                             "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_input_token_count",
+                                             "quotaId": "GenerateContentInputTokensPerModelPerMinute-FreeTier",
+                                             "quotaDimensions": {
+                                               "model": "gemini-2.5-flash-lite",
+                                               "location": "global"
+                                             },
+                                             "quotaValue": "250000"
+                                           }
+                                         ]
+                                       },
+                                       {
+                                         "@type": "type.googleapis.com/google.rpc.Help",
+                                         "links": [
+                                           {
+                                             "description": "Learn more about Gemini API quotas",
+                                             "url": "https://ai.google.dev/gemini-api/docs/rate-limits"
+                                           }
+                                         ]
+                                       },
+                                       {
+                                         "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                                         "retryDelay": "18s"
+                                       }
+                                     ]
+                                   }
+                                 }
+                                 ',
+                                  'param': None,
+                                  'request': <Request('POST', '%20https://cloud.google.com/vertex-ai/')>,
+                                  'request_id': None,
+                                  'response': <Response [503 Service Unavailable]>,
+                                  'status_code': 503,
+                                  'type': None}
+#+end_example
+
+#+begin_example python
+ic| type(original_exception): <class 'litellm.exceptions.MidStreamFallbackError'>
+    original_exception: litellm.ServiceUnavailableError: litellm.MidStreamFallbackError: litellm.RateLimitError: litellm.RateLimitError: VertexAIException - b'{
+                          "error": {
+                            "code": 429,
+                            "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.",
+                            "status": "RESOURCE_EXHAUSTED",
+                            "details": [
+                              {
+                                "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                                "violations": [
+                                  {
+                                    "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_input_token_count",
+                                    "quotaId": "GenerateContentInputTokensPerModelPerMinute-FreeTier",
+                                    "quotaDimensions": {
+                                      "location": "global",
+                                      "model": "gemini-2.5-flash-lite"
+                                    },
+                                    "quotaValue": "250000"
+                                  }
+                                ]
+                              },
+                              {
+                                "@type": "type.googleapis.com/google.rpc.Help",
+                                "links": [
+                                  {
+                                    "description": "Learn more about Gemini API quotas",
+                                    "url": "https://ai.google.dev/gemini-api/docs/rate-limits"
+                                  }
+                                ]
+                              },
+                              {
+                                "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                                "retryDelay": "19s"
+                              }
+                            ]
+                          }
+                        }
+                        ' Original exception: RateLimitError: litellm.RateLimitError: litellm.RateLimitError: VertexAIException - b'{
+                          "error": {
+                            "code": 429,
+                            "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.",
+                            "status": "RESOURCE_EXHAUSTED",
+                            "details": [
+                              {
+                                "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                                "violations": [
+                                  {
+                                    "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_input_token_count",
+                                    "quotaId": "GenerateContentInputTokensPerModelPerMinute-FreeTier",
+                                    "quotaDimensions": {
+                                      "location": "global",
+                                      "model": "gemini-2.5-flash-lite"
+                                    },
+                                    "quotaValue": "250000"
+                                  }
+                                ]
+                              },
+                              {
+                                "@type": "type.googleapis.com/google.rpc.Help",
+                                "links": [
+                                  {
+                                    "description": "Learn more about Gemini API quotas",
+                                    "url": "https://ai.google.dev/gemini-api/docs/rate-limits"
+                                  }
+                                ]
+                              },
+                              {
+                                "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                                "retryDelay": "19s"
+                              }
+                            ]
+                          }
+                        }
+                        '
+    original_msg: ('litellm.ServiceUnavailableError: litellm.MidStreamFallbackError: '
+                   "litellm.RateLimitError: litellm.RateLimitError: VertexAIException - b'{\
+                    "
+                   '"error": {\
+                      "code": 429,\
+                      "message": "You exceeded your current '
+                   'quota, please check your plan and billing details. For more information on '
+                   'this error, head to: '
+                   'https://ai.google.dev/gemini-api/docs/rate-limits.",\
+                      "status": '
+                   '"RESOURCE_EXHAUSTED",\
+                      "details": [\
+                        {\
+                          "@type": '
+                   '"type.googleapis.com/google.rpc.QuotaFailure",\
+                          "violations": '
+                   '[\
+                            {\
+                              "quotaMetric": '
+                   '"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count",\
+                              '
+                   '"quotaId": '
+                   '"GenerateContentInputTokensPerModelPerMinute-FreeTier",\
+                              '
+                   '"quotaDimensions": {\
+                                "location": "global",\
+                                '
+                   '"model": "gemini-2.5-flash-lite"\
+                              },\
+                              '
+                   '"quotaValue": "250000"\
+                            }\
+                          ]\
+                        },\
+                        '
+                   '{\
+                          "@type": "type.googleapis.com/google.rpc.Help",\
+                          '
+                   '"links": [\
+                            {\
+                              "description": "Learn more about '
+                   'Gemini API quotas",\
+                              "url": '
+                   '"https://ai.google.dev/gemini-api/docs/rate-limits"\
+                            }\
+                          '
+                   ']\
+                        },\
+                        {\
+                          "@type": '
+                   '"type.googleapis.com/google.rpc.RetryInfo",\
+                          "retryDelay": '
+                   '"19s"\
+                        }\
+                      ]\
+                    }\
+                  }\
+                  \' Original exception: RateLimitError: '
+                   "litellm.RateLimitError: litellm.RateLimitError: VertexAIException - b'{\
+                    "
+                   '"error": {\
+                      "code": 429,\
+                      "message": "You exceeded your current '
+                   'quota, please check your plan and billing details. For more information on '
+                   'this error, head to: '
+                   'https://ai.google.dev/gemini-api/docs/rate-limits.",\
+                      "status": '
+                   '"RESOURCE_EXHAUSTED",\
+                      "details": [\
+                        {\
+                          "@type": '
+                   '"type.googleapis.com/google.rpc.QuotaFailure",\
+                          "violations": '
+                   '[\
+                            {\
+                              "quotaMetric": '
+                   '"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count",\
+                              '
+                   '"quotaId": '
+                   '"GenerateContentInputTokensPerModelPerMinute-FreeTier",\
+                              '
+                   '"quotaDimensions": {\
+                                "location": "global",\
+                                '
+                   '"model": "gemini-2.5-flash-lite"\
+                              },\
+                              '
+                   '"quotaValue": "250000"\
+                            }\
+                          ]\
+                        },\
+                        '
+                   '{\
+                          "@type": "type.googleapis.com/google.rpc.Help",\
+                          '
+                   '"links": [\
+                            {\
+                              "description": "Learn more about '
+                   'Gemini API quotas",\
+                              "url": '
+                   '"https://ai.google.dev/gemini-api/docs/rate-limits"\
+                            }\
+                          '
+                   ']\
+                        },\
+                        {\
+                          "@type": '
+                   '"type.googleapis.com/google.rpc.RetryInfo",\
+                          "retryDelay": '
+                   '"19s"\
+                        }\
+                      ]\
+                    }\
+                  }\
+                  \'')
+#+end_example
+
+* DONE do not increase expire time of Gemini Files when reading them from the cache
 These uploaded files are available for exactly 48 hours after the initial upload.
 
 ** cache their URI
 
 ** add a kwarg `check_gemini_cached_files_p=False`. when true, check if the files exist. if false, assume they do without running the check. mime and filename etc. should already be available in the cache, right?
 
-* =_handle_native_gemini_image_generation=: use litellm's =_gemini_convert_messages_with_history= at =litellm/llms/vertex_ai/gemini/transformation.py= to convert the litellm messages into messages Gemini wants.
+* DONE =_handle_native_gemini_image_generation=: use litellm's =_gemini_convert_messages_with_history= at =litellm/llms/vertex_ai/gemini/transformation.py= to convert the litellm messages into messages Gemini wants.
 
-* When `initialize_llm_chat` ends, sends a succesful load message to `borg.log_chat`.
+* DONE When `initialize_llm_chat` ends, sends a succesful load message to `borg.log_chat`.
 
-* _
+* DONE _
 #+begin_verse
 Read:
 - https://ai.google.dev/gemini-api/docs/files
