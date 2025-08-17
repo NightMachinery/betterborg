@@ -9,6 +9,8 @@ These uploaded files are available for exactly 48 hours after the initial upload
 
 * =_handle_native_gemini_image_generation=: use litellm's =_gemini_convert_messages_with_history= at =litellm/llms/vertex_ai/gemini/transformation.py= to convert the litellm messages into messages Gemini wants.
 
+* When `initialize_llm_chat` ends, sends a succesful load message to `borg.log_chat`.
+
 * _
 #+begin_verse
 Read:
