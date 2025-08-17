@@ -1503,6 +1503,10 @@ def _check_media_capability(
         if "pdf" not in issued_warnings:
             issued_warnings.add("pdf")
             return "PDF files were skipped because the current model does not support PDF input."
+    elif media_type is None:
+        if "unknown" not in issued_warnings:
+            issued_warnings.add("unknown")
+            return "Files with unknown or unsupported media types were skipped."
     return None
 
 
@@ -1671,8 +1675,8 @@ async def _process_media(message: Message, temp_dir: Path, model_capabilities: D
 
             if (
                 not mime_type
-                or not mime_type.startswith(("image/", "audio/", "video/"))
-                and mime_type != "application/pdf"
+                or (not mime_type.startswith(("image/", "audio/", "video/"))
+                    and mime_type != "application/pdf")
             ):
                 print(
                     f"Unsupported binary media type '{mime_type}' for file {filename}"
