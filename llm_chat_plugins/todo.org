@@ -1,5 +1,8 @@
 #+TITLE: llm_chat_plugins/todo
 
+* WARN_UNSUPPORTED_TO_USER_P: add "private_only", "always", "never", make it an enum. when private_only, only add the warnings if the chat is private and not a group.
+Also add `BOT_META_INFO_LINE` instead of `---`. Then, when processing message texts, strip all text starting from a line that equals `BOT_META_INFO_LINE`.
+
 * _
 #+begin_verse
 _check_media_capability: should return a dataclass with warnings and a bool whether any warnings were found, and `private_p` which shows if the message is in a private chat or a group. For groups, do not add string warning for unknown media types, but do return the boolean flag. (This helps group messages not get spam warnings.)
