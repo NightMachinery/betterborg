@@ -1248,9 +1248,14 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
     except Exception as e:
         print(f"Error checking vision support for {model}: {e}")
     try:
-        capabilities["audio_input"] = litellm.supports_audio_input(model) or is_gemini_model(model) or model in (
-            "gemini/gemini-2.5-flash-lite",
-            "gemini/gemini-2.5-flash",
+        capabilities["audio_input"] = (
+            litellm.supports_audio_input(model)
+            or is_gemini_model(model)
+            or model
+            in (
+                "gemini/gemini-2.5-flash-lite",
+                "gemini/gemini-2.5-flash",
+            )
         )
         #: hardcoding some models because of upstream bugs
     except Exception as e:
@@ -1349,13 +1354,60 @@ async def _get_and_cache_media_info(message, file_id, temp_dir):
 
     is_text_file = False
     text_extensions = {
-        ".txt", ".md", ".py", ".js", ".html", ".css", ".json", ".xml",
-        ".log", ".yaml", ".csv", ".sql", ".java", ".c", ".h", ".cpp",
-        ".go", ".sh", ".rb", ".swift", ".toml", ".conf", ".ini", ".org",
-        ".m", ".applescript", ".as", ".osa", ".nu", ".nush", ".el", ".ss",
-        ".scm", ".lisp", ".rkt", ".jl", ".scala", ".sc", ".kt", ".clj",
-        ".cljs", ".jxa", ".dart", ".rs", ".cr", ".zsh", ".dash", ".bash",
-        ".php", ".lua", ".glsl", ".frag", ".cson", ".plist",
+        ".txt",
+        ".md",
+        ".py",
+        ".js",
+        ".html",
+        ".css",
+        ".json",
+        ".xml",
+        ".log",
+        ".yaml",
+        ".csv",
+        ".sql",
+        ".java",
+        ".c",
+        ".h",
+        ".cpp",
+        ".go",
+        ".sh",
+        ".rb",
+        ".swift",
+        ".toml",
+        ".conf",
+        ".ini",
+        ".org",
+        ".m",
+        ".applescript",
+        ".as",
+        ".osa",
+        ".nu",
+        ".nush",
+        ".el",
+        ".ss",
+        ".scm",
+        ".lisp",
+        ".rkt",
+        ".jl",
+        ".scala",
+        ".sc",
+        ".kt",
+        ".clj",
+        ".cljs",
+        ".jxa",
+        ".dart",
+        ".rs",
+        ".cr",
+        ".zsh",
+        ".dash",
+        ".bash",
+        ".php",
+        ".lua",
+        ".glsl",
+        ".frag",
+        ".cson",
+        ".plist",
     }
     if mime_type and mime_type.startswith("text/"):
         is_text_file = True
@@ -1511,7 +1563,17 @@ def _check_media_capability(
     return None
 
 
-async def _process_media(message: Message, temp_dir: Path, model_capabilities: Dict[str, bool], issued_warnings: set, *, user_id: int, api_key: str, model_in_use: str, check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P) -> ProcessMediaResult:
+async def _process_media(
+    message: Message,
+    temp_dir: Path,
+    model_capabilities: Dict[str, bool],
+    issued_warnings: set,
+    *,
+    sender_id: int,
+    api_key: str,
+    model_in_use: str,
+    check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
+) -> ProcessMediaResult:
     """
     Downloads or retrieves media from cache, prepares it for litellm,
     and ensures it's cached in a text-safe format (raw text or Base64).
@@ -1530,7 +1592,7 @@ async def _process_media(message: Message, temp_dir: Path, model_capabilities: D
             gemini_client = None
 
             cached_info = await history_util.get_cached_gemini_file_info(
-                file_id, user_id
+                file_id, sender_id
             )
 
             if cached_info and "name" in cached_info and "uri" in cached_info:
@@ -1585,8 +1647,8 @@ async def _process_media(message: Message, temp_dir: Path, model_capabilities: D
                     return ProcessMediaResult(media_part=part, warnings=[])
 
             # --- File not cached in Gemini format, proceed to upload ---
-            storage_type, content, filename, mime_type = await _get_and_cache_media_info(
-                message, file_id, temp_dir
+            storage_type, content, filename, mime_type = (
+                await _get_and_cache_media_info(message, file_id, temp_dir)
             )
 
             if not storage_type:
@@ -1602,7 +1664,9 @@ async def _process_media(message: Message, temp_dir: Path, model_capabilities: D
             # It must be 'base64' type. 'content' is a b64 string.
             # Check capability before uploading.
             media_type = get_media_type(mime_type)
-            warning = _check_media_capability(media_type, model_capabilities, issued_warnings)
+            warning = _check_media_capability(
+                media_type, model_capabilities, issued_warnings
+            )
             if warning:
                 return ProcessMediaResult(media_part=None, warnings=[warning])
 
@@ -1634,7 +1698,7 @@ async def _process_media(message: Message, temp_dir: Path, model_capabilities: D
                 # Cache the name, URI and mime_type
                 await history_util.cache_gemini_file_info(
                     file_id,
-                    user_id,
+                    sender_id,
                     gemini_file.name,
                     gemini_file.uri,
                     gemini_file.mime_type,
@@ -1674,10 +1738,9 @@ async def _process_media(message: Message, temp_dir: Path, model_capabilities: D
             if warning:
                 return ProcessMediaResult(media_part=None, warnings=[warning])
 
-            if (
-                not mime_type
-                or (not mime_type.startswith(("image/", "audio/", "video/"))
-                    and mime_type != "application/pdf")
+            if not mime_type or (
+                not mime_type.startswith(("image/", "audio/", "video/"))
+                and mime_type != "application/pdf"
             ):
                 print(
                     f"Unsupported binary media type '{mime_type}' for file {filename}"
@@ -1872,6 +1935,7 @@ async def _process_message_content(
     api_key: str,
     model_in_use: str,
     check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
+    sender_id,
 ) -> ProcessContentResult:
     """Processes a single message's text and media into litellm content parts."""
     text_buffer, media_parts, warnings = [], [], []
@@ -1917,7 +1981,7 @@ async def _process_message_content(
         temp_dir,
         model_capabilities,
         issued_warnings,
-        user_id=message.sender_id,
+        sender_id=sender_id,
         api_key=api_key,
         model_in_use=model_in_use,
         check_gemini_cached_files_p=check_gemini_cached_files_p,
@@ -1971,13 +2035,14 @@ async def _process_turns_to_history(
     respecting the user's chosen metadata and context settings.
     Returns: (history, warnings)
     """
+    sender_id = event.sender_id
     history = []
     all_warnings = []
     issued_warnings = set()  # Track issued warnings for this turn processing.
     if not message_list:
         return history, all_warnings
 
-    user_prefs = user_manager.get_prefs(event.sender_id)
+    user_prefs = user_manager.get_prefs(sender_id)
     active_metadata_mode = (
         user_prefs.group_metadata_mode
         if not event.is_private
@@ -2007,6 +2072,7 @@ async def _process_turns_to_history(
                     api_key=api_key,
                     model_in_use=model_in_use,
                     check_gemini_cached_files_p=check_gemini_cached_files_p,
+                    sender_id=sender_id,
                 )
                 text_buffer.extend(content_result.text_parts)
                 media_parts.extend(content_result.media_parts)
@@ -2052,6 +2118,7 @@ async def _process_turns_to_history(
                 api_key=api_key,
                 model_in_use=model_in_use,
                 check_gemini_cached_files_p=check_gemini_cached_files_p,
+                sender_id=sender_id,
             )
             all_warnings.extend(content_result.warnings)
 
