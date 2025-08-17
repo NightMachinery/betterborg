@@ -1532,7 +1532,9 @@ async def _get_context_mode_status_text(event) -> str:
 
 
 def _check_media_capability(
-    media_type: str, model_capabilities: Dict[str, bool], issued_warnings: set
+    media_type: str,
+    model_capabilities: Dict[str, bool],
+    issued_warnings: set,
 ) -> Optional[str]:
     """
     Checks if the model supports the given media type and returns a consolidated

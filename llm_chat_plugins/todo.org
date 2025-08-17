@@ -2,6 +2,13 @@
 
 * _
 #+begin_verse
+_check_media_capability: should return a dataclass with warnings and a bool whether any warnings were found, and `private_p` which shows if the message is in a private chat or a group. For groups, do not add string warning for unknown media types, but do return the boolean flag. (This helps group messages not get spam warnings.)
+
+Give your edits as diffs.
+#+end_verse
+
+* _
+#+begin_verse
 In `_process_media`, when using gemini files, we should check if the mimetype of the file is ctually supported by model_capabilities of the given model. The logic should be reused from later in the same function. Indeed, there is already some shared logic in this function that can be refactored. 
 
 Give your edits as diffs.
