@@ -7,7 +7,19 @@ In `_process_media`, when using gemini files, we should check if the mimetype of
 Give your edits as diffs.
 #+end_verse
 
-* _
+* We should add some metadata for showing when a message is in reply to another message:
+#+begin_example
+[In Reply to Message from '{replied_to_sender}': {replied_to_msg_truncated}] 
+#+end_example
+
+- not applicable when context mode is the reply chain (because every message is a reply to its previous message)
+- some messages can have no text (file only messages), we should elide the text in the metadata then
+- replied_to_sender should include their name and username if available
+
+* DONE _
+:PROPERTIES:
+:visibility: folded
+:END:
 #+begin_verse
 ```
 Traceback (most recent call last):
