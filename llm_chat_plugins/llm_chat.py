@@ -7,6 +7,7 @@ import os
 import uuid
 import base64
 import binascii
+import copy
 import io
 import mimetypes
 import re
@@ -822,13 +823,19 @@ def _validate_url_security(url: str) -> Optional[str]:
             logger.warning(f"URL rejected - private network {ip} for {hostname}: {url}")
             return None
         elif ip_obj.is_loopback:
-            logger.warning(f"URL rejected - loopback address {ip} for {hostname}: {url}")
+            logger.warning(
+                f"URL rejected - loopback address {ip} for {hostname}: {url}"
+            )
             return None
         elif ip_obj.is_link_local:
-            logger.warning(f"URL rejected - link-local address {ip} for {hostname}: {url}")
+            logger.warning(
+                f"URL rejected - link-local address {ip} for {hostname}: {url}"
+            )
             return None
         elif ip_obj.is_multicast:
-            logger.warning(f"URL rejected - multicast address {ip} for {hostname}: {url}")
+            logger.warning(
+                f"URL rejected - multicast address {ip} for {hostname}: {url}"
+            )
             return None
 
         # Block dangerous ports commonly used for internal services
@@ -855,7 +862,9 @@ def _validate_url_security(url: str) -> Optional[str]:
         return url
 
     except socket.gaierror as e:
-        logger.warning(f"URL rejected - DNS resolution failed for {parsed.hostname if 'parsed' in locals() else 'unknown'}: {e}")
+        logger.warning(
+            f"URL rejected - DNS resolution failed for {parsed.hostname if 'parsed' in locals() else 'unknown'}: {e}"
+        )
         return None
     except (ValueError, ipaddress.AddressValueError) as e:
         logger.warning(f"URL rejected - invalid IP address: {e}")
@@ -940,14 +949,11 @@ async def _check_url_mimetype(url: str) -> Optional[str]:
     return None
 
 
-async def _process_audio_url_magic(
-    event, url: str, *, temp_dir: Path
-) -> Optional[Path]:
+async def _download_audio_from_url(url: str, *, temp_dir: Path) -> Optional[Path]:
     """
     Downloads audio from URL and returns the file path.
 
     Args:
-        event: The Telegram event
         url: The URL to download
         temp_dir: Temporary directory for storing downloaded file
 
@@ -985,6 +991,50 @@ async def _process_audio_url_magic(
     except Exception as e:
         logger.error(f"Failed to download audio from {url}: {e}")
         return None
+
+
+async def _process_audio_url_magic(event, url: str) -> bool:
+    """
+    Handles the complete audio URL magic flow: download, upload, and process.
+
+    Args:
+        event: The original user event containing the URL
+        url: The URL to download
+
+    Returns:
+        True if processing was initiated, False if failed
+    """
+    try:
+        # Create temp directory for download
+        import tempfile
+
+        temp_dir = Path(tempfile.gettempdir()) / f"temp_llm_chat_{event.id}"
+        temp_dir.mkdir(exist_ok=True)
+
+        # Download the audio file
+        audio_file_path = await _download_audio_from_url(url, temp_dir=temp_dir)
+        if not audio_file_path:
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}❌ Failed to download audio from URL."
+            )
+            return False
+
+        # Send the audio file to the chat as a normal file upload
+        await event.respond(file=str(audio_file_path))
+
+        # Create a copy of the original event and patch it with .suma text
+        patched_event = copy.copy(event)
+        patched_event.message = copy.copy(event.message)
+        patched_event.message.text = ".suma"
+
+        # Process the patched event through the normal chat handler
+        await chat_handler(patched_event)
+        return True
+
+    except Exception as e:
+        logger.error(f"Audio URL magic failed: {e}")
+        await event.reply(f"{BOT_META_INFO_PREFIX}❌ Error processing audio URL.")
+        return False
 
 
 def _get_effective_model_and_service(
@@ -4866,10 +4916,7 @@ async def chat_handler(event):
     # Audio URL Magic: Check if message contains only a URL pointing to audio
     if (
         AUDIO_URL_MAGIC_P
-        ##
         and await util.isAdmin(event)
-        #: Admin-only: Can access internal networks (127.0.0.1, private IPs)
-        ##
         and not event.file
         and not group_id
     ):
@@ -4881,40 +4928,8 @@ async def chat_handler(event):
         if url:
             mimetype = await _check_url_mimetype(url)
             if mimetype and get_media_type(mimetype) == "audio":
-                # Create temp directory early for audio processing
-                import tempfile
-
-                temp_dir = Path(tempfile.gettempdir()) / f"temp_llm_chat_{event.id}"
-                temp_dir.mkdir(exist_ok=True)
-
-                try:
-                    # Download the audio file
-                    audio_file_path = await _process_audio_url_magic(
-                        event, url, temp_dir=temp_dir
-                    )
-                    if audio_file_path:
-                        # Create a simple file object that the existing pipeline can work with
-                        # This is much simpler than the previous fake object approach
-                        class SimpleFile:
-                            def __init__(self, path):
-                                self.name = path.name
-                                self.size = path.stat().st_size
-
-                        event.file = SimpleFile(audio_file_path)
-
-                        # Modify event text to use .suma prompt
-                        event.message.text = ".suma"
-                        # Continue with normal processing - the audio file is now available
-                    else:
-                        await event.reply(
-                            f"{BOT_META_INFO_PREFIX}❌ Failed to download audio from URL."
-                        )
-                        return
-                except Exception as e:
-                    logger.error(f"Audio URL magic failed: {e}")
-                    await event.reply(
-                        f"{BOT_META_INFO_PREFIX}❌ Error processing audio URL."
-                    )
+                # Process the audio URL and return early if successful
+                if await _process_audio_url_magic(event, url):
                     return
 
     # Determine effective model and service (with prefix model override)
