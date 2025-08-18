@@ -175,7 +175,8 @@ async def message_handler(event, *, log_p=True):
         await asyncio.sleep(0.2)
 
     status_message = await event.reply("Processing...")
-    temp_dir = Path(f"./temp_tts_bot_{event.id}/")
+    import tempfile
+    temp_dir = Path(tempfile.gettempdir()) / f"temp_tts_bot_{event.id}"
     ogg_file_path = None
 
     try:

@@ -4594,7 +4594,8 @@ async def chat_handler(event):
     else:
         response_message = await event.reply(f"{BOT_META_INFO_PREFIX}...")
 
-    temp_dir = Path(f"./temp_llm_chat_{event.id}/")
+    import tempfile
+    temp_dir = Path(tempfile.gettempdir()) / f"temp_llm_chat_{event.id}"
     try:
         temp_dir.mkdir(exist_ok=True)
 
