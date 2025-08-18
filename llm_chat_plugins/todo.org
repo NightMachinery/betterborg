@@ -1,5 +1,66 @@
 #+TITLE: llm_chat_plugins/todo
 
+* _
+#+begin_verse
+
+```
+Traceback (most recent call last):
+  File "/home/eva/code/betterborg/tts_plugins/tts_bot.py", line 234, in message_handl
+er
+    ogg_file_path = await tts_util.generate_tts_audio(
+  File "/home/eva/code/betterborg/uniborg/tts_util.py", line 294, in generate_tts_aud
+io
+    async for chunk in await client.aio.models.generate_content_stream(
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/mode
+ls.py", line 7995, in async_generator
+    async for chunk in response:  # type: ignore[attr-defined]
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/mode
+ls.py", line 6770, in async_generator
+    async for response in response_stream:
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/_api
+_client.py", line 1320, in async_generator
+    async for chunk in response:
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/_api
+_client.py", line 257, in __anext__
+    return await self.segment_iterator.__anext__()
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/_api
+_client.py", line 289, in async_segments
+    async for chunk in self._aiter_response_stream():
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/_api
+_client.py", line 392, in _aiter_response_stream
+    line_bytes = await self.response_stream.content.readline()
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/aiohttp/streams.p
+y", line 352, in readline
+    return await self.readuntil()
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/aiohttp/streams.p
+y", line 380, in readuntil
+    raise ValueError("Chunk too big")
+ValueError: Chunk too big
+```
+how do I solve this bug?
+#+end_verse
+
+* _
+#+begin_verse
+```
+Traceback (most recent call last):
+  File "/home/eva/code/betterborg/uniborg/util.py", line 960, in async_remove_dir
+    await aiofiles.os.removedirs(dir_path)
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/aiofiles/ospath.p
+y", line 14, in run
+    return await loop.run_in_executor(executor, pfunc)
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/concurrent/futures/thread.py",
+line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "/home/eva/micromamba/envs/p310/lib/python3.10/os.py", line 243, in removedirs
+    rmdir(name)
+OSError: [Errno 39] Directory not empty: 'temp_tts_bot_159'
+```
+
+  1. async_remove_dir: remove dirs even if not empty
+  2. tempdirs should be created in temp, not pwd
+#+end_verse
+
 * We should add some metadata for showing when a message is in reply to another message:
 #+begin_example
 [In Reply to Message from '{replied_to_sender}': {replied_to_msg_truncated}] 
