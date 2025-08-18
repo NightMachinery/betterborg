@@ -225,8 +225,3 @@ async def split_ebook_handler(event):
                 await status_message.delete()
             except Exception:
                 pass
-        # Try to delete the user's original command (will only work for userbots)
-        try:
-            await event.delete()
-        except Exception:
-            pass
