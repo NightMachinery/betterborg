@@ -4,12 +4,14 @@ import warnings
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 from bs4 import BeautifulSoup
 
+from pynight.common_icecream import ic
 import io
 import re
 from epub_sum_lib.epubsplit import SplitEpub
 from epub_sum_lib.chunking import semantic_chunking
 
 MAX_EBOOK_CHUNK_CHARS = 92000
+MIN_EBOOK_CHUNK_CHARS = 5000
 
 
 def _extract_text_from_html(html_content: str) -> str:
@@ -63,7 +65,8 @@ def chunk_epub(epub_path: str) -> list[str]:
         if not sections:
             sections.append(list(range(len(lines))))
 
-        # Process each section
+        # Process sections and group small ones together
+        accumulated_text = ""
         for section_linenums in sections:
             # Use get_split_files to extract the raw HTML for the section
             # This is a bit of a hack, but it reuses the existing file splitting logic
@@ -79,14 +82,45 @@ def chunk_epub(epub_path: str) -> list[str]:
             if not section_text:
                 continue
 
-            # If the chapter text is too long, apply semantic chunking
-            if len(section_text) > MAX_EBOOK_CHUNK_CHARS:
+            # Add section to accumulated text
+            if accumulated_text:
+                accumulated_text += "\n\n" + section_text
+            else:
+                accumulated_text = section_text
+
+            # If accumulated text is too long, apply semantic chunking
+            if len(accumulated_text) > MAX_EBOOK_CHUNK_CHARS:
+                # ic(len(accumulated_text))
+                
                 semantic_chunks = semantic_chunking(
-                    section_text, max_chunk_size=MAX_EBOOK_CHUNK_CHARS
+                    accumulated_text, max_chunk_size=MAX_EBOOK_CHUNK_CHARS
+                )
+                
+                # Handle merging small last chunk with accumulated_text
+                for i, chunk in enumerate(semantic_chunks):
+                    if i == len(semantic_chunks) - 1 and len(chunk) < MIN_EBOOK_CHUNK_CHARS:
+                        # Keep the last small chunk in accumulated_text for next iteration
+                        accumulated_text = chunk
+                    else:
+                        final_chunks.append(chunk)
+                        if i == len(semantic_chunks) - 1:
+                            accumulated_text = ""
+                            
+            # If accumulated text is long enough, finalize it
+            elif len(accumulated_text) >= MIN_EBOOK_CHUNK_CHARS:
+                # ic(len(accumulated_text))
+                final_chunks.append(accumulated_text)
+                accumulated_text = ""
+
+        # Handle any remaining accumulated text
+        if accumulated_text:
+            if len(accumulated_text) > MAX_EBOOK_CHUNK_CHARS:
+                semantic_chunks = semantic_chunking(
+                    accumulated_text, max_chunk_size=MAX_EBOOK_CHUNK_CHARS
                 )
                 final_chunks.extend(semantic_chunks)
             else:
-                final_chunks.append(section_text)
+                final_chunks.append(accumulated_text)
 
     except Exception as e:
         print(f"Error chunking EPUB file {epub_path}: {e}")
