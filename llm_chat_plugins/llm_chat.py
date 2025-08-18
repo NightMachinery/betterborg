@@ -166,6 +166,96 @@ You are a helpful and knowledgeable assistant. Your primary audience is advanced
 **Formatting:** You can use Telegram's markdown: `**bold**`, `__italic__`, `` `code` ``, `[links](https://example.com)`, and ```pre``` blocks.
 """
 
+
+# --- Event Proxy ---
+class ProxyEvent:
+    """A lightweight proxy around a Telethon event.
+
+    Forwards all attributes/methods to the original event unless overridden.
+    We override `message`, `text`, and `id` when needed while keeping the
+    original `client`, `chat_id`, `sender_id`, etc.
+    """
+
+    def __init__(
+        self,
+        base_event,
+        *,
+        message=None,
+        text: Optional[str] = None,
+        id: Optional[int] = None,
+    ):
+        self._base_event = base_event
+        self._override_message = message
+        self._override_text = text
+        self._override_id = id
+
+    # Explicit overrides / pass-throughs commonly used in this codebase
+    @property
+    def client(self):  # type: ignore
+        return self._base_event.client
+
+    @property
+    def chat_id(self):  # type: ignore
+        return getattr(self._base_event, "chat_id", None)
+
+    @property
+    def sender_id(self):  # type: ignore
+        return getattr(self._base_event, "sender_id", None)
+
+    @property
+    def is_private(self):  # type: ignore
+        return getattr(self._base_event, "is_private", None)
+
+    @property
+    def id(self):  # type: ignore
+        if self._override_id is not None:
+            return self._override_id
+        return getattr(self._base_event, "id", None)
+
+    @property
+    def message(self):  # type: ignore
+        return (
+            self._override_message
+            if self._override_message is not None
+            else getattr(self._base_event, "message", None)
+        )
+
+    @message.setter
+    def message(self, value):  # type: ignore
+        self._override_message = value
+
+    @property
+    def text(self):  # type: ignore
+        if self._override_text is not None:
+            return self._override_text
+        return getattr(self._base_event, "text", None)
+
+    @text.setter
+    def text(self, value):  # type: ignore
+        self._override_text = value
+
+    # Convenience methods matching Telethon event API
+    async def reply(self, *args, **kwargs):  # type: ignore
+        file = kwargs.pop("file", None)
+        if file is not None:
+            return await self.client.send_file(
+                self.chat_id, file, reply_to=self.id, **kwargs
+            )
+        return await self.client.send_message(
+            self.chat_id, *args, reply_to=self.id, **kwargs
+        )
+
+    async def respond(self, *args, **kwargs):  # type: ignore
+        file = kwargs.pop("file", None)
+        if file is not None:
+            return await self.client.send_file(self.chat_id, file, **kwargs)
+        return await self.client.send_message(self.chat_id, *args, **kwargs)
+
+    def __getattr__(self, name):
+        # Fallback to original event for everything else (download_media, edit, answer, etc.)
+        return getattr(self._base_event, name)
+
+
 # Directory for logs, mirroring the STT plugin's structure
 LOG_DIR = Path(os.path.expanduser("~/.borg/llm_chat/log/"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -942,9 +1032,11 @@ async def _check_url_mimetype(url: str) -> Optional[str]:
             try:
                 head_resp = await client.head(url)
                 if head_resp.status_code == 200:
-                    head_ct = head_resp.headers.get("content-type", "").split(";")[0].lower()
+                    head_ct = (
+                        head_resp.headers.get("content-type", "").split(";")[0].lower()
+                    )
                     if head_ct and head_ct not in ("text/plain", "text/html"):
-                        ic(head_ct)
+                        # ic(head_ct)
                         return head_ct
             except (httpx.TimeoutException, httpx.RequestError):
                 # Fall through to GET fallback
@@ -954,9 +1046,11 @@ async def _check_url_mimetype(url: str) -> Optional[str]:
             try:
                 get_resp = await client.get(url, headers={"Range": "bytes=0-0"})
                 if get_resp.status_code in (200, 206):
-                    get_ct = get_resp.headers.get("content-type", "").split(";")[0].lower()
+                    get_ct = (
+                        get_resp.headers.get("content-type", "").split(";")[0].lower()
+                    )
                     if get_ct:
-                        ic(get_ct)
+                        # ic(get_ct)
                         return get_ct
             except (httpx.TimeoutException, httpx.RequestError):
                 pass
@@ -968,7 +1062,9 @@ async def _check_url_mimetype(url: str) -> Optional[str]:
     return None
 
 
-async def _download_audio_from_url(url: str, *, temp_dir: Path) -> Tuple[Optional[Path], Optional[str]]:
+async def _download_audio_from_url(
+    url: str, *, temp_dir: Path
+) -> Tuple[Optional[Path], Optional[str]]:
     """
     Downloads audio from URL and returns the file path.
 
@@ -986,7 +1082,9 @@ async def _download_audio_from_url(url: str, *, temp_dir: Path) -> Tuple[Optiona
             async with client.stream("GET", url) as response:
                 status = response.status_code
                 final_url = str(response.url)
-                content_type = response.headers.get("content-type", "").split(";")[0].lower()
+                content_type = (
+                    response.headers.get("content-type", "").split(";")[0].lower()
+                )
 
                 if status not in (200, 206):
                     return None, (
@@ -1054,21 +1152,29 @@ async def _process_audio_url_magic(event, url: str) -> bool:
 
         # Send the audio file to the chat as a normal file upload
         print(f"Sending audio file: {audio_file_path}")
-        audio_message = await event.respond(file=str(audio_file_path))
+        audio_message = await event.reply(file=str(audio_file_path))
+        audio_message._role = "user"
+        #: This role will only persist for the current conversation turn.
+        #: But it should be enough.
+
+        new_text = ".suma\n\nIMPORTANT: The file has been given to you in this same message. It was downloaded for you from the URL in the previous message."
+        audio_message.text = new_text
+        #: This text will only persist for the current conversation turn.
+
         print(f"Audio message sent: {audio_message}")
         # @todo0 delete audio_file_path
 
-        # Create a copy of the original event and patch it with .suma text
-        patched_event = copy.copy(event)
-        patched_event.message = audio_message
-        patched_event.message.text = ".suma"
-        ic(patched_event.message.text)
-
-        # Process the patched event through the normal chat handler
+        # Build a proxy event that points to the uploaded audio message
+        proxy = ProxyEvent(
+            event,
+            message=audio_message,
+            text=new_text,
+            id=getattr(audio_message, "id", None),
+        )
         try:
-            await chat_handler(patched_event)
+            await chat_handler(proxy)
         finally:
-            #: We don't want this URL processed normally at this stage, even if an error happens.
+            # We don't want this URL processed normally at this stage, even if an error happens.
             return True
 
     except Exception as e:
@@ -1139,7 +1245,7 @@ async def _call_llm_with_retry(
     max_retries: int = MAX_RETRIES,
 ) -> LLMResponse:
     """Call LLM with retry logic for both streaming and non-streaming responses.
-    
+
     Returns:
         LLMResponse: Response containing text and finish_reason
     """
@@ -1177,7 +1283,9 @@ async def _call_llm_with_retry(
         else:
             # Non-streaming mode
             content = response.choices[0].message.content or ""
-            finish_reason = response.choices[0].finish_reason if response.choices else None
+            finish_reason = (
+                response.choices[0].finish_reason if response.choices else None
+            )
             return LLMResponse(text=content, finish_reason=finish_reason)
 
     except (
@@ -2329,6 +2437,10 @@ async def _get_message_role(message: Message) -> str:
     role = "user"
     original_sender_id = None
 
+    if hasattr(message, "_role"):
+        #: allows forcefully setting a role programmatically
+        return message._role
+
     if message.forward and message.forward.from_id:
         # from_id is a Peer object; we only care about user-to-user forwards for role assignment.
         original_sender_id = getattr(message.forward.from_id, "user_id", None)
@@ -2357,6 +2469,8 @@ async def _process_message_content(
     """Processes a single message's text and media into litellm content parts."""
     text_buffer, media_parts, warnings = [], [], []
 
+    # ic(message, message.text)
+
     # Filter out meta-info messages and commands from history
     if (
         role == "assistant"
@@ -2379,11 +2493,15 @@ async def _process_message_content(
         prefix_detection = _detect_and_process_message_prefix(processed_text)
         processed_text = prefix_detection.processed_text
 
-        stripped_text = processed_text.strip()
+        # Apply prompt replacements with simple regex substitutions.
+        # Apply each pattern at most once per message.
         for pattern, replacement in PROMPT_REPLACEMENTS.items():
-            if pattern.fullmatch(stripped_text):
-                processed_text = replacement
-                break
+            processed_text = pattern.sub(
+                replacement,
+                processed_text,
+                # count=1,
+                #: By default, `re.sub` replaces all occurrences of the pattern in the string.
+            )
 
     if not message.is_private and role == "user" and processed_text and BOT_USERNAME:
         stripped = processed_text.strip()
@@ -2423,8 +2541,6 @@ async def _process_message_content(
 async def _finalize_content_parts(text_buffer: list, media_parts: list) -> list:
     """Combines text and media parts into a final list for a history entry."""
     content_parts = []
-    if text_buffer:
-        content_parts.append({"type": "text", "text": "\n".join(text_buffer)})
 
     text_from_files = []
     for part in media_parts:
@@ -2432,6 +2548,11 @@ async def _finalize_content_parts(text_buffer: list, media_parts: list) -> list:
             text_from_files.append(part["text"])
         else:
             content_parts.append(part)
+
+    #: It seems that if the media parts are put first, the model will also see them first? I am not really sure, but it seems to help the model not say it doesn't have access to files when a file and its textual instructions are in the same message.
+    
+    if text_buffer:
+        content_parts.append({"type": "text", "text": "\n".join(text_buffer)})
 
     if text_from_files:
         combined_file_text = "\n".join(text_from_files)
@@ -4869,6 +4990,7 @@ async def chat_handler(event):
     """Main handler for all non-command messages in a private chat."""
     user_id = event.sender_id
     chat_id = event.chat_id
+    # ic(user_id, chat_id)
 
     # Intercept if user is in any waiting state first.
     if llm_db.is_awaiting_key(user_id) or user_id in AWAITING_INPUT_FROM_USERS:
@@ -5021,6 +5143,7 @@ async def chat_handler(event):
         messages = history_result.history
         warnings = history_result.warnings
 
+        # ic(messages)
         if not messages:
             unique_warnings = sorted(list(set(warnings)))
             warning_text = "\n".join(f"• {w}" for w in unique_warnings)
@@ -5099,7 +5222,9 @@ async def chat_handler(event):
                 response_message,
                 model_capabilities,
             )
-            finish_reason = None  # Native Gemini image generation doesn't provide finish_reason
+            finish_reason = (
+                None  # Native Gemini image generation doesn't provide finish_reason
+            )
         elif use_streaming:
             # Streaming response handling with retries
             edit_interval = get_streaming_delay(model_in_use)
