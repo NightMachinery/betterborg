@@ -84,7 +84,20 @@ You will be given a series of images that are part of a single, related sequence
 *Create a Single Footer:* Place all the consolidated, recurring information you identified in the previous step just once at the very end of the document, creating a clean footer.
 
 The goal is to produce a single, clean document as if it were the original, without the page breaks and repeated headers or footers from the images.
-"""
+""",
+    re.compile(
+        r"^\.sumafa$", re.MULTILINE | re.IGNORECASE
+    ): r"""سلام رفیق، لطفاً به این فایل صوتی به طور کامل گوش کن و یک تحلیل جامع و مفصل از کل محتوای اون ارائه بده.
+
+برای اینکه جواب کامل و دقیق باشه، لطفاً این موارد رو حتماً رعایت کن:
+
+*   پوشش کامل: خلاصه باید از اولین تا آخرین دقیقه فایل صوتی رو پوشش بده، نه فقط بخش‌های ابتدایی. استثنا: تبلیغات رو skip کن.
+*   ساختار منطقی: تحلیل رو به بخش‌های منطقی تقسیم کن. مثلاً بر اساس گوینده‌ها (مجری، مهمانان، تماس‌گیرندگان) یا موضوعات اصلی که به ترتیب مطرح شدن.
+*   جزئیات و استدلال‌ها: فقط به کلیات اشاره نکن. استدلال‌های اصلی هر شخص، مثال‌های مهمی که زدن، و نکات کلیدی بحث رو با جزئیات بیار.
+*   مشخص کردن گوینده: حتماً مشخص کن هر حرف یا تحلیل از طرف چه کسی بوده.
+*   لحن و سیر بحث: به سیر تکاملی گفتگو و تغییر لحن شرکت‌کنندگان در طول برنامه هم اشاره کن.
+
+خلاصه اینکه یک جواب کامل و طولانی می‌خوام که انگار خودم نشستم و با دقت به کل برنامه گوش دادم. مرسی!""",
 }
 DEFAULT_SYSTEM_PROMPT = """
 You are a helpful and knowledgeable assistant with the personality of a smart, highly agentic friend. Your primary audience is advanced STEM postgraduate researchers, so be precise and technically accurate while maintaining warmth and engagement.
@@ -1033,7 +1046,10 @@ async def _handle_native_gemini_image_generation(
     """
     try:
         client = llm_util.create_genai_client(
-            api_key=api_key, user_id=event.sender_id, read_bufsize=2 * 2**20, proxy_p=True,
+            api_key=api_key,
+            user_id=event.sender_id,
+            read_bufsize=2 * 2**20,
+            proxy_p=True,
         )
 
         # Initialize model capabilities and warnings tracking if not provided
@@ -1634,7 +1650,9 @@ async def _process_media(
                 if check_gemini_cached_files_p:
                     try:
                         if gemini_client is None:
-                            gemini_client = llm_util.create_genai_client(api_key=api_key, user_id=sender_id)
+                            gemini_client = llm_util.create_genai_client(
+                                api_key=api_key, user_id=sender_id
+                            )
 
                         # This API call verifies the file's existence.
                         await gemini_client.aio.files.get(name=cached_info["name"])
@@ -1700,7 +1718,9 @@ async def _process_media(
 
             # Upload to Gemini Files API
             if gemini_client is None:
-                gemini_client = llm_util.create_genai_client(api_key=api_key, user_id=sender_id)
+                gemini_client = llm_util.create_genai_client(
+                    api_key=api_key, user_id=sender_id
+                )
             with tempfile.NamedTemporaryFile(
                 delete=False, suffix=Path(filename).suffix
             ) as temp_f:
@@ -4070,7 +4090,9 @@ async def testlive_handler(event):
         import tempfile
 
         # Create client using the shared helper function
-        client = llm_util.create_genai_client(api_key=api_key, user_id=user_id, proxy_p=True)
+        client = llm_util.create_genai_client(
+            api_key=api_key, user_id=user_id, proxy_p=True
+        )
         # Try a more basic live model first
         model = "gemini-2.0-flash-live-001"
 
@@ -4586,6 +4608,7 @@ async def chat_handler(event):
         response_message = await event.reply(f"{BOT_META_INFO_PREFIX}...")
 
     import tempfile
+
     temp_dir = Path(tempfile.gettempdir()) / f"temp_llm_chat_{event.id}"
     try:
         temp_dir.mkdir(exist_ok=True)
