@@ -53,7 +53,7 @@ def get_proxy_config_or_error(user_id: int) -> tuple[str | None, str | None]:
     if not proxy_url:
         return None, None
 
-    if GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P and not util.is_admin_by_id(user_id):
+    if GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P and not util.is_admin_by_id(user_id, additional_admins=[467602588,]):
         raise ProxyRestrictedException(
             "🚫 This Gemini feature is currently unavailable due to regional restrictions. "
             "Our servers operate within EU jurisdiction where certain advanced AI capabilities "
@@ -89,6 +89,7 @@ def create_genai_client(
             print(f"LLM_Util: Using proxy {proxy_url} for user {user_id}")
 
     if read_bufsize is not None:
+        #: @G25 The buffer size is per concurrent request. Setting it to 100MB means that if you have, for example, 5 simultaneous live sessions running, you could see up to 500MB of memory being used just for these buffers during active data streaming. This is why it's a trade-off between preventing the "Chunk too big" error and managing server memory efficiently.
         async_client_args["read_bufsize"] = read_bufsize
 
     http_options = types.HttpOptions(
