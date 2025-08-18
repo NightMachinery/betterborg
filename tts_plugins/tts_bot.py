@@ -176,6 +176,7 @@ async def message_handler(event, *, log_p=True):
 
     status_message = await event.reply("Processing...")
     import tempfile
+
     temp_dir = Path(tempfile.gettempdir()) / f"temp_tts_bot_{event.id}"
     ogg_file_path = None
 

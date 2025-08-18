@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from pynight.common_icecream import ic
 import traceback
+
 try:
     from google import genai
     from google.genai import types
@@ -134,7 +135,10 @@ class LiveSessionManager:
 
             # For live streaming, a larger buffer is beneficial.
             client = llm_util.create_genai_client(
-                api_key=api_key, user_id=user_id, read_bufsize=10 * 2**20, proxy_p=True,
+                api_key=api_key,
+                user_id=user_id,
+                read_bufsize=10 * 2**20,
+                proxy_p=True,
             )
 
             # Create live session connection object

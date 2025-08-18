@@ -7,11 +7,16 @@ import pypdf
 import unicodedata
 import logging
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
 
 @click.command()
 @click.option("--dry-run", is_flag=True, help="Simulate a split")
-@click.option("--regex", nargs=1, help="Select outline items that match a RegEx pattern")
+@click.option(
+    "--regex", nargs=1, help="Select outline items that match a RegEx pattern"
+)
 @click.option("--overlap", is_flag=True, help="Overlap split points")
 @click.option("--prefix", nargs=1, help="Filename prefix")
 @click.argument("file")
@@ -19,19 +24,21 @@ def main(dry_run: bool, regex: str, overlap: bool, prefix: str, file: str):
     if not os.path.exists(file):
         print(f"Error: File '{file}' does not exist.")
         sys.exit(0)
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.basicConfig(
+        level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
     try:
         pdf = pypdf.PdfReader(input_file)
-        
+
         # Check if the PDF is encrypted
         if pdf.is_encrypted:
             logging.error(f"Error: PDF file '{input_file}' is encrypted.")
             return
-        
+
         # Process the PDF (e.g., extract TOC, pages, etc.)
         logging.info(f"Successfully loaded PDF: {input_file}")
         # Add further processing logic here
-        
+
     except pypdf.errors.PdfReadError as e:
         logging.error(f"Error reading PDF: {str(e)}", exc_info=True)
         sys.exit(1)
@@ -49,13 +56,15 @@ def main(dry_run: bool, regex: str, overlap: bool, prefix: str, file: str):
     page_ranges = prepare_page_ranges(toc, regex, overlap, page_count)
 
     if len(page_ranges) == 0:
-        print("No outline items match the RegEx." if regex else "No outline items found.")
+        print(
+            "No outline items match the RegEx." if regex else "No outline items found."
+        )
     else:
         if prefix is not None:
             prefix = safe_filename(prefix)
 
         file_name = os.path.splitext(os.path.basename(file))[0].replace(" ", "-")
-        file_name = re.sub(r'[^\w\-_]', '', file_name)
+        file_name = re.sub(r"[^\w\-_]", "", file_name)
         output_dir = f"out/{file_name}/"
 
         os.makedirs(output_dir, exist_ok=True)
@@ -65,9 +74,11 @@ def main(dry_run: bool, regex: str, overlap: bool, prefix: str, file: str):
         else:
             split_pdf(pdf, page_ranges, prefix, output_dir)
 
+
 class OutlineItem(TypedDict):
     name: str
     page: int
+
 
 def get_toc(pdf: pypdf.PdfReader) -> List[OutlineItem]:
     """
@@ -101,14 +112,23 @@ def get_toc(pdf: pypdf.PdfReader) -> List[OutlineItem]:
                     try:
                         page_number = pdf.get_destination_page_number(item)
                         if page_number is None:
-                            logging.warning(f"Skipping TOC item '{title}' with no valid page number.")
+                            logging.warning(
+                                f"Skipping TOC item '{title}' with no valid page number."
+                            )
                             continue
                     except Exception as e:
-                        logging.error(f"Error retrieving page number for TOC item '{title}': {e}")
+                        logging.error(
+                            f"Error retrieving page number for TOC item '{title}': {e}"
+                        )
                         continue
 
                     # Normalize and clean up the title
-                    title = unicodedata.normalize("NFKD", title).replace("\r", " ").replace("\n", " ").replace("\t", " ")
+                    title = (
+                        unicodedata.normalize("NFKD", title)
+                        .replace("\r", " ")
+                        .replace("\n", " ")
+                        .replace("\t", " ")
+                    )
 
                     toc_list.append({"name": title, "page": page_number})
 
@@ -130,11 +150,15 @@ def get_toc(pdf: pypdf.PdfReader) -> List[OutlineItem]:
 
     return toc_list
 
+
 class PageRange(TypedDict):
     name: str
     page_range: tuple
 
-def prepare_page_ranges(toc: List[OutlineItem], regex: str, overlap: bool, page_count: int) -> List[PageRange]:
+
+def prepare_page_ranges(
+    toc: List[OutlineItem], regex: str, overlap: bool, page_count: int
+) -> List[PageRange]:
     page_ranges = get_page_ranges(toc, overlap, page_count)
 
     if regex is not None:
@@ -142,19 +166,24 @@ def prepare_page_ranges(toc: List[OutlineItem], regex: str, overlap: bool, page_
 
     return page_ranges
 
-def get_page_ranges(toc: List[OutlineItem], overlap: bool, page_count: int) -> List[PageRange]:
+
+def get_page_ranges(
+    toc: List[OutlineItem], overlap: bool, page_count: int
+) -> List[PageRange]:
     page_ranges = []
     for i, item in enumerate(toc):
         name = item["name"]
         if len(name) == 0:
             name = "Untitled Section"
         if len([item for item in page_ranges if name is item["name"]]) > 0:
-            name += " {}".format(len([item for item in page_ranges if name in item["name"]]) + 1)
+            name += " {}".format(
+                len([item for item in page_ranges if name in item["name"]]) + 1
+            )
         start_page = item["page"]
         end_page = toc[i + 1]["page"] - 1 if i + 1 < len(toc) else page_count - 1
         if overlap and i + 1 < len(toc):
             end_page = toc[i + 1]["page"]
-        
+
         # Adjust ranges to ensure no single-page ranges and no overlaps
         if start_page == end_page:
             if i + 1 < len(toc):
@@ -165,22 +194,33 @@ def get_page_ranges(toc: List[OutlineItem], overlap: bool, page_count: int) -> L
             end_page = toc[i + 1]["page"] - 1
 
         page_ranges.append({"name": name, "page_range": (start_page, end_page)})
-    
+
     # Merge single-page ranges with the next range
     merged_page_ranges = []
     for i in range(len(page_ranges)):
-        if i < len(page_ranges) - 1 and page_ranges[i]["page_range"][1] == page_ranges[i + 1]["page_range"][0]:
-            page_ranges[i + 1]["page_range"] = (page_ranges[i]["page_range"][0], page_ranges[i + 1]["page_range"][1])
+        if (
+            i < len(page_ranges) - 1
+            and page_ranges[i]["page_range"][1] == page_ranges[i + 1]["page_range"][0]
+        ):
+            page_ranges[i + 1]["page_range"] = (
+                page_ranges[i]["page_range"][0],
+                page_ranges[i + 1]["page_range"][1],
+            )
         else:
             merged_page_ranges.append(page_ranges[i])
-    
+
     return merged_page_ranges
 
-def split_pdf(pdf: pypdf.PdfReader, page_ranges: List[PageRange], prefix: str, output_dir: str):
+
+def split_pdf(
+    pdf: pypdf.PdfReader, page_ranges: List[PageRange], prefix: str, output_dir: str
+):
     for i, page_range in enumerate(page_ranges, start=1):
         pdf_writer = pypdf.PdfWriter()
         start_page, end_page = page_range["page_range"]
-        logging.debug(f"Splitting pages {start_page} to {end_page} for '{page_range['name']}'")
+        logging.debug(
+            f"Splitting pages {start_page} to {end_page} for '{page_range['name']}'"
+        )
         pdf_writer.append(
             fileobj=pdf,
             pages=(start_page, end_page + 1),
@@ -199,6 +239,7 @@ def split_pdf(pdf: pypdf.PdfReader, page_ranges: List[PageRange], prefix: str, o
             pdf_writer.write(output)
 
         logging.info(f"Created file '{output_path}'")
+
 
 def dry_run_toc_split(page_ranges: List[PageRange], prefix: str, output_dir: str):
     print("With current options, the following PDF files would be created.\n")
@@ -229,17 +270,21 @@ def dry_run_toc_split(page_ranges: List[PageRange], prefix: str, output_dir: str
                 )
             )
 
+
 def safe_filename(filename: str, max_length: int = 100) -> str:
     # Remove invalid characters
     sanitized = "".join(c for c in filename if c.isalnum() or c in (" ", ".", "_", "-"))
     # Truncate to a maximum length
     return sanitized[:max_length].strip()
 
+
 def filter_by_regex(input_list: List[PageRange], regex: str) -> List[PageRange]:
     return [item for item in input_list if re.search(r"{}".format(regex), item["name"])]
 
+
 def get_n_levels(input_list: List[OutlineItem], level: int) -> List[OutlineItem]:
     return [item for item in input_list if item["level"] <= level]
+
 
 if __name__ == "__main__":
     main()

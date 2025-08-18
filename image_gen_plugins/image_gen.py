@@ -442,6 +442,7 @@ async def generate_image(prompt: str, user_id: int) -> list:
     try:
         # Initialize client using the shared helper function
         from uniborg import llm_util
+
         client = llm_util.create_genai_client(api_key=api_key, user_id=user_id)
 
         # Prepare configuration

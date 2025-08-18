@@ -53,7 +53,12 @@ def get_proxy_config_or_error(user_id: int) -> tuple[str | None, str | None]:
     if not proxy_url:
         return None, None
 
-    if GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P and not util.is_admin_by_id(user_id, additional_admins=[467602588,]):
+    if GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P and not util.is_admin_by_id(
+        user_id,
+        additional_admins=[
+            467602588,
+        ],
+    ):
         raise ProxyRestrictedException(
             "🚫 This Gemini feature is currently unavailable due to regional restrictions. "
             "Our servers operate within EU jurisdiction where certain advanced AI capabilities "
@@ -64,7 +69,11 @@ def get_proxy_config_or_error(user_id: int) -> tuple[str | None, str | None]:
 
 
 def create_genai_client(
-    api_key: str, *, user_id: int = None, read_bufsize: int = None, proxy_p: bool = False
+    api_key: str,
+    *,
+    user_id: int = None,
+    read_bufsize: int = None,
+    proxy_p: bool = False,
 ) -> "genai.Client":
     """
     Creates and configures a genai.Client with optional proxy support and buffer size.

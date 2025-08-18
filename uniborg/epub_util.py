@@ -91,21 +91,24 @@ def chunk_epub(epub_path: str) -> list[str]:
             # If accumulated text is too long, apply semantic chunking
             if len(accumulated_text) > MAX_EBOOK_CHUNK_CHARS:
                 # ic(len(accumulated_text))
-                
+
                 semantic_chunks = semantic_chunking(
                     accumulated_text, max_chunk_size=MAX_EBOOK_CHUNK_CHARS
                 )
-                
+
                 # Handle merging small last chunk with accumulated_text
                 for i, chunk in enumerate(semantic_chunks):
-                    if i == len(semantic_chunks) - 1 and len(chunk) < MIN_EBOOK_CHUNK_CHARS:
+                    if (
+                        i == len(semantic_chunks) - 1
+                        and len(chunk) < MIN_EBOOK_CHUNK_CHARS
+                    ):
                         # Keep the last small chunk in accumulated_text for next iteration
                         accumulated_text = chunk
                     else:
                         final_chunks.append(chunk)
                         if i == len(semantic_chunks) - 1:
                             accumulated_text = ""
-                            
+
             # If accumulated text is long enough, finalize it
             elif len(accumulated_text) >= MIN_EBOOK_CHUNK_CHARS:
                 # ic(len(accumulated_text))
