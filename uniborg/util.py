@@ -957,7 +957,10 @@ async def async_remove_file(file_path: str):
 async def async_remove_dir(dir_path: str):
     """Async directory removal with error handling."""
     try:
-        await aiofiles.os.removedirs(dir_path)
+        # Use shutil.rmtree to remove directory and all its contents
+        await asyncio.get_event_loop().run_in_executor(
+            None, shutil.rmtree, dir_path, True  # ignore_errors=True
+        )
     except Exception:
         traceback.print_exc()
         pass  # Ignore cleanup errors
