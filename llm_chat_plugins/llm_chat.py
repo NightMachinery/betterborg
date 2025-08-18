@@ -94,6 +94,19 @@ You will be given a series of images that are part of a single, related sequence
 The goal is to produce a single, clean document as if it were the original, without the page breaks and repeated headers or footers from the images.
 """,
     re.compile(
+        r"^\.suma$", re.MULTILINE | re.IGNORECASE
+    ): r"""Please listen to this audio file completely and provide a comprehensive, detailed analysis of its entire content.
+
+To ensure your response is complete and accurate, please follow these guidelines:
+
+* **Complete Coverage**: The summary should cover the audio from the first to the last minute, not just the beginning sections. Exception: Skip advertisements.
+* **Logical Structure**: Organize the analysis into logical sections based on speakers (hosts, guests, callers) or main topics discussed in order.
+* **Details and Arguments**: Don't just mention general topics. Include main arguments from each person, important examples they gave, and key discussion points with details.
+* **Speaker Identification**: Clearly identify who said what or which analysis comes from whom.
+* **Tone and Discussion Flow**: Note the evolutionary flow of the conversation and changes in participants' tone throughout the program.
+
+In summary, I want a complete and lengthy response as if I sat down and carefully listened to the entire program myself. Thanks!""",
+    re.compile(
         r"^\.sumafa$", re.MULTILINE | re.IGNORECASE
     ): r"""سلام رفیق، لطفاً به این فایل صوتی به طور کامل گوش کن و یک تحلیل جامع و مفصل از کل محتوای اون ارائه بده.
 
@@ -166,6 +179,9 @@ IMAGE_GENERATION_MODELS = GEMINI_IMAGE_GENERATION_MODELS
 # "SKIP": Skip the system message for native gemini image models
 # "PREPEND": Prepend the system message to the first prompt and add "\n\n---\n"
 GEMINI_IMAGE_GEN_SYSTEM_MODE = os.getenv("GEMINI_IMAGE_GEN_SYSTEM_MODE", "SKIP")
+
+# Audio URL Magic: automatically process URLs pointing to audio files
+AUDIO_URL_MAGIC_P = os.getenv("AUDIO_URL_MAGIC_P", "True").lower() in ("true", "1", "yes")
 
 # Security constants for image processing
 MAX_IMAGE_SIZE = 50 * 1024 * 1024  # 50MB limit
@@ -770,6 +786,120 @@ def _detect_and_process_message_prefix(text: str) -> PrefixProcessResult:
                 return PrefixProcessResult(model=model, processed_text=processed_text)
 
     return PrefixProcessResult(processed_text=text)
+
+
+def _is_url_only_message(text: str) -> Optional[str]:
+    """
+    Checks if a message contains only a single URL.
+    
+    Args:
+        text: The message text to check
+        
+    Returns:
+        The URL if message contains only a URL, None otherwise
+    """
+    if not text:
+        return None
+    
+    text = text.strip()
+    if not text:
+        return None
+    
+    # Simple URL detection pattern - matches http/https URLs
+    url_pattern = re.compile(
+        r'^https?://[^\s/$.?#].[^\s]*$',
+        re.IGNORECASE
+    )
+    
+    match = url_pattern.match(text)
+    return match.group(0) if match else None
+
+
+async def _check_url_mimetype(url: str) -> Optional[str]:
+    """
+    Checks the mimetype of a URL using HTTP HEAD request without downloading.
+    
+    Args:
+        url: The URL to check
+        
+    Returns:
+        The mimetype string if successful, None otherwise
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.head(url, follow_redirects=True)
+            if response.status_code == 200:
+                return response.headers.get('content-type', '').split(';')[0].lower()
+    except Exception as e:
+        logger.warning(f"Failed to check URL mimetype for {url}: {e}")
+    return None
+
+
+async def _process_audio_url_magic(event, url: str, *, temp_dir: Path) -> bool:
+    """
+    Processes an audio URL by downloading it and preparing for .suma prompt.
+    
+    Args:
+        event: The Telegram event
+        url: The URL to download
+        temp_dir: Temporary directory for storing downloaded file
+        
+    Returns:
+        True if audio was successfully processed, False otherwise
+    """
+    try:
+        # Download the audio file
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url)
+            if response.status_code != 200:
+                return False
+            
+            # Determine file extension from content-type or URL
+            content_type = response.headers.get('content-type', '').split(';')[0].lower()
+            extension = mimetypes.guess_extension(content_type) or '.audio'
+            if extension == '.audio':
+                # Fallback to URL-based extension detection
+                parsed_url = url.lower()
+                for ext in ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac']:
+                    if ext in parsed_url:
+                        extension = ext
+                        break
+            
+            # Save audio file
+            audio_file = temp_dir / f"audio_download{extension}"
+            with open(audio_file, 'wb') as f:
+                f.write(response.content)
+            
+            # Create fake file and media objects to simulate uploaded audio
+            fake_file = type('FakeFile', (), {
+                'name': audio_file.name,
+                'size': len(response.content),
+                'mime_type': content_type
+            })()
+            
+            fake_document = type('FakeDocument', (), {
+                'mime_type': content_type,
+                'file_name': audio_file.name,
+                'size': len(response.content)
+            })()
+            
+            fake_media = type('FakeMedia', (), {
+                'document': fake_document
+            })()
+            
+            # Attach fake media to event to trigger normal audio processing
+            event.media = fake_media
+            event.file = fake_file
+            
+            # Override download_media to return our downloaded file
+            original_download_media = event.download_media
+            event.download_media = lambda file=None: str(audio_file)
+            
+            return True
+            
+    except Exception as e:
+        logger.error(f"Failed to process audio URL {url}: {e}")
+        return False
 
 
 def _get_effective_model_and_service(
@@ -4647,6 +4777,39 @@ async def chat_handler(event):
 
     # Detect model prefix and process message text
     prefix_result = _detect_and_process_message_prefix(event.text)
+
+    # Audio URL Magic: Check if message contains only a URL pointing to audio
+    if (AUDIO_URL_MAGIC_P 
+        and await util.isAdmin(event) 
+        and not event.file 
+        and not group_id):
+        
+        # Use processed text from prefix detection (in case prefixes were stripped)
+        text_to_check = prefix_result.processed_text or event.text
+        url = _is_url_only_message(text_to_check)
+        
+        if url:
+            mimetype = await _check_url_mimetype(url)
+            if mimetype and get_media_type(mimetype) == "audio":
+                # Create temp directory early for audio processing
+                import tempfile
+                temp_dir = Path(tempfile.gettempdir()) / f"temp_llm_chat_{event.id}"
+                temp_dir.mkdir(exist_ok=True)
+                
+                try:
+                    # Process the audio URL
+                    success = await _process_audio_url_magic(event, url, temp_dir=temp_dir)
+                    if success:
+                        # Modify event text to use .suma prompt (which will be processed by PROMPT_REPLACEMENTS)
+                        event.message.text = ".suma"
+                        # Continue with normal processing - the audio file is now in temp_dir
+                    else:
+                        await event.reply(f"{BOT_META_INFO_PREFIX}❌ Failed to download audio from URL.")
+                        return
+                except Exception as e:
+                    logger.error(f"Audio URL magic failed: {e}")
+                    await event.reply(f"{BOT_META_INFO_PREFIX}❌ Error processing audio URL.")
+                    return
 
     # Determine effective model and service (with prefix model override)
     model_in_use, service_needed = _get_effective_model_and_service(
