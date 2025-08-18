@@ -1151,7 +1151,7 @@ async def _process_audio_url_magic(event, url: str) -> bool:
             return False
 
         # Send the audio file to the chat as a normal file upload
-        print(f"Sending audio file: {audio_file_path}")
+        print(f"Sending downloaded audio file: {audio_file_path}")
         audio_message = await event.reply(file=str(audio_file_path))
         audio_message._role = "user"
         #: This role will only persist for the current conversation turn.
@@ -1161,8 +1161,13 @@ async def _process_audio_url_magic(event, url: str) -> bool:
         audio_message.text = new_text
         #: This text will only persist for the current conversation turn.
 
-        print(f"Audio message sent: {audio_message}")
-        # @todo0 delete audio_file_path
+        # print(f"Audio message sent: {audio_message}")
+        
+        # Clean up the temporary audio file
+        try:
+            Path(audio_file_path).unlink()
+        except OSError as e:
+            logger.warning(f"Failed to delete temporary audio file {audio_file_path}: {e}")
 
         # Build a proxy event that points to the uploaded audio message
         proxy = ProxyEvent(
