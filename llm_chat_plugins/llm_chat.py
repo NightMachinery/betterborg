@@ -938,9 +938,9 @@ async def _check_url_mimetype(url: str) -> Optional[str]:
                 content_type = (
                     response.headers.get("content-type", "").split(";")[0].lower()
                 )
-                # Only return if it's actually an audio mimetype
-                if content_type.startswith("audio/"):
-                    return content_type
+                ic(content_type)
+
+                return content_type
 
     except (httpx.TimeoutException, httpx.RequestError) as e:
         logger.warning(f"Network error checking URL {url}: {e}")
