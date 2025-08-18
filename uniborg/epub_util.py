@@ -1,0 +1,97 @@
+from bs4 import XMLParsedAsHTMLWarning
+import warnings
+
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+from bs4 import BeautifulSoup
+
+import io
+import re
+from epub_sum_lib.epubsplit import SplitEpub
+from epub_sum_lib.chunking import semantic_chunking
+
+# Use a value consistent with lib/chunking.py's default max_chunk_size
+MAX_EBOOK_CHUNK_CHARS = 9200
+
+
+def _extract_text_from_html(html_content: str) -> str:
+    """Extracts clean text from an HTML string."""
+    soup = BeautifulSoup(html_content, "html.parser")
+    # Clean up spacing by replacing multiple newlines with a single one
+    return re.sub(r"\n\s*\n", "\n\n", soup.get_text(separator="\n", strip=True))
+
+
+def chunk_epub(epub_path: str) -> list[str]:
+    """
+    Chunks an EPUB file using a sophisticated two-stage process:
+
+    1.  **Structural Splitting**: The EPUB is first divided into sections
+        based on its Table of Contents (chapters).
+    2.  **Semantic Chunking**: If a chapter's text is too long, it is
+        further divided into smaller, semantically coherent chunks.
+
+    Args:
+        epub_path: Path to the EPUB file.
+
+    Returns:
+        A list of text chunks.
+    """
+    final_chunks = []
+    try:
+        # Open the EPUB file in memory
+        with open(epub_path, "rb") as f:
+            epub_io = io.BytesIO(f.read())
+
+        splitter = SplitEpub(epub_io)
+        lines = splitter.get_split_lines()
+
+        # Group split lines into sections based on TOC entries
+        sections = []
+        current_section_lines = []
+        for i, line in enumerate(lines):
+            # A TOC entry marks the beginning of a new section
+            if line.get("toc"):
+                if current_section_lines:
+                    sections.append(current_section_lines)
+                current_section_lines = [i]
+            # If no TOC, append to the current section
+            elif current_section_lines:
+                current_section_lines.append(i)
+
+        if current_section_lines:
+            sections.append(current_section_lines)
+
+        # If no TOC was found, treat the entire book as one section
+        if not sections:
+            sections.append(list(range(len(lines))))
+
+        # Process each section
+        for section_linenums in sections:
+            # Use get_split_files to extract the raw HTML for the section
+            # This is a bit of a hack, but it reuses the existing file splitting logic
+            # to get the precise content of each chapter.
+            files_in_section = splitter.get_split_files(section_linenums)
+
+            section_text_parts = []
+            for _, _, _, filedata in files_in_section:
+                section_text_parts.append(_extract_text_from_html(filedata))
+
+            section_text = "\n\n".join(section_text_parts).strip()
+
+            if not section_text:
+                continue
+
+            # If the chapter text is too long, apply semantic chunking
+            if len(section_text) > MAX_EBOOK_CHUNK_CHARS:
+                semantic_chunks = semantic_chunking(
+                    section_text, max_chunk_size=MAX_EBOOK_CHUNK_CHARS
+                )
+                final_chunks.extend(semantic_chunks)
+            else:
+                final_chunks.append(section_text)
+
+    except Exception as e:
+        print(f"Error chunking EPUB file {epub_path}: {e}")
+        # Optionally, re-raise or return a specific error message
+        # For now, we'll return any chunks processed so far.
+
+    return final_chunks
