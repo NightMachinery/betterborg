@@ -4797,8 +4797,10 @@ async def chat_handler(event):
         # Final text processing
         final_text = response_text.strip()
         if not final_text and not has_image:
-            finish_reason_text = f" (finish_reason: {finish_reason})" if finish_reason else ""
-            final_text = f"__[No response]{finish_reason_text}__\n\n{BOT_META_INFO_LINE}\nfinish_reason: {finish_reason}" if finish_reason else "__[No response]__"
+            final_text = f"{BOT_META_INFO_PREFIX}__[No response]__"
+            if finish_reason:
+                final_text += f" (finish_reason: `{finish_reason}`)"
+                # finish_reason += f"\n\n{BOT_META_INFO_LINE}\nfinish_reason: {finish_reason}"
 
         should_warn = WARN_UNSUPPORTED_TO_USER_P == "always" or (
             WARN_UNSUPPORTED_TO_USER_P == "private_only"
