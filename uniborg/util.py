@@ -666,7 +666,7 @@ def _find_best_split_point(
     max_length: int,
     *,
     search_direction: int = -1,
-    buffer_size=500,
+    buffer_size=600,
 ) -> int:
     """Find the best position to split text, prioritizing word boundaries and markdown preservation.
 
@@ -681,19 +681,19 @@ def _find_best_split_point(
     end_pos = min(end_pos, len(text))
     text_len = len(text) - start_pos
 
-    # Early return if text fits within limit
-    if search_direction == 0 and text_len + buffer_size <= max_length:
-        return end_pos
-    if search_direction == -1 and text_len <= max_length:
-        return end_pos
-
     # Determine search range based on direction
     if search_direction == 0:
+        if text_len + buffer_size <= max_length:
+            return end_pos
+
         # Forward search for streaming consistency
         min_pos = max(start_pos, end_pos - buffer_size)
         search_range = range(min_pos, end_pos)
     else:
         # Backward search for better quality splits
+        if text_len <= max_length:
+            return end_pos
+
         search_start = end_pos - 1
         search_limit = max(start_pos, search_start - buffer_size)
         search_range = range(search_start, search_limit - 1, -1)
@@ -704,46 +704,28 @@ def _find_best_split_point(
         for i in search_range:
             if text[i] == "\n":
                 split_pos = i + 1
-                if search_direction == 0:
-                    ic(
-                        start_pos,
-                        (min(search_range), max(search_range)),
-                        i,
-                        split_pos,
-                        "newline",
-                        text[split_pos : split_pos + 20],
-                    )
                 return split_pos
 
         # Strategy 2: Look for sentence boundaries
+
+        #: Early return. We might find a newline if the text grows later.
+        if search_direction == 0 and text_len + int(buffer_size * 0.3) <= max_length:
+            return end_pos
+
         for i in search_range:
             if text[i] in ".!?" and i + 1 < len(text) and text[i + 1] == " ":
                 split_pos = i + 1
-                if search_direction == 0:
-                    ic(
-                        start_pos,
-                        (min(search_range), max(search_range)),
-                        i,
-                        split_pos,
-                        "sentence",
-                        text[split_pos : split_pos + 20],
-                    )
                 return split_pos
 
         # Strategy 3: Look for other punctuation
         for i in search_range:
             if text[i] in ",;:" and i + 1 < len(text) and text[i + 1] == " ":
                 split_pos = i + 1
-                if search_direction == 0:
-                    ic(
-                        start_pos,
-                        (min(search_range), max(search_range)),
-                        i,
-                        split_pos,
-                        "punctuation",
-                        text[split_pos : split_pos + 20],
-                    )
                 return split_pos
+
+        #: Early return. We might fit a better strategy if the text grows later.
+        if search_direction == 0 and text_len + int(buffer_size * 0.1) <= max_length:
+            return end_pos
 
         # Strategy 4: Look for word boundaries (spaces) - lowest priority
         for i in search_range:
@@ -753,15 +735,6 @@ def _find_best_split_point(
                 while j + 1 < len(text) and text[j + 1] in " \t":
                     j += 1
                 split_pos = j + 1
-                if search_direction == 0:
-                    ic(
-                        start_pos,
-                        (min(search_range), max(search_range)),
-                        i,
-                        split_pos,
-                        "word_boundary",
-                        text[split_pos : split_pos + 20],
-                    )
                 return split_pos
 
         return None
