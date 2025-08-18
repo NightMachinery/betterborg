@@ -61,7 +61,7 @@ async def process_ebooks_and_clean(cwd, event):
 
 @borg.on(
     events.NewMessage(
-        func=lambda e: (e.is_private or e.is_group)
+        func=lambda e: e.is_private
         and e.file
         and Path(e.file.name or "").suffix.lower() in EBOOK_EXTENSIONS
     )
@@ -69,7 +69,8 @@ async def process_ebooks_and_clean(cwd, event):
 async def ebook_handler(event):
     """
     Handles incoming messages (including albums) with ebook files from admin
-    users, provides user feedback, and processes them as a single request.
+    users in private chats only, provides user feedback, and processes them as a
+    single request.
     """
     # Restrict this command to admins.
     if not await util.isAdmin(event):

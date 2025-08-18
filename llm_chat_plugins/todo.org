@@ -1,5 +1,7 @@
 #+TITLE: llm_chat_plugins/todo
 
+* DONE ebook_proceesor: do not process  in groups (event . private)
+
 * _
 #+begin_verse
 
