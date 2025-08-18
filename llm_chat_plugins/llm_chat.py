@@ -2550,7 +2550,7 @@ async def _finalize_content_parts(text_buffer: list, media_parts: list) -> list:
             content_parts.append(part)
 
     #: It seems that if the media parts are put first, the model will also see them first? I am not really sure, but it seems to help the model not say it doesn't have access to files when a file and its textual instructions are in the same message.
-    
+
     if text_buffer:
         content_parts.append({"type": "text", "text": "\n".join(text_buffer)})
 

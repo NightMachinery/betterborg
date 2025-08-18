@@ -627,6 +627,134 @@ async def remove_potential_file(file, event=None):
             )
 
 
+def _check_split_candidate(text: str, i: int) -> tuple[bool, int]:
+    """Check if position i is a valid split point and return (is_valid, split_position).
+
+    Returns:
+        (True, position) if valid split point found
+        (False, 0) if not a valid split point
+    """
+    if i >= len(text):
+        return False, 0
+
+    # Line breaks (highest priority)
+    if text[i] == "\n":
+        return True, i + 1
+
+    # Sentence boundaries
+    if text[i] in ".!?" and i + 1 < len(text) and text[i + 1] == " ":
+        return True, i + 1
+
+    # Other punctuation
+    if text[i] in ",;:" and i + 1 < len(text) and text[i + 1] == " ":
+        return True, i + 1
+
+    # Word boundaries (spaces) - lowest priority
+    if text[i] in " \t":
+        # Skip consecutive spaces and return position after the last space
+        j = i
+        while j + 1 < len(text) and text[j + 1] in " \t":
+            j += 1
+        return True, j + 1
+
+    return False, 0
+
+
+def _find_best_split_point(
+    text: str,
+    start_pos: int,
+    max_length: int,
+    *,
+    search_direction: int = -1,
+    buffer_size=500,
+) -> int:
+    """Find the best position to split text, prioritizing word boundaries and markdown preservation.
+
+    Args:
+        text: The text to split
+        start_pos: Starting position in the text
+        max_length: Maximum length of the chunk
+        search_direction: -1 for backward search (better quality splits),
+                         0 for forward search (streaming-consistent)
+    """
+    end_pos = start_pos + max_length
+    end_pos = min(end_pos, len(text))
+    text_len = len(text) - start_pos
+
+    if search_direction == 0:
+        if text_len + buffer_size <= max_length:
+            #: We will only try splitting if the text is approaching the max length allowed.
+            return end_pos
+
+        # Forward search for streaming consistency
+        min_pos = max(start_pos, end_pos - buffer_size)  # Don't go too far back
+
+        for i in range(min_pos, end_pos):
+            is_valid, split_pos = _check_split_candidate(text, i)
+            if is_valid:
+                return split_pos
+    else:
+        # Backward search for better quality splits
+        if text_len <= max_length:
+            return end_pos
+
+        search_start = end_pos - 1
+        search_limit = max(
+            start_pos, search_start - buffer_size
+        )  # Don't go too far back
+
+        for i in range(search_start, search_limit - 1, -1):
+            is_valid, split_pos = _check_split_candidate(text, i)
+            if is_valid:
+                return split_pos
+
+    # Last resort: use the max position
+    return end_pos
+
+
+def _split_message_smart(
+    message: str,
+    *,
+    max_chunk_size: int = 4000,
+    search_direction: int = -1,
+) -> list[str]:
+    """Split message into chunks with smart boundary detection.
+
+    Args:
+        message: The text to split
+        max_chunk_size: Maximum size of each chunk
+        search_direction: -1 for backward search (better quality), 0 for forward (streaming-consistent)
+    """
+    if not message:
+        return []
+
+    chunks = []
+    pos = 0
+
+    while pos < len(message):
+        # Find the best split point
+        split_pos = _find_best_split_point(
+            message, pos, max_chunk_size, search_direction=search_direction
+        )
+
+        # Ensure we make progress
+        if split_pos <= pos:
+            split_pos = min(pos + max_chunk_size, len(message))
+
+        # Extract the chunk
+        chunk = message[pos:split_pos].rstrip()
+        if chunk:
+            chunks.append(chunk)
+
+        # Skip any whitespace at the split position for the next chunk
+        while split_pos < len(message) and message[split_pos] in " \t":
+            split_pos += 1
+
+        pos = split_pos
+
+    return chunks
+
+
 async def discreet_send(
     event,
     message,
@@ -638,30 +766,32 @@ async def discreet_send(
     message = message.strip()
     if quiet or len(message) == 0:
         return reply_to
-    else:
-        length = len(message)
-        last_msg = reply_to
-        if length <= 12000:
-            s = 0
-            e = 4000
-            while length > s:
-                last_msg = await event.respond(
-                    message[s:e],
-                    link_preview=link_preview,
-                    reply_to=(reply_to if s == 0 else last_msg),
-                    parse_mode=parse_mode,
-                )
-                s = e
-                e = s + 4000
-        else:
-            chat = await event.get_chat()
-            last_msg = await send_text_as_file(
-                text=message,
-                chat=chat,
-                reply_to=reply_to,
-                caption="This message is too long, so it has been sent as a text file.",
-            )
-            return last_msg
+
+    length = len(message)
+
+    # Send as file if too long
+    if length > 12000:
+        chat = await event.get_chat()
+        return await send_text_as_file(
+            text=message,
+            chat=chat,
+            reply_to=reply_to,
+            caption="This message is too long, so it has been sent as a text file.",
+        )
+
+    # Use smart splitting for shorter messages
+    chunks = _split_message_smart(message)
+    last_msg = reply_to
+
+    for i, chunk in enumerate(chunks):
+        last_msg = await event.respond(
+            chunk,
+            link_preview=link_preview,
+            reply_to=(reply_to if i == 0 else last_msg),
+            parse_mode=parse_mode,
+        )
+
+    return last_msg
 
 
 # Dictionary to track message chains for the edit_message function
@@ -692,10 +822,14 @@ async def edit_message(
     global EDIT_CHAINS
     message_id = message_obj.id
 
-    # Sanitize and chunk the new text
+    # Sanitize and chunk the new text with forward search for streaming consistency
     new_text = new_text.strip()
     chunks = (
-        [new_text[i : i + max_len] for i in range(0, len(new_text), max_len)]
+        _split_message_smart(
+            new_text,
+            max_chunk_size=max_len,
+            search_direction=0,
+        )
         if new_text
         else []
     )
