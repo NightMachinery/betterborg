@@ -414,7 +414,7 @@ class PrefixProcessResult:
 
 @dataclass
 class LLMResponse:
-    \"\"\"Dataclass for the return type of _call_llm_with_retry.\"\"\"
+    """Dataclass for the return type of _call_llm_with_retry."""
 
     text: str
     finish_reason: Optional[str] = None
@@ -4774,6 +4774,7 @@ async def chat_handler(event):
                 response_message,
                 model_capabilities,
             )
+            finish_reason = None  # Native Gemini image generation doesn't provide finish_reason
         elif use_streaming:
             # Streaming response handling with retries
             edit_interval = get_streaming_delay(model_in_use)
