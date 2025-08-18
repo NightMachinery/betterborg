@@ -11,6 +11,9 @@ import io
 import mimetypes
 import re
 import json
+import socket
+import ipaddress
+import urllib.parse
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -181,7 +184,11 @@ IMAGE_GENERATION_MODELS = GEMINI_IMAGE_GENERATION_MODELS
 GEMINI_IMAGE_GEN_SYSTEM_MODE = os.getenv("GEMINI_IMAGE_GEN_SYSTEM_MODE", "SKIP")
 
 # Audio URL Magic: automatically process URLs pointing to audio files
-AUDIO_URL_MAGIC_P = os.getenv("AUDIO_URL_MAGIC_P", "True").lower() in ("true", "1", "yes")
+AUDIO_URL_MAGIC_P = os.getenv("AUDIO_URL_MAGIC_P", "True").lower() in (
+    "true",
+    "1",
+    "yes",
+)
 
 # Security constants for image processing
 MAX_IMAGE_SIZE = 50 * 1024 * 1024  # 50MB limit
@@ -788,118 +795,196 @@ def _detect_and_process_message_prefix(text: str) -> PrefixProcessResult:
     return PrefixProcessResult(processed_text=text)
 
 
+def _validate_url_security(url: str) -> Optional[str]:
+    """
+    Validates URL for security concerns (SSRF protection).
+
+    Args:
+        url: The URL to validate
+
+    Returns:
+        The URL if safe, None if dangerous
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+        hostname = parsed.hostname
+
+        if not hostname:
+            logger.warning(f"URL rejected - no hostname: {url}")
+            return None
+
+        # Resolve hostname to IP for security checks
+        ip = socket.gethostbyname(hostname)
+        ip_obj = ipaddress.ip_address(ip)
+
+        # Block private/local/multicast networks (SSRF protection)
+        if ip_obj.is_private:
+            logger.warning(f"URL rejected - private network {ip} for {hostname}: {url}")
+            return None
+        elif ip_obj.is_loopback:
+            logger.warning(f"URL rejected - loopback address {ip} for {hostname}: {url}")
+            return None
+        elif ip_obj.is_link_local:
+            logger.warning(f"URL rejected - link-local address {ip} for {hostname}: {url}")
+            return None
+        elif ip_obj.is_multicast:
+            logger.warning(f"URL rejected - multicast address {ip} for {hostname}: {url}")
+            return None
+
+        # Block dangerous ports commonly used for internal services
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        dangerous_ports = {
+            22,
+            23,
+            25,
+            53,
+            110,
+            143,
+            993,
+            995,
+            1433,
+            3306,
+            5432,
+            6379,
+        }
+        if port in dangerous_ports:
+            logger.warning(f"URL rejected - dangerous port {port}: {url}")
+            return None
+
+        logger.info(f"URL security validation passed for {hostname} ({ip}): {url}")
+        return url
+
+    except socket.gaierror as e:
+        logger.warning(f"URL rejected - DNS resolution failed for {parsed.hostname if 'parsed' in locals() else 'unknown'}: {e}")
+        return None
+    except (ValueError, ipaddress.AddressValueError) as e:
+        logger.warning(f"URL rejected - invalid IP address: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"URL rejected - validation error: {e}")
+        return None
+
+
 def _is_url_only_message(text: str) -> Optional[str]:
     """
     Checks if a message contains only a single URL.
-    
+
     Args:
         text: The message text to check
-        
+
     Returns:
         The URL if message contains only a URL, None otherwise
     """
     if not text:
         return None
-    
+
     text = text.strip()
     if not text:
         return None
-    
-    # Simple URL detection pattern - matches http/https URLs
+
+    # Fast early rejection for non-URLs (most common case)
+    # Check length and basic prefix before expensive regex/DNS
+    if (
+        len(text) < 7
+        or len(text) > 2048
+        or not (text.startswith("http://") or text.startswith("https://"))
+    ):
+        return None
+
+    # Fast check: no spaces (URL-only requirement)
+    if " " in text or "\t" in text or "\n" in text:
+        return None
+
+    # More secure URL pattern - only proceed to regex if basic checks pass
     url_pattern = re.compile(
-        r'^https?://[^\s/$.?#].[^\s]*$',
-        re.IGNORECASE
+        r"^https?://(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+(?:\.[a-zA-Z]{2,})(?::\d{1,5})?(?:/[^\s]*)?$"
     )
-    
+
     match = url_pattern.match(text)
-    return match.group(0) if match else None
+    if not match:
+        return None
+
+    # Security validation only if we have a URL match
+    return _validate_url_security(text)
 
 
 async def _check_url_mimetype(url: str) -> Optional[str]:
     """
     Checks the mimetype of a URL using HTTP HEAD request without downloading.
-    
+
     Args:
         url: The URL to check
-        
+
     Returns:
         The mimetype string if successful, None otherwise
     """
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.head(url, follow_redirects=True)
+        async with httpx.AsyncClient(
+            timeout=5,  # Shorter timeout for better UX
+            follow_redirects=True,
+            max_redirects=10,  # Limit redirect chains
+        ) as client:
+            response = await client.head(url)
             if response.status_code == 200:
-                return response.headers.get('content-type', '').split(';')[0].lower()
+                content_type = (
+                    response.headers.get("content-type", "").split(";")[0].lower()
+                )
+                # Only return if it's actually an audio mimetype
+                if content_type.startswith("audio/"):
+                    return content_type
+
+    except (httpx.TimeoutException, httpx.RequestError) as e:
+        logger.warning(f"Network error checking URL {url}: {e}")
     except Exception as e:
-        logger.warning(f"Failed to check URL mimetype for {url}: {e}")
+        logger.error(f"Unexpected error checking URL {url}: {e}")
     return None
 
 
-async def _process_audio_url_magic(event, url: str, *, temp_dir: Path) -> bool:
+async def _process_audio_url_magic(
+    event, url: str, *, temp_dir: Path
+) -> Optional[Path]:
     """
-    Processes an audio URL by downloading it and preparing for .suma prompt.
-    
+    Downloads audio from URL and returns the file path.
+
     Args:
         event: The Telegram event
         url: The URL to download
         temp_dir: Temporary directory for storing downloaded file
-        
+
     Returns:
-        True if audio was successfully processed, False otherwise
+        Path to downloaded audio file if successful, None otherwise
     """
     try:
         # Download the audio file
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url)
             if response.status_code != 200:
-                return False
-            
+                return None
+
             # Determine file extension from content-type or URL
-            content_type = response.headers.get('content-type', '').split(';')[0].lower()
-            extension = mimetypes.guess_extension(content_type) or '.audio'
-            if extension == '.audio':
+            content_type = (
+                response.headers.get("content-type", "").split(";")[0].lower()
+            )
+            extension = mimetypes.guess_extension(content_type) or ".audio"
+            if extension == ".audio":
                 # Fallback to URL-based extension detection
                 parsed_url = url.lower()
-                for ext in ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac']:
+                for ext in [".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac"]:
                     if ext in parsed_url:
                         extension = ext
                         break
-            
+
             # Save audio file
             audio_file = temp_dir / f"audio_download{extension}"
-            with open(audio_file, 'wb') as f:
+            with open(audio_file, "wb") as f:
                 f.write(response.content)
-            
-            # Create fake file and media objects to simulate uploaded audio
-            fake_file = type('FakeFile', (), {
-                'name': audio_file.name,
-                'size': len(response.content),
-                'mime_type': content_type
-            })()
-            
-            fake_document = type('FakeDocument', (), {
-                'mime_type': content_type,
-                'file_name': audio_file.name,
-                'size': len(response.content)
-            })()
-            
-            fake_media = type('FakeMedia', (), {
-                'document': fake_document
-            })()
-            
-            # Attach fake media to event to trigger normal audio processing
-            event.media = fake_media
-            event.file = fake_file
-            
-            # Override download_media to return our downloaded file
-            original_download_media = event.download_media
-            event.download_media = lambda file=None: str(audio_file)
-            
-            return True
-            
+
+            logger.info(f"Downloaded audio file: {audio_file}")
+            return audio_file
+
     except Exception as e:
-        logger.error(f"Failed to process audio URL {url}: {e}")
-        return False
+        logger.error(f"Failed to download audio from {url}: {e}")
+        return None
 
 
 def _get_effective_model_and_service(
@@ -4779,36 +4864,57 @@ async def chat_handler(event):
     prefix_result = _detect_and_process_message_prefix(event.text)
 
     # Audio URL Magic: Check if message contains only a URL pointing to audio
-    if (AUDIO_URL_MAGIC_P 
-        and await util.isAdmin(event) 
-        and not event.file 
-        and not group_id):
-        
+    if (
+        AUDIO_URL_MAGIC_P
+        ##
+        and await util.isAdmin(event)
+        #: Admin-only: Can access internal networks (127.0.0.1, private IPs)
+        ##
+        and not event.file
+        and not group_id
+    ):
+
         # Use processed text from prefix detection (in case prefixes were stripped)
         text_to_check = prefix_result.processed_text or event.text
         url = _is_url_only_message(text_to_check)
-        
+
         if url:
             mimetype = await _check_url_mimetype(url)
             if mimetype and get_media_type(mimetype) == "audio":
                 # Create temp directory early for audio processing
                 import tempfile
+
                 temp_dir = Path(tempfile.gettempdir()) / f"temp_llm_chat_{event.id}"
                 temp_dir.mkdir(exist_ok=True)
-                
+
                 try:
-                    # Process the audio URL
-                    success = await _process_audio_url_magic(event, url, temp_dir=temp_dir)
-                    if success:
-                        # Modify event text to use .suma prompt (which will be processed by PROMPT_REPLACEMENTS)
+                    # Download the audio file
+                    audio_file_path = await _process_audio_url_magic(
+                        event, url, temp_dir=temp_dir
+                    )
+                    if audio_file_path:
+                        # Create a simple file object that the existing pipeline can work with
+                        # This is much simpler than the previous fake object approach
+                        class SimpleFile:
+                            def __init__(self, path):
+                                self.name = path.name
+                                self.size = path.stat().st_size
+
+                        event.file = SimpleFile(audio_file_path)
+
+                        # Modify event text to use .suma prompt
                         event.message.text = ".suma"
-                        # Continue with normal processing - the audio file is now in temp_dir
+                        # Continue with normal processing - the audio file is now available
                     else:
-                        await event.reply(f"{BOT_META_INFO_PREFIX}❌ Failed to download audio from URL.")
+                        await event.reply(
+                            f"{BOT_META_INFO_PREFIX}❌ Failed to download audio from URL."
+                        )
                         return
                 except Exception as e:
                     logger.error(f"Audio URL magic failed: {e}")
-                    await event.reply(f"{BOT_META_INFO_PREFIX}❌ Error processing audio URL.")
+                    await event.reply(
+                        f"{BOT_META_INFO_PREFIX}❌ Error processing audio URL."
+                    )
                     return
 
     # Determine effective model and service (with prefix model override)
