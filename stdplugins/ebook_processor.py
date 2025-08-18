@@ -20,6 +20,29 @@ EBOOK_EXTENSIONS = {
     # ".azw3",
 }
 
+# AUTO_PROCESS_MODE configuration
+# "PV": only processes books sent in private chats
+# dict: a mapping of chat names to chat IDs - only process books sent in those chat IDs
+AUTO_PROCESS_MODE = {
+    "Books": -1001304139500,
+}
+
+
+def should_auto_process(event):
+    """
+    Determines if an ebook should be auto-processed based on AUTO_PROCESS_MODE.
+
+    Returns:
+        bool: True if the event should trigger auto-processing, False otherwise.
+    """
+    if AUTO_PROCESS_MODE == "PV":
+        return event.is_private
+    elif isinstance(AUTO_PROCESS_MODE, dict):
+        return event.chat_id in AUTO_PROCESS_MODE.values()
+    else:
+        print(f"Invalid AUTO_PROCESS_MODE configuration: '{AUTO_PROCESS_MODE}'")
+        return False
+
 
 async def process_ebooks_and_clean(cwd, event):
     """
@@ -66,7 +89,7 @@ async def process_ebooks_and_clean(cwd, event):
 
 @borg.on(
     events.NewMessage(
-        func=lambda e: e.is_private
+        func=lambda e: should_auto_process(e)
         and e.file
         and Path(e.file.name or "").suffix.lower() in EBOOK_EXTENSIONS
     )
@@ -74,8 +97,8 @@ async def process_ebooks_and_clean(cwd, event):
 async def ebook_handler(event):
     """
     Handles incoming messages (including albums) with ebook files from admin
-    users in private chats only, provides user feedback, and processes them as a
-    single request.
+    users in configured chats (based on AUTO_PROCESS_MODE), provides user feedback,
+    and processes them as a single request.
     """
     # Restrict this command to admins.
     if not await util.isAdmin(event):
@@ -131,7 +154,9 @@ async def split_ebook_and_clean(cwd, event):
         return
 
     if len(ebook_files) > 1:
-        await event.reply("Warning: Multiple EPUBs found. Splitting only the first one.")
+        await event.reply(
+            "Warning: Multiple EPUBs found. Splitting only the first one."
+        )
 
     ebook_file = ebook_files[0]
 
@@ -167,7 +192,9 @@ async def split_ebook_handler(event):
     text content into multiple text files using structural and semantic splitting.
     """
     replied_msg = await event.get_reply_message()
-    has_epub = event.file and Path(event.file.name or "").suffix.lower() in EBOOK_EXTENSIONS
+    has_epub = (
+        event.file and Path(event.file.name or "").suffix.lower() in EBOOK_EXTENSIONS
+    )
     reply_has_epub = (
         replied_msg
         and replied_msg.file
