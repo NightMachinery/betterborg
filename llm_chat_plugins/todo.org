@@ -40,7 +40,7 @@ use context7 to see how to get the finish reason
 
 * _
 #+begin_verse
-Llm_chat: when users without a Gemini key message the bot in a group, use a random key loaded ~/.gemini_default_keys (separated by newlines, load once at startup). Forcefully set the model to 2.5 flash lite. Also Reply with a warning that says they need to start the bot and send their own Gemini api key which they can get for free, and until then a default key was used for them that might not work due to rate limits. Also mention that the model has been set to flash lite because of this. If no default keys are present, fall back to the old behavior. The old behavior text must mention that they need to setup a free api key with the bot before they can use it. 
+Llm_chat: when users without a Gemini key message the bot in a group, use a random key loaded ~/.gemini_default_keys (separated by newlines, load once at startup). Forcefully set the model to 2.5 flash lite. Also Reply with a warning that says they need to start the bot and send their own Gemini api key which they can get for free, and until then a default key was used for them that might not work due to rate limits. Also mention that the model has been set to flash lite because of this. If no default keys are present, fall back to the old behavior.
 
 The default keys should not be used in private chats.
 #+end_verse

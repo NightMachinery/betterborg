@@ -180,10 +180,13 @@ async def request_api_key_message(event, service: str = "gemini"):
             )
     except Exception as e:
         print(f"Could not send PM to {user_id}. Error: {e}")
+
+        cancel_key_flow(user_id)
+
         if hasattr(event, "reply"):
             await event.reply(
-                f"{BOT_META_INFO_PREFIX}I couldn't send you a private message. Please check your privacy settings, "
-                f"then send `/start` to me in a private chat."
+                f"{BOT_META_INFO_PREFIX}I couldn't send you a private message. "
+                f"Send `/start` to me in a private chat and setup a (free) API key to use me."
             )
 
     raise events.StopPropagation
