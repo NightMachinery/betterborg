@@ -69,6 +69,13 @@ DEFAULT_MODEL = "gemini/gemini-2.5-flash"  #: Do NOT change the default model un
 # Alternatives:
 # - "gemini/gemini-2.5-pro"
 ##
+
+# Prefix-to-model mapping for hardcoded model selection
+PREFIX_MODEL_MAPPING = {
+    ".g": "gemini/gemini-2.5-pro",
+    ".c": "openrouter/openai/gpt-5-chat",
+}
+
 PROMPT_REPLACEMENTS = {
     re.compile(
         r"^\.ocr$", re.MULTILINE | re.IGNORECASE
@@ -394,6 +401,14 @@ class MediaCapabilityCheckResult:
 
     has_warning: bool = False
     warnings: List[str] = field(default_factory=list)
+
+
+@dataclass
+class PrefixProcessResult:
+    """Dataclass for the return type of _detect_and_process_message_prefix."""
+
+    model: Optional[str] = None
+    processed_text: str = ""
 
 
 # --- Smart Context State Management ---
@@ -724,15 +739,42 @@ def _build_context_mode_menu_options(chat_id: int, user_id: int) -> Dict[str, st
     return options
 
 
-def _get_effective_model_and_service(chat_id: int, user_id: int) -> tuple[str, str]:
+def _detect_and_process_message_prefix(text: str) -> PrefixProcessResult:
+    """
+    Detects if a message starts with a model prefix and returns the model and processed text.
+
+    Args:
+        text: The original message text
+
+    Returns:
+        PrefixProcessResult: Contains model name (if detected) and processed text with prefix removed
+    """
+    if not text:
+        return PrefixProcessResult(processed_text=text or "")
+
+    text = text.lstrip()
+    for prefix, model in PREFIX_MODEL_MAPPING.items():
+        if text.startswith(prefix):
+            # Check if the prefix is followed by a space or the end of the message
+            if len(text) == len(prefix) or text[len(prefix)].isspace():
+                processed_text = text[len(prefix) :].lstrip()
+                return PrefixProcessResult(model=model, processed_text=processed_text)
+
+    return PrefixProcessResult(processed_text=text)
+
+
+def _get_effective_model_and_service(
+    chat_id: int, user_id: int, *, prefix_model: str = None
+) -> tuple[str, str]:
     """
     Gets the effective model and the corresponding service ('gemini' or 'openrouter').
-    Prioritizes chat-specific settings over user-default settings.
+    Prioritizes prefix model > chat-specific settings > user-default settings.
     """
     prefs = user_manager.get_prefs(user_id)
     chat_model = chat_manager.get_model(chat_id)
 
-    model_in_use = chat_model or prefs.model
+    # Priority: prefix_model > chat_model > user default model
+    model_in_use = prefix_model or chat_model or prefs.model
 
     service_needed = "gemini"
     if model_in_use.startswith("openrouter/"):
@@ -2009,6 +2051,10 @@ async def _process_message_content(
     if role == "user" and processed_text:
         if re.match(r"^\.s\b", processed_text):
             processed_text = processed_text[2:].strip()
+
+        # Strip model selection prefixes from all user messages in history
+        prefix_detection = _detect_and_process_message_prefix(processed_text)
+        processed_text = prefix_detection.processed_text
 
         stripped_text = processed_text.strip()
         for pattern, replacement in PROMPT_REPLACEMENTS.items():
@@ -4582,8 +4628,13 @@ async def chat_handler(event):
     if group_id and group_id in bot_util.PROCESSED_GROUP_IDS:
         return  # Already being processed
 
-    # Determine effective model and service
-    model_in_use, service_needed = _get_effective_model_and_service(chat_id, user_id)
+    # Detect model prefix and process message text
+    prefix_result = _detect_and_process_message_prefix(event.text)
+
+    # Determine effective model and service (with prefix model override)
+    model_in_use, service_needed = _get_effective_model_and_service(
+        chat_id, user_id, prefix_model=prefix_result.model
+    )
     model_capabilities = get_model_capabilities(model_in_use)
     api_key = llm_db.get_api_key(user_id=user_id, service=service_needed)
 
