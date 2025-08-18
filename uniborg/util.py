@@ -681,41 +681,95 @@ def _find_best_split_point(
     end_pos = min(end_pos, len(text))
     text_len = len(text) - start_pos
 
+    # Early return if text fits within limit
+    if search_direction == 0 and text_len + buffer_size <= max_length:
+        return end_pos
+    if search_direction == -1 and text_len <= max_length:
+        return end_pos
+
+    # Determine search range based on direction
     if search_direction == 0:
-        if text_len + buffer_size <= max_length:
-            #: We will only try splitting if the text is approaching the max length allowed.
-            return end_pos
-
         # Forward search for streaming consistency
-        min_pos = max(start_pos, end_pos - buffer_size)  # Don't go too far back
-
-        for i in range(min_pos, end_pos):
-            is_valid, split_pos = _check_split_candidate(text, i)
-            if is_valid:
-                ic(
-                    start_pos,
-                    (min_pos, end_pos),
-                    i,
-                    split_pos,
-                    text[split_pos : split_pos + 20],
-                )
-                print(f"repr(text[min_pos : split_pos + 1]):\n{repr(text[min_pos : split_pos + 1])}")
-
-                return split_pos
+        min_pos = max(start_pos, end_pos - buffer_size)
+        search_range = range(min_pos, end_pos)
     else:
         # Backward search for better quality splits
-        if text_len <= max_length:
-            return end_pos
-
         search_start = end_pos - 1
-        search_limit = max(
-            start_pos, search_start - buffer_size
-        )  # Don't go too far back
+        search_limit = max(start_pos, search_start - buffer_size)
+        search_range = range(search_start, search_limit - 1, -1)
 
-        for i in range(search_start, search_limit - 1, -1):
-            is_valid, split_pos = _check_split_candidate(text, i)
-            if is_valid:
+    # Define split strategies in priority order
+    def try_strategies(search_range):
+        # Strategy 1: Look for newlines first (highest priority)
+        for i in search_range:
+            if text[i] == "\n":
+                split_pos = i + 1
+                if search_direction == 0:
+                    ic(
+                        start_pos,
+                        (min(search_range), max(search_range)),
+                        i,
+                        split_pos,
+                        "newline",
+                        text[split_pos : split_pos + 20],
+                    )
                 return split_pos
+
+        # Strategy 2: Look for sentence boundaries
+        for i in search_range:
+            if text[i] in ".!?" and i + 1 < len(text) and text[i + 1] == " ":
+                split_pos = i + 1
+                if search_direction == 0:
+                    ic(
+                        start_pos,
+                        (min(search_range), max(search_range)),
+                        i,
+                        split_pos,
+                        "sentence",
+                        text[split_pos : split_pos + 20],
+                    )
+                return split_pos
+
+        # Strategy 3: Look for other punctuation
+        for i in search_range:
+            if text[i] in ",;:" and i + 1 < len(text) and text[i + 1] == " ":
+                split_pos = i + 1
+                if search_direction == 0:
+                    ic(
+                        start_pos,
+                        (min(search_range), max(search_range)),
+                        i,
+                        split_pos,
+                        "punctuation",
+                        text[split_pos : split_pos + 20],
+                    )
+                return split_pos
+
+        # Strategy 4: Look for word boundaries (spaces) - lowest priority
+        for i in search_range:
+            if text[i] in " \t":
+                # Skip consecutive spaces and return position after the last space
+                j = i
+                while j + 1 < len(text) and text[j + 1] in " \t":
+                    j += 1
+                split_pos = j + 1
+                if search_direction == 0:
+                    ic(
+                        start_pos,
+                        (min(search_range), max(search_range)),
+                        i,
+                        split_pos,
+                        "word_boundary",
+                        text[split_pos : split_pos + 20],
+                    )
+                return split_pos
+
+        return None
+
+    # Try to find a split point using the strategies
+    result = try_strategies(search_range)
+    if result is not None:
+        return result
 
     # Last resort: use the max position
     return end_pos
