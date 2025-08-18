@@ -692,6 +692,15 @@ def _find_best_split_point(
         for i in range(min_pos, end_pos):
             is_valid, split_pos = _check_split_candidate(text, i)
             if is_valid:
+                ic(
+                    start_pos,
+                    (min_pos, end_pos),
+                    i,
+                    split_pos,
+                    text[split_pos : split_pos + 20],
+                )
+                print(f"repr(text[min_pos : split_pos + 1]):\n{repr(text[min_pos : split_pos + 1])}")
+
                 return split_pos
     else:
         # Backward search for better quality splits
@@ -800,7 +809,11 @@ EDIT_CHAINS = {}
 
 
 async def edit_message(
-    message_obj, new_text, link_preview=False, parse_mode=None, max_len=4096
+    message_obj,
+    new_text,
+    link_preview=False,
+    parse_mode=None,
+    max_len=4096,
 ):
     """
     Intelligently edits a message chain to reflect new text content,
