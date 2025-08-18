@@ -1,6 +1,15 @@
 #+TITLE: llm_chat_plugins/todo
 
-* _
+* @refactor
+** Refactor llm_chat plugin to define dataclasses when you need to return multiple items, not tuples.
+
+* DONE ebook_proceesor: define a =AUTO_PROCESS_MODE=:
+** =PV=: only processes books send in private chats
+
+** a dict of chat names to IDs: only process books sent in those chats IDs
+*** add ="Books": -1001304139500=
+
+* DONE _
 #+BEGIN_SRC markdown
 ebook processor: when a user replies `.split` to an epub, get the epub's  chapters/sections. convert each chapter to markdown. group the chapters  together such that the text in each group doesn't exceed 100kb. send the  grouped chapters as separate .md files to the user as replies to their  message.
 #+END_SRC
