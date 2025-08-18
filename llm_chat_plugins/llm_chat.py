@@ -37,7 +37,7 @@ from telethon.tl.types import (
     Message,
 )
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass, field
 
 # Import uniborg utilities and storage
@@ -919,7 +919,12 @@ def _is_url_only_message(text: str) -> Optional[str]:
 
 async def _check_url_mimetype(url: str) -> Optional[str]:
     """
-    Checks the mimetype of a URL using HTTP HEAD request without downloading.
+    Determine the mimetype of a URL while minimizing downloads.
+
+    Tries a HEAD request first. Some CDNs (e.g., Acast/CloudFront) return
+    misleading content-types (like text/plain) or do not follow redirects for
+    HEAD. If the HEAD result looks unhelpful, fallback to a tiny GET using a
+    Range request to trigger redirects and read only headers.
 
     Args:
         url: The URL to check
@@ -933,14 +938,28 @@ async def _check_url_mimetype(url: str) -> Optional[str]:
             follow_redirects=True,
             max_redirects=10,  # Limit redirect chains
         ) as client:
-            response = await client.head(url)
-            if response.status_code == 200:
-                content_type = (
-                    response.headers.get("content-type", "").split(";")[0].lower()
-                )
-                ic(content_type)
+            # First attempt: HEAD (fast, no body)
+            try:
+                head_resp = await client.head(url)
+                if head_resp.status_code == 200:
+                    head_ct = head_resp.headers.get("content-type", "").split(";")[0].lower()
+                    if head_ct and head_ct not in ("text/plain", "text/html"):
+                        ic(head_ct)
+                        return head_ct
+            except (httpx.TimeoutException, httpx.RequestError):
+                # Fall through to GET fallback
+                pass
 
-                return content_type
+            # Fallback: small GET with Range to force redirects and minimize data
+            try:
+                get_resp = await client.get(url, headers={"Range": "bytes=0-0"})
+                if get_resp.status_code in (200, 206):
+                    get_ct = get_resp.headers.get("content-type", "").split(";")[0].lower()
+                    if get_ct:
+                        ic(get_ct)
+                        return get_ct
+            except (httpx.TimeoutException, httpx.RequestError):
+                pass
 
     except (httpx.TimeoutException, httpx.RequestError) as e:
         logger.warning(f"Network error checking URL {url}: {e}")
@@ -949,7 +968,7 @@ async def _check_url_mimetype(url: str) -> Optional[str]:
     return None
 
 
-async def _download_audio_from_url(url: str, *, temp_dir: Path) -> Optional[Path]:
+async def _download_audio_from_url(url: str, *, temp_dir: Path) -> Tuple[Optional[Path], Optional[str]]:
     """
     Downloads audio from URL and returns the file path.
 
@@ -958,39 +977,52 @@ async def _download_audio_from_url(url: str, *, temp_dir: Path) -> Optional[Path
         temp_dir: Temporary directory for storing downloaded file
 
     Returns:
-        Path to downloaded audio file if successful, None otherwise
+        (Path, None) on success; (None, error_message) on failure
     """
     try:
-        # Download the audio file
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url)
-            if response.status_code != 200:
-                return None
+        # Follow redirects to reach the actual media URL
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            # Stream to file to avoid loading large content in memory
+            async with client.stream("GET", url) as response:
+                status = response.status_code
+                final_url = str(response.url)
+                content_type = response.headers.get("content-type", "").split(";")[0].lower()
 
-            # Determine file extension from content-type or URL
-            content_type = (
-                response.headers.get("content-type", "").split(";")[0].lower()
-            )
-            extension = mimetypes.guess_extension(content_type) or ".audio"
-            if extension == ".audio":
-                # Fallback to URL-based extension detection
-                parsed_url = url.lower()
-                for ext in [".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac"]:
-                    if ext in parsed_url:
-                        extension = ext
-                        break
+                if status not in (200, 206):
+                    return None, (
+                        f"HTTP {status} while downloading. Final URL: {final_url}. "
+                        f"Content-Type: {content_type or 'unknown'}."
+                    )
 
-            # Save audio file
-            audio_file = temp_dir / f"audio_download{extension}"
-            with open(audio_file, "wb") as f:
-                f.write(response.content)
+                # Determine file extension from content-type or URL
+                extension = mimetypes.guess_extension(content_type) or ".audio"
+                if extension == ".audio":
+                    parsed_url = final_url.lower()
+                    for ext in [".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac"]:
+                        if ext in parsed_url:
+                            extension = ext
+                            break
 
-            logger.info(f"Downloaded audio file: {audio_file}")
-            return audio_file
+                # Save audio file
+                audio_file = temp_dir / f"audio_download{extension}"
+                with open(audio_file, "wb") as f:
+                    async for chunk in response.aiter_bytes(64 * 1024):
+                        if chunk:
+                            f.write(chunk)
 
+        logger.info(f"Downloaded audio file: {audio_file}")
+        return audio_file, None
+
+    except httpx.HTTPError as e:
+        traceback.print_exc()
+        err = f"Network error: {e}"
+        logger.error(f"Failed to download audio from {url}: {err}")
+        return None, err
     except Exception as e:
-        logger.error(f"Failed to download audio from {url}: {e}")
-        return None
+        traceback.print_exc()
+        err = f"Unexpected error: {e}"
+        logger.error(f"Failed to download audio from {url}: {err}")
+        return None, err
 
 
 async def _process_audio_url_magic(event, url: str) -> bool:
@@ -1012,26 +1044,35 @@ async def _process_audio_url_magic(event, url: str) -> bool:
         temp_dir.mkdir(exist_ok=True)
 
         # Download the audio file
-        audio_file_path = await _download_audio_from_url(url, temp_dir=temp_dir)
+        audio_file_path, err = await _download_audio_from_url(url, temp_dir=temp_dir)
         if not audio_file_path:
+            details = f"\n\nError: {err}" if err else ""
             await event.reply(
-                f"{BOT_META_INFO_PREFIX}❌ Failed to download audio from URL."
+                f"{BOT_META_INFO_PREFIX}❌ Failed to download audio from URL{details}"
             )
             return False
 
         # Send the audio file to the chat as a normal file upload
-        await event.respond(file=str(audio_file_path))
+        print(f"Sending audio file: {audio_file_path}")
+        audio_message = await event.respond(file=str(audio_file_path))
+        print(f"Audio message sent: {audio_message}")
+        # @todo0 delete audio_file_path
 
         # Create a copy of the original event and patch it with .suma text
         patched_event = copy.copy(event)
-        patched_event.message = copy.copy(event.message)
+        patched_event.message = audio_message
         patched_event.message.text = ".suma"
+        ic(patched_event.message.text)
 
         # Process the patched event through the normal chat handler
-        await chat_handler(patched_event)
-        return True
+        try:
+            await chat_handler(patched_event)
+        finally:
+            #: We don't want this URL processed normally at this stage, even if an error happens.
+            return True
 
     except Exception as e:
+        traceback.print_exc()
         logger.error(f"Audio URL magic failed: {e}")
         await event.reply(f"{BOT_META_INFO_PREFIX}❌ Error processing audio URL.")
         return False
