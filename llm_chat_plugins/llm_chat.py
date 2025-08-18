@@ -1007,7 +1007,7 @@ def _is_url_only_message(text: str) -> Optional[str]:
     return _validate_url_security(text)
 
 
-async def _check_url_mimetype(url: str) -> Optional[str]:
+async def _check_url_mimetype(url: str, *, max_retries: int = 10) -> Optional[str]:
     """
     Determine the mimetype of a URL while minimizing downloads.
 
@@ -1018,47 +1018,71 @@ async def _check_url_mimetype(url: str) -> Optional[str]:
 
     Args:
         url: The URL to check
+        max_retries: Maximum number of retry attempts
 
     Returns:
         The mimetype string if successful, None otherwise
     """
-    try:
-        async with httpx.AsyncClient(
-            timeout=5,  # Shorter timeout for better UX
-            follow_redirects=True,
-            max_redirects=10,  # Limit redirect chains
-        ) as client:
-            # First attempt: HEAD (fast, no body)
-            try:
-                head_resp = await client.head(url)
-                if head_resp.status_code == 200:
-                    head_ct = (
-                        head_resp.headers.get("content-type", "").split(";")[0].lower()
-                    )
-                    if head_ct and head_ct not in ("text/plain", "text/html"):
-                        # ic(head_ct)
-                        return head_ct
-            except (httpx.TimeoutException, httpx.RequestError):
-                # Fall through to GET fallback
-                pass
+    for attempt in range(max_retries + 1):
+        try:
+            async with httpx.AsyncClient(
+                timeout=5,  # Shorter timeout for better UX
+                follow_redirects=True,
+                max_redirects=10,  # Limit redirect chains
+            ) as client:
+                # First attempt: HEAD (fast, no body)
+                try:
+                    head_resp = await client.head(url)
+                    if head_resp.status_code == 200:
+                        head_ct = (
+                            head_resp.headers.get("content-type", "").split(";")[0].lower()
+                        )
+                        if head_ct and head_ct not in ("text/plain", "text/html"):
+                            # ic(head_ct)
+                            return head_ct
+                # except (httpx.TimeoutException, httpx.RequestError):
+                except:
+                    # Fall through to GET fallback
+                    pass
 
-            # Fallback: small GET with Range to force redirects and minimize data
-            try:
-                get_resp = await client.get(url, headers={"Range": "bytes=0-0"})
-                if get_resp.status_code in (200, 206):
-                    get_ct = (
-                        get_resp.headers.get("content-type", "").split(";")[0].lower()
-                    )
-                    if get_ct:
-                        # ic(get_ct)
-                        return get_ct
-            except (httpx.TimeoutException, httpx.RequestError):
-                pass
+                # Fallback: small GET with Range to force redirects and minimize data
+                try:
+                    get_resp = await client.get(url, headers={"Range": "bytes=0-0"})
+                    if get_resp.status_code in (200, 206):
+                        get_ct = (
+                            get_resp.headers.get("content-type", "").split(";")[0].lower()
+                        )
+                        if get_ct:
+                            return get_ct
+                        else:
+                            ic(get_ct, get_resp, get_resp.headers)
 
-    except (httpx.TimeoutException, httpx.RequestError) as e:
-        logger.warning(f"Network error checking URL {url}: {e}")
-    except Exception as e:
-        logger.error(f"Unexpected error checking URL {url}: {e}")
+                    else:
+                        ic(get_resp, get_resp.headers, get_resp.status_code)
+                        pass
+
+                except (httpx.TimeoutException, httpx.RequestError):
+                    if attempt == max_retries:
+                        traceback.print_exc()
+                        logger.warning(f"Failed to get content type for {url} after {max_retries + 1} attempts")
+                    continue
+
+        except (httpx.TimeoutException, httpx.RequestError) as e:
+            if attempt == max_retries:
+                traceback.print_exc()
+                logger.warning(f"Network error checking URL {url} after {max_retries + 1} attempts: {e}")
+            continue
+        except:
+            if attempt == max_retries:
+                traceback.print_exc()
+                logger.error(f"Unexpected error checking URL {url} after {max_retries + 1} attempts")
+            continue
+
+        # If we reach here without returning, it means no content type was found but no errors occurred
+        # Only break if this is not a network-related issue that should be retried
+        # break
+
+    logger.warning(f"Could not determine content type for {url}")
     return None
 
 
@@ -5093,6 +5117,7 @@ async def chat_handler(event):
         text_to_check = prefix_result.processed_text or event.text
         url = _is_url_only_message(text_to_check)
 
+        # ic(url)
         if url:
             mimetype = await _check_url_mimetype(url)
             if mimetype and get_media_type(mimetype) == "audio":
