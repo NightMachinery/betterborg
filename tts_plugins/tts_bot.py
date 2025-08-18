@@ -237,6 +237,7 @@ async def message_handler(event, *, log_p=True):
             voice=user_prefs.voice,
             model=user_prefs.model,
             api_key=api_key,
+            user_id=event.sender_id,
             template_mode=False,
         )
 

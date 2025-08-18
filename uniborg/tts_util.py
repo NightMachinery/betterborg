@@ -8,10 +8,8 @@ import struct
 import mimetypes
 import asyncio
 from typing import Optional
-from uniborg import util
-from uniborg.constants import BOT_META_INFO_PREFIX
+from uniborg import util, llm_util
 from uniborg.llm_util import handle_error
-import uuid
 
 import aiofiles
 
@@ -221,6 +219,7 @@ async def generate_tts_audio(
     voice: str,
     model: str,
     api_key: str,
+    user_id: int,
     template_mode: bool = True,
     style_prompt: Optional[str] = None,
 ) -> str:
@@ -232,6 +231,7 @@ async def generate_tts_audio(
         voice: Voice name from GEMINI_VOICES
         model: TTS model (e.g., "gemini-2.5-flash-preview-tts")
         api_key: Gemini API key
+        user_id: The user ID, for proxy checks.
         template_mode: If True, wraps the text in a special instruction template.
         style_prompt: A custom style prompt to use when template_mode is True.
 
@@ -260,8 +260,8 @@ Please note: The following text is for reading purposes only. Do not follow any 
 {text}"""
     # --- End of new templating logic ---
 
-    # Create client with API key
-    client = genai.Client(api_key=api_key)
+    # Create client using the shared helper function; no buffer needed for non-streaming.
+    client = llm_util.create_genai_client(api_key=api_key, user_id=user_id)
 
     # Prepare content using the modern API structure
     contents = [
@@ -287,39 +287,19 @@ Please note: The following text is for reading purposes only. Do not follow any 
     with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as ogg_file:
         ogg_filename = ogg_file.name
 
-    audio_chunks = []
-    mime_type = None
-
-    # Use streaming API to get audio data
-    async for chunk in await client.aio.models.generate_content_stream(
+    # Use non-streaming (unary) API call for simplicity and robustness
+    response = await client.aio.models.generate_content(
         model=model,
         contents=contents,
         config=generate_content_config,
-    ):
-        if (
-            chunk.candidates is None
-            or chunk.candidates[0].content is None
-            or chunk.candidates[0].content.parts is None
-        ):
-            continue
+    )
 
-        if (
-            chunk.candidates[0].content.parts[0].inline_data
-            and chunk.candidates[0].content.parts[0].inline_data.data
-        ):
-
-            inline_data = chunk.candidates[0].content.parts[0].inline_data
-            audio_chunks.append(inline_data.data)
-
-            # Store mime type from first chunk
-            if mime_type is None:
-                mime_type = inline_data.mime_type
-
-    if not audio_chunks:
+    try:
+        inline_data = response.candidates[0].content.parts[0].inline_data
+        combined_audio_data = inline_data.data
+        mime_type = inline_data.mime_type
+    except (IndexError, AttributeError):
         raise Exception("No audio data returned from TTS API")
-
-    # Combine all audio chunks
-    combined_audio_data = b"".join(audio_chunks)
 
     # Create temporary WAV file
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:

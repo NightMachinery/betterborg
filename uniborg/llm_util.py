@@ -9,6 +9,8 @@ import os
 import re
 import uuid
 import json
+from google import genai
+from google.genai import types
 
 
 # --- Custom Exceptions ---
@@ -59,6 +61,42 @@ def get_proxy_config_or_error(user_id: int) -> tuple[str | None, str | None]:
         )
 
     return proxy_url, None
+
+
+def create_genai_client(
+    api_key: str, *, user_id: int = None, read_bufsize: int = None, proxy_p: bool = False
+) -> "genai.Client":
+    """
+    Creates and configures a genai.Client with optional proxy support and buffer size.
+
+    Args:
+        api_key: The Google Gemini API key.
+        user_id: Optional. The ID of the user making the request, for proxy access checks.
+        read_bufsize: Optional. The read buffer size in bytes for the async client.
+        proxy_p: Whether to use proxy configuration. Defaults to False.
+
+    Returns:
+        A configured google.genai.Client instance.
+    """
+    client_args = {}
+    async_client_args = {}
+
+    if proxy_p and user_id is not None:
+        proxy_url, _ = get_proxy_config_or_error(user_id)
+        if proxy_url:
+            client_args["proxy"] = proxy_url
+            async_client_args["proxy"] = proxy_url
+            print(f"LLM_Util: Using proxy {proxy_url} for user {user_id}")
+
+    if read_bufsize is not None:
+        async_client_args["read_bufsize"] = read_bufsize
+
+    http_options = types.HttpOptions(
+        client_args=client_args or None,
+        async_client_args=async_client_args or None,
+    )
+
+    return genai.Client(api_key=api_key, http_options=http_options)
 
 
 # --- LLM-Specific Shared Constants and Utilities ---

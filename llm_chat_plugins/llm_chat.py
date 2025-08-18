@@ -1032,20 +1032,9 @@ async def _handle_native_gemini_image_generation(
         tuple: (text_content, has_image) where has_image indicates if an image was sent
     """
     try:
-        # Check proxy configuration and admin permissions
-        from uniborg.llm_util import (
-            get_proxy_config_or_error,
+        client = llm_util.create_genai_client(
+            api_key=api_key, user_id=event.sender_id, read_bufsize=2 * 2**20, proxy_p=True,
         )
-
-        proxy_url, _ = get_proxy_config_or_error(event.sender_id)
-
-        http_options = None
-        if proxy_url:
-            http_options = types.HttpOptions(
-                client_args={"proxy": proxy_url}, async_client_args={"proxy": proxy_url}
-            )
-
-        client = genai.Client(api_key=api_key, http_options=http_options)
 
         # Initialize model capabilities and warnings tracking if not provided
         if model_capabilities is None:
@@ -1644,7 +1633,8 @@ async def _process_media(
                 # If we need to check, verify the file still exists on Gemini's servers
                 if check_gemini_cached_files_p:
                     try:
-                        gemini_client = gemini_client or genai.Client(api_key=api_key)
+                        if gemini_client is None:
+                            gemini_client = llm_util.create_genai_client(api_key=api_key, user_id=sender_id)
 
                         # This API call verifies the file's existence.
                         await gemini_client.aio.files.get(name=cached_info["name"])
@@ -1709,7 +1699,8 @@ async def _process_media(
                 )
 
             # Upload to Gemini Files API
-            gemini_client = gemini_client or genai.Client(api_key=api_key)
+            if gemini_client is None:
+                gemini_client = llm_util.create_genai_client(api_key=api_key, user_id=sender_id)
             with tempfile.NamedTemporaryFile(
                 delete=False, suffix=Path(filename).suffix
             ) as temp_f:
@@ -4078,8 +4069,8 @@ async def testlive_handler(event):
         import io
         import tempfile
 
-        # Create client
-        client = genai.Client(api_key=api_key)
+        # Create client using the shared helper function
+        client = llm_util.create_genai_client(api_key=api_key, user_id=user_id, proxy_p=True)
         # Try a more basic live model first
         model = "gemini-2.0-flash-live-001"
 
