@@ -412,6 +412,14 @@ class PrefixProcessResult:
     processed_text: str = ""
 
 
+@dataclass
+class LLMResponse:
+    \"\"\"Dataclass for the return type of _call_llm_with_retry.\"\"\"
+
+    text: str
+    finish_reason: Optional[str] = None
+
+
 # --- Smart Context State Management ---
 
 
@@ -823,8 +831,12 @@ async def _call_llm_with_retry(
     edit_interval: float = None,
     *,
     max_retries: int = MAX_RETRIES,
-) -> str:
-    """Call LLM with retry logic for both streaming and non-streaming responses."""
+) -> LLMResponse:
+    """Call LLM with retry logic for both streaming and non-streaming responses.
+    
+    Returns:
+        LLMResponse: Response containing text and finish_reason
+    """
     try:
         response = await litellm.acompletion(**api_kwargs)
 
@@ -853,10 +865,14 @@ async def _call_llm_with_retry(
                             # Log other edit errors but don't stop the stream
                             print(f"Error during message edit: {e}")
 
-            return response_text
+            # Get finish reason from the last chunk
+            finish_reason = chunk.choices[0].finish_reason if chunk.choices else None
+            return LLMResponse(text=response_text, finish_reason=finish_reason)
         else:
             # Non-streaming mode
-            return response.choices[0].message.content or ""
+            content = response.choices[0].message.content or ""
+            finish_reason = response.choices[0].finish_reason if response.choices else None
+            return LLMResponse(text=content, finish_reason=finish_reason)
 
     except (
         litellm.exceptions.RateLimitError,
@@ -4761,12 +4777,16 @@ async def chat_handler(event):
         elif use_streaming:
             # Streaming response handling with retries
             edit_interval = get_streaming_delay(model_in_use)
-            response_text = await _call_llm_with_retry(
+            llm_response = await _call_llm_with_retry(
                 response_message, api_kwargs, edit_interval
             )
+            response_text = llm_response.text
+            finish_reason = llm_response.finish_reason
         else:
             # Non-streaming response handling with retries
-            response_text = await _call_llm_with_retry(response_message, api_kwargs)
+            llm_response = await _call_llm_with_retry(response_message, api_kwargs)
+            response_text = llm_response.text
+            finish_reason = llm_response.finish_reason
 
             # Process image content if present
             if model_capabilities.get("image_generation", False):
@@ -4777,7 +4797,8 @@ async def chat_handler(event):
         # Final text processing
         final_text = response_text.strip()
         if not final_text and not has_image:
-            final_text = "__[No response]__"
+            finish_reason_text = f" (finish_reason: {finish_reason})" if finish_reason else ""
+            final_text = f"__[No response]{finish_reason_text}__\n\n{BOT_META_INFO_LINE}\nfinish_reason: {finish_reason}" if finish_reason else "__[No response]__"
 
         should_warn = WARN_UNSUPPORTED_TO_USER_P == "always" or (
             WARN_UNSUPPORTED_TO_USER_P == "private_only"
