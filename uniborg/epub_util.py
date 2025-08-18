@@ -9,8 +9,7 @@ import re
 from epub_sum_lib.epubsplit import SplitEpub
 from epub_sum_lib.chunking import semantic_chunking
 
-# Use a value consistent with lib/chunking.py's default max_chunk_size
-MAX_EBOOK_CHUNK_CHARS = 9200
+MAX_EBOOK_CHUNK_CHARS = 92000
 
 
 def _extract_text_from_html(html_content: str) -> str:

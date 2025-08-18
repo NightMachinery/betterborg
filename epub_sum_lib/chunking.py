@@ -42,7 +42,7 @@ def get_model():
         _model = SentenceTransformer('all-MiniLM-L6-v2')
     return _model
 
-def semantic_chunking(text, min_chunk_size=3000, max_chunk_size=9200):
+def semantic_chunking(text, min_chunk_size=8000, max_chunk_size=12000):
     sentences = [sent.strip() for sent in re.split(r'(?<=[.!?])\s+', text) if sent.strip()]
     model = get_model()
     embeddings = model.encode(sentences, convert_to_tensor=True)    
