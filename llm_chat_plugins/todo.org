@@ -3,6 +3,48 @@
 * @refactor
 ** Refactor llm_chat plugin to define dataclasses when you need to return multiple items, not tuples.
 
+* _
+#+begin_verse
+Llm_chat: when the user sends a message that consists solely of a URL, can we check the url's minetype without downloading it?
+
+If we can detect audio mimetypes, we can download the file and send it to the user, and then invoke the .suma prompt on it, instead of sending the raw url to the model. 
+
+This behavior can be controlled by the global flag AUDIO_URL_MAGIC_P=True. For now, limit it to admins only.
+#+end_verse
+
+* _
+#+begin_verse
+Discrete_send: try to break messages on words
+Try to not break markdown elements when sending as markdown (eg bold text). Easy way: try splitting on line breaks.
+We must still we never send a message bigger than the current limit.
+
+The way we break messages into parts should ideally be constant even as the message is streamed. This way, the text at the end of one message won't "oscillate" between being part of the previous message and the next one.
+#+end_verse
+
+* _
+#+begin_verse
+[Bug]: Gemini 2.5 Pro returns None for a lot of requests · Issue #10721 · BerriAI/litellm
+https://github.com/BerriAI/litellm/issues/10721
+
+
+the error is finish_reason=<FinishReason.MAX_TOKENS: ‘MAX_TOKENS’>.
+now free key have a limit tpm of 250000, this is the reason
+#+end_verse
+
+** DONE _
+#+begin_verse
+When we detect "No Response", try to get the finish reason and add the the reason after a `\n{BOT_META_INFO_LINE}\n`.
+
+use context7 to see how to get the finish reason
+#+end_verse
+
+* _
+#+begin_verse
+Llm_chat: when users without a Gemini key message the bot in a group, use a random key loaded ~/.gemini_default_keys (separated by newlines, load once at startup). Forcefully set the model to 2.5 flash lite. Also Reply with a warning that says they need to start the bot and send their own Gemini api key which they can get for free, and until then a default key was used for them that might not work due to rate limits. Also mention that the model has been set to flash lite because of this. If no default keys are present, fall back to the old behavior. The old behavior text must mention that they need to setup a free api key with the bot before they can use it. 
+
+The default keys should not be used in private chats.
+#+end_verse
+
 * DONE _
 #+begin_verse
 Add .sumafa hardcoded prompts `PROMPT_REPLACEMENTS` to summarize audio:
