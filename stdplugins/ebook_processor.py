@@ -28,7 +28,7 @@ AUTO_PROCESS_MODE = {
 }
 
 
-def should_auto_process(event):
+async def should_auto_process(event):
     """
     Determines if an ebook should be auto-processed based on AUTO_PROCESS_MODE.
 
@@ -95,8 +95,7 @@ async def process_ebooks_and_clean(cwd, event):
 
 @borg.on(
     events.NewMessage(
-        func=lambda e: should_auto_process(e)
-        and e.file
+        func=lambda e: e.file
         and Path(e.file.name or "").suffix.lower() in EBOOK_EXTENSIONS
     )
 )
@@ -106,6 +105,9 @@ async def ebook_handler(event):
     users in configured chats (based on AUTO_PROCESS_MODE), provides user feedback,
     and processes them as a single request.
     """
+    if not await should_auto_process(event):
+        return
+
     # --- Grouped message handling ---
     group_id = event.grouped_id
     if group_id:
