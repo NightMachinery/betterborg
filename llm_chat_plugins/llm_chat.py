@@ -77,6 +77,7 @@ DEFAULT_MODEL = "gemini/gemini-2.5-flash"  #: Do NOT change the default model un
 # Prefix-to-model mapping for hardcoded model selection
 PREFIX_MODEL_MAPPING = {
     ".f": "gemini/gemini-2.5-flash-lite",
+    ".ff": "gemini/gemini-2.5-flash",
     ".g": "gemini/gemini-2.5-pro",
     ".c": "openrouter/openai/gpt-5-chat",
 }
