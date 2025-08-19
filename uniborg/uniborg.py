@@ -148,14 +148,16 @@ class Uniborg(TelegramClient):
         self._plugins[shortname] = mod
         self._logger.info(f"Successfully loaded plugin {shortname}")
 
-    def remove_plugin(self, shortname):
-        name = self._plugins[shortname].__name__
-
+    def remove_events_of_mod(self, mod_name):
+        """Remove all event handlers belonging to a specific module."""
         for i in reversed(range(len(self._event_builders))):
             ev, cb = self._event_builders[i]
-            if cb.__module__ == name:
+            if cb.__module__ == mod_name:
                 del self._event_builders[i]
 
+    def remove_plugin(self, shortname):
+        name = self._plugins[shortname].__name__
+        self.remove_events_of_mod(name)
         del self._plugins[shortname]
         self._logger.info(f"Removed plugin {shortname}")
 
