@@ -144,13 +144,13 @@ DATA TO COLLECT (choose what fits the medium)
 REDDIT, LESSWRONG & RATIONAL-ADJACENT OPINIONS
 - Search Reddit (e.g., site:reddit.com "TARGET" + keywords like “review”, “worth it”, “discussion”, “ending”, “bugs”, “performance”). Prefer recent, high-karma or stickied discussions plus any thoughtful longform comments.
 - ALSO search rationalist/rational-adjacent communities for reviews, meta-discussion, and longform analysis:
-  - LessWrong (site:lesswrong.com "TARGET")
+  - LessWrong, using the GreaterWrong frontend (site:greaterwrong.com "TARGET")
   - Astral Codex Ten / Slate Star Codex (site:astralcodexten.com OR site:slatestarcodex.com "TARGET")
   - EA Forum (site:eaforum.org "TARGET")
   - Gwern.net (site:gwern.net "TARGET")
   - Overcoming Bias (site:overcomingbias.com "TARGET")
   - Hacker News (site:news.ycombinator.com "TARGET")
-  - (Optionally, where relevant) Marginal Revolution (site:marginalrevolution.com "TARGET")
+  - Marginal Revolution (site:marginalrevolution.com "TARGET")
 - Include 6–12 short, representative user/community quotes spanning positive, mixed, and negative views. Ensure at least 2–4 quotes come from the rationalist/rational-adjacent sources above (posts or comment sections). Attribute with source (e.g., LessWrong, ACX, EA Forum, HN, subreddit) and username/handle when available, and link to the comment/post. Trim quotes to the essential 10–25 words; indicate ellipses where you omit text.
 
 ANALYSIS & SYNTHESIS
@@ -1303,7 +1303,9 @@ async def _check_url_mimetype(url: str, *, max_retries: int = 10) -> Optional[st
 
                 else:
                     ic(get_resp, get_resp.headers, get_resp.status_code)
-                    pass
+                    if get_resp.status_code == 403:
+                        logger.warning(f"403 Forbidden (not retrying): {url}")
+                        return None
 
         except (httpx.TimeoutException, httpx.RequestError) as e:
             if attempt == max_retries:
