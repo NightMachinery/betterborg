@@ -3,6 +3,8 @@
 * @refactor
 ** Refactor llm_chat plugin to define dataclasses when you need to return multiple items, not tuples.
 
+* Put some of our PROMPT_REPLACEMENTS inside night.sh, load from there both here and in prompting.zsh to maintain single source of truth.
+
 * @todo2 @hack I need to think of a better magic command language.
 :PROPERTIES:
 :ID:       5afef6f3-51e1-4536-a85f-f1cf3bbed5ee
