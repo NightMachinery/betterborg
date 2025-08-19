@@ -1206,7 +1206,7 @@ async def _process_audio_url_magic(event, url: str) -> bool:
         # Send the audio file to the chat as a normal file upload
         print(f"Sending downloaded audio file: {audio_file_path}")
         new_text = f"{MAGIC_STR_AS_USER} .suma"
-        async with borg.action(event.chat, "document") as action:
+        async with borg.action(event.chat, "audio") as action:
             audio_message = await event.client.send_file(
                 event.chat_id,
                 file=str(audio_file_path),
@@ -4816,7 +4816,7 @@ async def _handle_tts_response(event, response_text: str):
             # Send as voice message with proper attributes
             from telethon.tl.types import DocumentAttributeAudio
 
-            async with borg.action(event.chat, "record_voice") as action:
+            async with borg.action(event.chat, "audio") as action:
                 await event.client.send_file(
                     event.chat_id,
                     ogg_file_path,
@@ -5017,7 +5017,7 @@ async def handle_live_mode_responses(session, original_event):
 
                         # Send as voice message
                         async with borg.action(
-                            session.chat_id, "record_voice"
+                            session.chat_id, "audio"
                         ) as action:
                             await borg.send_file(
                                 session.chat_id,

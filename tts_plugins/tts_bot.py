@@ -242,7 +242,7 @@ async def message_handler(event, *, log_p=True):
             template_mode=False,
         )
 
-        async with borg.action(event.chat, "record_voice") as action:
+        async with borg.action(event.chat, "audio") as action:
             await event.client.send_file(
                 event.chat_id, ogg_file_path, voice_note=True, reply_to=event.id
             )
