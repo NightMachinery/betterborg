@@ -3,6 +3,25 @@
 * @refactor
 ** Refactor llm_chat plugin to define dataclasses when you need to return multiple items, not tuples.
 
+* @todo2 @hack I need to think of a better magic command language.
+:PROPERTIES:
+:ID:       5afef6f3-51e1-4536-a85f-f1cf3bbed5ee
+:END:
+#+BEGIN_SRC markdown
+I need to think of a better magic command language.
+Perhaps when the first line starts with a dot, we try to match and replace `\b{magic_str}\b` only in the first line.
+The magic processing should be consolidated into a single function, and return a dataclass of all extracted info.
+
+See:
+- `_process_message_content`
+- `_detect_and_process_message_prefix`
+- `MAGIC_PATTERN_AS_USER`
+- `r"^\.s\b"` (turn this into a constant compiled pattern)
+
+Note: `PROMPT_REPLACEMENTS` does not need to change at all, as it already matches its magic patterns against whole lines and does not conflict with other magic processing.
+#+END_SRC
+
+
 * default gemini keys
 #+begin_verse
 Llm_chat: when users without a Gemini key message the bot in a group, use a random key loaded ~/.gemini_default_keys (separated by newlines, load once at startup). Forcefully set the model to 2.5 flash lite. Also Reply with a warning that says they need to start the bot and send their own Gemini api key which they can get for free, and until then a default key was used for them that might not work due to rate limits. Also mention that the model has been set to flash lite because of this. If no default keys are present, fall back to the old behavior.
@@ -27,7 +46,60 @@ When we detect "No Response", try to get the finish reason and add the the reaso
 use context7 to see how to get the finish reason
 #+end_verse
 
-* _
+* DONE _
+#+begin_verse
+llm_chat: define a global `override_chat_context_mode` as a dict of chat id to an optional context mode string. when setting the context mode to "recent", set it inside `override_chat_context_mode`. in `chat_handler`:
+```
+    # Check for chat-specific context mode first
+    chat_context_mode = chat_manager.get_context_mode(event.chat_id)
+    if chat_context_mode:
+        context_mode_to_use = chat_context_mode
+    else:
+        context_mode_to_use = (
+            prefs.context_mode if is_private else prefs.group_context_mode
+        )
+```
+before `chat_manager`, check the `override_chat_context_mode`. if already at "recent" mode, return early, as the first message that triggered recent mode will handle the rest.
+also, pop the recent mode from `override_chat_context_mode` after:
+
+```
+        await asyncio.sleep(RECENT_WAIT_TIME)
+```
+
+#+end_verse
+
+
+** DONE _
+#+begin_verse
+```
+    def remove_plugin(self, shortname):
+        name = self._plugins[shortname].__name__
+
+        for i in reversed(range(len(self._event_builders))):
+            ev, cb = self._event_builders[i]
+            if cb.__module__ == name:
+                del self._event_builders[i]
+
+        del self._plugins[shortname]
+        self._logger.info(f"Removed plugin {shortname}")
+```
+refactor out:
+```
+        for i in reversed(range(len(self._event_builders))):
+            ev, cb = self._event_builders[i]
+            if cb.__module__ == name:
+                del self._event_builders[i]
+```
+as `remove_events_of_mod(self, mod_name)`. Then use this in:
+```
+        if hasattr(borg, "_history_patched"):
+            return
+```
+to remove the old event handlers and add the new, instead of returning.
+#+end_verse
+
+
+* DONE _
 #+begin_verse
 llm_chat:
 Add constant `MAGIC_STR_AS_USER= "MAGIC_AS_USER" ; MAGIC_PATTERN_AS_USER = re.compile(rf"\b{MAGIC_STR_AS_USER}\b")`.
