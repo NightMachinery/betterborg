@@ -36,9 +36,15 @@ def should_auto_process(event):
         bool: True if the event should trigger auto-processing, False otherwise.
     """
     if AUTO_PROCESS_MODE == "PV":
+        # Restrict this command to admins.
+        if not await util.isAdmin(event):
+            return False
+
         return event.is_private
+
     elif isinstance(AUTO_PROCESS_MODE, dict):
         return event.chat_id in AUTO_PROCESS_MODE.values()
+
     else:
         print(f"Invalid AUTO_PROCESS_MODE configuration: '{AUTO_PROCESS_MODE}'")
         return False
@@ -100,10 +106,6 @@ async def ebook_handler(event):
     users in configured chats (based on AUTO_PROCESS_MODE), provides user feedback,
     and processes them as a single request.
     """
-    # Restrict this command to admins.
-    if not await util.isAdmin(event):
-        return
-
     # --- Grouped message handling ---
     group_id = event.grouped_id
     if group_id:
