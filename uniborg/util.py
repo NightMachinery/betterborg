@@ -841,6 +841,7 @@ async def edit_message(
     link_preview=False,
     parse_mode=None,
     max_len=4096,
+    append_p=False,
 ):
     """
     Intelligently edits a message chain to reflect new text content,
@@ -858,9 +859,31 @@ async def edit_message(
         link_preview (bool): Whether to enable link previews.
         parse_mode (str): The markdown parse mode.
         max_len (int): The maximum length of a single message.
+        append_p (bool): If True, append new_text to existing content separated by BOT_META_INFO_LINE.
+                        If False, replace existing content with new_text (default behavior).
     """
     global EDIT_CHAINS
     message_id = message_obj.id
+
+    # Handle append_p mode: append new_text to existing content
+    if append_p:
+        from uniborg.constants import BOT_META_INFO_LINE
+
+        existing_children = EDIT_CHAINS.get(message_id, [])
+
+        # Get existing text from the entire message chain
+        existing_text = message_obj.text or ""
+        for child in existing_children:
+            if child.text:
+                existing_text += child.text
+
+        # Only append if there's existing text and new text
+        if existing_text.strip() and new_text.strip():
+            new_text = f"{existing_text}\n\n{BOT_META_INFO_LINE}\n{new_text}"
+        elif existing_text.strip():
+            # If no new text but existing text exists, keep existing
+            new_text = existing_text
+        # else: if no existing text, just use new_text as-is
 
     # Sanitize and chunk the new text with forward search for streaming consistency
     new_text = new_text.strip()

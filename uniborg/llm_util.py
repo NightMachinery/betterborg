@@ -448,7 +448,7 @@ async def handle_error(
 
     try:
         if response_message:
-            await response_message.edit(user_facing_error)
+            await util.edit_message(response_message, user_facing_error, append_p=True)
         else:
             await event.reply(user_facing_error)
     except Exception as e:

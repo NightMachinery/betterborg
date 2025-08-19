@@ -1438,37 +1438,60 @@ def _create_retry_logger():
     return retry_logger
 
 
+async def _create_server_error_message(event, exception) -> str:
+    """Create a server error message with admin details if applicable."""
+    base_message = "The AI model's server is currently unavailable. This is likely an upstream issue. Please try again later."
+    if await util.isAdmin(event):
+        base_message += f"\n\n**Error:** {str(exception)}"
+    return base_message
+
+
 async def _call_llm_with_retry(
+    event,
     response_message,
     api_kwargs: dict,
     edit_interval: float = None,
     *,
     max_retries: int = MAX_RETRIES,
+    max_retriable_text_length: int = 300,
 ) -> LLMResponse:
     """Call LLM with retry logic for both streaming and non-streaming responses.
 
     Returns:
         LLMResponse: Response containing text and finish_reason
     """
+    response_text = ""  # Initialize at function scope for error handling
+
     try:
         response = await litellm.acompletion(**api_kwargs)
 
         # Check if streaming mode based on edit_interval parameter
         if edit_interval is not None:
             # Streaming mode
-            response_text = ""
             last_edit_time = asyncio.get_event_loop().time()
+            streaming_start_time = last_edit_time
 
             async for chunk in response:
                 delta = chunk.choices[0].delta.content
                 if delta:
                     response_text += delta
                     current_time = asyncio.get_event_loop().time()
-                    if (current_time - last_edit_time) > edit_interval:
+
+                    # Dynamic streaming delay: increase delay for long outputs
+                    current_edit_interval = edit_interval
+                    cursor = "▌"  # Normal typing cursor
+                    if (current_time - streaming_start_time) > 30:  # 30 seconds elapsed
+                        current_edit_interval = 15  # Increase delay to 15 seconds
+                        cursor = "▌(💤)"
+                        # Slow mode cursor to indicate increased delay
+
+                    if (current_time - last_edit_time) > current_edit_interval:
                         try:
                             # Add a cursor to indicate the bot is still "typing"
                             await util.edit_message(
-                                response_message, f"{response_text}▌", parse_mode="md"
+                                response_message,
+                                f"{response_text}{cursor}",
+                                parse_mode="md",
                             )
                             last_edit_time = current_time
                         except errors.rpcerrorlist.MessageNotModifiedError:
@@ -1527,6 +1550,14 @@ async def _call_llm_with_retry(
             is_500_error = True
 
         if is_500_error and max_retries > 0:
+            # Check if we have accumulated significant text - if so, avoid retrying
+            if len(response_text) >= max_retriable_text_length:
+                print(
+                    f"LLM call failed but accumulated text ({len(response_text)} chars) exceeds retry threshold ({max_retriable_text_length}). Not retrying."
+                )
+                error_message = await _create_server_error_message(event, e)
+                raise llm_util.TelegramUserReplyException(error_message)
+
             print(
                 f"LLM call failed with server error. Retrying (attempt {MAX_RETRIES - max_retries + 1}/{MAX_RETRIES})..."
             )
@@ -1536,17 +1567,18 @@ async def _call_llm_with_retry(
 
             await asyncio.sleep(1)  # Small delay before retrying
             return await _call_llm_with_retry(
+                event,
                 response_message,
                 retry_api_kwargs,
                 edit_interval,
                 max_retries=max_retries - 1,
+                max_retriable_text_length=max_retriable_text_length,
             )
         elif is_500_error:
             traceback.print_exc()
             print(f"LLM call failed after {MAX_RETRIES} attempts.")
-            raise llm_util.TelegramUserReplyException(
-                "The AI model's server is currently unavailable. This is likely an upstream issue. Please try again later."
-            )
+            error_message = await _create_server_error_message(event, e)
+            raise llm_util.TelegramUserReplyException(error_message)
         else:
             # Re-raise other errors
             raise
@@ -3619,7 +3651,6 @@ async def log_handler(event):
                 )
                 return
 
-
     if not user_log_dir.is_dir():
         await event.reply(f"{BOT_META_INFO_PREFIX}You have no conversation logs yet.")
         return
@@ -5479,13 +5510,15 @@ async def chat_handler(event):
             # Streaming response handling with retries
             edit_interval = get_streaming_delay(model_in_use)
             llm_response = await _call_llm_with_retry(
-                response_message, api_kwargs, edit_interval
+                event, response_message, api_kwargs, edit_interval
             )
             response_text = llm_response.text
             finish_reason = llm_response.finish_reason
         else:
             # Non-streaming response handling with retries
-            llm_response = await _call_llm_with_retry(response_message, api_kwargs)
+            llm_response = await _call_llm_with_retry(
+                event, response_message, api_kwargs
+            )
             response_text = llm_response.text
             finish_reason = llm_response.finish_reason
 
