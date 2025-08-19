@@ -288,6 +288,10 @@ ALLOWED_IMAGE_FORMATS = {"png", "jpg", "jpeg", "gif", "webp"}
 # Pre-compiled regex for better performance and security
 IMAGE_PATTERN = re.compile(r"data:image/([^;]{1,20});base64,([A-Za-z0-9+/=]+)")
 
+# Magic string to force message role to user
+MAGIC_STR_AS_USER = "MAGIC_AS_USER"
+MAGIC_PATTERN_AS_USER = re.compile(rf"\b{MAGIC_STR_AS_USER}\b")
+
 MODEL_CHOICES = {
     ## Gemini
     "gemini/gemini-2.5-flash": "Gemini 2.5 Flash",
@@ -1027,7 +1031,9 @@ async def _check_url_mimetype(url: str, *, max_retries: int = 10) -> Optional[st
         if attempt >= 1:
             await asyncio.sleep(0.1)
             # await asyncio.sleep(0.1 * attempt)
-        else:
+        elif False:
+            #: I have completely disabled the head req strategy.
+            ##
             try:
                 async with httpx.AsyncClient(
                     timeout=5,  # Shorter timeout for better UX
@@ -1035,51 +1041,47 @@ async def _check_url_mimetype(url: str, *, max_retries: int = 10) -> Optional[st
                     max_redirects=10,  # Limit redirect chains
                 ) as client:
                     # First attempt: HEAD (fast, no body)
-                    try:
-                        head_resp = await client.head(url)
-                        if head_resp.status_code == 200:
-                            head_ct = (
-                                head_resp.headers.get("content-type", "").split(";")[0].lower()
-                            )
-                            if head_ct and head_ct not in ("text/plain", "text/html"):
-                                # ic(head_ct)
-                                return head_ct
-                    # except (httpx.TimeoutException, httpx.RequestError):
-                    except:
-                        # Fall through to GET fallback
-                        pass
-
-                # Fallback: small GET with Range to force redirects and minimize data
-                try:
-                    get_resp = await client.get(url, headers={"Range": "bytes=0-0"})
-                    if get_resp.status_code in (200, 206):
-                        get_ct = (
-                            get_resp.headers.get("content-type", "").split(";")[0].lower()
+                    head_resp = await client.head(url)
+                    if head_resp.status_code == 200:
+                        head_ct = (
+                            head_resp.headers.get("content-type", "")
+                            .split(";")[0]
+                            .lower()
                         )
-                        if get_ct:
-                            return get_ct
-                        else:
-                            ic(get_ct, get_resp, get_resp.headers)
+                        if head_ct and head_ct not in ("text/plain", "text/html"):
+                            # ic(head_ct)
+                            return head_ct
+            except:
+                # Fall through to GET fallback
+                pass
 
-                    else:
-                        ic(get_resp, get_resp.headers, get_resp.status_code)
-                        pass
+        try:
+            # Fallback: small GET with Range to force redirects and minimize data
+            get_resp = await client.get(url, headers={"Range": "bytes=0-0"})
+            if get_resp.status_code in (200, 206):
+                get_ct = get_resp.headers.get("content-type", "").split(";")[0].lower()
+                if get_ct:
+                    return get_ct
+                else:
+                    ic(get_ct, get_resp, get_resp.headers)
 
-                except (httpx.TimeoutException, httpx.RequestError):
-                    if attempt == max_retries:
-                        traceback.print_exc()
-                        logger.warning(f"Failed to get content type for {url} after {max_retries + 1} attempts")
-                    continue
+            else:
+                ic(get_resp, get_resp.headers, get_resp.status_code)
+                pass
 
         except (httpx.TimeoutException, httpx.RequestError) as e:
             if attempt == max_retries:
                 traceback.print_exc()
-                logger.warning(f"Network error checking URL {url} after {max_retries + 1} attempts: {e}")
+                logger.warning(
+                    f"Network error checking URL {url} after {max_retries + 1} attempts: {e}"
+                )
             continue
         except:
             if attempt == max_retries:
                 traceback.print_exc()
-                logger.error(f"Unexpected error checking URL {url} after {max_retries + 1} attempts")
+                logger.error(
+                    f"Unexpected error checking URL {url} after {max_retries + 1} attempts"
+                )
             continue
 
         # If we reach here without returning, it means no content type was found but no errors occurred
@@ -1180,22 +1182,26 @@ async def _process_audio_url_magic(event, url: str) -> bool:
 
         # Send the audio file to the chat as a normal file upload
         print(f"Sending downloaded audio file: {audio_file_path}")
-        audio_message = await event.reply(file=str(audio_file_path))
-        audio_message._role = "user"
-        #: This role will only persist for the current conversation turn.
-        #: But it should be enough.
+        new_text = f"{MAGIC_STR_AS_USER} .suma"
+        async with borg.action(event.chat, "document") as action:
+            audio_message = await event.reply(
+                file=str(audio_file_path), caption=new_text
+            )
+        # audio_message._role = "user"
+        #: @deprecated This role will only persist for the current conversation turn.
 
-        new_text = ".suma\n\nIMPORTANT: The file has been given to you in this same message. It was downloaded for you from the URL in the previous message."
-        audio_message.text = new_text
-        #: This text will only persist for the current conversation turn.
+        # audio_message.text = new_text
+        #: @deprecated This text will only persist for the current conversation turn.
 
         # print(f"Audio message sent: {audio_message}")
-        
+
         # Clean up the temporary audio file
         try:
             Path(audio_file_path).unlink()
         except OSError as e:
-            logger.warning(f"Failed to delete temporary audio file {audio_file_path}: {e}")
+            logger.warning(
+                f"Failed to delete temporary audio file {audio_file_path}: {e}"
+            )
 
         # Build a proxy event that points to the uploaded audio message
         proxy = ProxyEvent(
@@ -1455,12 +1461,13 @@ async def _send_image_to_telegram(
         image_io.name = filename
 
         try:
-            # Send image to Telegram
-            await event.client.send_file(
-                event.chat_id,
-                file=image_io,
-                reply_to=event.id,
-            )
+            # Send image to Telegram with uploading photo action
+            async with borg.action(event.chat, "photo") as action:
+                await event.client.send_file(
+                    event.chat_id,
+                    file=image_io,
+                    reply_to=event.id,
+                )
             return True
         finally:
             image_io.close()
@@ -2474,6 +2481,10 @@ async def _get_message_role(message: Message) -> str:
         #: allows forcefully setting a role programmatically
         return message._role
 
+    # Check for magic pattern to force user role
+    if message.text and MAGIC_PATTERN_AS_USER.search(message.text):
+        return "user"
+
     if message.forward and message.forward.from_id:
         # from_id is a Peer object; we only care about user-to-user forwards for role assignment.
         original_sender_id = getattr(message.forward.from_id, "user_id", None)
@@ -2525,6 +2536,9 @@ async def _process_message_content(
         # Strip model selection prefixes from all user messages in history
         prefix_detection = _detect_and_process_message_prefix(processed_text)
         processed_text = prefix_detection.processed_text
+
+        # Remove magic pattern to force user role
+        processed_text = MAGIC_PATTERN_AS_USER.sub("", processed_text).strip()
 
         # Apply prompt replacements with simple regex substitutions.
         # Apply each pattern at most once per message.
@@ -4770,18 +4784,19 @@ async def _handle_tts_response(event, response_text: str):
             # Send as voice message with proper attributes
             from telethon.tl.types import DocumentAttributeAudio
 
-            await event.client.send_file(
-                event.chat_id,
-                ogg_file_path,
-                voice_note=True,
-                reply_to=event.id,
-                attributes=[
-                    DocumentAttributeAudio(
-                        duration=0,  # Duration will be auto-detected by Telegram
-                        voice=True,
-                    )
-                ],
-            )
+            async with borg.action(event.chat, "record_voice") as action:
+                await event.client.send_file(
+                    event.chat_id,
+                    ogg_file_path,
+                    voice_note=True,
+                    reply_to=event.id,
+                    attributes=[
+                        DocumentAttributeAudio(
+                            duration=0,  # Duration will be auto-detected by Telegram
+                            voice=True,
+                        )
+                    ],
+                )
         finally:
             # Clean up temporary file
             try:
@@ -4969,9 +4984,15 @@ async def handle_live_mode_responses(session, original_event):
                         )
 
                         # Send as voice message
-                        await borg.send_file(
-                            session.chat_id, ogg_data, attributes=[], voice_note=True
-                        )
+                        async with borg.action(
+                            session.chat_id, "record_voice"
+                        ) as action:
+                            await borg.send_file(
+                                session.chat_id,
+                                ogg_data,
+                                attributes=[],
+                                voice_note=True,
+                            )
                         print(f"Sent voice response: {len(ogg_data)} bytes")
                     except Exception as audio_error:
                         print(f"Error processing audio response: {audio_error}")

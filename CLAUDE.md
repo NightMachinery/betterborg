@@ -2,6 +2,8 @@
 
 This file provides guidance to coding agents when working with code in this repository.
 
+- After editing files, run `black` on them to both format them correctly and to check for syntax errors.
+
 ------------------------------------------------------------------------
 
 -   DRY.
@@ -34,7 +36,7 @@ For enum-like conditionals, use explicit matching conditions, and raise an excep
 
 Start by reading these files completely: uniborg/*.py stt_plugins/*.py llm_chat_plugins/*.py .
 
-When a file is too big to read directly, read its first 500 lines, and also search for various definitions inside it to get a map of the file (e.g., classes, functions, ...). Then read parts that you need from this map.
+When a file is too big to read directly, read its first 500 lines, and also search for various definitions inside it to get a map of the file (e.g., classes, functions, ...). Then read parts that you need from this map. Or you can use the serena MCP.
 
 ## Development Commands
 

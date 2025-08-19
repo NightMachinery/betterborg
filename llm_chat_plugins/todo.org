@@ -27,6 +27,30 @@ When we detect "No Response", try to get the finish reason and add the the reaso
 use context7 to see how to get the finish reason
 #+end_verse
 
+* _
+#+begin_verse
+llm_chat:
+Add constant `MAGIC_STR_AS_USER= "MAGIC_AS_USER" ; MAGIC_PATTERN_AS_USER = re.compile(rf"\b{MAGIC_STR_AS_USER}\b")`.
+
+Check for this pattern in `_get_message_role`. Replace this pattern with nothing in `_process_message_content`.
+
+In:
+```
+        print(f"Sending downloaded audio file: {audio_file_path}")
+        audio_message = await event.reply(file=str(audio_file_path))
+        audio_message._role = "user"
+        #: This role will only persist for the current conversation turn.
+        #: But it should be enough.
+
+        new_text = ".suma\n\nIMPORTANT: The file has been given to you in this same message. It was downloaded for you from the URL in the previous message."
+        audio_message.text = new_text
+```
+1. use telethon with "sending_file" to indicate that the file is being sent.
+2. `new_text = f"{MAGIC_STR_AS_USER} .suma"`
+3. also set new_text as caption of the file message being sent
+#+end_verse
+
+
 * DONE audio url magic
 #+begin_verse
 Llm_chat: when the user sends a message that consists solely of a URL, can we check the url's minetype without downloading it?
