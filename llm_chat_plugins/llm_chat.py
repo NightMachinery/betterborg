@@ -206,6 +206,11 @@ NOW WAIT FOR TARGET
 After reading all instructions above, analyze the following TARGET and produce the review:
 
 TARGET: """,
+    #: Replace LessWrong and Alignment Forum URLs with GreaterWrong to allow better scraping of URLs.
+    re.compile(
+        r"\bhttps?://(?:www\.)?(lesswrong\.com|alignmentforum\.org)/",
+        re.IGNORECASE,
+    ): r"https://greaterwrong.com/",
 }
 
 # **Strategic emoji use:** 0-2 per message, only when they add clarity or warmth—never decorative.
