@@ -109,6 +109,30 @@ def create_genai_client(
     return genai.Client(api_key=api_key, http_options=http_options)
 
 
+# --- Prompt Loading Utilities ---
+
+# Environment and prompt loading setup
+NIGHTDIR = os.getenv("NIGHTDIR", None)
+DEFAULT_PROMPT_DIR = f"{NIGHTDIR}/prompt" if NIGHTDIR else "UNSET"
+
+
+def load_prompt_from_file(filename, *, prefix=DEFAULT_PROMPT_DIR):
+    """Load prompt content from file. Returns empty string and prints warning if prefix is UNSET."""
+    if prefix == "UNSET":
+        print(f"Warning: NIGHTDIR not set, cannot load prompt from {filename}")
+        return ""
+
+    try:
+        file_path = Path(prefix) / filename
+        return file_path.read_text()
+    except FileNotFoundError:
+        print(f"Warning: Prompt file not found: {file_path}")
+        return ""
+    except Exception as e:
+        print(f"Warning: Error loading prompt from {file_path}: {e}")
+        return ""
+
+
 # --- LLM-Specific Shared Constants and Utilities ---
 
 MIME_TYPE_MAP = {
