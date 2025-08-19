@@ -2,6 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from pynight.common_icecream import ic
 import os
 import json
 import asyncio
@@ -184,6 +185,7 @@ async def _get_history_items_redis(chat_id: int) -> List[HistoryItem]:
             item_data = json.loads(raw_item)
             items.append(HistoryItem.from_dict(item_data))
         except (json.JSONDecodeError, KeyError):
+            print(f"HistoryUtil: Corrupted history item in Redis:\n{raw_item}")
             continue  # Skip corrupted entries
 
     return items
@@ -281,18 +283,30 @@ async def get_all_ids(chat_id: int, skip_deleted_p: bool = True) -> List[int]:
 
 
 async def get_ids_since(
-    chat_id: int, timestamp: datetime, skip_deleted_p: bool = True
+    chat_id: int,
+    timestamp: datetime,
+    skip_deleted_p: bool = True,
 ) -> List[int]:
     """Retrieves message IDs for a chat that have occurred since the given timestamp."""
     if redis_util.is_redis_available():
         try:
             items = await _get_history_items_redis(chat_id)
+            # ic(chat_id, items)
+
             if skip_deleted_p:
-                return [
-                    item.message_id
-                    for item in items
-                    if item.timestamp > timestamp and not item.deleted
-                ]
+                if False:
+                    #: for debugging
+                    for item in items:
+                        if item.message_id > 5625:
+                            ic(
+                                item.__dict__,
+                                item.timestamp,
+                                timestamp,
+                                item.timestamp > timestamp,
+                            )
+
+                result = [item.message_id for item in items if item.timestamp > timestamp and not item.deleted]
+                return result
             else:
                 return [item.message_id for item in items if item.timestamp > timestamp]
         except Exception as e:
@@ -457,7 +471,8 @@ async def initialize_history_handler():
     if await borg.is_bot():
         # BOT MODE: Monkey-patch send methods.
         if hasattr(borg, "_history_patched"):
-            return
+            # Remove old event handlers and add new ones instead of returning
+            borg.remove_events_of_mod(__name__)
         borg._history_patched = True
 
         # Store the original methods before we replace them
