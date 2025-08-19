@@ -342,6 +342,9 @@ HISTORY_MESSAGE_LIMIT = 1000
 LOG_COUNT_LIMIT = 3
 AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
 DEFAULT_ENABLED_TOOLS = ["googleSearch", "urlContext"]
+
+# Global override for chat context modes (chat_id -> context_mode_string or None)
+override_chat_context_mode: Dict[int, Optional[str]] = {}
 # Controls when to show warnings about unsupported media, etc. to the user.
 # "always": Show in all chats. "private_only": Show only in private chats. "never": Never show.
 WARN_UNSUPPORTED_TO_USER_P = os.getenv("WARN_UNSUPPORTED_TO_USER_P", "private_only")
@@ -880,15 +883,32 @@ def _detect_and_process_message_prefix(text: str) -> PrefixProcessResult:
     if not text:
         return PrefixProcessResult(processed_text=text or "")
 
-    text = text.lstrip()
+    #: [[id:5afef6f3-51e1-4536-a85f-f1cf3bbed5ee][@hack I need to think of a better magic command language.]]
+    other_prefixes = {
+        ".s ": False,
+    }
+    for p in other_prefixes:
+        if text.startswith(p):
+            other_prefixes[p] = True
+            text = text[len(p) :]
+
+    def add_back_prefixes(text: str) -> str:
+        for p, v in other_prefixes.items():
+            if v:
+                text = p + text
+        return text
+
+    processed_text = text.lstrip()
     for prefix, model in PREFIX_MODEL_MAPPING.items():
-        if text.startswith(prefix):
+        if processed_text.startswith(prefix):
             # Check if the prefix is followed by a space or the end of the message
             if len(text) == len(prefix) or text[len(prefix)].isspace():
                 processed_text = text[len(prefix) :].lstrip()
+                processed_text = add_back_prefixes(processed_text)
                 return PrefixProcessResult(model=model, processed_text=processed_text)
 
-    return PrefixProcessResult(processed_text=text)
+    processed_text = add_back_prefixes(processed_text)
+    return PrefixProcessResult(processed_text=processed_text)
 
 
 def _validate_url_security(url: str) -> Optional[str]:
@@ -1187,8 +1207,11 @@ async def _process_audio_url_magic(event, url: str) -> bool:
         print(f"Sending downloaded audio file: {audio_file_path}")
         new_text = f"{MAGIC_STR_AS_USER} .suma"
         async with borg.action(event.chat, "document") as action:
-            audio_message = await event.reply(
-                file=str(audio_file_path), caption=new_text
+            audio_message = await event.client.send_file(
+                event.chat_id,
+                file=str(audio_file_path),
+                caption=new_text,
+                reply_to=event.id,
             )
         # audio_message._role = "user"
         #: @deprecated This role will only persist for the current conversation turn.
@@ -2516,7 +2539,7 @@ async def _process_message_content(
     """Processes a single message's text and media into litellm content parts."""
     text_buffer, media_parts, warnings = [], [], []
 
-    # ic(message, message.text)
+    # ic(message, message.id, message.text)
 
     # Filter out meta-info messages and commands from history
     if (
@@ -2828,6 +2851,7 @@ async def build_conversation_history(
             now = datetime.now(timezone.utc)
             five_seconds_ago = now - timedelta(seconds=5)
             message_ids = await history_util.get_ids_since(chat_id, five_seconds_ago)
+            # ic(message_ids)
 
         # Common logic for bot modes that use message_ids
         all_ids = sorted(list(set(message_ids + [event.id])))
@@ -3173,15 +3197,6 @@ async def initialize_llm_chat():
 Your username on Telegram is {BOT_USERNAME}. The user might mention you using this username.
 """
 
-    if IS_BOT:
-        await history_util.initialize_history_handler()
-        print("LLM_Chat: Running as a BOT. History utility initialized.")
-        await bot_util.register_bot_commands(borg, BOT_COMMANDS)
-    else:
-        print(
-            "LLM_Chat: Running as a USERBOT. History utility and bot commands skipped."
-        )
-
     # Load smart context states from Redis on startup (both bot and userbot)
     await load_smart_context_states()
 
@@ -3189,6 +3204,16 @@ Your username on Telegram is {BOT_USERNAME}. The user might mention you using th
     bot_util.populate_callback_hash_map(MODEL_CHOICES)
 
     register_handlers()
+
+    #: Registering the history event handlers last, as uniborg monkey patches `._event_builders` to be a ReverseList.
+    #: [[zf:~\[borg\]/uniborg/uniborg.py::self._event_builders = hacks.ReverseList()]]
+    if IS_BOT:
+        await history_util.initialize_history_handler()
+        print("LLM_Chat: Running as a BOT. History utility initialized.")
+    else:
+        print(
+            "LLM_Chat: Running as a USERBOT. History utility and bot commands skipped."
+        )
 
     # Notify log chat that the plugin initialized successfully
     try:
@@ -3202,6 +3227,10 @@ Your username on Telegram is {BOT_USERNAME}. The user might mention you using th
     except Exception:
         # Silently ignore logging errors to avoid breaking startup
         pass
+
+    if IS_BOT:
+        #: This doesn't really matter, so we put it after the successful initialization message.
+        await bot_util.register_bot_commands(borg, BOT_COMMANDS)
 
 
 # --- Telethon Event Handlers ---
@@ -5063,14 +5092,21 @@ async def chat_handler(event):
     prefs = user_manager.get_prefs(user_id)
     is_private = event.is_private
 
-    # Check for chat-specific context mode first
-    chat_context_mode = chat_manager.get_context_mode(event.chat_id)
-    if chat_context_mode:
-        context_mode_to_use = chat_context_mode
+    # Check for override context mode first
+    override_mode = override_chat_context_mode.get(event.chat_id)
+    if override_mode:
+        if override_mode == "recent":
+            return  # Early return - first message handles the rest
+        context_mode_to_use = override_mode
     else:
-        context_mode_to_use = (
-            prefs.context_mode if is_private else prefs.group_context_mode
-        )
+        # Check for chat-specific context mode
+        chat_context_mode = chat_manager.get_context_mode(event.chat_id)
+        if chat_context_mode:
+            context_mode_to_use = chat_context_mode
+        else:
+            context_mode_to_use = (
+                prefs.context_mode if is_private else prefs.group_context_mode
+            )
 
     # Smart Mode logic
     if context_mode_to_use == "smart":
@@ -5169,9 +5205,13 @@ async def chat_handler(event):
 
     if event.text and re.match(r"^\.s\b", event.text):
         RECENT_WAIT_TIME = 1
+        override_chat_context_mode[event.chat_id] = "recent"
         await asyncio.sleep(RECENT_WAIT_TIME)
+        # Pop the recent mode after waiting
+        override_chat_context_mode.pop(event.chat_id, None)
         context_mode_to_use = "recent"
         event.message.text = event.text[2:].strip()
+        event.text = event.message.text  #: might be redundant
 
         response_message = await event.reply(
             f"{BOT_META_INFO_PREFIX}**Recent Context Mode:** I'll use only the recent messages to form the conversation context. I have waited {RECENT_WAIT_TIME} second(s) to receive all your messages.\n\nProcessing ... "
