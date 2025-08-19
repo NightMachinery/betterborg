@@ -1029,46 +1029,48 @@ async def _check_url_mimetype(url: str, *, max_retries: int = 10) -> Optional[st
         The mimetype string if successful, None otherwise
     """
     for attempt in range(max_retries + 1):
-        if attempt >= 1:
-            await asyncio.sleep(0.1)
-            # await asyncio.sleep(0.1 * attempt)
-        elif False:
-            #: I have completely disabled the head req strategy.
-            ##
-            try:
-                async with httpx.AsyncClient(
-                    timeout=5,  # Shorter timeout for better UX
-                    follow_redirects=True,
-                    max_redirects=10,  # Limit redirect chains
-                ) as client:
-                    # First attempt: HEAD (fast, no body)
-                    head_resp = await client.head(url)
-                    if head_resp.status_code == 200:
-                        head_ct = (
-                            head_resp.headers.get("content-type", "")
-                            .split(";")[0]
-                            .lower()
-                        )
-                        if head_ct and head_ct not in ("text/plain", "text/html"):
-                            # ic(head_ct)
-                            return head_ct
-            except:
-                # Fall through to GET fallback
-                pass
-
         try:
-            # Fallback: small GET with Range to force redirects and minimize data
-            get_resp = await client.get(url, headers={"Range": "bytes=0-0"})
-            if get_resp.status_code in (200, 206):
-                get_ct = get_resp.headers.get("content-type", "").split(";")[0].lower()
-                if get_ct:
-                    return get_ct
-                else:
-                    ic(get_ct, get_resp, get_resp.headers)
+            async with httpx.AsyncClient(
+                timeout=5,  # Shorter timeout for better UX
+                follow_redirects=True,
+                max_redirects=10,  # Limit redirect chains
+            ) as client:
+                if attempt >= 1:
+                    await asyncio.sleep(0.1)
+                    # await asyncio.sleep(0.1 * attempt)
+                elif False:
+                    #: I have completely disabled the head req strategy.
+                    ##
+                    try:
+                        # First attempt: HEAD (fast, no body)
+                        head_resp = await client.head(url)
+                        if head_resp.status_code == 200:
+                            head_ct = (
+                                head_resp.headers.get("content-type", "")
+                                .split(";")[0]
+                                .lower()
+                            )
+                            if head_ct and head_ct not in ("text/plain", "text/html"):
+                                # ic(head_ct)
+                                return head_ct
+                    except:
+                        # Fall through to GET fallback
+                        pass
 
-            else:
-                ic(get_resp, get_resp.headers, get_resp.status_code)
-                pass
+                # Fallback: small GET with Range to force redirects and minimize data
+                get_resp = await client.get(url, headers={"Range": "bytes=0-0"})
+                if get_resp.status_code in (200, 206):
+                    get_ct = (
+                        get_resp.headers.get("content-type", "").split(";")[0].lower()
+                    )
+                    if get_ct:
+                        return get_ct
+                    else:
+                        ic(get_ct, get_resp, get_resp.headers)
+
+                else:
+                    ic(get_resp, get_resp.headers, get_resp.status_code)
+                    pass
 
         except (httpx.TimeoutException, httpx.RequestError) as e:
             if attempt == max_retries:
