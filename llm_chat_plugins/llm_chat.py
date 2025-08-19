@@ -1024,26 +1024,30 @@ async def _check_url_mimetype(url: str, *, max_retries: int = 10) -> Optional[st
         The mimetype string if successful, None otherwise
     """
     for attempt in range(max_retries + 1):
-        try:
-            async with httpx.AsyncClient(
-                timeout=5,  # Shorter timeout for better UX
-                follow_redirects=True,
-                max_redirects=10,  # Limit redirect chains
-            ) as client:
-                # First attempt: HEAD (fast, no body)
-                try:
-                    head_resp = await client.head(url)
-                    if head_resp.status_code == 200:
-                        head_ct = (
-                            head_resp.headers.get("content-type", "").split(";")[0].lower()
-                        )
-                        if head_ct and head_ct not in ("text/plain", "text/html"):
-                            # ic(head_ct)
-                            return head_ct
-                # except (httpx.TimeoutException, httpx.RequestError):
-                except:
-                    # Fall through to GET fallback
-                    pass
+        if attempt >= 1:
+            await asyncio.sleep(0.1)
+            # await asyncio.sleep(0.1 * attempt)
+        else:
+            try:
+                async with httpx.AsyncClient(
+                    timeout=5,  # Shorter timeout for better UX
+                    follow_redirects=True,
+                    max_redirects=10,  # Limit redirect chains
+                ) as client:
+                    # First attempt: HEAD (fast, no body)
+                    try:
+                        head_resp = await client.head(url)
+                        if head_resp.status_code == 200:
+                            head_ct = (
+                                head_resp.headers.get("content-type", "").split(";")[0].lower()
+                            )
+                            if head_ct and head_ct not in ("text/plain", "text/html"):
+                                # ic(head_ct)
+                                return head_ct
+                    # except (httpx.TimeoutException, httpx.RequestError):
+                    except:
+                        # Fall through to GET fallback
+                        pass
 
                 # Fallback: small GET with Range to force redirects and minimize data
                 try:
