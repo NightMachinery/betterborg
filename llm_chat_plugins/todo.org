@@ -27,6 +27,26 @@ See:
 Note: `PROMPT_REPLACEMENTS` does not need to change at all, as it already matches its magic patterns against whole lines and does not conflict with other magic processing.
 #+END_SRC
 
+* _
+#+BEGIN_SRC markdown
+Llm_chat: When an error is encountered, add it to the end of the current text, don't replace the current text. Use META BOT LINE to separate the error. 
+This way the user won't lose the already streamed parts.
+
+`handle_error`: should use `util.edit_message` to edit the message with the error messages. we should add `prepend_p=False` to `util.edit_message`. When `prepend_p=True`, the error message is prepended to the current text (separated with `BOT_META_INFO_LINE`). Otherwise, it is appended. handle_error should set `prepend_p=True`.
+
+`_call_llm_with_retry`: This function should avoid retrying if the accumulated text `response_text` has a minumum length (set as a kwarg `max_retriable_text_length=300`). When raising TelegramUserReplyException, append the original exception to the message if `await util.isAdmin(event)`.
+
+Also: Streaming delay must increase as time goes on to deal with long outputs etc. If it's been 30 seconds since start of streaming, make the delay 15 seconds.
+#+END_SRC
+
+#+BEGIN_SRC markdown
+<!-- To properly implement this, we should modify `_call_llm_with_retry` to not raise a `TelegramUserReplyException`; instead, whenever it wants to give up, it should simply append the error to `response_text` using `BOT_META_INFO_LINE` and raise the error normally. -->
+<!-- if the event is admin, we should append the raw error too at the end. Otherwise just our current generic message. -->
+
+
+<!-- To properly implement this, we should modify `_call_llm_with_retry` to return a dataclass that includes any possible exceptions encountered and the accumulated text. The callers  -->
+#+END_SRC
+
 * DONE llm_chat: add the ability to `/log` command to get an optional number instead
 #+begin_verse
 llm_chat: add the ability to `/log` command to get an optional number instead 
