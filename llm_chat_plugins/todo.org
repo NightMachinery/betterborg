@@ -3,7 +3,8 @@
 * @refactor
 ** Refactor llm_chat plugin to define dataclasses when you need to return multiple items, not tuples.
 
-* Put some of our PROMPT_REPLACEMENTS inside night.sh, load from there both here and in prompting.zsh to maintain single source of truth.
+* @recurrent
+** DONE Put some of our PROMPT_REPLACEMENTS inside night.sh, load from there both here and in prompting.zsh to maintain single source of truth.
 #+begin_verse
 Extract the `.rev` in PROMPT_REPLACEMENTS into `~/scripts/prompt/review_v1.md` and load it from there.
 #+end_verse
