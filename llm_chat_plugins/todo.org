@@ -3,25 +3,14 @@
 * @refactor
 ** Refactor llm_chat plugin to define dataclasses when you need to return multiple items, not tuples.
 
-* _
+* default gemini keys
 #+begin_verse
-Llm_chat: when the user sends a message that consists solely of a URL, can we check the url's minetype without downloading it?
+Llm_chat: when users without a Gemini key message the bot in a group, use a random key loaded ~/.gemini_default_keys (separated by newlines, load once at startup). Forcefully set the model to 2.5 flash lite. Also Reply with a warning that says they need to start the bot and send their own Gemini api key which they can get for free, and until then a default key was used for them that might not work due to rate limits. Also mention that the model has been set to flash lite because of this. If no default keys are present, fall back to the old behavior.
 
-If we can detect audio mimetypes, we can download the file and send it to the user, and then invoke the .suma prompt on it, instead of sending the raw url to the model. 
-
-This behavior can be controlled by the global flag AUDIO_URL_MAGIC_P=True. For now, limit it to admins only.
+The default keys should not be used in private chats.
 #+end_verse
 
-* _
-#+begin_verse
-Discrete_send: try to break messages on words
-Try to not break markdown elements when sending as markdown (eg bold text). Easy way: try splitting on line breaks.
-We must still we never send a message bigger than the current limit.
-
-The way we break messages into parts should ideally be constant even as the message is streamed. This way, the text at the end of one message won't "oscillate" between being part of the previous message and the next one.
-#+end_verse
-
-* _
+* Gemini 2.5 Pro returns None for a lot of requests
 #+begin_verse
 [Bug]: Gemini 2.5 Pro returns None for a lot of requests · Issue #10721 · BerriAI/litellm
 https://github.com/BerriAI/litellm/issues/10721
@@ -38,14 +27,42 @@ When we detect "No Response", try to get the finish reason and add the the reaso
 use context7 to see how to get the finish reason
 #+end_verse
 
-* _
+* DONE audio url magic
 #+begin_verse
-Llm_chat: when users without a Gemini key message the bot in a group, use a random key loaded ~/.gemini_default_keys (separated by newlines, load once at startup). Forcefully set the model to 2.5 flash lite. Also Reply with a warning that says they need to start the bot and send their own Gemini api key which they can get for free, and until then a default key was used for them that might not work due to rate limits. Also mention that the model has been set to flash lite because of this. If no default keys are present, fall back to the old behavior.
+Llm_chat: when the user sends a message that consists solely of a URL, can we check the url's minetype without downloading it?
 
-The default keys should not be used in private chats.
+If we can detect audio mimetypes, we can download the file and send it to the user, and then invoke the .suma prompt on it, instead of sending the raw url to the model. 
+
+This behavior can be controlled by the global flag AUDIO_URL_MAGIC_P=True. For now, limit it to admins only.
 #+end_verse
 
-* DONE _
+** DONE =_check_url_mimetype= returns =text/plain= for `https://sphinx.acast.com/p/open/s/624fd0fe3b43120012e43cb5/e/689f54fa66f126ae
+#+begin_verse
+Test why `_check_url_mimetype` returns `text/plain` for `https://sphinx.acast.com/p/open/s/624fd0fe3b43120012e43cb5/e/689f54fa66f126ae3f099d1b/media.mp3`. It seems we are not properly following redirects. The url ultimately redirects to `https://stitcher2.acast.com/livestitches/a9589d92256701dcb21dcab933e66528.mp3?aid=689f54fa66f126ae3f099d1b&chid=624fd0fe3b43120012e43cb5&ci=gf-umLFnszTIVbGBP_R5Jus6_F8ZQ8Uszd9kIuHkK8Wpf-uBq7ZrKg%3D%3D&pf=rss&sv=sphinx%401.257.1&uid=9e3da852e36996ee3b50ccea994d5de3&Expires=1755562066543&Key-Pair-Id=K38CTQXUSD0VVB&Signature=cSjZJbRv6wVQI-7QJpL3S3ws-HaeUvwXGYuh1dH8u8iQmuKOelUg7F35EaMMD~HcbusWtFODySAMotKIrcuBMsM0TQah6tSV5W99FtMGjxBb5VdMzNWQmzoub4a~yPf-jABzX8m8Gpnrk6AEzoI6JIFVw0ZgxjE-ogiBZ0K-Ukc4G3PE7b-ezWN3pcwMYh5HZ0ui65nS98~c5QqTVQmyHb7jDZNVb9W3iUdsyOU6wUvwQQkG5KaLdjF5AZFNqMK9l0VpNUVpipiWSgKdV8w1ZjK-ZS7iLFIbcC-heyU8~~SJ7vbj7MpqATiEu47~0ImvXkc0955y9eFyW9GlDtZH0Q__` which has the correct mime type.
+
+You can create a test script to run python code.
+#+end_verse
+
+* DONE discreet_send: try to break messages on words
+#+begin_verse
+discreet_send: try to break messages on words
+Try to not break markdown elements when sending as markdown (eg bold text). Easy way: try splitting on line breaks.
+We must still we never send a message bigger than the current limit.
+
+The way we break messages into parts should ideally be constant even as the message is streamed. This way, the text at the end of one message won't "oscillate" between being part of the previous message and the next one.
+
+Define helper functions when needed. Clean, reusable code.
+#+end_verse
+
+** _
+#+begin_verse
+```
+    for i in range(max_pos, max(0, max_pos - 200), -1):
+```
+when you use `-1` here, your break point might change if a postfix is added to the text. but if you don't do that, the break point will stay the same even if the text grows (which happens in streaming). Make this a kwarg and default to `-1`, as discreet_send itself does not handle streaming text, but update `async def edit_message` to use the proper `0` because that function deals with streaming text.
+#+end_verse
+
+* DONE Add .sumafa hardcoded prompts
 #+begin_verse
 Add .sumafa hardcoded prompts `PROMPT_REPLACEMENTS` to summarize audio:
 
