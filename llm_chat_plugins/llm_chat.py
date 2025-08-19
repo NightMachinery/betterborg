@@ -3116,7 +3116,7 @@ def register_handlers():
     )(status_handler)
     borg.on(
         events.NewMessage(
-            pattern=rf"(?i)^/log{bot_username_suffix_re}\s*$",
+            pattern=rf"(?i)^/log{bot_username_suffix_re}(?:\s+(\d+))?\s*$",
             func=lambda e: e.is_private,
         )
     )(log_handler)
@@ -3603,6 +3603,23 @@ async def log_handler(event):
     user_id = event.sender_id
     user_log_dir = LOG_DIR / str(user_id)
 
+    # Check if a number parameter was provided
+    match = event.pattern_match
+    custom_count = None
+    if match and match.group(1):
+        # Admin check required for custom count
+        if await util.isAdmin(event):
+            custom_count = int(match.group(1))
+
+        else:
+            if False:
+                #: let us fall back gracefully
+                await event.reply(
+                    f"{BOT_META_INFO_PREFIX}Admin access required for custom log count."
+                )
+                return
+
+
     if not user_log_dir.is_dir():
         await event.reply(f"{BOT_META_INFO_PREFIX}You have no conversation logs yet.")
         return
@@ -3620,7 +3637,8 @@ async def log_handler(event):
             )
             return
 
-        logs_to_send = log_files[:LOG_COUNT_LIMIT]
+        count_to_use = custom_count if custom_count is not None else LOG_COUNT_LIMIT
+        logs_to_send = log_files[:count_to_use]
 
         await event.reply(
             f"{BOT_META_INFO_PREFIX}Sending your last {len(logs_to_send)} conversation log(s)..."

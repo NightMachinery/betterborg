@@ -27,6 +27,12 @@ See:
 Note: `PROMPT_REPLACEMENTS` does not need to change at all, as it already matches its magic patterns against whole lines and does not conflict with other magic processing.
 #+END_SRC
 
+* DONE llm_chat: add the ability to `/log` command to get an optional number instead
+#+begin_verse
+llm_chat: add the ability to `/log` command to get an optional number instead 
+  of 3: `/log\s+(\d+)`. this should only be available to admins, and do not 
+  change `/help` etc. as normal users cannot use it.
+#+end_verse
 
 * default gemini keys
 #+begin_verse
