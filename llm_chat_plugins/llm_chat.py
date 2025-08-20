@@ -1480,10 +1480,14 @@ async def _call_llm_with_retry(
                     # Dynamic streaming delay: increase delay for long outputs
                     current_edit_interval = edit_interval
                     cursor = "▌"  # Normal typing cursor
+                    
                     if (current_time - streaming_start_time) > 30:  # 30 seconds elapsed
                         current_edit_interval = 15  # Increase delay to 15 seconds
-                        cursor = "▌(💤)"
+                        # cursor = "▌(💤)"
+                        # cursor = "▌⁞💤"
+                        cursor = "▌💤"
                         # Slow mode cursor to indicate increased delay
+                        ##
 
                     if (current_time - last_edit_time) > current_edit_interval:
                         try:
