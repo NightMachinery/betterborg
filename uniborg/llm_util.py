@@ -296,9 +296,7 @@ async def _handle_common_error_cases(
                                     error_message += f"**Quota ID:** {quota_id}\n"
 
                                 if quota_value:
-                                    error_message += (
-                                        f"**Quota Value:** {quota_value}\n"
-                                    )
+                                    error_message += f"**Quota Value:** {quota_value}\n"
 
                                 if model:
                                     error_message += f"**Model:** {model}\n"
@@ -374,15 +372,23 @@ async def _handle_common_error_cases(
             print(f"Error while sending/editing rate limit exception message: {e}")
         return True
 
-    error_message = f"{BOT_META_INFO_PREFIX}{str(exception)}"
+    error_message = f"{BOT_META_INFO_PREFIX}\n```\n{str(exception)}\n```"
 
     if isinstance(exception, TelegramUserReplyException):
         try:
             if response_message:
-                await util.edit_message(response_message, error_message, append_p=True)
+                await util.edit_message(
+                    response_message,
+                    error_message,
+                    parse_mode="md",
+                    append_p=True,
+                )
             else:
                 await util.discreet_send(
-                    event, error_message, reply_to=event.message, parse_mode="md"
+                    event,
+                    error_message,
+                    reply_to=event.message,
+                    parse_mode="md",
                 )
         except Exception as e:
             traceback.print_exc()
