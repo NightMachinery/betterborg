@@ -31,6 +31,7 @@ import sys
 import pathlib
 from pathlib import Path
 import typing
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import io
 from io import BytesIO
@@ -830,8 +831,20 @@ async def discreet_send(
     return last_msg
 
 
+@dataclass
+class EditChainState:
+    """Stores the state of an edit chain including children and last computed text."""
+
+    children: list = None
+    last_text: str = ""
+
+    def __post_init__(self):
+        if self.children is None:
+            self.children = []
+
+
 # Dictionary to track message chains for the edit_message function
-# Key: original_message_id, Value: list of child Message objects
+# Key: original_message_id, Value: EditChainState object
 EDIT_CHAINS = {}
 
 
@@ -865,28 +878,28 @@ async def edit_message(
     global EDIT_CHAINS
     message_id = message_obj.id
 
+    new_text = new_text.strip()
+
+    # Get or create the edit state for this message ID
+    edit_state = EDIT_CHAINS.get(message_id, EditChainState())
+
     # Handle append_p mode: append new_text to existing content
     if append_p:
         from uniborg.constants import BOT_META_INFO_LINE
 
-        existing_children = EDIT_CHAINS.get(message_id, [])
-
-        # Get existing text from the entire message chain
-        existing_text = message_obj.text or ""
-        for child in existing_children:
-            if child.text:
-                existing_text += child.text
+        # Use the stored last_text instead of reconstructing from messages
+        existing_text = edit_state.last_text
+        existing_text = existing_text.strip() if existing_text else ""
 
         # Only append if there's existing text and new text
-        if existing_text.strip() and new_text.strip():
+        if existing_text and new_text:
             new_text = f"{existing_text}\n\n{BOT_META_INFO_LINE}\n{new_text}"
-        elif existing_text.strip():
+        elif existing_text:
             # If no new text but existing text exists, keep existing
             new_text = existing_text
         # else: if no existing text, just use new_text as-is
 
-    # Sanitize and chunk the new text with forward search for streaming consistency
-    new_text = new_text.strip()
+    # Chunk the new text with forward search for streaming consistency
     chunks = (
         _split_message_smart(
             new_text,
@@ -897,8 +910,7 @@ async def edit_message(
         else []
     )
 
-    # Get the existing message chain for this message ID
-    existing_children = EDIT_CHAINS.get(message_id, [])
+    existing_children = edit_state.children
     new_children = []
 
     # Case 1: The new text is empty, delete the entire chain.
@@ -975,8 +987,11 @@ async def edit_message(
                 pass  # Ignore deletion errors
 
     # Update the global state with the new chain configuration
-    if new_children:
-        EDIT_CHAINS[message_id] = new_children
+    edit_state.children = new_children
+    edit_state.last_text = new_text  # Store the last text for future append operations
+
+    if new_children or new_text:
+        EDIT_CHAINS[message_id] = edit_state
     else:
         EDIT_CHAINS.pop(message_id, None)
 
