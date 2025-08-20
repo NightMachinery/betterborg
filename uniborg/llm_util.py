@@ -289,14 +289,20 @@ async def _handle_common_error_cases(
                                     "model", ""
                                 )
 
-                                if quota_metric and quota_value:
-                                    error_message += f"**Quota exceeded:** {quota_metric.replace('_', ' ').title()}\n"
+                                if quota_metric:
+                                    error_message += f"**Quota Metric:** {quota_metric.replace('_', ' ').title()}\n"
+
+                                if quota_id:
+                                    error_message += f"**Quota ID:** {quota_id}\n"
+
+                                if quota_value:
                                     error_message += (
-                                        f"**Limit:** {quota_value} tokens per minute\n"
+                                        f"**Quota Value:** {quota_value}\n"
                                     )
-                                    if model:
-                                        error_message += f"**Model:** {model}\n"
-                                    error_message += "\n"
+
+                                if model:
+                                    error_message += f"**Model:** {model}\n"
+                                error_message += "\n"
 
                         elif (
                             detail.get("@type")
@@ -356,10 +362,15 @@ async def _handle_common_error_cases(
 
         try:
             if response_message:
-                await response_message.edit(error_message, parse_mode="md")
+                await util.edit_message(
+                    response_message, error_message, parse_mode="md", append_p=True
+                )
             else:
-                await event.reply(error_message, parse_mode="md")
+                await util.discreet_send(
+                    event, error_message, reply_to=event.message, parse_mode="md"
+                )
         except Exception as e:
+            traceback.print_exc()
             print(f"Error while sending/editing rate limit exception message: {e}")
         return True
 
@@ -368,10 +379,13 @@ async def _handle_common_error_cases(
     if isinstance(exception, TelegramUserReplyException):
         try:
             if response_message:
-                await response_message.edit(error_message)
+                await util.edit_message(response_message, error_message, append_p=True)
             else:
-                await event.reply(error_message)
+                await util.discreet_send(
+                    event, error_message, reply_to=event.message, parse_mode="md"
+                )
         except Exception as e:
+            traceback.print_exc()
             print(f"Error while sending/editing user reply exception message: {e}")
         return True
 
@@ -448,9 +462,16 @@ async def handle_error(
 
     try:
         if response_message:
-            await util.edit_message(response_message, user_facing_error, append_p=True)
+            await util.edit_message(
+                response_message,
+                user_facing_error,
+                append_p=True,
+                parse_mode="md",
+            )
         else:
-            await event.reply(user_facing_error)
+            await util.discreet_send(
+                event, user_facing_error, reply_to=event.message, parse_mode="md"
+            )
     except Exception as e:
         print(f"Error while sending/editing error message: {e}")
 
@@ -497,7 +518,9 @@ def create_llm_start_handler(
 
         # Check if the required API key is configured
         if llm_db.get_api_key(user_id=event.sender_id, service=service):
-            await event.reply(configured_message)
+            await util.discreet_send(
+                event, configured_message, reply_to=event.message, parse_mode="md"
+            )
         else:
             # If not configured, start the key request flow
             await llm_db.request_api_key_message(event, service)
