@@ -28,6 +28,11 @@ Note: `PROMPT_REPLACEMENTS` does not need to change at all, as it already matche
 #+END_SRC
 
 * _
+#+begin_verse
+_handle_common_error_cases, _handle_common_error_cases: should use `discreet_send` instead of `event.reply`
+#+end_verse
+
+** DONE _
 #+BEGIN_SRC markdown
 Llm_chat: When an error is encountered, add it to the end of the current text, don't replace the current text. Use META BOT LINE to separate the error. 
 This way the user won't lose the already streamed parts.
