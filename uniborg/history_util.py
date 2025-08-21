@@ -434,12 +434,16 @@ async def _lookup_chat_id_for_deleted_message(message_id: int) -> Optional[int]:
     return _message_id_to_chat_id_map.get(message_id)
 
 
+original_send_message = None
+original_send_file = None
+
+
 async def initialize_history_handler():
     """
     Initializes history tracking. It uses event handlers and monkey-patching
     to log new, outgoing, and deleted messages.
     """
-    global borg
+    global borg, original_send_message, original_send_file
     if not borg:
         print("HistoryUtil Error: borg client is not set. Cannot initialize.")
         return
@@ -473,11 +477,14 @@ async def initialize_history_handler():
         if hasattr(borg, "_history_patched"):
             # Remove old event handlers and add new ones instead of returning
             borg.remove_events_of_mod(__name__)
-        borg._history_patched = True
 
-        # Store the original methods before we replace them
-        original_send_message = borg.send_message
-        original_send_file = borg.send_file
+            assert original_send_file is not None and original_send_message is not None
+        else:
+            # Store the original methods before we replace them
+            original_send_message = borg.send_message
+            original_send_file = borg.send_file
+
+        borg._history_patched = True
 
         async def patched_send_message(*args, **kwargs):
             # Call the original function to actually send the message
