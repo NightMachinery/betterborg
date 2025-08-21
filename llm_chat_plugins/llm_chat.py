@@ -1233,13 +1233,14 @@ def _is_url_only_message(text: str) -> Optional[str]:
     ):
         return None
 
-    # Fast check: no spaces (URL-only requirement)
-    if " " in text or "\t" in text or "\n" in text:
+    # Fast check: no tabs or newlines (URL-only requirement)
+    # Allow spaces in URLs as they can be legitimately part of file paths
+    if "\t" in text or "\n" in text:
         return None
 
-    # More secure URL pattern - only proceed to regex if basic checks pass
+    # More secure URL pattern - allow spaces in the path portion
     url_pattern = re.compile(
-        r"^https?://(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+(?:\.[a-zA-Z]{2,})(?::\d{1,5})?(?:/[^\s]*)?$"
+        r"^https?://(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+(?:\.[a-zA-Z]{2,})(?::\d{1,5})?(?:/[^\t\n]*)?$"
     )
 
     match = url_pattern.match(text)
