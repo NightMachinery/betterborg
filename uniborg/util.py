@@ -55,10 +55,13 @@ def _resize_photo_if_needed(
     is_image,
     min_width=128,
     min_height=128,
-    width=1280,
-    height=1280,
+    width=2560,
+    height=2560,
     background=(255, 255, 255),
 ):
+    #: [[zf:~\[site-packages\]/telethon/client/uploads.py::def _resize_photo_if_needed(]]
+    #: forked from the original
+    ##
     # print("_resize_photo_if_needed entered")
 
     # https://github.com/telegramdesktop/tdesktop/blob/12905f0dcb9d513378e7db11989455a1b764ef75/Telegram/SourceFiles/boxes/photo_crop_box.cpp#L254
@@ -114,6 +117,9 @@ def _resize_photo_if_needed(
 
         buffer = io.BytesIO()
         result.save(buffer, "JPEG", **kwargs)
+        buffer.name = "a.jpg"
+        #: `.name` needs to be set for newer Telethon versions
+
         buffer.seek(0)
         return buffer
 
