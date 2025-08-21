@@ -27,7 +27,7 @@ See:
 Note: `PROMPT_REPLACEMENTS` does not need to change at all, as it already matches its magic patterns against whole lines and does not conflict with other magic processing.
 #+END_SRC
 
-* _
+* DONE _
 #+begin_verse
 _handle_common_error_cases, _handle_common_error_cases: should use `discreet_send` instead of `event.reply`
 #+end_verse
