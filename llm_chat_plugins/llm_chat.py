@@ -135,11 +135,11 @@ The goal is to produce a single, clean document as if it were the original, with
 
 خلاصه اینکه یک جواب کامل و طولانی می‌خوام که انگار خودم نشستم و با دقت به کل برنامه گوش دادم. مرسی!""",
     re.compile(
-        r"^\.rev\s", re.IGNORECASE
+        r"^\.rev\s*", re.IGNORECASE
     ): f"""{llm_util.load_prompt_from_file("review_v1.md")} """,
     re.compile(
-        r"^\.teach\s", re.IGNORECASE
-    ): f"""{llm_util.load_prompt_from_file("socratic_teacher_v1.md")} """,
+        r"^\.teach\s*", re.IGNORECASE
+    ): f"""{llm_util.load_prompt_from_file("socratic_teacher_v1.md")}\n""",
     #: Replace LessWrong and Alignment Forum URLs with GreaterWrong to allow better scraping of URLs.
     re.compile(
         r"\bhttps?://(?:www\.)?(lesswrong\.com|alignmentforum\.org)/",
