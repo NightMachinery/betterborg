@@ -25,6 +25,7 @@ from telethon import TelegramClient, events
 import telethon.utils
 from telethon.tl.functions.messages import GetPeerDialogsRequest
 from telethon.tl.types import DocumentAttributeAudio
+from telethon.errors.rpcerrorlist import PhotoExtInvalidError
 from IPython import embed
 import IPython
 import sys
@@ -513,12 +514,18 @@ async def send_files(chat, files, **kwargs):
                 fs.sort()
                 [print(f) for f in fs]
                 print()
-                if ext == ".gif":
-                    # @upstreamBug on GIF files
+                # Use no-album workaround for GIFs or when album sending fails
+                use_no_album = ext == ".gif"
+                if not use_no_album:
+                    try:
+                        await borg.send_file(chat, fs, allow_cache=False, **kwargs)
+                    except PhotoExtInvalidError:
+                        print(f"Album sending failed, using no-album workaround. Files: {fs}")
+                        use_no_album = True
+
+                if use_no_album:
                     for f in fs:
                         await borg.send_file(chat, f, allow_cache=False, **kwargs)
-                else:
-                    await borg.send_file(chat, fs, allow_cache=False, **kwargs)
             except:
                 await handle_exc_chat(chat)
 
