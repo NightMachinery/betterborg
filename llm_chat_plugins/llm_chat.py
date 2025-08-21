@@ -147,25 +147,25 @@ Emit **actual control codepoints** in normal output; use `\\u` escapes only in c
 - Unknown direction: `\u2068 ... \u2069`
 
 **Nudges**
-- LRM (attach to LTR): `\u200E`
-- RLM (attach to RTL): `\u200F`
+- LRM (attach to LTR): `\u200e`
+- RLM (attach to RTL): `\u200f`
 
 **Shaping aids (Arabic/Persian)**
-- ZWNJ: `\u200C`
-- ZWJ: `\u200D`
+- ZWNJ: `\u200c`
+- ZWJ: `\u200d`
 
 **Rules**
 - Always **balance** isolates with `\u2069`.
 - Keep control chars **outside** code/math/URLs/markdown; wrap **around** them.
-- Use `\u200E`/`\u200F` directly next to punctuation that visually “jumps”.
+- Use `\u200e`/`\u200f` directly next to punctuation that visually “jumps”.
 - Keep numbers/units/IDs **inside** the same isolate as their fragment.
 
 **Mini-examples**
-- RTL + English phrase: `… \u2066your English phrase\u2069\u200E …`
-- LTR + Arabic term: `… \u2067المصطلح\u2069\u200F …`
-- Parentheses in RTL around LTR: `… (\u2066text\u2069)\u200E …`
-- LTR-in-RTL + period: `… \u2066ABC\u2069\u200E.`
-- RTL-in-LTR + period: `… \u2067عربي\u2069\u200F.`
+- RTL + English phrase: `… \u2066your English phrase\u2069\u200e …`
+- LTR + Arabic term: `… \u2067المصطلح\u2069\u200f …`
+- Parentheses in RTL around LTR: `… (\u2066text\u2069)\u200e …`
+- LTR-in-RTL + period: `… \u2066ABC\u2069\u200e.`
+- RTL-in-LTR + period: `… \u2067عربي\u2069\u200f.`
 - Unknown dir fragment: `\u2068MixedStart\u2069`
 
 **Final check**
@@ -547,6 +547,7 @@ BOT_COMMANDS = [
     {"command": "start", "description": "Onboard and set API key"},
     {"command": "help", "description": "Show detailed help and instructions"},
     {"command": "status", "description": "Show your current settings"},
+    {"command": "stop", "description": "Stop all in-progress chat requests"},
     {
         "command": "log",
         "description": f"Get your last {LOG_COUNT_LIMIT} conversation logs",
@@ -662,6 +663,9 @@ IS_BOT = None
 USERBOT_HISTORY_CACHE = {}
 SMART_CONTEXT_STATE = {}
 
+# Track active LLM tasks by user_id for cancellation support
+ACTIVE_LLM_TASKS = {}
+
 
 @dataclass
 class ConversationHistoryResult:
@@ -774,6 +778,50 @@ async def set_smart_context_mode(user_id: int, mode: str):
 def cancel_input_flow(user_id: int):
     """Cancels any pending input requests for a user."""
     AWAITING_INPUT_FROM_USERS.pop(user_id, None)
+
+
+def add_active_llm_task(user_id: int, task: asyncio.Task):
+    """Add an active LLM task for tracking and cancellation."""
+    if user_id not in ACTIVE_LLM_TASKS:
+        ACTIVE_LLM_TASKS[user_id] = set()
+    ACTIVE_LLM_TASKS[user_id].add(task)
+
+
+def remove_active_llm_task(user_id: int, task: asyncio.Task):
+    """Remove a completed/cancelled LLM task from tracking."""
+    if user_id in ACTIVE_LLM_TASKS:
+        ACTIVE_LLM_TASKS[user_id].discard(task)
+        if not ACTIVE_LLM_TASKS[user_id]:
+            del ACTIVE_LLM_TASKS[user_id]
+
+
+def cleanup_completed_tasks(user_id: int):
+    """Remove completed tasks from tracking."""
+    if user_id in ACTIVE_LLM_TASKS:
+        ACTIVE_LLM_TASKS[user_id] = {
+            task for task in ACTIVE_LLM_TASKS[user_id] if not task.done()
+        }
+        if not ACTIVE_LLM_TASKS[user_id]:
+            del ACTIVE_LLM_TASKS[user_id]
+
+
+def cancel_all_llm_tasks(user_id: int) -> int:
+    """Cancel all active LLM tasks for a user. Returns count of cancelled tasks."""
+    if user_id not in ACTIVE_LLM_TASKS:
+        return 0
+
+    active_tasks = ACTIVE_LLM_TASKS[user_id]
+    cancelled_count = 0
+
+    for task in active_tasks.copy():
+        if not task.done():
+            task.cancel()
+            cancelled_count += 1
+
+    # Clear the user's active tasks
+    ACTIVE_LLM_TASKS[user_id] = set()
+
+    return cancelled_count
 
 
 # --- Preference Management ---
@@ -1516,7 +1564,7 @@ async def _call_llm_with_retry(
                     # Dynamic streaming delay: increase delay for long outputs
                     current_edit_interval = edit_interval
                     cursor = "▌"  # Normal typing cursor
-                    
+
                     if (current_time - streaming_start_time) > 30:  # 30 seconds elapsed
                         current_edit_interval = 15  # Increase delay to 15 seconds
                         # cursor = "▌(💤)"
@@ -1622,6 +1670,50 @@ async def _call_llm_with_retry(
         else:
             # Re-raise other errors
             raise
+
+
+async def _call_llm_with_retry_tracked(
+    user_id: int,
+    event,
+    response_message,
+    api_kwargs: dict,
+    edit_interval: Optional[float] = None,
+    max_retries: int = MAX_RETRIES,
+) -> LLMResponse:
+    """Wrapper around _call_llm_with_retry that tracks the task for cancellation."""
+
+    async def _wrapped_call():
+        try:
+            return await _call_llm_with_retry(
+                event,
+                response_message,
+                api_kwargs,
+                edit_interval,
+                max_retries=max_retries,
+            )
+        except asyncio.CancelledError:
+            # Handle cancellation gracefully
+            await util.edit_message(
+                response_message,
+                f"{BOT_META_INFO_PREFIX}❌ Request was canceled.",
+                append_p=True,
+                parse_mode="md",
+            )
+            raise
+        except Exception:
+            # Re-raise other exceptions
+            raise
+
+    # Create and track the task
+    task = asyncio.create_task(_wrapped_call())
+    add_active_llm_task(user_id, task)
+
+    try:
+        result = await task
+        return result
+    finally:
+        # Clean up task tracking
+        remove_active_llm_task(user_id, task)
 
 
 def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
@@ -3188,6 +3280,12 @@ def register_handlers():
     )(status_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^/stop{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(stop_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/log{bot_username_suffix_re}(?:\s+(\d+))?\s*$",
             func=lambda e: e.is_private,
         )
@@ -3518,6 +3616,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /start: Onboard and set up your API key.
 - /help: Shows this detailed help message.
 - /status: Shows a summary of your current settings.
+- /stop: Stop all in-progress chat requests.
 - /log: Get your last {LOG_COUNT_LIMIT} conversation logs as files.
 - /setgeminikey: Sets or updates your Gemini API key.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
@@ -3540,6 +3639,34 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
     await event.reply(
         f"{BOT_META_INFO_PREFIX}{help_text}", link_preview=False, parse_mode="md"
     )
+
+
+async def stop_handler(event):
+    """Stop all in-progress chat requests for the user."""
+    user_id = event.sender_id
+
+    # Cancel any pending input flows first
+    if llm_db.is_awaiting_key(user_id):
+        llm_db.cancel_key_flow(user_id)
+    cancel_input_flow(user_id)
+
+    # Cancel live mode if active
+    chat_id = event.chat_id
+    if gemini_live_util.live_session_manager.is_live_mode_active(chat_id):
+        session = gemini_live_util.live_session_manager.get_session(chat_id)
+        if session and hasattr(session, "_response_task") and session._response_task:
+            session._response_task.cancel()
+        gemini_live_util.live_session_manager.end_session(chat_id)
+
+    # Cancel all active LLM tasks
+    cancelled_count = cancel_all_llm_tasks(user_id)
+
+    if cancelled_count > 0:
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}✅ Stopped {cancelled_count} active chat request(s)."
+        )
+    else:
+        await event.reply(f"{BOT_META_INFO_PREFIX}No active chat requests to stop.")
 
 
 async def status_handler(event):
@@ -5301,6 +5428,9 @@ async def chat_handler(event):
     chat_id = event.chat_id
     # ic(user_id, chat_id)
 
+    # Clean up any completed tasks from previous requests
+    cleanup_completed_tasks(user_id)
+
     # Intercept if user is in any waiting state first.
     if llm_db.is_awaiting_key(user_id) or user_id in AWAITING_INPUT_FROM_USERS:
         return
@@ -5549,15 +5679,15 @@ async def chat_handler(event):
         elif use_streaming:
             # Streaming response handling with retries
             edit_interval = get_streaming_delay(model_in_use)
-            llm_response = await _call_llm_with_retry(
-                event, response_message, api_kwargs, edit_interval
+            llm_response = await _call_llm_with_retry_tracked(
+                user_id, event, response_message, api_kwargs, edit_interval
             )
             response_text = llm_response.text
             finish_reason = llm_response.finish_reason
         else:
             # Non-streaming response handling with retries
-            llm_response = await _call_llm_with_retry(
-                event, response_message, api_kwargs
+            llm_response = await _call_llm_with_retry_tracked(
+                user_id, event, response_message, api_kwargs
             )
             response_text = llm_response.text
             finish_reason = llm_response.finish_reason
