@@ -82,6 +82,25 @@ PREFIX_MODEL_MAPPING = {
     ".c": "openrouter/openai/gpt-5-chat",
 }
 
+# Audio summarization prompt
+PROMPT_SUMMARIZE_AUDIO = r"""Please listen to this audio file completely and provide a comprehensive, detailed analysis of its entire content.
+
+To ensure your response is complete and accurate, please follow these guidelines:
+
+* **Complete Coverage**: The summary should cover the audio from the first to the last minute, not just the beginning sections. Exception: Skip advertisements.
+* **Logical Structure**: Organize the analysis into logical sections based on speakers (hosts, guests, callers) or main topics discussed in order.
+* **Details and Arguments**: Don't just mention general topics. Include main arguments from each person, important examples they gave, and key discussion points with details.
+* **Speaker Identification**: Clearly identify who said what or which analysis comes from whom.
+* **Tone and Discussion Flow**: Note the evolutionary flow of the conversation and changes in participants' tone throughout the program.
+
+In summary, I want a complete and lengthy response as if I sat down and carefully listened to the entire program myself. Thanks!"""
+
+# Language matching instruction
+PROMPT_MATCH_LANGUAGE = r"""**Language**
+- Match the language of the user's last message.
+- Determine language from the message content only (ignore metadata).
+- If in doubt between Arabic and Persian/Farsi, assume Persian/Farsi."""
+
 PROMPT_REPLACEMENTS = {
     re.compile(
         r"^\.ocr$", re.MULTILINE | re.IGNORECASE
@@ -98,19 +117,10 @@ You will be given a series of images that are part of a single, related sequence
 
 The goal is to produce a single, clean document as if it were the original, without the page breaks and repeated headers or footers from the images.
 """,
-    re.compile(
-        r"^\.suma$", re.MULTILINE | re.IGNORECASE
-    ): r"""Please listen to this audio file completely and provide a comprehensive, detailed analysis of its entire content.
-
-To ensure your response is complete and accurate, please follow these guidelines:
-
-* **Complete Coverage**: The summary should cover the audio from the first to the last minute, not just the beginning sections. Exception: Skip advertisements.
-* **Logical Structure**: Organize the analysis into logical sections based on speakers (hosts, guests, callers) or main topics discussed in order.
-* **Details and Arguments**: Don't just mention general topics. Include main arguments from each person, important examples they gave, and key discussion points with details.
-* **Speaker Identification**: Clearly identify who said what or which analysis comes from whom.
-* **Tone and Discussion Flow**: Note the evolutionary flow of the conversation and changes in participants' tone throughout the program.
-
-In summary, I want a complete and lengthy response as if I sat down and carefully listened to the entire program myself. Thanks!""",
+    re.compile(r"^\.suma$", re.MULTILINE | re.IGNORECASE): PROMPT_SUMMARIZE_AUDIO,
+    re.compile(r"^\.sumaauto$", re.MULTILINE | re.IGNORECASE): PROMPT_SUMMARIZE_AUDIO
+    + "\n\n"
+    + PROMPT_MATCH_LANGUAGE,
     re.compile(
         r"^\.sumafa$", re.MULTILINE | re.IGNORECASE
     ): r"""سلام رفیق، لطفاً به این فایل صوتی به طور کامل گوش کن و یک تحلیل جامع و مفصل از کل محتوای اون ارائه بده.
@@ -1426,7 +1436,7 @@ async def _process_audio_url_magic(event, url: str) -> bool:
 
         # Send the audio file to the chat as a normal file upload
         print(f"Sending downloaded audio file: {audio_file_path}")
-        new_text = f"{MAGIC_STR_AS_USER} .suma"
+        new_text = f"{MAGIC_STR_AS_USER} .sumaauto"
         async with borg.action(event.chat, "audio") as action:
             audio_message = await event.client.send_file(
                 event.chat_id,
