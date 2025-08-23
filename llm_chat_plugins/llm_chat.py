@@ -536,6 +536,12 @@ MODEL_CHOICES = {
     ## DeepSeek
     "deepseek/deepseek-chat": "DeepSeek Chat",
     "deepseek/deepseek-reasoner": "DeepSeek Reasoner",
+    ## Mistral
+    "mistral/mistral-medium-latest": "Mistral Medium (Latest)",
+    "mistral/magistral-medium-latest": "Magistral Medium (Latest)",
+    # "mistral/mistral-large-latest": "Mistral Large (Latest)",
+    # "mistral/mistral-small-latest": "Mistral Small (Latest)",
+    "mistral/pixtral-large-latest": "Pixtral Large (Latest)",
     ##
 }
 
@@ -598,6 +604,10 @@ BOT_COMMANDS = [
         "description": "Set or update your OpenRouter API key",
     },
     {"command": "setdeepseekkey", "description": "Set or update your DeepSeek API key"},
+    {
+        "command": "setmistralkey",
+        "description": "Set or update your Mistral AI API key",
+    },
     {"command": "setmodel", "description": "Set your preferred chat model"},
     {
         "command": "setsystemprompt",
@@ -3348,6 +3358,12 @@ def register_handlers():
     )(set_deepseek_key_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^/setmistralkey{bot_username_suffix_re}(?:\s+(.*))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(set_mistral_key_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/setmodel{bot_username_suffix_re}(?:\s+(.*))?\s*$",
             func=lambda e: e.is_private,
         )
@@ -3628,9 +3644,9 @@ async def help_handler(event):
     group_trigger_text = " or ".join(activation_instructions)
 
     help_text = f"""
-**Hello! I am a Telegram chat bot powered by Google's Gemini.** It's like ChatGPT but in Telegram!
+**Hello! I am a Telegram chat bot powered by third-party AI providers.** It's like ChatGPT but in Telegram!
 
-To get started, you'll need a free Gemini API key. Send me /setgeminikey to help you set this up.
+To get started, you'll need an API key. Send me /setgeminikey for Gemini models, /setopenrouterkey for OpenRouter, /setdeepseekkey for DeepSeek models, or /setmistralkey for Mistral models.
 
 **How to Chat with Me**
 
@@ -3930,6 +3946,11 @@ async def set_openrouter_key_handler(event):
 async def set_deepseek_key_handler(event):
     """Delegates /setdeepseekkey command logic to the shared module."""
     await llm_db.handle_set_key_command(event, "deepseek")
+
+
+async def set_mistral_key_handler(event):
+    """Delegates /setmistralkey command logic to the shared module."""
+    await llm_db.handle_set_key_command(event, "mistral")
 
 
 async def key_submission_handler(event):

@@ -41,6 +41,12 @@ API_KEY_CONFIG = {
         "regex": r"^(?P<deepseek_key>sk-[a-f0-9]{30,100})$",
         "welcome_message": "**To use DeepSeek models, I need a DeepSeek API key.**",
     },
+    "mistral": {
+        "name": "Mistral AI",
+        "url": "https://console.mistral.ai/api-keys/",
+        "regex": r"^(?P<mistral_key>[a-zA-Z0-9]{30,100})$",
+        "welcome_message": "**To use Mistral models, I need a Mistral AI API key.**",
+    },
 }
 
 
