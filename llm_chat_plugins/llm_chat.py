@@ -98,6 +98,7 @@ To ensure your response is complete and accurate, please follow these guidelines
 
 In summary, I want a complete and lengthy response as if I sat down and carefully listened to the entire program myself. Thanks!"""
 
+### * PROMPT_REPLACEMENTS
 # Language matching instruction
 PROMPT_MATCH_LANGUAGE = r"""**Language**
 - Match the language of the user's last message.
@@ -140,16 +141,33 @@ The goal is to produce a single, clean document as if it were the original, with
     re.compile(
         r"^\.rev\s*", re.IGNORECASE
     ): f"""{llm_util.load_prompt_from_file("review_v1.md")} """,
-    re.compile(
-        r"^\.teach\s*", re.IGNORECASE
-    ): f"""{llm_util.load_prompt_from_file("socratic_teacher_v1.md")}\n""",
     #: Replace LessWrong and Alignment Forum URLs with GreaterWrong to allow better scraping of URLs.
     re.compile(
         r"\bhttps?://(?:www\.)?(lesswrong\.com|alignmentforum\.org)/",
         re.IGNORECASE,
     ): r"https://greaterwrong.com/",
 }
-
+##
+TEACH_PROMPTS = {
+    re.compile(
+        r"^\.teach\s*", re.IGNORECASE
+    ): f"""{llm_util.load_prompt_from_file("socratic_teacher_v1.4.md")}\n""",
+}
+#: for `v1.1`, `v1.2`, ..., `v1.4`, also add `.teach1.1` ...:
+for i in [
+    "1",
+    "1.1",
+    "1.2",
+    "1.3",
+    "1.4",
+    "2",
+]:
+    #: `\s` also matches newlines
+    TEACH_PROMPTS[re.compile(rf"^\.teach{re.escape(i)}(?:\s+|$)", re.IGNORECASE)] = (
+        f"""{llm_util.load_prompt_from_file(f"socratic_teacher_v{i}.md")}\n"""
+    )
+PROMPT_REPLACEMENTS.update(TEACH_PROMPTS)
+###
 # **Strategic emoji use:** 0-2 per message, only when they add clarity or warmth—never decorative.
 # **Strategic emoji use:** 2-4 per message for rhythm, readability, and subtle humor. Use as visual anchors and section breaks in dense text. The key is using them as **information architecture**—they should make scanning and parsing faster for people used to reading dense technical content.
 BIDI_PROMPT = """
