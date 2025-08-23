@@ -12,7 +12,305 @@ Extract the `.rev` in PROMPT_REPLACEMENTS into `~/scripts/prompt/review_v1.md` a
 * sign up at mistral api and add models
 
 * dl must retry
+** pycurl ver
+#+begin_src python :eval never
+from __future__ import annotations
+
+import asyncio
+import logging
+import mimetypes
+import os
+import traceback
+from io import BytesIO
+from pathlib import Path
+from typing import Optional, Tuple
+
+import pycurl
+
+logger = logging.getLogger(__name__)
+
+
+async def _download_audio_from_url(
+    url: str, *, temp_dir: Path
+) -> Tuple[Optional[Path], Optional[str]]:
+    """
+    Downloads audio from URL and returns the file path using pycurl.
+
+    Returns:
+        (Path, None) on success; (None, error_message) on failure
+    """
+
+    def _parse_last_headers(raw: bytes) -> dict:
+        # pycurl collects headers for redirects too; take the last block
+        blocks = [b for b in raw.split(b"\r\n\r\n") if b.strip()]
+        last = blocks[-1] if blocks else b""
+        headers = {}
+        for line in last.splitlines()[1:]:  # skip HTTP status line
+            if b":" in line:
+                k, v = line.split(b":", 1)
+                headers[k.decode("latin-1").strip().lower()] = v.decode("latin-1").strip()
+        return headers
+
+    def _guess_extension(content_type: str, final_url: str) -> str:
+        ext = mimetypes.guess_extension((content_type or "").split(";")[0].lower() or "")
+        if not ext:
+            ext = ".audio"
+        if ext == ".audio":
+            parsed = final_url.lower()
+            for cand in [".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".opus", ".webm"]:
+                if cand in parsed:
+                    return cand
+        return ext
+
+    async def _run() -> Tuple[Optional[Path], Optional[str]]:
+        try:
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            part_path = temp_dir / "audio_download.part"
+
+            # Prepare pycurl
+            c = pycurl.Curl()
+            header_buf = BytesIO()
+
+            # If there's a partial file, resume
+            resume_from = part_path.stat().st_size if part_path.exists() else 0
+            f = open(part_path, "ab" if resume_from else "wb")
+
+            try:
+                c.setopt(pycurl.URL, url)
+                c.setopt(pycurl.WRITEDATA, f)
+                c.setopt(pycurl.FOLLOWLOCATION, 1)
+                c.setopt(pycurl.MAXREDIRS, 10)
+                c.setopt(pycurl.NOPROGRESS, 1)
+
+                # Timeouts & resiliency
+                c.setopt(pycurl.CONNECTTIMEOUT, 20)     # seconds
+                c.setopt(pycurl.TIMEOUT, 60)            # total transfer time
+                c.setopt(pycurl.LOW_SPEED_LIMIT, 1024)  # bytes/sec
+                c.setopt(pycurl.LOW_SPEED_TIME, 20)     # abort if below limit for N sec
+                c.setopt(pycurl.ACCEPT_ENCODING, "")    # accept compressed responses
+                c.setopt(pycurl.USERAGENT, "pycurl-downloader/1.0")
+
+                # Capture headers (final response will be at the end)
+                c.setopt(pycurl.HEADERFUNCTION, header_buf.write)
+
+                # Resume if needed
+                if resume_from > 0:
+                    c.setopt(pycurl.RESUME_FROM_LARGE, resume_from)
+
+                # Perform request
+                c.perform()
+
+                status = int(c.getinfo(pycurl.RESPONSE_CODE))
+                final_url = c.getinfo(pycurl.EFFECTIVE_URL) or url
+            finally:
+                try:
+                    c.close()
+                except Exception:
+                    pass
+                try:
+                    f.close()
+                except Exception:
+                    pass
+
+            # Parse headers from the last response block
+            headers = _parse_last_headers(header_buf.getvalue())
+            content_type = (headers.get("content-type") or "").split(";")[0].lower()
+
+            if status not in (200, 206):
+                # Clean up partial file on error to mimic original behavior
+                try:
+                    if part_path.exists():
+                        part_path.unlink()
+                except Exception:
+                    pass
+                err = (
+                    f"HTTP {status} while downloading. Final URL: {final_url}. "
+                    f"Content-Type: {content_type or 'unknown'}."
+                )
+                logger.error(err)
+                return None, err
+
+            # Decide final file path/extension after we know headers/final URL
+            extension = _guess_extension(content_type, final_url)
+            final_path = temp_dir / f"audio_download{extension}"
+
+            # Replace existing file if present
+            try:
+                if final_path.exists():
+                    final_path.unlink()
+            except Exception:
+                # If we can't unlink, fall back to a unique name
+                stem = final_path.stem
+                suffix = final_path.suffix
+                i = 1
+                while True:
+                    candidate = final_path.with_name(f"{stem}-{i}{suffix}")
+                    if not candidate.exists():
+                        final_path = candidate
+                        break
+                    i += 1
+
+            # Atomically move the .part file into place
+            part_path.rename(final_path)
+
+            logger.info(f"Downloaded audio file: {final_path}")
+            return final_path, None
+
+        except pycurl.error as e:
+            traceback.print_exc()
+            err = f"Network error: {e}"
+            logger.error(f"Failed to download audio from {url}: {err}")
+            # Best-effort cleanup of the partial
+            try:
+                (temp_dir / "audio_download.part").unlink()
+            except Exception:
+                pass
+            return None, err
+        except Exception as e:
+            traceback.print_exc()
+            err = f"Unexpected error: {e}"
+            logger.error(f"Failed to download audio from {url}: {err}")
+            try:
+                (temp_dir / "audio_download.part").unlink()
+            except Exception:
+                pass
+            return None, err
+
+    # Run the blocking pycurl work in a thread so we don't block the event loop
+    return await asyncio.to_thread(lambda: asyncio.run(_run()))
+#+end_src
+
+** _
+#+begin_src python :eval never
+async def _download_audio_from_url(
+    url: str, *, temp_dir: Path
+) -> Tuple[Optional[Path], Optional[str]]:
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+        }
+
+        async with httpx.AsyncClient(
+            timeout=60.0,
+            follow_redirects=True,
+            headers=headers,
+        ) as client:
+            # Step 1: Resolve redirects & get content-type
+            head_resp = await client.get(url, follow_redirects=True)
+            if head_resp.status_code not in (200, 206):
+                ic(url, head_resp.__dict__)
+                return None, (
+                    f"HTTP {head_resp.status_code} while resolving. "
+                    f"Final URL: {head_resp.url}. "
+                    f"Content-Type: {head_resp.headers.get('content-type','unknown')}."
+                )
+            final_url = str(head_resp.url)
+            content_type = (
+                head_resp.headers.get("content-type", "").split(";")[0].lower()
+            )
+
+            # Step 2: Guess extension
+            extension = mimetypes.guess_extension(content_type) or ".audio"
+            if extension == ".audio":
+                parsed_url = final_url.lower()
+                for ext in [".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac"]:
+                    if ext in parsed_url:
+                        extension = ext
+                        break
+
+            audio_file = temp_dir / f"audio_download{extension}"
+
+            # Step 3: Stream download
+            async with client.stream("GET", final_url) as response:
+                if response.status_code not in (200, 206):
+                    return None, f"HTTP {response.status_code} during download"
+                with open(audio_file, "wb") as f:
+                    async for chunk in response.aiter_bytes(64 * 1024):
+                        if chunk:
+                            f.write(chunk)
+
+        logger.info(f"Downloaded audio file: {audio_file}")
+        return audio_file, None
+
+    except httpx.HTTPError as e:
+        traceback.print_exc()
+        err = f"Network error: {e}"
+        logger.error(f"Failed to download audio from {url}: {err}")
+        return None, err
+    except Exception as e:
+        traceback.print_exc()
+        err = f"Unexpected error: {e}"
+        logger.error(f"Failed to download audio from {url}: {err}")
+        return None, err
+#+end_src
+
 #+begin_verse
+```
+async def _download_audio_from_url(
+    url: str, *, temp_dir: Path
+) -> Tuple[Optional[Path], Optional[str]]:
+    \"""
+    Downloads audio from URL and returns the file path.
+
+    Args:
+        url: The URL to download
+        temp_dir: Temporary directory for storing downloaded file
+
+    Returns:
+        (Path, None) on success; (None, error_message) on failure
+    \"""
+    try:
+        # Follow redirects to reach the actual media URL
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            # Stream to file to avoid loading large content in memory
+            async with client.stream("GET", url) as response:
+                status = response.status_code
+                final_url = str(response.url)
+                content_type = (
+                    response.headers.get("content-type", "").split(";")[0].lower()
+                )
+
+                if status not in (200, 206):
+                    return None, (
+                        f"HTTP {status} while downloading. Final URL: {final_url}. "
+                        f"Content-Type: {content_type or 'unknown'}."
+                    )
+
+                # Determine file extension from content-type or URL
+                extension = mimetypes.guess_extension(content_type) or ".audio"
+                if extension == ".audio":
+                    parsed_url = final_url.lower()
+                    for ext in [".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac"]:
+                        if ext in parsed_url:
+                            extension = ext
+                            break
+
+                # Save audio file
+                audio_file = temp_dir / f"audio_download{extension}"
+                with open(audio_file, "wb") as f:
+                    async for chunk in response.aiter_bytes(64 * 1024):
+                        if chunk:
+                            f.write(chunk)
+
+        logger.info(f"Downloaded audio file: {audio_file}")
+        return audio_file, None
+
+    except httpx.HTTPError as e:
+        traceback.print_exc()
+        err = f"Network error: {e}"
+        logger.error(f"Failed to download audio from {url}: {err}")
+        return None, err
+    except Exception as e:
+        traceback.print_exc()
+        err = f"Unexpected error: {e}"
+        logger.error(f"Failed to download audio from {url}: {err}")
+        return None, err
+```
+
 test in a temp script why _download_audio_from_url fails for `https://api.substack.com/feed/podcast/171551669/39d6b393a94286a74bcae9af3829a01d.mp3` while wget etc. can download it.
 #+end_verse
 
