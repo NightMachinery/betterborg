@@ -9,10 +9,14 @@
 Extract the `.rev` in PROMPT_REPLACEMENTS into `~/scripts/prompt/review_v1.md` and load it from there.
 #+end_verse
 
-* our .s mode seems to break as the plugin is reloaded?
+* sign up at mistral api and add models
+
+* DONE our .s mode seems to break as the plugin is reloaded?
 #+begin_verse
 our .s mode seems to break as the plugin is reloaded?
 #+end_verse
+
+This was because of a bug in how we registered event handlers (we first registered then cleared all history event handlers).
 
 ** DONE History util: check what happens when we repeatedly patch the outgoing send message functions
 
