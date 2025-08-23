@@ -12,6 +12,10 @@ Extract the `.rev` in PROMPT_REPLACEMENTS into `~/scripts/prompt/review_v1.md` a
 * sign up at mistral api and add models
 
 * dl must retry
+#+begin_verse
+test in a temp script why _download_audio_from_url fails for `https://api.substack.com/feed/podcast/171551669/39d6b393a94286a74bcae9af3829a01d.mp3` while wget etc. can download it.
+#+end_verse
+
 #+BEGIN_SRC markdown
 ```
 async def _download_audio_from_url(
