@@ -523,9 +523,6 @@ MODEL_CHOICES = {
     ## Kimi
     # moonshotai/kimi-k2:free
     "openrouter/moonshotai/kimi-k2:free": "🎁 Kimi K2 (Free, OpenRouter)",
-    ## DeepSeek
-    "deepseek/deepseek-chat": "DeepSeek Chat",
-    "deepseek/deepseek-reasoner": "DeepSeek Reasoner",
     ## Qwen
     # qwen/qwen3-coder:free
     "openrouter/qwen/qwen3-coder:free": "🎁 Qwen3 Coder (Free, OpenRouter)",
@@ -536,6 +533,10 @@ MODEL_CHOICES = {
     # "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "🎁 Venice Uncensored 24B (Free, OpenRouter)",
     #: model name is too long for Telegram API's `data` field in callback buttons
     ## Cloaked Models
+    ## DeepSeek
+    "deepseek/deepseek-chat": "DeepSeek Chat",
+    "deepseek/deepseek-reasoner": "DeepSeek Reasoner",
+    ##
 }
 
 # Chat model options including "Not Set" option for removing chat-specific model
