@@ -139,7 +139,7 @@ The goal is to produce a single, clean document as if it were the original, with
 
 خلاصه اینکه یک جواب کامل و طولانی می‌خوام که انگار خودم نشستم و با دقت به کل برنامه گوش دادم. مرسی!""",
     re.compile(
-        r"^\.rev\s*", re.IGNORECASE
+        r"^\.rev(?:\s+|$)", re.IGNORECASE
     ): f"""{llm_util.load_prompt_from_file("review_v1.md")} """,
     #: Replace LessWrong and Alignment Forum URLs with GreaterWrong to allow better scraping of URLs.
     re.compile(
@@ -150,7 +150,7 @@ The goal is to produce a single, clean document as if it were the original, with
 ##
 TEACH_PROMPTS = {
     re.compile(
-        r"^\.teach\s*", re.IGNORECASE
+        r"^\.teach(?:\s+|$)", re.IGNORECASE
     ): f"""{llm_util.load_prompt_from_file("socratic_teacher_v1.4.md")}\n""",
 }
 #: for `v1.1`, `v1.2`, ..., `v1.4`, also add `.teach1.1` ...:
