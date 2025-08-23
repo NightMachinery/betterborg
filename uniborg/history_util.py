@@ -448,9 +448,23 @@ async def initialize_history_handler():
         print("HistoryUtil Error: borg client is not set. Cannot initialize.")
         return
 
+    if hasattr(borg, "_history_patched"):
+        # Remove old event handlers and add new ones instead of returning
+        borg.remove_events_of_mod(__name__)
+
+        assert original_send_file is not None and original_send_message is not None
+    else:
+        # Store the original methods before we replace them
+        original_send_message = borg.send_message
+        original_send_file = borg.send_file
+
+    borg._history_patched = True
+
     # --- 1. Handler for Incoming Messages ---
     @borg.on(events.NewMessage(incoming=True))
     async def incoming_message_recorder(event: events.NewMessage.Event):
+        # print(f"History: new message in {event.chat_id}: {event.id}, text (truncated):\n{event.text[:100]}")
+
         await add_message(event.chat_id, event.id, event.date)
 
     # --- 2. Handler for Deleted Messages ---
@@ -474,18 +488,6 @@ async def initialize_history_handler():
     # --- 3. Strategy for Outgoing Messages (User vs. Bot) ---
     if await borg.is_bot():
         # BOT MODE: Monkey-patch send methods.
-        if hasattr(borg, "_history_patched"):
-            # Remove old event handlers and add new ones instead of returning
-            borg.remove_events_of_mod(__name__)
-
-            assert original_send_file is not None and original_send_message is not None
-        else:
-            # Store the original methods before we replace them
-            original_send_message = borg.send_message
-            original_send_file = borg.send_file
-
-        borg._history_patched = True
-
         async def patched_send_message(*args, **kwargs):
             # Call the original function to actually send the message
             sent_message: Message = await original_send_message(*args, **kwargs)
