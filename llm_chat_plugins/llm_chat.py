@@ -141,6 +141,9 @@ The goal is to produce a single, clean document as if it were the original, with
     re.compile(
         r"^\.rev(?:\s+|$)", re.IGNORECASE
     ): f"""{llm_util.load_prompt_from_file("review_v1.md")} """,
+    re.compile(
+        r"^\.red(?:team)?(?:\s+|$)", re.IGNORECASE
+    ): f"""{llm_util.load_prompt_from_file("redteam_v1.md")}\n\n{PROMPT_MATCH_LANGUAGE}\n---\n""",
     #: Replace LessWrong and Alignment Forum URLs with GreaterWrong to allow better scraping of URLs.
     re.compile(
         r"\bhttps?://(?:www\.)?(lesswrong\.com|alignmentforum\.org)/",
