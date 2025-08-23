@@ -151,15 +151,15 @@ The goal is to produce a single, clean document as if it were the original, with
 TEACH_PROMPTS = {
     re.compile(
         r"^\.teach(?:\s+|$)", re.IGNORECASE
-    ): f"""{llm_util.load_prompt_from_file("socratic_teacher_v1.4.md")}\n""",
+    ): f"""{llm_util.load_prompt_from_file("socratic_teacher_v1.3.md")}\n""",
 }
-#: for `v1.1`, `v1.2`, ..., `v1.4`, also add `.teach1.1` ...:
+
 for i in [
     "1",
     "1.1",
     "1.2",
     "1.3",
-    "1.4",
+    "1.4",  #: possibly best for material already studied
     "2",
 ]:
     #: `\s` also matches newlines
