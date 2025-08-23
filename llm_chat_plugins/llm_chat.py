@@ -57,6 +57,9 @@ from uniborg import gemini_live_util
 # Redis utilities for smart context state persistence
 from uniborg import redis_util
 
+# Common utilities for URL and media processing
+from uniborg.common_util import url_audio_p
+
 # --- Constants and Configuration ---
 GEMINI_NATIVE_FILE_MODE = os.getenv(
     "GEMINI_NATIVE_FILE_MODE",
@@ -5559,8 +5562,8 @@ async def chat_handler(event):
 
         # ic(url)
         if url:
-            mimetype = await _check_url_mimetype(url)
-            if mimetype and get_media_type(mimetype) == "audio":
+            media_info = await url_audio_p(url)
+            if media_info.audio_p:
                 # Process the audio URL and return early if successful
                 if await _process_audio_url_magic(event, url):
                     return
