@@ -11,6 +11,73 @@ Extract the `.rev` in PROMPT_REPLACEMENTS into `~/scripts/prompt/review_v1.md` a
 
 * sign up at mistral api and add models
 
+* dl must retry
+#+BEGIN_SRC markdown
+```
+async def _download_audio_from_url(
+    url: str, *, temp_dir: Path
+) -> Tuple[Optional[Path], Optional[str]]:
+    """
+    Downloads audio from URL and returns the file path.
+
+    Args:
+        url: The URL to download
+        temp_dir: Temporary directory for storing downloaded file
+
+    Returns:
+        (Path, None) on success; (None, error_message) on failure
+    """
+    try:
+        # Follow redirects to reach the actual media URL
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            # Stream to file to avoid loading large content in memory
+            async with client.stream("GET", url) as response:
+                status = response.status_code
+                final_url = str(response.url)
+                content_type = (
+                    response.headers.get("content-type", "").split(";")[0].lower()
+                )
+
+                if status not in (200, 206):
+                    return None, (
+                        f"HTTP {status} while downloading. Final URL: {final_url}. "
+                        f"Content-Type: {content_type or 'unknown'}."
+                    )
+
+                # Determine file extension from content-type or URL
+                extension = mimetypes.guess_extension(content_type) or ".audio"
+                if extension == ".audio":
+                    parsed_url = final_url.lower()
+                    for ext in [".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac"]:
+                        if ext in parsed_url:
+                            extension = ext
+                            break
+
+                # Save audio file
+                audio_file = temp_dir / f"audio_download{extension}"
+                with open(audio_file, "wb") as f:
+                    async for chunk in response.aiter_bytes(64 * 1024):
+                        if chunk:
+                            f.write(chunk)
+
+        logger.info(f"Downloaded audio file: {audio_file}")
+        return audio_file, None
+
+    except httpx.HTTPError as e:
+        traceback.print_exc()
+        err = f"Network error: {e}"
+        logger.error(f"Failed to download audio from {url}: {err}")
+        return None, err
+    except Exception as e:
+        traceback.print_exc()
+        err = f"Unexpected error: {e}"
+        logger.error(f"Failed to download audio from {url}: {err}")
+        return None, err
+```
+is there a good 3rd party lib for downloading files in python with auto retry etc?
+#+END_SRC
+
+
 * DONE our .s mode seems to break as the plugin is reloaded?
 #+begin_verse
 our .s mode seems to break as the plugin is reloaded?
