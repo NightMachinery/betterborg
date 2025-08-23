@@ -141,9 +141,6 @@ The goal is to produce a single, clean document as if it were the original, with
     re.compile(
         r"^\.rev(?:\s+|$)", re.IGNORECASE
     ): f"""{llm_util.load_prompt_from_file("review_v1.md")} """,
-    re.compile(
-        r"^\.red(?:team)?(?:\s+|$)", re.IGNORECASE
-    ): f"""{llm_util.load_prompt_from_file("redteam_v1.md")}\n\n{PROMPT_MATCH_LANGUAGE}\n---\n""",
     #: Replace LessWrong and Alignment Forum URLs with GreaterWrong to allow better scraping of URLs.
     re.compile(
         r"\bhttps?://(?:www\.)?(lesswrong\.com|alignmentforum\.org)/",
@@ -170,6 +167,20 @@ for i in [
         f"""{llm_util.load_prompt_from_file(f"socratic_teacher_v{i}.md")}\n"""
     )
 PROMPT_REPLACEMENTS.update(TEACH_PROMPTS)
+##
+REDTEAM_PROMPTS = {
+        re.compile(
+        r"^\.red(?:team)?(?:\s+|$)", re.IGNORECASE
+    ): f"""{llm_util.load_prompt_from_file("redteam_v1.1.md")}\n\n{PROMPT_MATCH_LANGUAGE}\n---\n""",
+}
+for i in [
+        "1",
+        "1.1",
+]:
+    REDTEAM_PROMPTS[re.compile(rf"^\.red(?:team)?{re.escape(i)}(?:\s+|$)", re.IGNORECASE)] = (
+        f"""{llm_util.load_prompt_from_file(f"redteam_v{i}.md")}\n\n{PROMPT_MATCH_LANGUAGE}\n---\n"""
+        )
+PROMPT_REPLACEMENTS.update(REDTEAM_PROMPTS)
 ###
 # **Strategic emoji use:** 0-2 per message, only when they add clarity or warmth—never decorative.
 # **Strategic emoji use:** 2-4 per message for rhythm, readability, and subtle humor. Use as visual anchors and section breaks in dense text. The key is using them as **information architecture**—they should make scanning and parsing faster for people used to reading dense technical content.
