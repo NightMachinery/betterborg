@@ -56,9 +56,7 @@ from uniborg import gemini_live_util
 
 # Redis utilities for smart context state persistence
 from uniborg import redis_util
-
-# Common utilities for URL and media processing
-from uniborg.common_util import url_audio_p
+from uniborg import common_util
 
 # --- Constants and Configuration ---
 GEMINI_NATIVE_FILE_MODE = os.getenv(
@@ -1302,89 +1300,6 @@ def _is_url_only_message(text: str) -> Optional[str]:
     return _validate_url_security(text)
 
 
-async def _check_url_mimetype(url: str, *, max_retries: int = 10) -> Optional[str]:
-    """
-    Determine the mimetype of a URL while minimizing downloads.
-
-    Tries a HEAD request first. Some CDNs (e.g., Acast/CloudFront) return
-    misleading content-types (like text/plain) or do not follow redirects for
-    HEAD. If the HEAD result looks unhelpful, fallback to a tiny GET using a
-    Range request to trigger redirects and read only headers.
-
-    Args:
-        url: The URL to check
-        max_retries: Maximum number of retry attempts
-
-    Returns:
-        The mimetype string if successful, None otherwise
-    """
-    for attempt in range(max_retries + 1):
-        try:
-            async with httpx.AsyncClient(
-                timeout=5,  # Shorter timeout for better UX
-                follow_redirects=True,
-                max_redirects=10,  # Limit redirect chains
-            ) as client:
-                if attempt >= 1:
-                    await asyncio.sleep(0.1)
-                    # await asyncio.sleep(0.1 * attempt)
-                elif False:
-                    #: I have completely disabled the head req strategy.
-                    ##
-                    try:
-                        # First attempt: HEAD (fast, no body)
-                        head_resp = await client.head(url)
-                        if head_resp.status_code == 200:
-                            head_ct = (
-                                head_resp.headers.get("content-type", "")
-                                .split(";")[0]
-                                .lower()
-                            )
-                            if head_ct and head_ct not in ("text/plain", "text/html"):
-                                # ic(head_ct)
-                                return head_ct
-                    except:
-                        # Fall through to GET fallback
-                        pass
-
-                # Fallback: small GET with Range to force redirects and minimize data
-                get_resp = await client.get(url, headers={"Range": "bytes=0-0"})
-                if get_resp.status_code in (200, 206):
-                    get_ct = (
-                        get_resp.headers.get("content-type", "").split(";")[0].lower()
-                    )
-                    if get_ct:
-                        return get_ct
-                    else:
-                        ic(get_ct, get_resp, get_resp.headers)
-
-                else:
-                    ic(get_resp, get_resp.headers, get_resp.status_code)
-                    if get_resp.status_code == 403:
-                        logger.warning(f"403 Forbidden (not retrying): {url}")
-                        return None
-
-        except (httpx.TimeoutException, httpx.RequestError) as e:
-            if attempt == max_retries:
-                traceback.print_exc()
-                logger.warning(
-                    f"Network error checking URL {url} after {max_retries + 1} attempts: {e}"
-                )
-            continue
-        except:
-            if attempt == max_retries:
-                traceback.print_exc()
-                logger.error(
-                    f"Unexpected error checking URL {url} after {max_retries + 1} attempts"
-                )
-            continue
-
-        # If we reach here without returning, it means no content type was found but no errors occurred
-        # Only break if this is not a network-related issue that should be retried
-        # break
-
-    logger.warning(f"Could not determine content type for {url}")
-    return None
 
 
 async def _download_audio_from_url(
@@ -2191,20 +2106,6 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
     return capabilities
 
 
-def get_media_type(mime_type: str) -> Optional[str]:
-    """Determine media type category from MIME type."""
-    if not mime_type:
-        return None
-    if mime_type.startswith("image/"):
-        return "image"
-    elif mime_type.startswith("audio/"):
-        return "audio"
-    elif mime_type.startswith("video/"):
-        return "video"
-    elif mime_type == "application/pdf":
-        return "pdf"
-    else:
-        return None
 
 
 async def _get_and_cache_media_info(message, file_id, temp_dir):
@@ -2521,7 +2422,7 @@ async def _process_media(
             if cached_info and "name" in cached_info and "uri" in cached_info:
                 # New: check media capability before proceeding
                 cached_mime_type = cached_info.get("mime_type")
-                media_type = get_media_type(cached_mime_type)
+                media_type = common_util.get_media_type(cached_mime_type)
                 check_result = _check_media_capability(
                     media_type,
                     model_capabilities,
@@ -2594,7 +2495,7 @@ async def _process_media(
 
             # It must be 'base64' type. 'content' is a b64 string.
             # Check capability before uploading.
-            media_type = get_media_type(mime_type)
+            media_type = common_util.get_media_type(mime_type)
             check_result = _check_media_capability(
                 media_type, model_capabilities, issued_warnings, private_p=is_private
             )
@@ -2667,7 +2568,7 @@ async def _process_media(
             }
             return ProcessMediaResult(media_part=part, warnings=[])
         elif storage_type == "base64":
-            media_type = get_media_type(mime_type)
+            media_type = common_util.get_media_type(mime_type)
             check_result = _check_media_capability(
                 media_type, model_capabilities, issued_warnings, private_p=is_private
             )
@@ -5623,7 +5524,7 @@ async def chat_handler(event):
 
         # ic(url)
         if url:
-            media_info = await url_audio_p(url)
+            media_info = await common_util.url_audio_p(url)
             if media_info.audio_p:
                 # Process the audio URL and return early if successful
                 if await _process_audio_url_magic(event, url):
