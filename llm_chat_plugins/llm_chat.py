@@ -3823,6 +3823,11 @@ async def log_handler(event):
         # Admin check required for custom count
         if await util.isAdmin(event):
             custom_count = int(match.group(1))
+            if custom_count >= 20:
+                custom_count = 20
+                event.reply(
+                    f"{BOT_META_INFO_PREFIX}Custom log count limited to 20 even for admins for privacy reasons."
+                )
 
         else:
             if False:
