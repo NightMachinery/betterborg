@@ -532,3 +532,23 @@ def create_llm_start_handler(
             await llm_db.request_api_key_message(event, service)
 
     return start_handler
+
+
+def get_service_from_model(model: str) -> str:
+    """
+    Determines the service needed based on the model name.
+
+    Args:
+        model: The model name (e.g., "openrouter/openai/gpt-5-chat", "deepseek/deepseek-chat")
+
+    Returns:
+        str: The service name ("openrouter", "openai", "deepseek", or "gemini" as default)
+    """
+    if model.startswith("openrouter/"):
+        return "openrouter"
+    elif model.startswith("openai/"):
+        return "openai"
+    elif model.startswith("deepseek/"):
+        return "deepseek"
+    else:
+        return "gemini"

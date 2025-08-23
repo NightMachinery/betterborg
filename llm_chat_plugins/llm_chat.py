@@ -83,6 +83,7 @@ PREFIX_MODEL_MAPPING = {
     ".ff": "gemini/gemini-2.5-flash",
     ".g": "gemini/gemini-2.5-pro",
     ".c": "openrouter/openai/gpt-5-chat",
+    ".d": "deepseek/deepseek-reasoner",
 }
 
 # Audio summarization prompt
@@ -521,6 +522,9 @@ MODEL_CHOICES = {
     ## Kimi
     # moonshotai/kimi-k2:free
     "openrouter/moonshotai/kimi-k2:free": "🎁 Kimi K2 (Free, OpenRouter)",
+    ## DeepSeek
+    "deepseek/deepseek-chat": "DeepSeek Chat",
+    "deepseek/deepseek-reasoner": "DeepSeek Reasoner",
     ## Qwen
     # qwen/qwen3-coder:free
     "openrouter/qwen/qwen3-coder:free": "🎁 Qwen3 Coder (Free, OpenRouter)",
@@ -591,6 +595,7 @@ BOT_COMMANDS = [
         "command": "setopenrouterkey",
         "description": "Set or update your OpenRouter API key",
     },
+    {"command": "setdeepseekkey", "description": "Set or update your DeepSeek API key"},
     {"command": "setmodel", "description": "Set your preferred chat model"},
     {
         "command": "setsystemprompt",
@@ -1517,11 +1522,7 @@ def _get_effective_model_and_service(
     # Priority: prefix_model > chat_model > user default model
     model_in_use = prefix_model or chat_model or prefs.model
 
-    service_needed = "gemini"
-    if model_in_use.startswith("openrouter/"):
-        service_needed = "openrouter"
-    elif model_in_use.startswith("openai/"):
-        service_needed = "openai"
+    service_needed = llm_util.get_service_from_model(model_in_use)
 
     return model_in_use, service_needed
 
@@ -3339,6 +3340,12 @@ def register_handlers():
     )(set_openrouter_key_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^/setdeepseekkey{bot_username_suffix_re}(?:\s+(.*))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(set_deepseek_key_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/setmodel{bot_username_suffix_re}(?:\s+(.*))?\s*$",
             func=lambda e: e.is_private,
         )
@@ -3908,6 +3915,11 @@ async def set_key_handler(event):
 async def set_openrouter_key_handler(event):
     """Delegates /setopenrouterkey command logic to the shared module."""
     await llm_db.handle_set_key_command(event, "openrouter")
+
+
+async def set_deepseek_key_handler(event):
+    """Delegates /setdeepseekkey command logic to the shared module."""
+    await llm_db.handle_set_key_command(event, "deepseek")
 
 
 async def key_submission_handler(event):
