@@ -5111,6 +5111,10 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     if event.forward:
         return False
 
+    if event.text.strip() == ".":
+        #: allow single dot for simply bookmarking a message
+        return False
+
     if _is_known_command(event.text):
         return False
 
