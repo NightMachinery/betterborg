@@ -78,6 +78,7 @@ DEFAULT_MODEL = "gemini/gemini-2.5-flash"  #: Do NOT change the default model un
 ##
 
 # Prefix-to-model mapping for hardcoded model selection
+#: @hiddenDep Update `Quick Model Selection Shortcuts` in `/help` command to reflect changes here.
 PREFIX_MODEL_MAPPING = {
     ".f": "gemini/gemini-2.5-flash-lite",
     ".ff": "gemini/gemini-2.5-flash",
@@ -3677,6 +3678,14 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setthink: Adjust the model's reasoning effort for complex tasks.
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
+
+**Quick Model Selection Shortcuts**
+Start your messages with these shortcuts to use specific models:
+- `.c` → GPT-5 Chat (OpenRouter): Latest Non-reasoning OpenAI model
+- `.f` → Gemini 2.5 Flash Lite: Ultra-fast responses
+- `.ff` → Gemini 2.5 Flash: Fast responses
+- `.g` → Gemini 2.5 Pro: Google's flagship model
+- `.d` → DeepSeek Reasoner
 """
     await event.reply(
         f"{BOT_META_INFO_PREFIX}{help_text}", link_preview=False, parse_mode="md"
