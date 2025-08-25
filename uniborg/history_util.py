@@ -305,7 +305,11 @@ async def get_ids_since(
                                 item.timestamp > timestamp,
                             )
 
-                result = [item.message_id for item in items if item.timestamp > timestamp and not item.deleted]
+                result = [
+                    item.message_id
+                    for item in items
+                    if item.timestamp > timestamp and not item.deleted
+                ]
                 return result
             else:
                 return [item.message_id for item in items if item.timestamp > timestamp]

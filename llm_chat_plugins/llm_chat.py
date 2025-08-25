@@ -1386,8 +1386,6 @@ def _is_url_only_message(text: str) -> Optional[str]:
     return _validate_url_security(text)
 
 
-
-
 async def _download_audio_from_url(
     url: str, *, temp_dir: Path
 ) -> Tuple[Optional[Path], Optional[str]]:
@@ -1619,7 +1617,9 @@ async def _call_llm_with_retry(
                         cursor = "▌💤💤"
                         #: Doubly slow mode cursor to indicate increased delay
 
-                    elif (current_time - streaming_start_time) > 30:  # 30 seconds elapsed
+                    elif (
+                        current_time - streaming_start_time
+                    ) > 30:  # 30 seconds elapsed
                         current_edit_interval = 15  # Increase delay to 15 seconds
                         # cursor = "▌(💤)"
                         # cursor = "▌⁞💤"
@@ -2195,8 +2195,6 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
 
     capabilities["image_generation"] = is_image_generation_model(model)
     return capabilities
-
-
 
 
 async def _get_and_cache_media_info(message, file_id, temp_dir):

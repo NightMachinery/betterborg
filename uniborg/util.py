@@ -526,7 +526,9 @@ async def send_files(chat, files, **kwargs):
                     try:
                         await borg.send_file(chat, fs, allow_cache=False, **kwargs)
                     except PhotoExtInvalidError:
-                        print(f"Album sending failed, using no-album workaround. Files: {fs}")
+                        print(
+                            f"Album sending failed, using no-album workaround. Files: {fs}"
+                        )
                         use_no_album = True
 
                 if use_no_album:
