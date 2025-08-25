@@ -105,6 +105,67 @@ PROMPT_MATCH_LANGUAGE = r"""**Language**
 - Determine language from the message content only (ignore metadata).
 - If in doubt between Arabic and Persian/Farsi, assume Persian/Farsi."""
 
+# Pattern constants
+COMMON_PATTERN_SUFFIX = r"(?:\s+|$)"
+
+TEACH_PATTERN_PREFIX = r"^\.teach"
+REDTEAM_PATTERN_PREFIX = r"^\.red(?:team)?"
+EXTRACTOR_PATTERN_PREFIX = r"^\.ext(?:ract)?"
+RESOURCERANGER_PATTERN_PREFIX = r"^\.learn"
+
+# File name constants
+TEACH_FILE_NAME = "socratic_teacher"
+REDTEAM_FILE_NAME = "redteam"
+EXTRACTOR_FILE_NAME = "extractor"
+EXTRACTOR_VERSIONED_FILE_NAME = "socratic_extractorer"
+RESOURCERANGER_FILE_NAME = "learning_resources"
+
+
+def _register_prompt_family(
+    *,
+    pattern_prefix,
+    file_base,
+    default_version,
+    versions=[],
+    pattern_suffix=COMMON_PATTERN_SUFFIX,
+    content_postfix="",
+    versioned_file_base=None,
+    regex_flags=re.IGNORECASE,
+):
+    """
+    Helper function to register a family of related prompts with versions.
+
+    Args:
+        pattern_prefix: Regex prefix (e.g., r"^\.teach")
+        file_base: Base filename for prompts (e.g., "socratic_teacher")
+        default_version: Default version used for base pattern (e.g., "1.3")
+        versions: List of versions to create patterns for (e.g., ["1", "1.1", "2"])
+        pattern_suffix: Regex suffix, defaults to COMMON_PATTERN_SUFFIX
+        content_postfix: Text to append to loaded prompt content (e.g., language instructions)
+        versioned_file_base: Alternative file base for versioned files
+        regex_flags: Regex compilation flags, defaults to re.IGNORECASE
+    """
+    prompts = {}
+
+    # Base pattern (uses default version)
+    base_pattern = f"{pattern_prefix}{pattern_suffix}"
+    base_file = f"{file_base}_v{default_version}.md"
+    base_content = f"""{llm_util.load_prompt_from_file(base_file)}{content_postfix}"""
+    prompts[re.compile(base_pattern, regex_flags)] = base_content
+
+    # Versioned patterns
+    for version in versions:
+        version_pattern = f"{pattern_prefix}{re.escape(version)}{pattern_suffix}"
+        version_file_base = versioned_file_base if versioned_file_base else file_base
+        version_file = f"{version_file_base}_v{version}.md"
+        version_content = (
+            f"""{llm_util.load_prompt_from_file(version_file)}{content_postfix}"""
+        )
+        prompts[re.compile(version_pattern, regex_flags)] = version_content
+
+    return prompts
+
+
 PROMPT_REPLACEMENTS = {
     re.compile(
         r"^\.ocr$", re.MULTILINE | re.IGNORECASE
@@ -148,71 +209,48 @@ The goal is to produce a single, clean document as if it were the original, with
     ): r"https://greaterwrong.com/",
 }
 ##
-TEACH_PROMPTS = {
-    re.compile(
-        r"^\.teach(?:\s+|$)", re.IGNORECASE
-    ): f"""{llm_util.load_prompt_from_file("socratic_teacher_v1.3.md")}\n""",
-}
-
-for i in [
-    "1",
-    "1.1",
-    "1.2",
-    "1.3",
-    "1.4",  #: possibly best for material already studied
-    "2",
-]:
-    #: `\s` also matches newlines
-    TEACH_PROMPTS[re.compile(rf"^\.teach{re.escape(i)}(?:\s+|$)", re.IGNORECASE)] = (
-        f"""{llm_util.load_prompt_from_file(f"socratic_teacher_v{i}.md")}\n"""
-    )
-PROMPT_REPLACEMENTS.update(TEACH_PROMPTS)
-##
-REDTEAM_PROMPTS = {
-        re.compile(
-        r"^\.red(?:team)?(?:\s+|$)", re.IGNORECASE
-    ): f"""{llm_util.load_prompt_from_file("redteam_v1.1.md")}\n\n{PROMPT_MATCH_LANGUAGE}\n---\n""",
-}
-for i in [
+TEACH_PROMPTS = _register_prompt_family(
+    pattern_prefix=TEACH_PATTERN_PREFIX,
+    file_base=TEACH_FILE_NAME,
+    default_version="1.3",
+    versions=[
         "1",
         "1.1",
-]:
-    REDTEAM_PROMPTS[re.compile(rf"^\.red(?:team)?{re.escape(i)}(?:\s+|$)", re.IGNORECASE)] = (
-        f"""{llm_util.load_prompt_from_file(f"redteam_v{i}.md")}\n\n{PROMPT_MATCH_LANGUAGE}\n---\n"""
-        )
+        "1.2",
+        "1.3",
+        "1.4",
+        "2",
+    ],  #: 1.4 possibly best for material already studied
+    content_postfix="\n",
+)
+PROMPT_REPLACEMENTS.update(TEACH_PROMPTS)
+##
+REDTEAM_PROMPTS = _register_prompt_family(
+    pattern_prefix=REDTEAM_PATTERN_PREFIX,
+    file_base=REDTEAM_FILE_NAME,
+    default_version="1.1",
+    versions=["1", "1.1"],
+    content_postfix=f"\n\n{PROMPT_MATCH_LANGUAGE}\n---\n",
+)
 PROMPT_REPLACEMENTS.update(REDTEAM_PROMPTS)
 ##
-EXTRACTOR_PATTERN = r"\.ext(?:ract)?"
-EXTRACTOR_PROMPTS = {
-    re.compile(
-        rf"^{EXTRACTOR_PATTERN}(?:\s+|$)", re.IGNORECASE
-    ): f"""{llm_util.load_prompt_from_file("extractor_v1.md")}\n""",
-}
-
-for i in [
-    # "1",
-]:
-    #: `\s` also matches newlines
-    EXTRACTOR_PROMPTS[re.compile(rf"^{EXTRACTOR_PATTERN}{re.escape(i)}(?:\s+|$)", re.IGNORECASE)] = (
-        f"""{llm_util.load_prompt_from_file(f"socratic_extractorer_v{i}.md")}\n"""
-    )
+EXTRACTOR_PROMPTS = _register_prompt_family(
+    pattern_prefix=EXTRACTOR_PATTERN_PREFIX,
+    file_base=EXTRACTOR_FILE_NAME,
+    default_version="1",
+    versions=[],
+    versioned_file_base=EXTRACTOR_VERSIONED_FILE_NAME,
+    content_postfix="\n",
+)
 PROMPT_REPLACEMENTS.update(EXTRACTOR_PROMPTS)
 ##
-RESOURCERANGER_PATTERN = r"\.learn"
-RESOURCERANGER_FILE_NAME = "learning_resources"
-RESOURCERANGER_PROMPTS = {
-    re.compile(
-        rf"^{RESOURCERANGER_PATTERN}(?:\s+|$)", re.IGNORECASE
-    ): f"""{llm_util.load_prompt_from_file(f"{RESOURCERANGER_FILE_NAME}_v1.md")}\n""",
-}
-
-for i in [
-    # "1",
-]:
-    #: `\s` also matches newlines
-    RESOURCERANGER_PROMPTS[re.compile(rf"^{RESOURCERANGER_PATTERN}{re.escape(i)}(?:\s+|$)", re.IGNORECASE)] = (
-        f"""{llm_util.load_prompt_from_file(f"{RESOURCERANGER_FILE_NAME}_v{i}.md")}\n"""
-    )
+RESOURCERANGER_PROMPTS = _register_prompt_family(
+    pattern_prefix=RESOURCERANGER_PATTERN_PREFIX,
+    file_base=RESOURCERANGER_FILE_NAME,
+    default_version="1",
+    versions=[],
+    content_postfix="\n",
+)
 PROMPT_REPLACEMENTS.update(RESOURCERANGER_PROMPTS)
 ##
 ###
