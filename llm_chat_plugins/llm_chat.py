@@ -181,6 +181,40 @@ for i in [
         f"""{llm_util.load_prompt_from_file(f"redteam_v{i}.md")}\n\n{PROMPT_MATCH_LANGUAGE}\n---\n"""
         )
 PROMPT_REPLACEMENTS.update(REDTEAM_PROMPTS)
+##
+EXTRACTOR_PATTERN = r"\.ext(?:ract)?"
+EXTRACTOR_PROMPTS = {
+    re.compile(
+        rf"^{EXTRACTOR_PATTERN}(?:\s+|$)", re.IGNORECASE
+    ): f"""{llm_util.load_prompt_from_file("extractor_v1.md")}\n""",
+}
+
+for i in [
+    # "1",
+]:
+    #: `\s` also matches newlines
+    EXTRACTOR_PROMPTS[re.compile(rf"^{EXTRACTOR_PATTERN}{re.escape(i)}(?:\s+|$)", re.IGNORECASE)] = (
+        f"""{llm_util.load_prompt_from_file(f"socratic_extractorer_v{i}.md")}\n"""
+    )
+PROMPT_REPLACEMENTS.update(EXTRACTOR_PROMPTS)
+##
+RESOURCERANGER_PATTERN = r"\.learn"
+RESOURCERANGER_FILE_NAME = "learning_resources"
+RESOURCERANGER_PROMPTS = {
+    re.compile(
+        rf"^{RESOURCERANGER_PATTERN}(?:\s+|$)", re.IGNORECASE
+    ): f"""{llm_util.load_prompt_from_file(f"{RESOURCERANGER_FILE_NAME}_v1.md")}\n""",
+}
+
+for i in [
+    # "1",
+]:
+    #: `\s` also matches newlines
+    RESOURCERANGER_PROMPTS[re.compile(rf"^{RESOURCERANGER_PATTERN}{re.escape(i)}(?:\s+|$)", re.IGNORECASE)] = (
+        f"""{llm_util.load_prompt_from_file(f"{RESOURCERANGER_FILE_NAME}_v{i}.md")}\n"""
+    )
+PROMPT_REPLACEMENTS.update(RESOURCERANGER_PROMPTS)
+##
 ###
 # **Strategic emoji use:** 0-2 per message, only when they add clarity or warmth—never decorative.
 # **Strategic emoji use:** 2-4 per message for rhythm, readability, and subtle humor. Use as visual anchors and section breaks in dense text. The key is using them as **information architecture**—they should make scanning and parsing faster for people used to reading dense technical content.
