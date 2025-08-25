@@ -108,18 +108,6 @@ PROMPT_MATCH_LANGUAGE = r"""**Language**
 # Pattern constants
 COMMON_PATTERN_SUFFIX = r"(?:\s+|$)"
 
-TEACH_PATTERN_PREFIX = r"^\.teach"
-REDTEAM_PATTERN_PREFIX = r"^\.red(?:team)?"
-EXTRACTOR_PATTERN_PREFIX = r"^\.ext(?:ract)?"
-RESOURCERANGER_PATTERN_PREFIX = r"^\.learn"
-
-# File name constants
-TEACH_FILE_NAME = "socratic_teacher"
-REDTEAM_FILE_NAME = "redteam"
-EXTRACTOR_FILE_NAME = "extractor"
-EXTRACTOR_VERSIONED_FILE_NAME = "socratic_extractorer"
-RESOURCERANGER_FILE_NAME = "learning_resources"
-
 
 def _register_prompt_family(
     *,
@@ -209,6 +197,9 @@ The goal is to produce a single, clean document as if it were the original, with
     ): r"https://greaterwrong.com/",
 }
 ##
+TEACH_PATTERN_PREFIX = r"^\.teach"
+TEACH_FILE_NAME = "socratic_teacher"
+
 TEACH_PROMPTS = _register_prompt_family(
     pattern_prefix=TEACH_PATTERN_PREFIX,
     file_base=TEACH_FILE_NAME,
@@ -225,6 +216,9 @@ TEACH_PROMPTS = _register_prompt_family(
 )
 PROMPT_REPLACEMENTS.update(TEACH_PROMPTS)
 ##
+REDTEAM_PATTERN_PREFIX = r"^\.red(?:team)?"
+REDTEAM_FILE_NAME = "redteam"
+
 REDTEAM_PROMPTS = _register_prompt_family(
     pattern_prefix=REDTEAM_PATTERN_PREFIX,
     file_base=REDTEAM_FILE_NAME,
@@ -234,16 +228,21 @@ REDTEAM_PROMPTS = _register_prompt_family(
 )
 PROMPT_REPLACEMENTS.update(REDTEAM_PROMPTS)
 ##
+EXTRACTOR_PATTERN_PREFIX = r"^\.ext(?:ract)?"
+EXTRACTOR_FILE_NAME = "extractor"
+
 EXTRACTOR_PROMPTS = _register_prompt_family(
     pattern_prefix=EXTRACTOR_PATTERN_PREFIX,
     file_base=EXTRACTOR_FILE_NAME,
     default_version="1",
     versions=[],
-    versioned_file_base=EXTRACTOR_VERSIONED_FILE_NAME,
     content_postfix="\n",
 )
 PROMPT_REPLACEMENTS.update(EXTRACTOR_PROMPTS)
 ##
+RESOURCERANGER_PATTERN_PREFIX = r"^\.learn"
+RESOURCERANGER_FILE_NAME = "learning_resources"
+
 RESOURCERANGER_PROMPTS = _register_prompt_family(
     pattern_prefix=RESOURCERANGER_PATTERN_PREFIX,
     file_base=RESOURCERANGER_FILE_NAME,
@@ -252,6 +251,40 @@ RESOURCERANGER_PROMPTS = _register_prompt_family(
     content_postfix="\n",
 )
 PROMPT_REPLACEMENTS.update(RESOURCERANGER_PROMPTS)
+##
+CBT_PATTERN_PREFIX = r"^\.cbt"
+CBT_FILE_NAME = "CBT"
+
+CBT_PROMPTS = _register_prompt_family(
+    pattern_prefix=CBT_PATTERN_PREFIX,
+    file_base=CBT_FILE_NAME,
+    default_version="2",
+    versions=[
+        "1",
+        "2",
+    ],
+    content_postfix="\n",
+)
+PROMPT_REPLACEMENTS.update(CBT_PROMPTS)
+##
+ACT_PATTERN_PREFIX = r"^\.act"
+ACT_FILE_NAME = "ACT"
+
+ACT_PROMPTS = _register_prompt_family(
+    pattern_prefix=ACT_PATTERN_PREFIX,
+    file_base=ACT_FILE_NAME,
+    default_version="3.2",
+    versions=[
+        "1",
+        "2",
+        "2.1",
+        "3",
+        "3.1",
+        "3.2",
+    ],
+    content_postfix="\n",
+)
+PROMPT_REPLACEMENTS.update(ACT_PROMPTS)
 ##
 ###
 # **Strategic emoji use:** 0-2 per message, only when they add clarity or warmth—never decorative.
