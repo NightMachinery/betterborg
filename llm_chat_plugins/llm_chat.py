@@ -1873,7 +1873,8 @@ async def _retry_on_no_response_with_reasons(
 
                 # Small delay before retry
                 await asyncio.sleep(1)
-
+        finally:
+            pass
 
     # All retries exhausted - create final failure message
     final_finish_reason_text = (
