@@ -587,6 +587,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- New Constants for Features ---
 GEMINI_IMAGE_GENERATION_MODELS = {
+    "gemini/gemini-2.5-flash-image-preview",
     "gemini/gemini-2.0-flash-preview-image-generation",
     "gemini/gemini-2.0-flash-exp-image-generation",
 }
@@ -621,7 +622,8 @@ MODEL_CHOICES = {
     "gemini/gemini-2.5-flash": "Gemini 2.5 Flash",
     "gemini/gemini-2.5-pro": "Gemini 2.5 Pro",
     "openrouter/google/gemini-2.5-pro": "Gemini 2.5 Pro (OpenRouter)",
-    "gemini/gemini-2.0-flash-preview-image-generation": "Gemini 2.0 Flash Image Generation",
+    "gemini/gemini-2.0-flash-preview-image-generation": "Gemini 2.0 Flash Image",
+    "gemini/gemini-2.5-flash-image-preview": "Gemini 2.5 Flash Image",
     "gemini/gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
     ## Anthropic Claude
     "openrouter/anthropic/claude-sonnet-4": "Claude Sonnet 4 (OpenRouter)",
