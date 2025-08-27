@@ -5850,7 +5850,8 @@ async def chat_handler(event):
             # Upstream Gemini Limitation: Only enable tools if JSON mode is OFF.
             if prefs.enabled_tools and not prefs.json_mode:
                 api_kwargs["tools"] = [{t: {}} for t in prefs.enabled_tools]
-            if prefs.thinking:
+            if prefs.thinking and "2.5-pro" not in model_in_use:
+                #: 2.5-pro thinks automatically
                 api_kwargs["reasoning_effort"] = prefs.thinking
             # Add modalities for image generation models
             if model_capabilities.get("image_generation", False):
