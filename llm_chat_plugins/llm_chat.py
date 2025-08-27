@@ -1697,6 +1697,9 @@ async def _call_llm_with_retry(
                 text=content, finish_reason=finish_reason, has_image=False
             )
 
+    except asyncio.CancelledError:
+        raise
+
     except (
         litellm.exceptions.RateLimitError,
         httpx.HTTPStatusError,
@@ -5936,6 +5939,10 @@ async def chat_handler(event):
         await _handle_tts_response(event, final_text)
 
         await _log_conversation(event, prefs, model_in_use, messages, final_text)
+
+    except asyncio.CancelledError:
+        # print(f"chat_handler: Task was cancelled for event: {event.id}")
+        pass
 
     except Exception as e:
         await llm_util.handle_llm_error(
