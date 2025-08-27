@@ -707,7 +707,7 @@ METADATA_MODES = {
 MAX_RETRIES = 2
 
 # Maximum number of retries for "no response" scenarios
-NO_RESPONSE_RETRIES_MAX = int(os.getenv("NO_RESPONSE_RETRIES_MAX", "10"))
+NO_RESPONSE_RETRIES_MAX = int(os.getenv("NO_RESPONSE_RETRIES_MAX", "30"))
 
 
 # --- Single Source of Truth for Bot Commands ---
@@ -1825,6 +1825,7 @@ async def _retry_on_no_response_with_reasons(
     model_capabilities: dict = None,
     streaming_p=True,
     no_response_retries_max=NO_RESPONSE_RETRIES_MAX,
+    sleep=20,
 ) -> LLMResponse:
     """
     Retry LLM calls specifically for no-response scenarios with progress display.
@@ -1865,7 +1866,7 @@ async def _retry_on_no_response_with_reasons(
                 finish_reason_text = (
                     f" (finish_reason: `{finish_reason}`)" if finish_reason else ""
                 )
-                retry_message = f"{BOT_META_INFO_PREFIX}[No response - retrying {attempt}/{no_response_retries_max}{finish_reason_text}]"
+                retry_message = f"{BOT_META_INFO_PREFIX}__[No response: retrying {attempt}/{no_response_retries_max}]__{finish_reason_text}"
 
                 await util.edit_message(
                     response_message,
@@ -1875,7 +1876,7 @@ async def _retry_on_no_response_with_reasons(
                 )
 
                 # Small delay before retry
-                await asyncio.sleep(1)
+                await asyncio.sleep(sleep)
         finally:
             pass
 
