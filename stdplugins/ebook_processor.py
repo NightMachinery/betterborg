@@ -20,6 +20,18 @@ EBOOK_EXTENSIONS = {
     # ".azw3",
 }
 
+# Extensions for which ebook-cover routine should be run
+EBOOK_COVER_EXTENSIONS = {
+    ".epub",
+    ".mobi",
+    ".azw3",
+    ".pdf",
+    ".fb2",
+    ".djvu",
+    ".cbr",
+    ".cbz",
+}
+
 # AUTO_PROCESS_MODE configuration
 # "PV": only processes books sent in private chats
 # dict: a mapping of chat names to chat IDs - only process books sent in those chat IDs
@@ -50,20 +62,34 @@ async def should_auto_process(event):
         return False
 
 
-async def process_ebooks_and_clean(cwd, event):
+async def process_ebooks_and_clean(cwd, event, *, include_conversion=True):
     """
-    Finds all ebook files in the given directory, runs conversion commands,
+    Finds all ebook files in the given directory, runs processing commands,
     and then deletes the original files only upon success.
     This function is designed to be called by `util.run_and_upload`.
+
+    Args:
+        cwd: Working directory path
+        event: Telegram event object
+        include_conversion: If True, runs both ebook-cover and epub2md.
+                          If False, runs only ebook-cover.
     """
+    # Select appropriate file extensions based on processing mode
+    if include_conversion:
+        target_extensions = EBOOK_EXTENSIONS
+    else:
+        target_extensions = EBOOK_COVER_EXTENSIONS
+
+    error_msg = "Error: Could not find any supported ebook files to process."
+
     ebook_files = [
         f
         for f in Path(cwd).iterdir()
-        if f.is_file() and f.suffix.lower() in EBOOK_EXTENSIONS
+        if f.is_file() and f.suffix.lower() in target_extensions
     ]
 
     if not ebook_files:
-        await event.reply("Error: Could not find any supported ebook files to process.")
+        await event.reply(error_msg)
         return
 
     # Build a single, multi-part command string to process all files in one go.
@@ -71,11 +97,15 @@ async def process_ebooks_and_clean(cwd, event):
     for ebook_file in ebook_files:
         # We can use relative paths since the command runs inside `cwd`.
         filename = ebook_file.name
-        md_filename = ebook_file.with_suffix(".md").name
 
-        # Use zs() to safely construct each part of the command.
-        command_parts.append(zs("ebook-cover {filename}"))
-        command_parts.append(zs("epub2md {filename} > {md_filename}"))
+        # Always run ebook-cover for files that support it
+        if ebook_file.suffix.lower() in EBOOK_COVER_EXTENSIONS:
+            command_parts.append(zs("ebook-cover {filename}"))
+
+        # Optionally run conversion
+        if include_conversion:
+            md_filename = ebook_file.with_suffix(".md").name
+            command_parts.append(zs("epub2md {filename} > {md_filename}"))
 
     full_command = " && ".join(command_parts)
 
@@ -96,7 +126,8 @@ async def process_ebooks_and_clean(cwd, event):
 @borg.on(
     events.NewMessage(
         func=lambda e: e.file
-        and Path(e.file.name or "").suffix.lower() in EBOOK_EXTENSIONS
+        and Path(e.file.name or "").suffix.lower()
+        in (EBOOK_COVER_EXTENSIONS | EBOOK_EXTENSIONS)
     )
 )
 async def ebook_handler(event):
@@ -120,11 +151,21 @@ async def ebook_handler(event):
     status_message = await event.reply("Processing ebook(s)…")
 
     try:
+        # Determine processing mode based on file extension
+        file_extension = Path(event.file.name or "").suffix.lower()
+        include_conversion = file_extension in EBOOK_EXTENSIONS
+
+        # Create a wrapper function with the appropriate parameters
+        async def processing_function(cwd, event):
+            return await process_ebooks_and_clean(
+                cwd, event, include_conversion=include_conversion
+            )
+
         # The `run_and_upload` utility handles file download, command execution,
         # result upload, and directory cleanup.
         await util.run_and_upload(
             event=event,
-            to_await=process_ebooks_and_clean,
+            to_await=processing_function,
             album_mode=False,  #: It's better to send each book separately, not grouped together
             quiet=True,  # Suppress default status messages from run_and_upload
         )
