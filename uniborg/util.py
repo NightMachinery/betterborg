@@ -814,21 +814,41 @@ async def discreet_send(
     quiet=False,
     link_preview=False,
     parse_mode=None,
+    *,
+    send_as_file_instead=12000,
+    file_name_mode="random",
 ):
+    """
+    Send a message, splitting it into chunks if needed or sending as file.
+
+    Args:
+        send_as_file_instead: If int, send as file when length >= threshold.
+                             Else, treated as Boolean.
+        file_name_mode: File naming mode - "random", "timestamp", or "llm".
+    """
     message = message.strip()
     if quiet or len(message) == 0:
         return reply_to
 
     length = len(message)
 
-    # Send as file if too long
-    if length > 12000:
+    # Check if we should send as file (either by length threshold or user request)
+    if isinstance(send_as_file_instead, int):
+        should_send_as_file = length >= send_as_file_instead
+
+    if should_send_as_file:
+        # Generate file data using shared function
+        file_data = await _generate_file_data(message, parse_mode, file_name_mode)
         chat = await event.get_chat()
+
+        # Send file using existing function
         return await send_text_as_file(
             text=message,
+            suffix=file_data.suffix,
             chat=chat,
+            caption=file_data.caption,
             reply_to=reply_to,
-            caption="This message is too long, so it has been sent as a text file.",
+            filename=file_data.filename,
         )
 
     # Use smart splitting for shorter messages
@@ -858,6 +878,20 @@ class EditChainState:
             self.children = []
 
 
+@dataclass
+class FileGeneration:
+    """Encapsulates all data needed for intelligent file generation."""
+
+    filename: str
+    caption: str
+    extension: str
+
+    @property
+    def suffix(self) -> str:
+        """Get the file extension for use with send_text_as_file."""
+        return self.extension
+
+
 # Dictionary to track message chains for the edit_message function
 # Key: original_message_id, Value: EditChainState object
 EDIT_CHAINS = {}
@@ -870,6 +904,9 @@ async def edit_message(
     parse_mode=None,
     max_len=4096,
     append_p=False,
+    *,
+    also_send_as_file=None,
+    file_name_mode="random",
 ):
     """
     Intelligently edits a message chain to reflect new text content,
@@ -889,6 +926,8 @@ async def edit_message(
         max_len (int): The maximum length of a single message.
         append_p (bool): If True, append new_text to existing content separated by BOT_META_INFO_LINE.
                         If False, replace existing content with new_text (default behavior).
+        also_send_as_file (int): When text length >= this threshold, also send as a file.
+        file_name_mode (str): File naming mode - "random", "timestamp", or "llm".
     """
     global EDIT_CHAINS
     message_id = message_obj.id
@@ -914,101 +953,129 @@ async def edit_message(
             new_text = existing_text
         # else: if no existing text, just use new_text as-is
 
-    # Chunk the new text with forward search for streaming consistency
-    chunks = (
-        _split_message_smart(
-            new_text,
-            max_chunk_size=max_len,
-            search_direction=0,
-        )
-        if new_text
-        else []
+    # Store file sending parameters for later use
+    should_send_file = (
+        also_send_as_file is not None
+        and new_text
+        and len(new_text) >= also_send_as_file
+    )
+    file_sending_params = (
+        {
+            "text": new_text,
+            "parse_mode": parse_mode,
+            "file_name_mode": file_name_mode,
+            "message_obj": message_obj,
+        }
+        if should_send_file
+        else None
     )
 
-    existing_children = edit_state.children
-    new_children = []
-
-    # Case 1: The new text is empty, delete the entire chain.
-    if not chunks:
-        for child in existing_children:
-            try:
-                await child.delete()
-            except Exception:
-                pass  # Ignore if deletion fails
-        EDIT_CHAINS.pop(message_id, None)
-        try:
-            # Edit the original message to be empty or show a placeholder
-            if message_obj.text != "__[empty]__":
-                await message_obj.edit("__[empty]__")
-        except Exception:
-            pass
-        return
-
-    # Edit the primary message (the one the user replied to)
     try:
-        # --- OPTIMIZATION: Check text before editing ---
-        if message_obj.text != chunks[0]:
-            await message_obj.edit(
-                chunks[0], parse_mode=parse_mode, link_preview=link_preview
+        # Chunk the new text with forward search for streaming consistency
+        chunks = (
+            _split_message_smart(
+                new_text,
+                max_chunk_size=max_len,
+                search_direction=0,
             )
-    except telethon.errors.rpcerrorlist.MessageNotModifiedError:
-        pass  # Fallback for safety, though the check above should prevent this.
-    except Exception as e:
-        print(f"Error editing original message {message_id}: {e}")
-        return  # If the head of the chain fails, abort
+            if new_text
+            else []
+        )
 
-    # Now, handle the children (the rest of the chunks)
-    num_new_chunks = len(chunks) - 1
-    num_existing_children = len(existing_children)
-    last_message_in_chain = message_obj
+        existing_children = edit_state.children
+        new_children = []
 
-    for i in range(max(num_new_chunks, num_existing_children)):
-        # --- Edit existing messages if we have a chunk for them ---
-        if i < num_new_chunks and i < num_existing_children:
-            child_to_edit = existing_children[i]
-            new_chunk = chunks[i + 1]
+        # Case 1: The new text is empty, delete the entire chain.
+        if not chunks:
+            for child in existing_children:
+                try:
+                    await child.delete()
+                except Exception:
+                    pass  # Ignore if deletion fails
+            EDIT_CHAINS.pop(message_id, None)
             try:
-                # --- OPTIMIZATION: Check text before editing ---
-                if child_to_edit.text != new_chunk:
-                    await child_to_edit.edit(new_chunk, parse_mode=parse_mode)
-
-                new_children.append(child_to_edit)
-                last_message_in_chain = child_to_edit
-            except telethon.errors.rpcerrorlist.MessageNotModifiedError:
-                # This is a fallback, but the check above should prevent it.
-                new_children.append(child_to_edit)
-                last_message_in_chain = child_to_edit
+                # Edit the original message to be empty or show a placeholder
+                if message_obj.text != "__[empty]__":
+                    await message_obj.edit("__[empty]__")
             except Exception:
-                # If editing a child fails, stop processing the chain to avoid errors.
-                break
+                pass
+            return
 
-        # --- Create new messages if new text is longer ---
-        elif i < num_new_chunks:
-            try:
-                new_child = await last_message_in_chain.reply(
-                    chunks[i + 1], parse_mode=parse_mode
+        # Edit the primary message (the one the user replied to)
+        try:
+            # --- OPTIMIZATION: Check text before editing ---
+            if message_obj.text != chunks[0]:
+                await message_obj.edit(
+                    chunks[0], parse_mode=parse_mode, link_preview=link_preview
                 )
-                new_children.append(new_child)
-                last_message_in_chain = new_child
-            except Exception:
-                break  # Stop if we can't send a new reply
+        except telethon.errors.rpcerrorlist.MessageNotModifiedError:
+            pass  # Fallback for safety, though the check above should prevent this.
+        except Exception as e:
+            print(f"Error editing original message {message_id}: {e}")
+            return  # If the head of the chain fails, abort
 
-        # --- Delete surplus messages if new text is shorter ---
-        elif i < num_existing_children:
-            child_to_delete = existing_children[i]
+        # Now, handle the children (the rest of the chunks)
+        num_new_chunks = len(chunks) - 1
+        num_existing_children = len(existing_children)
+        last_message_in_chain = message_obj
+
+        for i in range(max(num_new_chunks, num_existing_children)):
+            # --- Edit existing messages if we have a chunk for them ---
+            if i < num_new_chunks and i < num_existing_children:
+                child_to_edit = existing_children[i]
+                new_chunk = chunks[i + 1]
+                try:
+                    # --- OPTIMIZATION: Check text before editing ---
+                    if child_to_edit.text != new_chunk:
+                        await child_to_edit.edit(new_chunk, parse_mode=parse_mode)
+
+                    new_children.append(child_to_edit)
+                    last_message_in_chain = child_to_edit
+                except telethon.errors.rpcerrorlist.MessageNotModifiedError:
+                    # This is a fallback, but the check above should prevent it.
+                    new_children.append(child_to_edit)
+                    last_message_in_chain = child_to_edit
+                except Exception:
+                    # If editing a child fails, stop processing the chain to avoid errors.
+                    break
+
+            # --- Create new messages if new text is longer ---
+            elif i < num_new_chunks:
+                try:
+                    new_child = await last_message_in_chain.reply(
+                        chunks[i + 1], parse_mode=parse_mode
+                    )
+                    new_children.append(new_child)
+                    last_message_in_chain = new_child
+                except Exception:
+                    break  # Stop if we can't send a new reply
+
+            # --- Delete surplus messages if new text is shorter ---
+            elif i < num_existing_children:
+                child_to_delete = existing_children[i]
+                try:
+                    await child_to_delete.delete()
+                except Exception:
+                    pass  # Ignore deletion errors
+
+        # Update the global state with the new chain configuration
+        edit_state.children = new_children
+        edit_state.last_text = new_text  # Store the last text for future append operations
+
+        if new_children or new_text:
+            EDIT_CHAINS[message_id] = edit_state
+        else:
+            EDIT_CHAINS.pop(message_id, None)
+
+    finally:
+        # Send file after message editing (success or failure)
+        if should_send_file and file_sending_params:
             try:
-                await child_to_delete.delete()
+                await _send_as_file_with_filename(**file_sending_params)
             except Exception:
-                pass  # Ignore deletion errors
-
-    # Update the global state with the new chain configuration
-    edit_state.children = new_children
-    edit_state.last_text = new_text  # Store the last text for future append operations
-
-    if new_children or new_text:
-        EDIT_CHAINS[message_id] = edit_state
-    else:
-        EDIT_CHAINS.pop(message_id, None)
+                # Log the error but don't let it mask message editing errors
+                print(f"File sending failed in edit_message:", file=sys.stderr)
+                traceback.print_exc()
 
 
 def postproccesor_json(file_path):
@@ -1018,7 +1085,7 @@ def postproccesor_json(file_path):
 
 
 async def send_text_as_file(
-    text: str, *, suffix: str = ".txt", chat, postproccesors=[], **kwargs
+    text: str, *, suffix: str = ".txt", chat, postproccesors=[], filename=None, **kwargs
 ):
     f = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
     try:
@@ -1030,6 +1097,20 @@ async def send_text_as_file(
 
         for postproccesor in postproccesors:
             postproccesor(f_path)
+
+        # Handle filename attribute internally
+        if filename:
+            if "attributes" not in kwargs:
+                kwargs["attributes"] = []
+            elif kwargs["attributes"] is None:
+                kwargs["attributes"] = []
+            else:
+                # Make a copy to avoid modifying the original list
+                kwargs["attributes"] = list(kwargs["attributes"])
+
+            kwargs["attributes"].append(
+                telethon.tl.types.DocumentAttributeFilename(filename)
+            )
 
         async with borg.action(chat, "document") as action:
             last_msg = await borg.send_file(
@@ -1191,6 +1272,116 @@ async def async_remove_dir(dir_path: str):
     except Exception:
         traceback.print_exc()
         pass  # Ignore cleanup errors
+
+
+def _generate_random_filename(file_ext: str) -> str:
+    """Generate a random filename with the given extension."""
+    import uuid
+
+    return f"message_{uuid.uuid4().hex[:8]}{file_ext}"
+
+
+async def _generate_file_data(
+    text: str, parse_mode: str, file_name_mode: str
+) -> FileGeneration:
+    """Generate file data (filename, caption, extension) based on the specified mode."""
+    # Determine file extension based on parse_mode
+    file_ext = ".md" if parse_mode == "md" else ".txt"
+    default_caption = "This message is too long, so it has been sent as a text file."
+
+    if file_name_mode == "random":
+        filename = _generate_random_filename(file_ext)
+        caption = default_caption
+
+    elif file_name_mode == "timestamp":
+        from datetime import datetime
+
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = f"message_{timestamp}{file_ext}"
+        caption = default_caption
+
+    elif file_name_mode == "llm":
+        try:
+            import litellm
+            from pynight.common_files import sanitize_filename
+            import json
+
+            CHAT_TITLE_MODEL = "gemini/gemini-2.5-flash-lite"
+
+            response = litellm.completion(
+                model=CHAT_TITLE_MODEL,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"Generate a title and filename for this text content:\n\n{text[:2000]}...",
+                    }
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "filename_generation",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "title_as_file_name": {"type": "string"},
+                                "short_description": {"type": "string"},
+                            },
+                            "required": [
+                                "title",
+                                "title_as_file_name",
+                                "short_description",
+                            ],
+                        },
+                    },
+                },
+            )
+
+            result = json.loads(response.choices[0].message.content)
+            safe_filename = sanitize_filename(result["title_as_file_name"])
+            filename = f"{safe_filename}{file_ext}"
+            caption = f"**{result['title']}**\n\n{result['short_description']}"
+
+        except Exception as e:
+            traceback.print_exc()
+            filename = _generate_random_filename(file_ext)
+            caption = f"{default_caption}\n\nFailed to generate a title: {e}"
+
+    else:
+        filename = _generate_random_filename(file_ext)
+        caption = default_caption
+
+    return FileGeneration(filename=filename, caption=caption, extension=file_ext)
+
+
+async def _send_as_file_with_filename(
+    *,
+    text: str,
+    parse_mode: str,
+    file_name_mode: str,
+    message_obj,
+):
+    """Helper function to send text as file with intelligent filename generation."""
+    try:
+        # Generate file data using shared function
+        file_data = await _generate_file_data(text, parse_mode, file_name_mode)
+
+        # Get chat object and send file
+        chat = await message_obj.get_chat()
+
+        # Use existing send_text_as_file function
+        await send_text_as_file(
+            text=text,
+            suffix=file_data.suffix,
+            chat=chat,
+            caption=file_data.caption,
+            reply_to=message_obj,
+            filename=file_data.filename,
+        )
+
+    except Exception:
+        # If file sending fails, silently continue with normal message editing
+        pass
 
 
 ##

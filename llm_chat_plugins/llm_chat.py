@@ -5929,6 +5929,7 @@ async def chat_handler(event):
                 final_text,
                 parse_mode="md",
                 link_preview=False,
+                also_send_as_file=12000,
             )
         else:
             # If we sent an image but have no text, delete the "..." message

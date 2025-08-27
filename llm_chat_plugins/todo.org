@@ -11,6 +11,59 @@ Extract the `.rev` in PROMPT_REPLACEMENTS into `~/scripts/prompt/review_v1.md` a
 
 * sign up at mistral api and add models
 
+* -
+#+BEGIN_SRC markdown
+```
+async def edit_message(
+```
+add kwarg `also_send_as_file=None`; when char count >= this amount, also send the message as a file (in reply to the original in reply message). The file extension should be determined based on `parse_mode` (txt vs md).
+
+in
+```
+        if final_text.strip():
+            await util.edit_message(
+                response_message,
+                final_text,
+                parse_mode="md",
+                link_preview=False,
+            )
+```
+set `also_send_as_file=12000`.
+
+also add `file_name_mode="random"`: 1. `random`: generate a random file name. 2. `llm`: use the structured output with litellm with the model `CHAT_TITLE_MODEL="gemini/gemini-2.5-flash-lite"` to get three fields from the LLM: `title`, `title_as_file_name`, `short_description`. Set the file name as `title_as_file_name` (still sanitize using `pynight.common_files.sanitize_filename`), and use `**{title}**\n\n{short_description}` for the file caption. To avoid circular imports, import what you need from other utils inside the function itself.  LLM related helpers should in `llm_util`. 3. `timestamp`: use the formatted timestamp as the file name.
+#+END_SRC
+
+#+BEGIN_SRC markdown
+```
+async def edit_message(
+    message_obj,
+    new_text,
+    link_preview=False,
+    parse_mode=None,
+    max_len=4096,
+    append_p=False,
+    ,*,
+    also_send_as_file=None,
+    file_name_mode="random",
+):
+```
+
+```
+async def discreet_send(
+    event,
+    message,
+    reply_to=None,
+    quiet=False,
+    link_preview=False,
+    parse_mode=None,
+    *,
+    send_as_file_instead=12000,
+    file_name_mode="random",
+):
+```
+Refactor to have `send_file_mode` which can be `"only"` (for discreet_send) and `"also"` (for edit_message) (define an enum). Then have `file_length_threshold` which can be int (converted to bool using comparison with length) or a booleany value.
+#+END_SRC
+
 * dl must retry
 ** pycurl ver
 #+begin_src python :eval never
