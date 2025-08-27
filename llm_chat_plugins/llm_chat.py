@@ -706,6 +706,9 @@ METADATA_MODES = {
 }
 MAX_RETRIES = 2
 
+# Maximum number of retries for "no response" scenarios
+NO_RESPONSE_RETRIES_MAX = int(os.getenv("NO_RESPONSE_RETRIES_MAX", "10"))
+
 
 # --- Single Source of Truth for Bot Commands ---
 BOT_COMMANDS = [
@@ -884,6 +887,7 @@ class LLMResponse:
 
     text: str
     finish_reason: Optional[str] = None
+    has_image: bool = False
 
 
 # --- Smart Context State Management ---
@@ -1680,14 +1684,18 @@ async def _call_llm_with_retry(
 
             # Get finish reason from the last chunk
             finish_reason = chunk.choices[0].finish_reason if chunk.choices else None
-            return LLMResponse(text=response_text, finish_reason=finish_reason)
+            return LLMResponse(
+                text=response_text, finish_reason=finish_reason, has_image=False
+            )
         else:
             # Non-streaming mode
             content = response.choices[0].message.content or ""
             finish_reason = (
                 response.choices[0].finish_reason if response.choices else None
             )
-            return LLMResponse(text=content, finish_reason=finish_reason)
+            return LLMResponse(
+                text=content, finish_reason=finish_reason, has_image=False
+            )
 
     except (
         litellm.exceptions.RateLimitError,
@@ -1803,6 +1811,85 @@ async def _call_llm_with_retry_tracked(
     finally:
         # Clean up task tracking
         remove_active_llm_task(user_id, task)
+
+
+async def _retry_on_no_response_with_reasons(
+    user_id: int,
+    event,
+    response_message,
+    api_kwargs: dict,
+    edit_interval: Optional[float] = None,
+    model_capabilities: dict = None,
+    streaming_p=True,
+    no_response_retries_max=NO_RESPONSE_RETRIES_MAX,
+) -> LLMResponse:
+    """
+    Retry LLM calls specifically for no-response scenarios with progress display.
+    Shows retry progress and finish_reason in messages.
+    """
+    has_image = False
+    last_finish_reason = None
+
+    for attempt in range(1, no_response_retries_max + 1):
+        try:
+            # Make the LLM call
+            llm_response = await _call_llm_with_retry_tracked(
+                user_id, event, response_message, api_kwargs, edit_interval
+            )
+
+            response_text = llm_response.text
+            finish_reason = llm_response.finish_reason
+            last_finish_reason = finish_reason
+
+            # Process image content if present for image generation models
+            if (
+                not streaming_p
+                and model_capabilities
+                and model_capabilities.get("image_generation", False)
+            ):
+                response_text, has_image = await _process_image_response(
+                    event, response_text
+                )
+
+            # Check if we got a meaningful response
+            if response_text.strip() or has_image:
+                # Success! Set has_image on the response and return
+                llm_response.has_image = has_image
+                return llm_response
+
+            # No response - show retry progress if not the last attempt
+            if attempt < no_response_retries_max:
+                finish_reason_text = (
+                    f" (finish_reason: `{finish_reason}`)" if finish_reason else ""
+                )
+                retry_message = f"{BOT_META_INFO_PREFIX}[No response - retrying {attempt}/{no_response_retries_max}{finish_reason_text}]"
+
+                await util.edit_message(
+                    response_message,
+                    retry_message,
+                    parse_mode="md",
+                    link_preview=False,
+                )
+
+                # Small delay before retry
+                await asyncio.sleep(1)
+
+
+    # All retries exhausted - create final failure message
+    final_finish_reason_text = (
+        f" (last finish_reason: `{last_finish_reason}`)" if last_finish_reason else ""
+    )
+
+    final_text = f"{BOT_META_INFO_PREFIX}__[No response after {no_response_retries_max} attempts]__{final_finish_reason_text}"
+
+    # Create a final LLMResponse with the failure message
+    final_response = LLMResponse(
+        text=final_text,
+        finish_reason=last_finish_reason,
+        has_image=has_image,
+    )
+
+    return final_response
 
 
 def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
@@ -5789,34 +5876,33 @@ async def chat_handler(event):
                 None  # Native Gemini image generation doesn't provide finish_reason
             )
         elif use_streaming:
-            # Streaming response handling with retries
             edit_interval = get_streaming_delay(model_in_use)
-            llm_response = await _call_llm_with_retry_tracked(
-                user_id, event, response_message, api_kwargs, edit_interval
+            llm_response = await _retry_on_no_response_with_reasons(
+                user_id,
+                event,
+                response_message,
+                api_kwargs,
+                edit_interval,
+                model_capabilities,
+                streaming_p=True,
             )
-            response_text = llm_response.text
-            finish_reason = llm_response.finish_reason
         else:
-            # Non-streaming response handling with retries
-            llm_response = await _call_llm_with_retry_tracked(
-                user_id, event, response_message, api_kwargs
+            llm_response = await _retry_on_no_response_with_reasons(
+                user_id,
+                event,
+                response_message,
+                api_kwargs,
+                None,
+                model_capabilities,
+                streaming_p=False,
             )
-            response_text = llm_response.text
-            finish_reason = llm_response.finish_reason
 
-            # Process image content if present
-            if model_capabilities.get("image_generation", False):
-                response_text, has_image = await _process_image_response(
-                    event, response_text
-                )
+        response_text = llm_response.text
+        finish_reason = llm_response.finish_reason
+        has_image = getattr(llm_response, "has_image", False)
 
-        # Final text processing
+        # Final text processing (now handles both success and failure cases)
         final_text = response_text.strip()
-        if not final_text and not has_image:
-            final_text = f"{BOT_META_INFO_PREFIX}__[No response]__"
-            if finish_reason:
-                final_text += f" (finish_reason: `{finish_reason}`)"
-                # finish_reason += f"\n\n{BOT_META_INFO_LINE}\nfinish_reason: {finish_reason}"
 
         should_warn = WARN_UNSUPPORTED_TO_USER_P == "always" or (
             WARN_UNSUPPORTED_TO_USER_P == "private_only"
@@ -5830,10 +5916,13 @@ async def chat_handler(event):
             )
             final_text += warning_text
 
-        # Only send text message if there's actual content or if no image was sent
-        if final_text.strip() or not has_image:
+        # Only send text message if there's actual content
+        if final_text.strip():
             await util.edit_message(
-                response_message, final_text, parse_mode="md", link_preview=False
+                response_message,
+                final_text,
+                parse_mode="md",
+                link_preview=False,
             )
         else:
             # If we sent an image but have no text, delete the "..." message
