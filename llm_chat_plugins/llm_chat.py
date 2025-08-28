@@ -1829,7 +1829,7 @@ async def _retry_on_no_response_with_reasons(
     model_capabilities: dict = None,
     streaming_p=True,
     no_response_retries_max=NO_RESPONSE_RETRIES_MAX,
-    sleep=20,
+    sleep=90,
 ) -> LLMResponse:
     """
     Retry LLM calls specifically for no-response scenarios with progress display.
