@@ -2,11 +2,15 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-
 from uniborg.constants import (
     BOT_META_INFO_PREFIX,
     DEFAULT_FILE_LENGTH_THRESHOLD,
+    CHAT_TITLE_MODEL,
 )
+from pynight.common_files import sanitize_filename
+import json
+from pydantic import BaseModel, Field
+import litellm
 from brish import z, zp, zs, bsh, Brish
 from pynight.common_icecream import ic
 from collections.abc import Iterable
@@ -854,7 +858,10 @@ async def discreet_send(
 
     if should_send_as_file:
         # Generate file data using shared function
-        file_data = await _generate_file_data(message, parse_mode, file_name_mode)
+        user_id = getattr(event, "sender_id", None)
+        file_data = await _generate_file_data(
+            message, parse_mode, file_name_mode, user_id=user_id
+        )
         chat = await event.get_chat()
 
         # Send file using existing function
@@ -916,7 +923,11 @@ class FileGeneration:
 # Helper functions for DRY improvements
 def _should_send_as_file(text, file_length_threshold, send_file_mode):
     """Determine if text should be sent as a file based on threshold and mode."""
-    if not text or not text.strip() or send_file_mode not in [SendFileMode.ALSO, SendFileMode.ONLY]:
+    if (
+        not text
+        or not text.strip()
+        or send_file_mode not in [SendFileMode.ALSO, SendFileMode.ONLY]
+    ):
         return False
 
     if isinstance(file_length_threshold, int):
@@ -1356,8 +1367,19 @@ def _generate_random_filename(file_ext: str) -> str:
     return f"message_{uuid.uuid4().hex[:8]}{file_ext}"
 
 
+# Define structured output schema using Pydantic
+class FilenameGeneration(BaseModel):
+    title: str = Field(description="A clear, descriptive title for the content")
+    title_as_file_name: str = Field(
+        description="The title formatted as a safe, short filename (alphanumeric, hyphens, underscores only)"
+    )
+    short_description: str = Field(
+        description="A concise summary of the content in maximum 300 words"
+    )
+
+
 async def _generate_file_data(
-    text: str, parse_mode: str, file_name_mode: str
+    text: str, parse_mode: str, file_name_mode: str, *, user_id: int = None
 ) -> FileGeneration:
     """Generate file data (filename, caption, extension) based on the specified mode."""
     # Determine file extension based on parse_mode
@@ -1377,47 +1399,44 @@ async def _generate_file_data(
 
     elif file_name_mode == "llm":
         try:
-            import litellm
-            from pynight.common_files import sanitize_filename
-            import json
+            from uniborg import llm_util, llm_db
 
-            CHAT_TITLE_MODEL = "gemini/gemini-2.5-flash-lite"
+            # Check if user_id is provided and get API key
+            gemini_api_key = None
+            if user_id is not None:
+                gemini_api_key = llm_db.get_api_key(user_id, service="gemini")
 
-            response = litellm.completion(
-                model=CHAT_TITLE_MODEL,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Generate a title and filename for this text content:\n\n{text[:2000]}...",
-                    }
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "filename_generation",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "title": {"type": "string"},
-                                "title_as_file_name": {"type": "string"},
-                                "short_description": {"type": "string"},
-                            },
-                            "required": [
-                                "title",
-                                "title_as_file_name",
-                                "short_description",
-                            ],
-                        },
-                    },
-                },
-            )
+            if not gemini_api_key:
+                print(
+                    f"Warning: Gemini API key not found for user {user_id}, falling back to random filename"
+                )
+                filename = _generate_random_filename(file_ext)
+                caption = default_caption
+            else:
+                # Set up LiteLLM with the API key
+                # Use LiteLLM with structured output
+                response = litellm.completion(
+                    api_key=gemini_api_key,
+                    model=CHAT_TITLE_MODEL,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"Generate a title and filename for this text content:\n\n{text[:2000]}...",
+                        }
+                    ],
+                    response_format=FilenameGeneration,
+                )
 
-            result = json.loads(response.choices[0].message.content)
-            safe_filename = sanitize_filename(result["title_as_file_name"])
-            filename = f"{safe_filename}{file_ext}"
-            caption = f"**{result['title']}**\n\n{result['short_description']}"
+                # Parse the structured response using Pydantic
+                result = FilenameGeneration.model_validate_json(
+                    response.choices[0].message.content
+                )
+                safe_filename = sanitize_filename(result.title_as_file_name)
+                filename = f"{safe_filename}{file_ext}"
+                caption = f"**{result.title}**\n\n{result.short_description}"
 
         except Exception as e:
+            print(f"Warning: Failed to generate LLM title: {e}")
             traceback.print_exc()
             filename = _generate_random_filename(file_ext)
             caption = f"{default_caption}\n\nFailed to generate a title: {e}"
@@ -1439,7 +1458,16 @@ async def _send_as_file_with_filename(
     """Helper function to send text as file with intelligent filename generation."""
     try:
         # Generate file data using shared function
-        file_data = await _generate_file_data(text, parse_mode, file_name_mode)
+        user_id = getattr(message_obj, "sender_id", None)
+        if user_id is None:
+            ic(message_obj.__dict__)
+            sender = await message_obj.get_sender()
+            ic(sender.__dict__)
+            user_id = sender.id
+
+        file_data = await _generate_file_data(
+            text, parse_mode, file_name_mode, user_id=user_id
+        )
 
         # Get chat object and send file
         chat = await message_obj.get_chat()
