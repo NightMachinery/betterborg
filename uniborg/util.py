@@ -1570,7 +1570,7 @@ async def _generate_file_data(
                     messages=[
                         {
                             "role": "user",
-                            "content": f"Generate a title and filename for this text content:\n\n{text[:2000]}...",
+                            "content": f"Generate a title and filename for this text content:\n\n{text[:10000]}...",
                         }
                     ],
                     response_format=FilenameGeneration,
