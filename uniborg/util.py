@@ -836,7 +836,7 @@ async def discreet_send(
     *,
     send_file_mode=SendFileMode.ONLY,
     file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
-    file_only_threshold=30000,
+    file_only_threshold=DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
     file_name_mode="random",
     title_model: str | None = None,
     api_keys: dict | None = None,
@@ -945,7 +945,10 @@ class FileGeneration:
 
 # Helper functions for DRY improvements
 def _should_send_as_file(
-    text, file_length_threshold, send_file_mode, file_only_threshold=30000
+    text,
+    file_length_threshold,
+    send_file_mode,
+    file_only_threshold=DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
 ):
     """Determine if text should be sent as a file based on threshold and mode."""
     if (
@@ -1008,7 +1011,7 @@ async def edit_message(
     *,
     send_file_mode=SendFileMode.ALSO,
     file_length_threshold=None,
-    file_only_threshold=30000,
+    file_only_threshold=DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
     file_name_mode="random",
     title_model: str | None = None,
     api_keys: dict | None = None,
