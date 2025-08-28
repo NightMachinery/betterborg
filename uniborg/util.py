@@ -995,6 +995,7 @@ def _should_send_as_file(
         else:
             send_text = True
 
+        # ic(send_file, send_text, len(text), file_length_threshold, file_only_threshold)
         return SendDecision(send_text=send_text, send_file=send_file)
 
     # Default fallback: behave like NEVER
