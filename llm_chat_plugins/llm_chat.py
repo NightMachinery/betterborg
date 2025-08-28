@@ -3025,10 +3025,7 @@ async def _process_message_content(
     processed_text = message.text or ""
 
     # Filter out meta-info messages and commands from history
-    if (
-        role == "assistant"
-        and processed_text.startswith(BOT_META_INFO_PREFIX)
-    ):
+    if role == "assistant" and processed_text.startswith(BOT_META_INFO_PREFIX):
         return ProcessContentResult(text_parts=[], media_parts=[], warnings=[])
 
     if role == "user" and _is_known_command(processed_text):
