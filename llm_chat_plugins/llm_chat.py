@@ -129,6 +129,21 @@ def _register_manual_prompt(shortcut, description):
     )
 
 
+def _extract_shortcut_from_pattern(pattern):
+    """Extract user-friendly shortcut from regex pattern.
+
+    Examples:
+        "^\.teach" -> ".teach"
+    """
+    res = pattern.replace("^\\", "")
+    res = res.replace(r"\.", ".")
+    res = res.replace("(?:", "(")
+    res = res.replace(")?", ")")
+    # res = res.replace("(?:", "/").replace(")?", "")
+
+    return res
+
+
 @dataclass
 class PromptVersion:
     path_infix: str
@@ -194,15 +209,15 @@ def _register_prompt_family(
 
     # Register this prompt family for help generation
     # Extract the base shortcut from pattern_prefix (e.g., "^\.teach" -> ".teach")
-    base_shortcut = (
-        pattern_prefix.replace("^\\", "").replace("(?:", "/").replace(")?", "")
-    )
+    base_shortcut = _extract_shortcut_from_pattern(pattern_prefix)
 
     # Convert PromptVersion objects to version strings for display
     version_strings = []
     for v in prompt_versions:
         if hasattr(v, "patterns"):
-            version_strings.extend(v.patterns)
+            # Clean up regex patterns in version patterns for display
+            cleaned_patterns = [_extract_shortcut_from_pattern(p) for p in v.patterns]
+            version_strings.extend(cleaned_patterns)
         else:
             version_strings.append(str(v))
 
@@ -286,6 +301,7 @@ DEEP_RESEARCH_PROMPTS = _register_prompt_family(
     file_base=DEEP_RESEARCH_FILE_NAME,
     default_version="1",
     versions=[],
+    description="Deep research mode - helps find and synthesize information",
 )
 PROMPT_REPLACEMENTS.update(DEEP_RESEARCH_PROMPTS)
 ##
@@ -298,6 +314,7 @@ REDTEAM_PROMPTS = _register_prompt_family(
     default_version="1.1",
     versions=["1", "1.1"],
     content_postfix=f"\n\n{PROMPT_MATCH_LANGUAGE}\n---\n",
+    description="find flaws",
 )
 PROMPT_REPLACEMENTS.update(REDTEAM_PROMPTS)
 ##
@@ -310,6 +327,7 @@ EXTRACTOR_PROMPTS = _register_prompt_family(
     default_version="1",
     versions=[],
     content_postfix="\n",
+    description="Extracts the key information",
 )
 PROMPT_REPLACEMENTS.update(EXTRACTOR_PROMPTS)
 ##
@@ -322,6 +340,7 @@ RESOURCERANGER_PROMPTS = _register_prompt_family(
     default_version="1",
     versions=[],
     content_postfix="\n",
+    description="Gathers resources for self-studying the given topic",
 )
 PROMPT_REPLACEMENTS.update(RESOURCERANGER_PROMPTS)
 ##
@@ -337,6 +356,7 @@ CBT_PROMPTS = _register_prompt_family(
         "2",
     ],
     content_postfix="\n",
+    description="Cognitive behavioral therapy (CBT)",
 )
 PROMPT_REPLACEMENTS.update(CBT_PROMPTS)
 ##
@@ -356,6 +376,7 @@ ACT_PROMPTS = _register_prompt_family(
         "3.2",
     ],
     content_postfix="\n",
+    description="Acceptance and commitment therap (ACT)",
 )
 PROMPT_REPLACEMENTS.update(ACT_PROMPTS)
 ##
@@ -371,7 +392,7 @@ KNOW_PARTNER_PROMPTS = _register_prompt_family(
         PromptVersion("eight_dates_G25_v1", ["G25", "8dates"]),
     ],
     content_postfix="\n",
-    description="Relationship guidance - understand your partner better",
+    description="Relationship guidance to get to know your partner better",
 )
 PROMPT_REPLACEMENTS.update(KNOW_PARTNER_PROMPTS)
 ##
@@ -385,7 +406,7 @@ REVIEW_PROMPTS = _register_prompt_family(
     versions=[],
     pattern_suffix=r"(?:\s+|$)",
     content_postfix=" ",
-    description="Code/content review and analysis",
+    description="Product review and analysis (can be a movie, a book, a company, etc.)",
 )
 PROMPT_REPLACEMENTS.update(REVIEW_PROMPTS)
 ##
@@ -3955,18 +3976,23 @@ async def help_magics_handler(event):
         description = entry["description"]
         versions = entry["versions"]
 
+        res = f"`{shortcut}`"
+        if description:
+            res += f" - {description}"
+
         if versions:
+            versions = [f"`{v}`" for v in versions]
+
             # Format versions nicely
             version_str = (
                 ", ".join(versions)
                 if len(versions) <= 6
                 else f"{len(versions)} versions"
             )
-            versioned_shortcuts.append(
-                f"`{shortcut}` - {description} (versions: {version_str})"
-            )
+            res = f"{res} (versions: {version_str})"
+            versioned_shortcuts.append(res)
         else:
-            basic_shortcuts.append(f"`{shortcut}` - {description}")
+            basic_shortcuts.append(res)
 
     # Build the response text
     help_text = "**✨ Available Magic Prompt Shortcuts**\n\n"
