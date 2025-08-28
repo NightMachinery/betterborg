@@ -3011,20 +3011,26 @@ async def _process_message_content(
 
     # ic(message, message.id, message.text)
 
+    processed_text = message.text or ""
+
     # Filter out meta-info messages and commands from history
     if (
         role == "assistant"
-        and message.text
-        and message.text.startswith(BOT_META_INFO_PREFIX)
+        and processed_text.startswith(BOT_META_INFO_PREFIX)
     ):
         return ProcessContentResult(text_parts=[], media_parts=[], warnings=[])
-    if role == "user" and _is_known_command(message.text):
-        return ProcessContentResult(text_parts=[], media_parts=[], warnings=[])
 
-    processed_text = message.text
+    if role == "user" and _is_known_command(processed_text):
+        return ProcessContentResult(text_parts=[], media_parts=[], warnings=[])
 
     if processed_text:
         processed_text = processed_text.split(BOT_META_INFO_LINE, 1)[0].strip()
+
+    if role == "user" and processed_text and BOT_USERNAME:
+        stripped = processed_text.strip()
+        if stripped.startswith(BOT_USERNAME):
+            processed_text = stripped[len(BOT_USERNAME) :].strip()
+
     if role == "user" and processed_text:
         if re.match(r"^\.s\b", processed_text):
             processed_text = processed_text[2:].strip()
@@ -3045,11 +3051,6 @@ async def _process_message_content(
                 # count=1,
                 #: By default, `re.sub` replaces all occurrences of the pattern in the string.
             )
-
-    if not message.is_private and role == "user" and processed_text and BOT_USERNAME:
-        stripped = processed_text.strip()
-        if stripped.startswith(BOT_USERNAME):
-            processed_text = stripped[len(BOT_USERNAME) :].strip()
 
     if metadata_prefix:
         processed_text = (
@@ -5707,7 +5708,7 @@ async def chat_handler(event):
     # Standard separator logic for group chats or explicit "until_separator" mode
     elif context_mode_to_use == "until_separator" and event.text and not group_id:
         text_to_check = event.text.strip()
-        if not is_private and BOT_USERNAME and text_to_check.startswith(BOT_USERNAME):
+        if BOT_USERNAME and text_to_check.startswith(BOT_USERNAME):
             text_to_check = text_to_check[len(BOT_USERNAME) :].strip()
 
         if text_to_check == CONTEXT_SEPARATOR:
