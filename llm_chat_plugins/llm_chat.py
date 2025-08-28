@@ -221,6 +221,17 @@ TEACH_PROMPTS = _register_prompt_family(
 )
 PROMPT_REPLACEMENTS.update(TEACH_PROMPTS)
 ##
+DEEP_RESEARCH_PATTERN_PREFIX = r"^\.res(?:earch)?"
+DEEP_RESEARCH_FILE_NAME = "deep_research"
+
+DEEP_RESEARCH_PROMPTS = _register_prompt_family(
+    pattern_prefix=DEEP_RESEARCH_PATTERN_PREFIX,
+    file_base=DEEP_RESEARCH_FILE_NAME,
+    default_version="1",
+    versions=[],
+)
+PROMPT_REPLACEMENTS.update(DEEP_RESEARCH_PROMPTS)
+##
 REDTEAM_PATTERN_PREFIX = r"^\.red(?:team)?"
 REDTEAM_FILE_NAME = "redteam"
 
