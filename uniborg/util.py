@@ -985,7 +985,13 @@ def _should_send_as_file(
         return SendDecision(send_text=True, send_file=file_condition())
 
     if send_file_mode == SendFileMode.ALSO_IF_LESS_THAN:
-        return SendDecision(send_text=(len(text) < file_only_threshold), send_file=True)
+        send_file = file_condition()
+        if send_file:
+            send_text = len(text) < file_only_threshold
+        else:
+            send_text = True
+
+        return SendDecision(send_text=send_text, send_file=send_file)
 
     # Default fallback: behave like NEVER
     return SendDecision(send_text=True, send_file=False)
