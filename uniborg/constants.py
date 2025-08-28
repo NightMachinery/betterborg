@@ -1,7 +1,7 @@
 ##
 CHAT_TITLE_MODEL = "gemini/gemini-2.5-flash-lite"
 ##
-DEFAULT_FILE_LENGTH_THRESHOLD = 8000
+DEFAULT_FILE_LENGTH_THRESHOLD = 6000
 DEFAULT_FILE_ONLY_LENGTH_THRESHOLD = 60000
 ##
 #: An invisible character sequence to prefix bot meta messages.
