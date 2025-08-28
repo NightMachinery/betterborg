@@ -5887,31 +5887,32 @@ async def chat_handler(event):
             finish_reason = (
                 None  # Native Gemini image generation doesn't provide finish_reason
             )
-        elif use_streaming:
-            edit_interval = get_streaming_delay(model_in_use)
-            llm_response = await _retry_on_no_response_with_reasons(
-                user_id,
-                event,
-                response_message,
-                api_kwargs,
-                edit_interval,
-                model_capabilities,
-                streaming_p=True,
-            )
         else:
-            llm_response = await _retry_on_no_response_with_reasons(
-                user_id,
-                event,
-                response_message,
-                api_kwargs,
-                None,
-                model_capabilities,
-                streaming_p=False,
-            )
+            if use_streaming:
+                edit_interval = get_streaming_delay(model_in_use)
+                llm_response = await _retry_on_no_response_with_reasons(
+                    user_id,
+                    event,
+                    response_message,
+                    api_kwargs,
+                    edit_interval,
+                    model_capabilities,
+                    streaming_p=True,
+                )
+            else:
+                llm_response = await _retry_on_no_response_with_reasons(
+                    user_id,
+                    event,
+                    response_message,
+                    api_kwargs,
+                    None,
+                    model_capabilities,
+                    streaming_p=False,
+                )
 
-        response_text = llm_response.text
-        finish_reason = llm_response.finish_reason
-        has_image = getattr(llm_response, "has_image", False)
+            response_text = llm_response.text
+            finish_reason = llm_response.finish_reason
+            has_image = getattr(llm_response, "has_image", False)
 
         # Final text processing (now handles both success and failure cases)
         final_text = response_text.strip()
