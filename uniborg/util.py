@@ -1604,7 +1604,8 @@ async def _generate_file_data(
             print(f"Warning: Failed to generate LLM title: {e}")
             traceback.print_exc()
             filename = _generate_random_filename(file_ext)
-            caption = f"{default_caption}\n\nFailed to generate a title: {e}"
+            caption = f"{default_caption}\n\n(Failed to generate a title.)"
+            #: do not put the error in the caption as normal users might see it.
 
     else:
         filename = _generate_random_filename(file_ext)
