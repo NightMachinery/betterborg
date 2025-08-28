@@ -49,7 +49,11 @@ from uniborg import history_util
 from uniborg.history_util import LAST_N_MAX
 from uniborg import bot_util
 from uniborg.storage import UserStorage
-from uniborg.constants import BOT_META_INFO_PREFIX, BOT_META_INFO_LINE
+from uniborg.constants import (
+    BOT_META_INFO_PREFIX,
+    BOT_META_INFO_LINE,
+    DEFAULT_FILE_LENGTH_THRESHOLD,
+)
 
 # Import live mode utilities
 from uniborg import gemini_live_util
@@ -5851,7 +5855,8 @@ async def chat_handler(event):
             if prefs.enabled_tools and not prefs.json_mode:
                 api_kwargs["tools"] = [{t: {}} for t in prefs.enabled_tools]
             if prefs.thinking and "2.5-pro" not in model_in_use:
-                #: 2.5-pro thinks automatically
+                #: Note: Gemini 2.5 Pro and 2.5 Flash come with thinking on by default.
+                #: [[https://ai.google.dev/gemini-api/docs/models][Gemini models  |  Gemini API  |  Google AI for Developers]]
                 api_kwargs["reasoning_effort"] = prefs.thinking
             # Add modalities for image generation models
             if model_capabilities.get("image_generation", False):
@@ -5929,7 +5934,8 @@ async def chat_handler(event):
                 final_text,
                 parse_mode="md",
                 link_preview=False,
-                file_length_threshold=util.DEFAULT_FILE_LENGTH_THRESHOLD,
+                file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
+                file_name_mode="llm",
             )
         else:
             # If we sent an image but have no text, delete the "..." message
