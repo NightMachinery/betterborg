@@ -1,0 +1,6 @@
+#+TITLE: reply_chainer_plugins
+
+* _
+#+BEGIN_SRC markdown
+create new plugin `make_reply_chain`. whenever a message arrives, it waits for 1 second, then resends the messages received within that window as a reply chain (i.e., the first is a normal message. the second is in reply to the first, etc.). also support grouped messages (albumbs) correctly. We should not download files, we should simply "forward" them (not sure how, search, they prob have an id or sth).
+#+END_SRC

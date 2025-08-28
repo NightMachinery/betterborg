@@ -65,6 +65,17 @@ borgdir=~/code/betterborg/
 tmuxnew betterborg_stt "dash -c 'cd $(gq $borgdir) && borg_session=session_stt borg_plugin_path=stt_plugins borg_brish_count=1 $(gq "$(realpath2 python3)") $(gq $borgdir/stdborg.py)'"
 #+end_src
 
+* reply-chainer
+#+begin_src zsh :eval never
+borgdir=~/code/betterborg/
+# set this the directory containing betterborg
+##
+# IMPORTANT: needs the same functions as `llm_chat` defined, copy those function definitions here before running!
+##
+
+tmuxnew betterborg_reply_chainer "dash -c 'cd $(gq $borgdir) && borg_session=session_reply_chainer borg_plugin_path=reply_chainer_plugins borg_brish_count=1 $(gq "$(realpath2 python3)") $(gq $borgdir/stdborg.py)'"
+#+end_src
+
 * uniborg
 Pluggable [[https://docs.python.org/3/library/asyncio.html][=asyncio=]] [[https://telegram.org][Telegram]] userbot based on [[https://github.com/LonamiWebs/Telethon][Telethon]].
 
