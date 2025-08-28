@@ -870,26 +870,26 @@ async def discreet_send(
     )
 
     if decision.send_file:
-        # Generate file data using shared function (let it lazily resolve user_id)
-        file_data = await _generate_file_data(
-            message,
-            parse_mode,
-            file_name_mode,
-            title_model=title_model,
-            api_keys=api_keys,
-            message_obj=getattr(event, "message", None),
-        )
         chat = await event.get_chat()
+        async with borg.action(chat, "document") as action:
+            file_data = await _generate_file_data(
+                message,
+                parse_mode,
+                file_name_mode,
+                title_model=title_model,
+                api_keys=api_keys,
+                message_obj=getattr(event, "message", None),
+            )
 
-        # Send file using existing function
-        file_message = await send_text_as_file(
-            text=message,
-            suffix=file_data.suffix,
-            chat=chat,
-            caption=file_data.caption,
-            reply_to=reply_to,
-            filename=file_data.filename,
-        )
+            # Send file using existing function
+            file_message = await send_text_as_file(
+                text=message,
+                suffix=file_data.suffix,
+                chat=chat,
+                caption=file_data.caption,
+                reply_to=reply_to,
+                filename=file_data.filename,
+            )
 
         # If we should not send text, return the file message
         if not decision.send_text:
@@ -1115,7 +1115,10 @@ async def edit_message(
 
         # Clear the original message or replace with placeholder
         try:
-            await message_obj.edit("__[sent as file]__")
+            await message_obj.edit(
+                "__[sent as file]__",
+                parse_mode="md",
+            )
         except Exception:
             pass
 
@@ -1157,7 +1160,10 @@ async def edit_message(
             try:
                 # Edit the original message to be empty or show a placeholder
                 if message_obj.text != "__[empty]__":
-                    await message_obj.edit("__[empty]__")
+                    await message_obj.edit(
+                        "__[empty]__",
+                        parse_mode="md",
+                    )
             except Exception:
                 pass
             return
@@ -1167,7 +1173,9 @@ async def edit_message(
             # --- OPTIMIZATION: Check text before editing ---
             if message_obj.text != chunks[0]:
                 await message_obj.edit(
-                    chunks[0], parse_mode=parse_mode, link_preview=link_preview
+                    chunks[0],
+                    parse_mode=parse_mode,
+                    link_preview=link_preview,
                 )
         except telethon.errors.rpcerrorlist.MessageNotModifiedError:
             pass  # Fallback for safety, though the check above should prevent this.
@@ -1188,7 +1196,11 @@ async def edit_message(
                 try:
                     # --- OPTIMIZATION: Check text before editing ---
                     if child_to_edit.text != new_chunk:
-                        await child_to_edit.edit(new_chunk, parse_mode=parse_mode)
+                        await child_to_edit.edit(
+                            new_chunk,
+                            parse_mode=parse_mode,
+                            link_preview=link_preview,
+                        )
 
                     new_children.append(child_to_edit)
                     last_message_in_chain = child_to_edit
@@ -1610,27 +1622,27 @@ async def _send_as_file_with_filename(
     """Helper function to send text as file with intelligent filename generation."""
     try:
         # Generate file data using shared function, allow it to resolve user_id lazily
-        file_data = await _generate_file_data(
-            text,
-            parse_mode,
-            file_name_mode,
-            api_keys=api_keys,
-            title_model=title_model,
-            message_obj=message_obj,
-        )
 
-        # Get chat object and send file
         chat = await message_obj.get_chat()
+        async with borg.action(chat, "document") as action:
+            file_data = await _generate_file_data(
+                text,
+                parse_mode,
+                file_name_mode,
+                api_keys=api_keys,
+                title_model=title_model,
+                message_obj=message_obj,
+            )
 
-        # Use existing send_text_as_file function
-        await send_text_as_file(
-            text=text,
-            suffix=file_data.suffix,
-            chat=chat,
-            caption=file_data.caption,
-            reply_to=reply_to,
-            filename=file_data.filename,
-        )
+            # Use existing send_text_as_file function
+            await send_text_as_file(
+                text=text,
+                suffix=file_data.suffix,
+                chat=chat,
+                caption=file_data.caption,
+                reply_to=reply_to,
+                filename=file_data.filename,
+            )
 
     except Exception:
         # If file sending fails, silently continue with normal message editing
