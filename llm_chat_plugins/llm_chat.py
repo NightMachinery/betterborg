@@ -113,6 +113,21 @@ PROMPT_MATCH_LANGUAGE = r"""**Language**
 # Pattern constants
 COMMON_PATTERN_SUFFIX = r"(?:\s+|$)"
 
+# Global registry for tracking all prompt registrations for help generation
+PROMPT_REGISTRY = []
+
+
+def _register_manual_prompt(shortcut, description):
+    """Register a manually defined prompt for help generation."""
+    PROMPT_REGISTRY.append(
+        {
+            "shortcut": shortcut,
+            "description": description,
+            "versions": [],
+            "default_version": None,
+        }
+    )
+
 
 @dataclass
 class PromptVersion:
@@ -134,6 +149,7 @@ def _register_prompt_family(
     content_postfix="",
     versioned_file_base=None,
     regex_flags=re.IGNORECASE,
+    description="",
 ):
     """
     Helper function to register a family of related prompts with versions.
@@ -147,6 +163,7 @@ def _register_prompt_family(
         content_postfix: Text to append to loaded prompt content (e.g., language instructions)
         versioned_file_base: Alternative file base for versioned files
         regex_flags: Regex compilation flags, defaults to re.IGNORECASE
+        description: Human-readable description of what this prompt family does
     """
     prompts = {}
 
@@ -174,6 +191,29 @@ def _register_prompt_family(
         for pattern in version.patterns:
             version_pattern = f"{pattern_prefix}{pattern}{pattern_suffix}"
             prompts[re.compile(version_pattern, regex_flags)] = version_content
+
+    # Register this prompt family for help generation
+    # Extract the base shortcut from pattern_prefix (e.g., "^\.teach" -> ".teach")
+    base_shortcut = (
+        pattern_prefix.replace("^\\", "").replace("(?:", "/").replace(")?", "")
+    )
+
+    # Convert PromptVersion objects to version strings for display
+    version_strings = []
+    for v in prompt_versions:
+        if hasattr(v, "patterns"):
+            version_strings.extend(v.patterns)
+        else:
+            version_strings.append(str(v))
+
+    PROMPT_REGISTRY.append(
+        {
+            "shortcut": base_shortcut,
+            "description": description,
+            "versions": version_strings,
+            "default_version": default_version,
+        }
+    )
 
     return prompts
 
@@ -211,9 +251,6 @@ The goal is to produce a single, clean document as if it were the original, with
 *   لحن و سیر بحث: به سیر تکاملی گفتگو و تغییر لحن شرکت‌کنندگان در طول برنامه هم اشاره کن.
 
 خلاصه اینکه یک جواب کامل و طولانی می‌خوام که انگار خودم نشستم و با دقت به کل برنامه گوش دادم. مرسی!""",
-    re.compile(
-        r"^\.rev(?:\s+|$)", re.IGNORECASE
-    ): f"""{llm_util.load_prompt_from_file("review_v1.md")} """,
     #: Replace LessWrong and Alignment Forum URLs with GreaterWrong to allow better scraping of URLs.
     re.compile(
         r"\bhttps?://(?:www\.)?(lesswrong\.com|alignmentforum\.org)/",
@@ -237,6 +274,7 @@ TEACH_PROMPTS = _register_prompt_family(
         "2",
     ],  #: 1.4 possibly best for material already studied
     content_postfix="\n",
+    description="Socratic teaching mode - helps learn through guided questions",
 )
 PROMPT_REPLACEMENTS.update(TEACH_PROMPTS)
 ##
@@ -320,6 +358,43 @@ ACT_PROMPTS = _register_prompt_family(
     content_postfix="\n",
 )
 PROMPT_REPLACEMENTS.update(ACT_PROMPTS)
+##
+KNOW_PARTNER_PATTERN_PREFIX = r"^\.know(?:partner)?"
+KNOW_PARTNER_FILE_NAME = "know_partner"
+KNOW_PARTNER_PROMPTS = _register_prompt_family(
+    pattern_prefix=KNOW_PARTNER_PATTERN_PREFIX,
+    file_base=KNOW_PARTNER_FILE_NAME,
+    default_version="eight_dates_G25_v1",
+    versions=[
+        PromptVersion("GPT5T_DR_v1", ["GPT5?"]),
+        PromptVersion("Opus4.1T_v1", ["O(?:pus)?4?"]),
+        PromptVersion("eight_dates_G25_v1", ["G25", "8dates"]),
+    ],
+    content_postfix="\n",
+    description="Relationship guidance - understand your partner better",
+)
+PROMPT_REPLACEMENTS.update(KNOW_PARTNER_PROMPTS)
+##
+REVIEW_PATTERN_PREFIX = r"^\.rev"
+REVIEW_FILE_NAME = "review"
+
+REVIEW_PROMPTS = _register_prompt_family(
+    pattern_prefix=REVIEW_PATTERN_PREFIX,
+    file_base=REVIEW_FILE_NAME,
+    default_version="v1",
+    versions=[],
+    pattern_suffix=r"(?:\s+|$)",
+    content_postfix=" ",
+    description="Code/content review and analysis",
+)
+PROMPT_REPLACEMENTS.update(REVIEW_PROMPTS)
+##
+
+# Register manual prompts for help generation
+_register_manual_prompt(".ocr", "OCR images and combine text into clean document")
+_register_manual_prompt(".suma", "Comprehensive audio summarization in English")
+_register_manual_prompt(".sumaauto", "Auto-language audio summarization")
+_register_manual_prompt(".sumafa", "Persian/Farsi audio summarization")
 ##
 ###
 # **Strategic emoji use:** 0-2 per message, only when they add clarity or warmth—never decorative.
@@ -849,6 +924,10 @@ BOT_COMMANDS = [
     {
         "command": "getmodelhere",
         "description": "View the effective model for the current chat",
+    },
+    {
+        "command": "helpmagics",
+        "description": "Show all available magic prompt shortcuts",
     },
 ]
 # Create a set of command strings (e.g., {"/start", "/help"}) for efficient lookup
@@ -3472,6 +3551,12 @@ def register_handlers():
     )(help_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^/helpmagics{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(help_magics_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/status{bot_username_suffix_re}\s*$",
             func=lambda e: e.is_private,
         )
@@ -3856,6 +3941,59 @@ Start your messages with these shortcuts to use specific models:
 """
     await event.reply(
         f"{BOT_META_INFO_PREFIX}{help_text}", link_preview=False, parse_mode="md"
+    )
+
+
+async def help_magics_handler(event):
+    """Shows all available magic prompt shortcuts from the registry."""
+    # Separate basic shortcuts from versioned ones
+    basic_shortcuts = []
+    versioned_shortcuts = []
+
+    for entry in PROMPT_REGISTRY:
+        shortcut = entry["shortcut"]
+        description = entry["description"]
+        versions = entry["versions"]
+
+        if versions:
+            # Format versions nicely
+            version_str = (
+                ", ".join(versions)
+                if len(versions) <= 6
+                else f"{len(versions)} versions"
+            )
+            versioned_shortcuts.append(
+                f"`{shortcut}` - {description} (versions: {version_str})"
+            )
+        else:
+            basic_shortcuts.append(f"`{shortcut}` - {description}")
+
+    # Build the response text
+    help_text = "**✨ Available Magic Prompt Shortcuts**\n\n"
+
+    if basic_shortcuts:
+        help_text += "**Basic Shortcuts:**\n"
+        for shortcut_line in sorted(basic_shortcuts):
+            help_text += f"• {shortcut_line}\n"
+        help_text += "\n"
+
+    if versioned_shortcuts:
+        help_text += "**Advanced Shortcuts (with versions):**\n"
+        for shortcut_line in sorted(versioned_shortcuts):
+            help_text += f"• {shortcut_line}\n"
+        help_text += "\n"
+
+    help_text += "**How to use:**\nStart your message with any of these shortcuts to activate the corresponding prompt template.\n\n"
+    help_text += "**Examples:**\n"
+    help_text += "• `.ocr` + image → Clean OCR text extraction\n"
+    help_text += "• `.suma` + audio → Comprehensive summarization\n"
+    help_text += "• `.teach` + topic → Socratic learning session\n"
+    help_text += "• `.res` + question → Deep research analysis\n"
+
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}{help_text}",
+        parse_mode="md",
+        link_preview=False,
     )
 
 
