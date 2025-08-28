@@ -54,6 +54,7 @@ class SendFileMode(Enum):
 
     ONLY = "only"  # Send as file instead of text (discreet_send behavior)
     ALSO = "also"  # Send as both text and file (edit_message behavior)
+    ALSO_IF_LESS_THAN = "also_if_less_than"  # Send as both text and file only if text length is less than file_only_threshold
 
 
 try:
@@ -835,6 +836,7 @@ async def discreet_send(
     *,
     send_file_mode=SendFileMode.ONLY,
     file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
+    file_only_threshold=30000,
     file_name_mode="random",
 ):
     """
@@ -842,9 +844,11 @@ async def discreet_send(
 
     Args:
         send_file_mode: SendFileMode.ONLY to send as file instead of text,
-                       SendFileMode.ALSO to send as both text and file.
+                       SendFileMode.ALSO to send as both text and file,
+                       SendFileMode.ALSO_IF_LESS_THAN to send as both text and file only if length < file_only_threshold.
         file_length_threshold: If int, send as file when length >= threshold.
                               If bool-like, always/never send as file.
+        file_only_threshold: For ALSO_IF_LESS_THAN mode, threshold below which to send both text and file.
         file_name_mode: File naming mode - "random", "timestamp", or "llm".
     """
     message = message.strip()
@@ -853,8 +857,17 @@ async def discreet_send(
 
     # Use shared helper to determine if we should send as file
     should_send_as_file = _should_send_as_file(
-        message, file_length_threshold, send_file_mode
+        message, file_length_threshold, send_file_mode, file_only_threshold
     )
+
+    # Determine if we should skip text sending
+    should_skip_text = False
+
+    if send_file_mode == SendFileMode.ONLY:
+        should_skip_text = should_send_as_file
+    elif send_file_mode == SendFileMode.ALSO_IF_LESS_THAN:
+        # For ALSO_IF_LESS_THAN: skip text if length >= file_only_threshold
+        should_skip_text = len(message) >= file_only_threshold
 
     if should_send_as_file:
         # Generate file data using shared function
@@ -874,10 +887,10 @@ async def discreet_send(
             filename=file_data.filename,
         )
 
-        # If ONLY mode, return the file message and don't send text
-        if send_file_mode == SendFileMode.ONLY:
+        # If we should skip text, return the file message
+        if should_skip_text:
             return file_message
-        # If ALSO mode, continue to send text message as well
+        # Otherwise, continue to send text message as well
 
     # Use smart splitting for shorter messages
     chunks = _split_message_smart(message)
@@ -921,14 +934,21 @@ class FileGeneration:
 
 
 # Helper functions for DRY improvements
-def _should_send_as_file(text, file_length_threshold, send_file_mode):
+def _should_send_as_file(
+    text, file_length_threshold, send_file_mode, file_only_threshold=30000
+):
     """Determine if text should be sent as a file based on threshold and mode."""
     if (
         not text
         or not text.strip()
-        or send_file_mode not in [SendFileMode.ALSO, SendFileMode.ONLY]
+        or send_file_mode
+        not in [SendFileMode.ALSO, SendFileMode.ONLY, SendFileMode.ALSO_IF_LESS_THAN]
     ):
         return False
+
+    if send_file_mode == SendFileMode.ALSO_IF_LESS_THAN:
+        # For ALSO_IF_LESS_THAN mode, always send as file (decision on text is made elsewhere)
+        return True
 
     if isinstance(file_length_threshold, int):
         return len(text) >= file_length_threshold
@@ -978,6 +998,7 @@ async def edit_message(
     *,
     send_file_mode=SendFileMode.ALSO,
     file_length_threshold=None,
+    file_only_threshold=30000,
     file_name_mode="random",
 ):
     """
@@ -999,9 +1020,11 @@ async def edit_message(
         append_p (bool): If True, append new_text to existing content separated by BOT_META_INFO_LINE.
                         If False, replace existing content with new_text (default behavior).
         send_file_mode: SendFileMode.ALSO to also send as file in addition to text,
-                       SendFileMode.ONLY to skip text editing and only send as file.
+                       SendFileMode.ONLY to skip text editing and only send as file,
+                       SendFileMode.ALSO_IF_LESS_THAN to send as both text and file only if length < file_only_threshold.
         file_length_threshold: If int, send as file when length >= threshold.
                               If bool-like, always/never send as file.
+        file_only_threshold: For ALSO_IF_LESS_THAN mode, threshold below which to send both text and file.
         file_name_mode (str): File naming mode - "random", "timestamp", or "llm".
     """
     global EDIT_CHAINS
@@ -1030,11 +1053,19 @@ async def edit_message(
 
     # Determine if we should send as file using shared helper
     should_send_file = _should_send_as_file(
-        new_text, file_length_threshold, send_file_mode
+        new_text, file_length_threshold, send_file_mode, file_only_threshold
     )
 
-    # If ONLY mode and should send file, clean up message chain and send file
-    if send_file_mode == SendFileMode.ONLY and should_send_file:
+    # Determine if we should skip text editing and only send file
+    should_skip_text_editing = (
+        send_file_mode == SendFileMode.ONLY and should_send_file
+    ) or (
+        send_file_mode == SendFileMode.ALSO_IF_LESS_THAN
+        and len(new_text) >= file_only_threshold
+    )
+
+    # If we should skip text editing, clean up message chain and send file
+    if should_skip_text_editing:
         # Clean up existing message chain since we're only sending file
         edit_state = EDIT_CHAINS.get(message_id, EditChainState())
         await _cleanup_message_chain(edit_state, message_id)
@@ -1460,7 +1491,8 @@ async def _send_as_file_with_filename(
         # Generate file data using shared function
         user_id = getattr(message_obj, "sender_id", None)
         if user_id is None:
-            ic(message_obj.__dict__)
+            # ic(message_obj.__dict__)
+            print("_send_as_file_with_filename: getting sender")
             sender = await message_obj.get_sender()
             ic(sender.__dict__)
             user_id = sender.id
