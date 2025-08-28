@@ -838,6 +838,8 @@ async def discreet_send(
     file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
     file_only_threshold=30000,
     file_name_mode="random",
+    title_model: str | None = None,
+    api_keys: dict | None = None,
 ):
     """
     Send a message, splitting it into chunks if needed or sending as file.
@@ -850,6 +852,10 @@ async def discreet_send(
                               If bool-like, always/never send as file.
         file_only_threshold: For ALSO_IF_LESS_THAN mode, threshold below which to send both text and file.
         file_name_mode: File naming mode - "random", "timestamp", or "llm".
+        title_model (str | None): Optional override of the model used to
+            generate a smart filename when file_name_mode == "llm".
+        api_keys (dict | None): Optional mapping of service name (e.g., "gemini") to
+            API key value. If provided, avoids sender_id-based key lookup.
     """
     message = message.strip()
     if quiet or len(message) == 0:
@@ -870,10 +876,14 @@ async def discreet_send(
         should_skip_text = len(message) >= file_only_threshold
 
     if should_send_as_file:
-        # Generate file data using shared function
-        user_id = getattr(event, "sender_id", None)
+        # Generate file data using shared function (let it lazily resolve user_id)
         file_data = await _generate_file_data(
-            message, parse_mode, file_name_mode, user_id=user_id
+            message,
+            parse_mode,
+            file_name_mode,
+            title_model=title_model,
+            api_keys=api_keys,
+            message_obj=getattr(event, "message", None),
         )
         chat = await event.get_chat()
 
@@ -1000,6 +1010,8 @@ async def edit_message(
     file_length_threshold=None,
     file_only_threshold=30000,
     file_name_mode="random",
+    title_model: str | None = None,
+    api_keys: dict | None = None,
 ):
     """
     Intelligently edits a message chain to reflect new text content,
@@ -1026,6 +1038,11 @@ async def edit_message(
                               If bool-like, always/never send as file.
         file_only_threshold: For ALSO_IF_LESS_THAN mode, threshold below which to send both text and file.
         file_name_mode (str): File naming mode - "random", "timestamp", or "llm".
+        title_model (str | None): Optional override of the model used to
+            generate a smart filename when file_name_mode == "llm". Defaults to
+            constants.CHAT_TITLE_MODEL when not provided.
+        api_keys (dict | None): Optional mapping of service name (e.g., "gemini") to
+            API key value. If provided, avoids sender_id-based key lookup.
     """
     global EDIT_CHAINS
     message_id = message_obj.id
@@ -1083,6 +1100,8 @@ async def edit_message(
                 parse_mode=parse_mode,
                 file_name_mode=file_name_mode,
                 message_obj=message_obj,
+                title_model=title_model,
+                api_keys=api_keys,
             )
         except Exception:
             _log_file_sending_error("edit_message (ONLY mode)")
@@ -1190,6 +1209,8 @@ async def edit_message(
                     parse_mode=parse_mode,
                     file_name_mode=file_name_mode,
                     message_obj=message_obj,
+                    title_model=title_model,
+                    api_keys=api_keys,
                 )
             except Exception:
                 _log_file_sending_error("edit_message")
@@ -1240,6 +1261,61 @@ async def send_text_as_file(
         return last_msg
     finally:
         await remove_potential_file(f)
+
+
+def _get_title_model_and_service(title_model: str | None) -> tuple[str, str]:
+    """Return (model_in_use, service_needed) for LLM title generation.
+
+    - Uses provided title_model if set, otherwise falls back to CHAT_TITLE_MODEL.
+    - Maps model to the appropriate service via llm_util.get_service_from_model.
+    """
+    from uniborg import llm_util
+
+    model_in_use = title_model or CHAT_TITLE_MODEL
+    service_needed = llm_util.get_service_from_model(model_in_use)
+    return model_in_use, service_needed
+
+
+async def _resolve_title_api_key(
+    service_needed: str,
+    *,
+    api_keys: dict | None = None,
+    user_id: int | None = None,
+    message_obj=None,
+) -> tuple[str | None, int | None]:
+    """Resolve API key for the given service.
+
+    Priority:
+    1) Explicit api_keys mapping
+    2) Finalize user_id (use provided or derive from message_obj)
+    3) Lookup API key from llm_db using the finalized user_id
+
+    Returns a tuple of (api_key_or_None, resolved_user_id_or_None).
+    """
+    from uniborg import llm_db
+
+    # 1) Explicit mapping wins immediately
+    mapped_key = (api_keys or {}).get(service_needed)
+    if mapped_key:
+        return mapped_key, user_id
+
+    # 2) Finalize user_id (prefer provided; otherwise derive from message object)
+    resolved_uid = user_id
+    if resolved_uid is None and message_obj is not None:
+        try:
+            resolved_uid = getattr(message_obj, "sender_id", None)
+            if resolved_uid is None:
+                sender = await message_obj.get_sender()
+                resolved_uid = getattr(sender, "id", None)
+        except Exception:
+            resolved_uid = None
+
+    # 3) Lookup API key if we have a user id
+    api_key = None
+    if resolved_uid is not None:
+        api_key = llm_db.get_api_key(resolved_uid, service=service_needed)
+
+    return api_key, resolved_uid
 
 
 async def saexec(code: str, **kwargs):
@@ -1410,7 +1486,14 @@ class FilenameGeneration(BaseModel):
 
 
 async def _generate_file_data(
-    text: str, parse_mode: str, file_name_mode: str, *, user_id: int = None
+    text: str,
+    parse_mode: str,
+    file_name_mode: str,
+    *,
+    user_id: int | None = None,
+    api_keys: dict | None = None,
+    title_model: str | None = None,
+    message_obj=None,
 ) -> FileGeneration:
     """Generate file data (filename, caption, extension) based on the specified mode."""
     # Determine file extension based on parse_mode
@@ -1430,16 +1513,23 @@ async def _generate_file_data(
 
     elif file_name_mode == "llm":
         try:
-            from uniborg import llm_util, llm_db
 
-            # Check if user_id is provided and get API key
-            gemini_api_key = None
-            if user_id is not None:
-                gemini_api_key = llm_db.get_api_key(user_id, service="gemini")
+            # Decide which service is needed based on the model in use
+            model_in_use, service_needed = _get_title_model_and_service(title_model)
 
-            if not gemini_api_key:
+            # Resolve API key using shared helper
+            api_key_to_use, resolved_uid = await _resolve_title_api_key(
+                service_needed,
+                api_keys=api_keys,
+                user_id=user_id,
+                message_obj=message_obj,
+            )
+            if user_id is None:
+                user_id = resolved_uid
+
+            if not api_key_to_use:
                 print(
-                    f"Warning: Gemini API key not found for user {user_id}, falling back to random filename"
+                    f"Warning: {service_needed} API key not found for user {user_id}, falling back to random filename"
                 )
                 filename = _generate_random_filename(file_ext)
                 caption = default_caption
@@ -1447,8 +1537,8 @@ async def _generate_file_data(
                 # Set up LiteLLM with the API key
                 # Use LiteLLM with structured output
                 response = litellm.completion(
-                    api_key=gemini_api_key,
-                    model=CHAT_TITLE_MODEL,
+                    api_key=api_key_to_use,
+                    model=model_in_use,
                     messages=[
                         {
                             "role": "user",
@@ -1485,20 +1575,19 @@ async def _send_as_file_with_filename(
     parse_mode: str,
     file_name_mode: str,
     message_obj,
+    title_model: str | None = None,
+    api_keys: dict | None = None,
 ):
     """Helper function to send text as file with intelligent filename generation."""
     try:
-        # Generate file data using shared function
-        user_id = getattr(message_obj, "sender_id", None)
-        if user_id is None:
-            # ic(message_obj.__dict__)
-            print("_send_as_file_with_filename: getting sender")
-            sender = await message_obj.get_sender()
-            ic(sender.__dict__)
-            user_id = sender.id
-
+        # Generate file data using shared function, allow it to resolve user_id lazily
         file_data = await _generate_file_data(
-            text, parse_mode, file_name_mode, user_id=user_id
+            text,
+            parse_mode,
+            file_name_mode,
+            api_keys=api_keys,
+            title_model=title_model,
+            message_obj=message_obj,
         )
 
         # Get chat object and send file

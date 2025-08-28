@@ -5936,6 +5936,9 @@ async def chat_handler(event):
                 link_preview=False,
                 file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
                 file_name_mode="llm",
+                api_keys={
+                    "gemini": llm_db.get_api_key(user_id, service="gemini"),
+                },
             )
         else:
             # If we sent an image but have no text, delete the "..." message
