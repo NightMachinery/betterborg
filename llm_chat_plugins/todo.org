@@ -11,7 +11,12 @@ Extract the `.rev` in PROMPT_REPLACEMENTS into `~/scripts/prompt/review_v1.md` a
 
 * sign up at mistral api and add models
 
-* -
+* DRY for =tsend=
+#+BEGIN_SRC markdown
+We should make the functions in util like `discreet_send` usable without running borg at all. This way, we can create the tsend script without code duplication.
+#+END_SRC
+
+* DONE -
 #+BEGIN_SRC markdown
 ```
 async def edit_message(
