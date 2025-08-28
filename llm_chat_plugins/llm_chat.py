@@ -114,6 +114,16 @@ PROMPT_MATCH_LANGUAGE = r"""**Language**
 COMMON_PATTERN_SUFFIX = r"(?:\s+|$)"
 
 
+@dataclass
+class PromptVersion:
+    path_infix: str
+    patterns: list[str]
+
+    @classmethod
+    def from_string(cls, version_str: str) -> "PromptVersion":
+        return cls(f"v{version_str}", [re.escape(version_str)])
+
+
 def _register_prompt_family(
     *,
     pattern_prefix,
@@ -132,7 +142,7 @@ def _register_prompt_family(
         pattern_prefix: Regex prefix (e.g., r"^\.teach")
         file_base: Base filename for prompts (e.g., "socratic_teacher")
         default_version: Default version used for base pattern (e.g., "1.3")
-        versions: List of versions to create patterns for (e.g., ["1", "1.1", "2"])
+        versions: List of PromptVersion or str to create patterns for
         pattern_suffix: Regex suffix, defaults to COMMON_PATTERN_SUFFIX
         content_postfix: Text to append to loaded prompt content (e.g., language instructions)
         versioned_file_base: Alternative file base for versioned files
@@ -146,15 +156,24 @@ def _register_prompt_family(
     base_content = f"""{llm_util.load_prompt_from_file(base_file)}{content_postfix}"""
     prompts[re.compile(base_pattern, regex_flags)] = base_content
 
+    # Convert strings to PromptVersion objects
+    prompt_versions = [
+        v if isinstance(v, PromptVersion) else PromptVersion.from_string(str(v))
+        for v in versions
+    ]
+
     # Versioned patterns
-    for version in versions:
-        version_pattern = f"{pattern_prefix}{re.escape(version)}{pattern_suffix}"
+    for version in prompt_versions:
         version_file_base = versioned_file_base if versioned_file_base else file_base
-        version_file = f"{version_file_base}_v{version}.md"
+        version_file = f"{version_file_base}_{version.path_infix}.md"
         version_content = (
             f"""{llm_util.load_prompt_from_file(version_file)}{content_postfix}"""
         )
-        prompts[re.compile(version_pattern, regex_flags)] = version_content
+
+        # Create pattern for each pattern in this version
+        for pattern in version.patterns:
+            version_pattern = f"{pattern_prefix}{pattern}{pattern_suffix}"
+            prompts[re.compile(version_pattern, regex_flags)] = version_content
 
     return prompts
 

@@ -16,6 +16,12 @@ Extract the `.rev` in PROMPT_REPLACEMENTS into `~/scripts/prompt/review_v1.md` a
 We should make the functions in util like `discreet_send` usable without running borg at all. This way, we can create the tsend script without code duplication.
 #+END_SRC
 
+* DONE -
+#+BEGIN_SRC markdown
+`_register_prompt_family`: instead of assuming versions are numbers, define a dataclass `PromptVersion` which has `path_infix` (will be `v2` etc. for numbers) and `patterns` which will be a list of regex patterns. (all patterns should be valid for that version, so we can eg give the pattern `Costly` to a version as an alias) Define a factory class to produce the current behavior just from a string (infix would be `v{string}` and the pattern would `re.escape(string)`. any questions or ideas?
+#+END_SRC
+
+
 * DONE we could add `ALSO_IF_LESS_THAN` to `SendFileMode` with another kwarg `file_only_threshold=30000`.
 
 * DONE `edit_message`: add optional kwarg `api_keys: dict` (service (e.g. gemini) -> api_key_value) which callers can pass to avoid using sender_id etc. logic for getting the key
