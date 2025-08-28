@@ -184,7 +184,11 @@ def _register_prompt_family(
     prompts = {}
 
     # Base pattern (uses default version)
-    default_version = default_version if isinstance(default_version, PromptVersion) else PromptVersion.from_string(default_version)
+    default_version = (
+        default_version
+        if isinstance(default_version, PromptVersion)
+        else PromptVersion.from_string(default_version)
+    )
     base_pattern = f"{pattern_prefix}{pattern_suffix}"
     base_file = f"{file_base}_{default_version.path_infix}.md"
     base_content = f"""{llm_util.load_prompt_from_file(base_file)}{content_postfix}"""
@@ -228,7 +232,7 @@ def _register_prompt_family(
             "shortcut": base_shortcut,
             "description": description,
             "versions": version_strings,
-            "default_version": default_version,  #: @unused
+            "default_version": default_version,
         }
     )
 
@@ -3996,7 +4000,8 @@ async def help_magics_handler(event):
                 if len(versions) <= 6
                 else f"{len(versions)} versions"
             )
-            res = f"{res} (versions: {version_str})"
+            default_version = entry["default_version"].path_infix
+            res = f"{res} (default: `{default_version}`, versions: {version_str})"
             versioned_shortcuts.append(res)
         else:
             basic_shortcuts.append(res)
