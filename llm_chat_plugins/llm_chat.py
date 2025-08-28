@@ -5357,13 +5357,15 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
 async def _handle_tts_response(event, response_text: str):
     """Handle TTS generation for LLM responses."""
     try:
+        sender_id = event.sender_id
+
         # Check if TTS is enabled for this chat
         tts_model = chat_manager.get_tts_model(event.chat_id)
         if tts_model == "Disabled":
             return
 
         # Get user's Gemini API key
-        api_key = llm_db.get_api_key(user_id=event.sender_id, service="gemini")
+        api_key = llm_db.get_api_key(user_id=sender_id, service="gemini")
         if not api_key:
             return  # No API key, silently skip TTS
 
@@ -5372,14 +5374,18 @@ async def _handle_tts_response(event, response_text: str):
         if voice_override:
             voice = voice_override
         else:
-            voice = user_manager.get_tts_global_voice(event.sender_id)
+            voice = user_manager.get_tts_global_voice(sender_id)
 
         # Truncate text if needed
         truncated_text, was_truncated = tts_util.truncate_text_for_tts(response_text)
 
         # Generate TTS audio (returns OGG file path)
         ogg_file_path = await tts_util.generate_tts_audio(
-            truncated_text, voice=voice, model=tts_model, api_key=api_key
+            truncated_text,
+            voice=voice,
+            model=tts_model,
+            api_key=api_key,
+            user_id=sender_id,
         )
 
         try:
