@@ -184,7 +184,7 @@ def _register_prompt_family(
 
     # Base pattern (uses default version)
     base_pattern = f"{pattern_prefix}{pattern_suffix}"
-    base_file = f"{file_base}_v{default_version}.md"
+    base_file = f"{file_base}_{default_version}.md"
     base_content = f"""{llm_util.load_prompt_from_file(base_file)}{content_postfix}"""
     prompts[re.compile(base_pattern, regex_flags)] = base_content
 
