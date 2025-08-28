@@ -2,6 +2,11 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+
+from uniborg.constants import (
+    BOT_META_INFO_PREFIX,
+    DEFAULT_FILE_LENGTH_THRESHOLD,
+)
 from brish import z, zp, zs, bsh, Brish
 from pynight.common_icecream import ic
 from collections.abc import Iterable
@@ -37,6 +42,15 @@ from concurrent.futures import ThreadPoolExecutor
 import io
 from io import BytesIO
 import tempfile
+from enum import Enum
+
+
+class SendFileMode(Enum):
+    """Mode for file sending behavior."""
+
+    ONLY = "only"  # Send as file instead of text (discreet_send behavior)
+    ALSO = "also"  # Send as both text and file (edit_message behavior)
+
 
 try:
     import PIL
@@ -815,26 +829,28 @@ async def discreet_send(
     link_preview=False,
     parse_mode=None,
     *,
-    send_as_file_instead=12000,
+    send_file_mode=SendFileMode.ONLY,
+    file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
     file_name_mode="random",
 ):
     """
     Send a message, splitting it into chunks if needed or sending as file.
 
     Args:
-        send_as_file_instead: If int, send as file when length >= threshold.
-                             Else, treated as Boolean.
+        send_file_mode: SendFileMode.ONLY to send as file instead of text,
+                       SendFileMode.ALSO to send as both text and file.
+        file_length_threshold: If int, send as file when length >= threshold.
+                              If bool-like, always/never send as file.
         file_name_mode: File naming mode - "random", "timestamp", or "llm".
     """
     message = message.strip()
     if quiet or len(message) == 0:
         return reply_to
 
-    length = len(message)
-
-    # Check if we should send as file (either by length threshold or user request)
-    if isinstance(send_as_file_instead, int):
-        should_send_as_file = length >= send_as_file_instead
+    # Use shared helper to determine if we should send as file
+    should_send_as_file = _should_send_as_file(
+        message, file_length_threshold, send_file_mode
+    )
 
     if should_send_as_file:
         # Generate file data using shared function
@@ -842,7 +858,7 @@ async def discreet_send(
         chat = await event.get_chat()
 
         # Send file using existing function
-        return await send_text_as_file(
+        file_message = await send_text_as_file(
             text=message,
             suffix=file_data.suffix,
             chat=chat,
@@ -850,6 +866,11 @@ async def discreet_send(
             reply_to=reply_to,
             filename=file_data.filename,
         )
+
+        # If ONLY mode, return the file message and don't send text
+        if send_file_mode == SendFileMode.ONLY:
+            return file_message
+        # If ALSO mode, continue to send text message as well
 
     # Use smart splitting for shorter messages
     chunks = _split_message_smart(message)
@@ -892,6 +913,45 @@ class FileGeneration:
         return self.extension
 
 
+# Helper functions for DRY improvements
+def _should_send_as_file(text, file_length_threshold, send_file_mode):
+    """Determine if text should be sent as a file based on threshold and mode."""
+    if not text or not text.strip() or send_file_mode not in [SendFileMode.ALSO, SendFileMode.ONLY]:
+        return False
+
+    if isinstance(file_length_threshold, int):
+        return len(text) >= file_length_threshold
+    else:
+        # Treat as boolean-like
+        return bool(file_length_threshold)
+
+
+async def _safe_delete_message(message):
+    """Safely delete a message, ignoring any errors."""
+    try:
+        await message.delete()
+    except Exception:
+        pass  # Ignore if deletion fails
+
+
+async def _cleanup_message_chain(edit_state, message_id):
+    """Clean up an existing message chain by deleting all child messages."""
+    existing_children = edit_state.children
+
+    # Delete all child messages
+    for child in existing_children:
+        await _safe_delete_message(child)
+
+    # Remove from edit chains tracking
+    EDIT_CHAINS.pop(message_id, None)
+
+
+def _log_file_sending_error(context_name):
+    """Log file sending error in a standardized way."""
+    print(f"File sending failed in {context_name}:", file=sys.stderr)
+    traceback.print_exc()
+
+
 # Dictionary to track message chains for the edit_message function
 # Key: original_message_id, Value: EditChainState object
 EDIT_CHAINS = {}
@@ -905,7 +965,8 @@ async def edit_message(
     max_len=4096,
     append_p=False,
     *,
-    also_send_as_file=None,
+    send_file_mode=SendFileMode.ALSO,
+    file_length_threshold=None,
     file_name_mode="random",
 ):
     """
@@ -926,7 +987,10 @@ async def edit_message(
         max_len (int): The maximum length of a single message.
         append_p (bool): If True, append new_text to existing content separated by BOT_META_INFO_LINE.
                         If False, replace existing content with new_text (default behavior).
-        also_send_as_file (int): When text length >= this threshold, also send as a file.
+        send_file_mode: SendFileMode.ALSO to also send as file in addition to text,
+                       SendFileMode.ONLY to skip text editing and only send as file.
+        file_length_threshold: If int, send as file when length >= threshold.
+                              If bool-like, always/never send as file.
         file_name_mode (str): File naming mode - "random", "timestamp", or "llm".
     """
     global EDIT_CHAINS
@@ -953,22 +1017,34 @@ async def edit_message(
             new_text = existing_text
         # else: if no existing text, just use new_text as-is
 
-    # Store file sending parameters for later use
-    should_send_file = (
-        also_send_as_file is not None
-        and new_text
-        and len(new_text) >= also_send_as_file
+    # Determine if we should send as file using shared helper
+    should_send_file = _should_send_as_file(
+        new_text, file_length_threshold, send_file_mode
     )
-    file_sending_params = (
-        {
-            "text": new_text,
-            "parse_mode": parse_mode,
-            "file_name_mode": file_name_mode,
-            "message_obj": message_obj,
-        }
-        if should_send_file
-        else None
-    )
+
+    # If ONLY mode and should send file, clean up message chain and send file
+    if send_file_mode == SendFileMode.ONLY and should_send_file:
+        # Clean up existing message chain since we're only sending file
+        edit_state = EDIT_CHAINS.get(message_id, EditChainState())
+        await _cleanup_message_chain(edit_state, message_id)
+
+        # Clear the original message or replace with placeholder
+        try:
+            await message_obj.edit("__[sent as file]__")
+        except Exception:
+            pass
+
+        # Send the file
+        try:
+            await _send_as_file_with_filename(
+                text=new_text,
+                parse_mode=parse_mode,
+                file_name_mode=file_name_mode,
+                message_obj=message_obj,
+            )
+        except Exception:
+            _log_file_sending_error("edit_message (ONLY mode)")
+        return
 
     try:
         # Chunk the new text with forward search for streaming consistency
@@ -988,10 +1064,7 @@ async def edit_message(
         # Case 1: The new text is empty, delete the entire chain.
         if not chunks:
             for child in existing_children:
-                try:
-                    await child.delete()
-                except Exception:
-                    pass  # Ignore if deletion fails
+                await _safe_delete_message(child)
             EDIT_CHAINS.pop(message_id, None)
             try:
                 # Edit the original message to be empty or show a placeholder
@@ -1053,14 +1126,13 @@ async def edit_message(
             # --- Delete surplus messages if new text is shorter ---
             elif i < num_existing_children:
                 child_to_delete = existing_children[i]
-                try:
-                    await child_to_delete.delete()
-                except Exception:
-                    pass  # Ignore deletion errors
+                await _safe_delete_message(child_to_delete)
 
         # Update the global state with the new chain configuration
         edit_state.children = new_children
-        edit_state.last_text = new_text  # Store the last text for future append operations
+        edit_state.last_text = (
+            new_text  # Store the last text for future append operations
+        )
 
         if new_children or new_text:
             EDIT_CHAINS[message_id] = edit_state
@@ -1069,13 +1141,16 @@ async def edit_message(
 
     finally:
         # Send file after message editing (success or failure)
-        if should_send_file and file_sending_params:
+        if should_send_file:
             try:
-                await _send_as_file_with_filename(**file_sending_params)
+                await _send_as_file_with_filename(
+                    text=new_text,
+                    parse_mode=parse_mode,
+                    file_name_mode=file_name_mode,
+                    message_obj=message_obj,
+                )
             except Exception:
-                # Log the error but don't let it mask message editing errors
-                print(f"File sending failed in edit_message:", file=sys.stderr)
-                traceback.print_exc()
+                _log_file_sending_error("edit_message")
 
 
 def postproccesor_json(file_path):
