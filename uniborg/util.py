@@ -1489,7 +1489,7 @@ class FilenameGeneration(BaseModel):
         description="The title formatted as a safe, short filename (alphanumeric, hyphens, underscores only)"
     )
     short_description: str = Field(
-        description="A concise summary of the content in maximum 150 words"
+        description="A concise summary of the content in maximum 70 words"
     )
 
 
