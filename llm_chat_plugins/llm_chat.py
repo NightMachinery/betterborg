@@ -148,6 +148,7 @@ def _extract_shortcut_from_pattern(pattern):
 class PromptVersion:
     path_infix: str
     patterns: list[str]
+    description: Optional[str] = None
 
     @classmethod
     def from_string(cls, version_str: str) -> "PromptVersion":
@@ -385,11 +386,16 @@ KNOW_PARTNER_FILE_NAME = "know_partner"
 KNOW_PARTNER_PROMPTS = _register_prompt_family(
     pattern_prefix=KNOW_PARTNER_PATTERN_PREFIX,
     file_base=KNOW_PARTNER_FILE_NAME,
-    default_version="eight_dates_G25_v1",
+    default_version="eight_dates_G25_v1.1",
     versions=[
         PromptVersion("GPT5T_DR_v1", ["GPT5?"]),
         PromptVersion("Opus4.1T_v1", ["O(?:pus)?4?"]),
-        PromptVersion("eight_dates_G25_v1", ["G25", "8dates"]),
+        PromptVersion(
+            "eight_dates_G25_v1.1",
+            ["G25", "8dates"],
+            description="G25 personalized for our situation",
+        ),
+        PromptVersion("eight_dates_G25_v1", ["G25v1"]),
     ],
     content_postfix="\n",
     description="Relationship guidance to get to know your partner better",
