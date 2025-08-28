@@ -184,8 +184,9 @@ def _register_prompt_family(
     prompts = {}
 
     # Base pattern (uses default version)
+    default_version = default_version if isinstance(default_version, PromptVersion) else PromptVersion.from_string(default_version)
     base_pattern = f"{pattern_prefix}{pattern_suffix}"
-    base_file = f"{file_base}_{default_version}.md"
+    base_file = f"{file_base}_{default_version.path_infix}.md"
     base_content = f"""{llm_util.load_prompt_from_file(base_file)}{content_postfix}"""
     prompts[re.compile(base_pattern, regex_flags)] = base_content
 
@@ -227,7 +228,7 @@ def _register_prompt_family(
             "shortcut": base_shortcut,
             "description": description,
             "versions": version_strings,
-            "default_version": default_version,
+            "default_version": default_version,  #: @unused
         }
     )
 
@@ -386,7 +387,7 @@ KNOW_PARTNER_FILE_NAME = "know_partner"
 KNOW_PARTNER_PROMPTS = _register_prompt_family(
     pattern_prefix=KNOW_PARTNER_PATTERN_PREFIX,
     file_base=KNOW_PARTNER_FILE_NAME,
-    default_version="eight_dates_G25_v1.1",
+    default_version=PromptVersion("eight_dates_G25_v1.1", []),
     versions=[
         PromptVersion("GPT5T_DR_v1", ["GPT5?"]),
         PromptVersion("Opus4.1T_v1", ["O(?:pus)?4?"]),
@@ -408,7 +409,7 @@ REVIEW_FILE_NAME = "review"
 REVIEW_PROMPTS = _register_prompt_family(
     pattern_prefix=REVIEW_PATTERN_PREFIX,
     file_base=REVIEW_FILE_NAME,
-    default_version="v1",
+    default_version="1",
     versions=[],
     pattern_suffix=r"(?:\s+|$)",
     content_postfix=" ",
