@@ -5939,6 +5939,7 @@ async def chat_handler(event):
                 api_keys={
                     "gemini": llm_db.get_api_key(user_id, service="gemini"),
                 },
+                reply_to=event.message,
             )
         else:
             # If we sent an image but have no text, delete the "..." message

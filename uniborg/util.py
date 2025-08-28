@@ -5,6 +5,7 @@
 from uniborg.constants import (
     BOT_META_INFO_PREFIX,
     DEFAULT_FILE_LENGTH_THRESHOLD,
+    DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
     CHAT_TITLE_MODEL,
 )
 from pynight.common_files import sanitize_filename
@@ -1009,6 +1010,7 @@ async def edit_message(
     max_len=4096,
     append_p=False,
     *,
+    reply_to=None,
     send_file_mode=SendFileMode.ALSO,
     file_length_threshold=None,
     file_only_threshold=DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
@@ -1034,6 +1036,7 @@ async def edit_message(
         max_len (int): The maximum length of a single message.
         append_p (bool): If True, append new_text to existing content separated by BOT_META_INFO_LINE.
                         If False, replace existing content with new_text (default behavior).
+        reply_to: Optional message to reply to when sending a file.
         send_file_mode: SendFileMode.ALSO to also send as file in addition to text,
                        SendFileMode.ONLY to skip text editing and only send as file,
                        SendFileMode.ALSO_IF_LESS_THAN to send as both text and file only if length < file_only_threshold.
@@ -1103,6 +1106,7 @@ async def edit_message(
                 parse_mode=parse_mode,
                 file_name_mode=file_name_mode,
                 message_obj=message_obj,
+                reply_to=reply_to,
                 title_model=title_model,
                 api_keys=api_keys,
             )
@@ -1212,6 +1216,7 @@ async def edit_message(
                     parse_mode=parse_mode,
                     file_name_mode=file_name_mode,
                     message_obj=message_obj,
+                    reply_to=reply_to,
                     title_model=title_model,
                     api_keys=api_keys,
                 )
@@ -1578,6 +1583,7 @@ async def _send_as_file_with_filename(
     parse_mode: str,
     file_name_mode: str,
     message_obj,
+    reply_to=None,
     title_model: str | None = None,
     api_keys: dict | None = None,
 ):
@@ -1602,7 +1608,7 @@ async def _send_as_file_with_filename(
             suffix=file_data.suffix,
             chat=chat,
             caption=file_data.caption,
-            reply_to=message_obj,
+            reply_to=reply_to,
             filename=file_data.filename,
         )
 
