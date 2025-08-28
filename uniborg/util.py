@@ -56,6 +56,7 @@ class SendFileMode(Enum):
     ONLY = "only"  # Send as file instead of text (discreet_send behavior)
     ALSO = "also"  # Send as both text and file (edit_message behavior)
     ALSO_IF_LESS_THAN = "also_if_less_than"  # Send as both text and file only if text length is less than file_only_threshold
+    NEVER = "never"  # Never send as file (text only)
 
 
 try:
@@ -848,7 +849,8 @@ async def discreet_send(
     Args:
         send_file_mode: SendFileMode.ONLY to send as file instead of text,
                        SendFileMode.ALSO to send as both text and file,
-                       SendFileMode.ALSO_IF_LESS_THAN to send as both text and file only if length < file_only_threshold.
+                       SendFileMode.ALSO_IF_LESS_THAN to send as both text and file only if length < file_only_threshold,
+                       SendFileMode.NEVER to always send as text (never as file).
         file_length_threshold: If int, send as file when length >= threshold.
                               If bool-like, always/never send as file.
         file_only_threshold: For ALSO_IF_LESS_THAN mode, threshold below which to send both text and file.
@@ -862,21 +864,12 @@ async def discreet_send(
     if quiet or len(message) == 0:
         return reply_to
 
-    # Use shared helper to determine if we should send as file
-    should_send_as_file = _should_send_as_file(
+    # Use shared helper to determine text/file decisions
+    decision = _should_send_as_file(
         message, file_length_threshold, send_file_mode, file_only_threshold
     )
 
-    # Determine if we should skip text sending
-    should_skip_text = False
-
-    if send_file_mode == SendFileMode.ONLY:
-        should_skip_text = should_send_as_file
-    elif send_file_mode == SendFileMode.ALSO_IF_LESS_THAN:
-        # For ALSO_IF_LESS_THAN: skip text if length >= file_only_threshold
-        should_skip_text = len(message) >= file_only_threshold
-
-    if should_send_as_file:
+    if decision.send_file:
         # Generate file data using shared function (let it lazily resolve user_id)
         file_data = await _generate_file_data(
             message,
@@ -898,12 +891,15 @@ async def discreet_send(
             filename=file_data.filename,
         )
 
-        # If we should skip text, return the file message
-        if should_skip_text:
+        # If we should not send text, return the file message
+        if not decision.send_text:
             return file_message
         # Otherwise, continue to send text message as well
 
     # Use smart splitting for shorter messages
+    if not decision.send_text:
+        return reply_to
+
     chunks = _split_message_smart(message)
     last_msg = reply_to
 
@@ -944,31 +940,55 @@ class FileGeneration:
         return self.extension
 
 
+@dataclass
+class SendDecision:
+    """Decision for whether to send text and/or file."""
+
+    send_text: bool
+    send_file: bool
+
+
 # Helper functions for DRY improvements
 def _should_send_as_file(
-    text,
+    text: str,
     file_length_threshold,
-    send_file_mode,
-    file_only_threshold=DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
-):
-    """Determine if text should be sent as a file based on threshold and mode."""
-    if (
-        not text
-        or not text.strip()
-        or send_file_mode
-        not in [SendFileMode.ALSO, SendFileMode.ONLY, SendFileMode.ALSO_IF_LESS_THAN]
-    ):
-        return False
+    send_file_mode: SendFileMode,
+    file_only_threshold: int = DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
+) -> SendDecision:
+    """Return whether to send text and/or file based on mode and thresholds.
+
+    - NEVER: send_text=True, send_file=False
+    - ONLY: send_file if threshold says so; otherwise send_text. Never both.
+    - ALSO: always send_text; send_file if threshold says so.
+    - ALSO_IF_LESS_THAN: always send_file; send_text only if len(text) < file_only_threshold.
+    - Empty/whitespace text: send_text=False, send_file=False
+    """
+    if not text or not text.strip():
+        return SendDecision(send_text=False, send_file=False)
+
+    def file_condition() -> bool:
+        if isinstance(file_length_threshold, int):
+            return len(text) >= file_length_threshold
+        return bool(file_length_threshold)
+
+    if send_file_mode == SendFileMode.NEVER:
+        return SendDecision(send_text=True, send_file=False)
+
+    if send_file_mode == SendFileMode.ONLY:
+        should_file = file_condition()
+        if should_file:
+            return SendDecision(send_text=False, send_file=True)
+        else:
+            return SendDecision(send_text=True, send_file=False)
+
+    if send_file_mode == SendFileMode.ALSO:
+        return SendDecision(send_text=True, send_file=file_condition())
 
     if send_file_mode == SendFileMode.ALSO_IF_LESS_THAN:
-        # For ALSO_IF_LESS_THAN mode, always send as file (decision on text is made elsewhere)
-        return True
+        return SendDecision(send_text=(len(text) < file_only_threshold), send_file=True)
 
-    if isinstance(file_length_threshold, int):
-        return len(text) >= file_length_threshold
-    else:
-        # Treat as boolean-like
-        return bool(file_length_threshold)
+    # Default fallback: behave like NEVER
+    return SendDecision(send_text=True, send_file=False)
 
 
 async def _safe_delete_message(message):
@@ -1011,7 +1031,7 @@ async def edit_message(
     append_p=False,
     *,
     reply_to=None,
-    send_file_mode=SendFileMode.ALSO,
+    send_file_mode=SendFileMode.NEVER,
     file_length_threshold=None,
     file_only_threshold=DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
     file_name_mode="random",
@@ -1039,7 +1059,8 @@ async def edit_message(
         reply_to: Optional message to reply to when sending a file.
         send_file_mode: SendFileMode.ALSO to also send as file in addition to text,
                        SendFileMode.ONLY to skip text editing and only send as file,
-                       SendFileMode.ALSO_IF_LESS_THAN to send as both text and file only if length < file_only_threshold.
+                       SendFileMode.ALSO_IF_LESS_THAN to send as both text and file only if length < file_only_threshold,
+                       SendFileMode.NEVER to never send a file (text only).
         file_length_threshold: If int, send as file when length >= threshold.
                               If bool-like, always/never send as file.
         file_only_threshold: For ALSO_IF_LESS_THAN mode, threshold below which to send both text and file.
@@ -1074,21 +1095,14 @@ async def edit_message(
             new_text = existing_text
         # else: if no existing text, just use new_text as-is
 
-    # Determine if we should send as file using shared helper
-    should_send_file = _should_send_as_file(
+    # Determine text/file decisions using shared helper
+    decision = _should_send_as_file(
         new_text, file_length_threshold, send_file_mode, file_only_threshold
     )
-
-    # Determine if we should skip text editing and only send file
-    should_skip_text_editing = (
-        send_file_mode == SendFileMode.ONLY and should_send_file
-    ) or (
-        send_file_mode == SendFileMode.ALSO_IF_LESS_THAN
-        and len(new_text) >= file_only_threshold
-    )
+    only_send_file = decision.send_file and not decision.send_text
 
     # If we should skip text editing, clean up message chain and send file
-    if should_skip_text_editing:
+    if only_send_file:
         # Clean up existing message chain since we're only sending file
         edit_state = EDIT_CHAINS.get(message_id, EditChainState())
         await _cleanup_message_chain(edit_state, message_id)
@@ -1209,7 +1223,7 @@ async def edit_message(
 
     finally:
         # Send file after message editing (success or failure)
-        if should_send_file:
+        if decision.send_file and decision.send_text:
             try:
                 await _send_as_file_with_filename(
                     text=new_text,
