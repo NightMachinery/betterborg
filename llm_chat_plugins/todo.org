@@ -18,6 +18,8 @@ We should make the functions in util like `discreet_send` usable without running
 
 * we could add `ALSO_IF_LESS_THAN` to `SendFileMode` with another kwarg `file_only_threshold=30000`.
 
+* `edit_message`: add optional kwarg `api_keys: dict` (service (e.g. gemini) -> api_key_value) which callers can pass to avoid using sender_id etc. logic for getting the key
+
 * DONE -
 #+BEGIN_SRC markdown
 ```
