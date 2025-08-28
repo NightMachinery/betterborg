@@ -1484,7 +1484,7 @@ class FilenameGeneration(BaseModel):
         description="The title formatted as a safe, short filename (alphanumeric, hyphens, underscores only)"
     )
     short_description: str = Field(
-        description="A concise summary of the content in maximum 300 words"
+        description="A concise summary of the content in maximum 150 words"
     )
 
 
@@ -1557,7 +1557,7 @@ async def _generate_file_data(
                 )
                 safe_filename = sanitize_filename(result.title_as_file_name)
                 filename = f"{safe_filename}{file_ext}"
-                caption = f"**{result.title}**\n\n{result.short_description}"
+                caption = f"**{result.title}**\n\n{result.short_description[:2000]}"
 
         except Exception as e:
             print(f"Warning: Failed to generate LLM title: {e}")
