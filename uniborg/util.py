@@ -963,6 +963,10 @@ def _should_send_as_file(
     - ALSO_IF_LESS_THAN: always send_file; send_text only if len(text) < file_only_threshold.
     - Empty/whitespace text: send_text=False, send_file=False
     """
+    if isinstance(file_length_threshold, int) and isinstance(file_only_threshold, int):
+        #: If at file_only_threshold, we are going to send only a file, then at that same length, we should always send a file.
+        file_length_threshold = min(file_length_threshold, file_only_threshold)
+
     if not text or not text.strip():
         return SendDecision(send_text=False, send_file=False)
 

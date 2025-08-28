@@ -53,6 +53,7 @@ from uniborg.constants import (
     BOT_META_INFO_PREFIX,
     BOT_META_INFO_LINE,
     DEFAULT_FILE_LENGTH_THRESHOLD,
+    DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
 )
 
 # Import live mode utilities
@@ -5929,6 +5930,11 @@ async def chat_handler(event):
 
         # Only send text message if there's actual content
         if final_text.strip():
+            file_only_threshold = DEFAULT_FILE_ONLY_LENGTH_THRESHOLD
+            if not is_private:
+                #: We should avoid spamming groups.
+                file_only_threshold = 8000
+
             await util.edit_message(
                 response_message,
                 final_text,
@@ -5936,6 +5942,7 @@ async def chat_handler(event):
                 link_preview=False,
                 send_file_mode=util.SendFileMode.ALSO_IF_LESS_THAN,
                 file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
+                file_only_threshold=file_only_threshold,
                 file_name_mode="llm",
                 api_keys={
                     "gemini": llm_db.get_api_key(user_id, service="gemini"),
