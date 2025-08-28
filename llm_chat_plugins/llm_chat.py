@@ -5934,7 +5934,7 @@ async def chat_handler(event):
                 final_text,
                 parse_mode="md",
                 link_preview=False,
-                send_file_mode=SendFileMode.ALSO_IF_LESS_THAN,
+                send_file_mode=util.SendFileMode.ALSO_IF_LESS_THAN,
                 file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
                 file_name_mode="llm",
                 api_keys={
