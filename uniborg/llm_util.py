@@ -113,7 +113,7 @@ def create_genai_client(
 
 # Environment and prompt loading setup
 NIGHTDIR = os.getenv("NIGHTDIR", None)
-DEFAULT_PROMPT_DIR = f"{NIGHTDIR}/prompt" if NIGHTDIR else "UNSET"
+DEFAULT_PROMPT_DIR = f"{NIGHTDIR}/PE" if NIGHTDIR else "UNSET"
 
 
 def load_prompt_from_file(filename, *, prefix=DEFAULT_PROMPT_DIR):
