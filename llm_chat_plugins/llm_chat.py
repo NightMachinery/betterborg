@@ -83,7 +83,8 @@ DEFAULT_MODEL = "gemini/gemini-2.5-flash"  #: Do NOT change the default model un
 # Prefix-to-model mapping for hardcoded model selection
 #: @hiddenDep Update `Quick Model Selection Shortcuts` in `/help` command to reflect changes here.
 PREFIX_MODEL_MAPPING = {
-    ".f": "gemini/gemini-2.5-flash-lite",
+    # ".f": "gemini/gemini-2.5-flash-lite",
+    ".f": "gemini/gemini-2.0-flash",
     ".ff": "gemini/gemini-2.5-flash",
     ".g": "gemini/gemini-2.5-pro",
     ".c": "openrouter/openai/gpt-5-chat",
@@ -764,9 +765,10 @@ MODEL_CHOICES = {
     "gemini/gemini-2.5-flash": "Gemini 2.5 Flash",
     "gemini/gemini-2.5-pro": "Gemini 2.5 Pro",
     "openrouter/google/gemini-2.5-pro": "Gemini 2.5 Pro (OpenRouter)",
+    "gemini/gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
+    "gemini/gemini-2.0-flash": "Gemini 2.0 Flash",
     "gemini/gemini-2.0-flash-preview-image-generation": "Gemini 2.0 Flash Image",
     "gemini/gemini-2.5-flash-image-preview": "Gemini 2.5 Flash Image",
-    "gemini/gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
     ## Anthropic Claude
     "openrouter/anthropic/claude-sonnet-4": "Claude Sonnet 4 (OpenRouter)",
     "openrouter/anthropic/claude-opus-4.1": "Claude Opus 4.1 (OpenRouter)",
@@ -3966,7 +3968,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 **Quick Model Selection Shortcuts**
 Start your messages with these shortcuts to use specific models:
 - `.c` → GPT-5 Chat (OpenRouter): Latest Non-reasoning OpenAI model
-- `.f` → Gemini 2.5 Flash Lite: Ultra-fast responses
+- `.f` → Gemini 2.0 Flash: Fast responses, more generous free tier
 - `.ff` → Gemini 2.5 Flash: Fast responses
 - `.g` → Gemini 2.5 Pro: Google's flagship model
 - `.d` → DeepSeek Reasoner
