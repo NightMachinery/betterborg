@@ -22,6 +22,22 @@ We should make the functions in util like `discreet_send` usable without running
 #+END_SRC
 
 
+* _
+#+BEGIN_SRC markdown
+```
+Error: litellm.ServiceUnavailableError: litellm.MidStreamFallbackError: litellm.BadRequestError: VertexAIException BadRequestError - b'{\n  "error": {\n    "code": 400,\n    "message": "The GenerateContentRequest proto is invalid:\\n  * tools[0].tool_type: one_of \'tool_type\' has more than one initialized field: google_search, url_context",\n    "status": "INVALID_ARGUMENT"\n  }\n}\n' Original exception: BadRequestError: litellm.BadRequestError: VertexAIException BadRequestError - b'{\n  "error": {\n    "code": 400,\n    "message": "The GenerateContentRequest proto is invalid:\\n  * tools[0].tool_type: one_of \'tool_type\' has more than one initialized field: google_search, url_context",\n    "status": "INVALID_ARGUMENT"\n  }\n}\n'
+```
+
+It seems for the model     "gemini/gemini-2.0-flash", both google_search and url_context, cannot be enabled at the same time. When both are, disable url_context in:
+```
+            if prefs.enabled_tools and not prefs.json_mode:
+                api_kwargs["tools"] = [{t: {}} for t in prefs.enabled_tools]
+                ic(api_kwargs["tools"])
+```
+
+#+END_SRC
+
+
 * DONE we could add `ALSO_IF_LESS_THAN` to `SendFileMode` with another kwarg `file_only_threshold=30000`.
 
 * DONE `edit_message`: add optional kwarg `api_keys: dict` (service (e.g. gemini) -> api_key_value) which callers can pass to avoid using sender_id etc. logic for getting the key
