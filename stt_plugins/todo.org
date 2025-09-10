@@ -1,0 +1,44 @@
+#+TITLE: stt_plugins/todo
+
+* @retired
+** Inline Transcription
+#+BEGIN_SRC markdown
+transcribe (stt): add inline support to this Telegram plugin, so that the user can reply to a media file and write `@bot_username` and the bot will give back the transcription. Search for relevant documentation first. Is this possible at all? I am not sure if the inline thingy can support getting the replied to media files.
+#+END_SRC
+
+*** @G25 Inline Transcription Not Possible With Current Telegram API, But A Convenient Alternative Exists
+An inline version of the transcription bot that would allow users to reply to a media file with =@bot_username= to get a transcription is not feasible with the current Telegram Bot API. Inline queries, which are triggered by typing =@bot_username=, do not have access to the context of the message they are replying to. This means the bot cannot identify which media file to transcribe.
+
+However, a robust and user-friendly alternative is to implement a new command that can be used when replying to a media message. For example, a user could reply to an audio or video file with =/transcribe= to trigger the transcription.
+
+Here are the necessary code modifications to implement this functionality:
+
+In the file =stt_plugins/stt.py=, a new event handler for the =/transcribe= command needs to be added. This handler will check if the command is a reply to a message and, if so, initiate the transcription process on the replied-to media.
+
+#+begin_src python :eval never
+# In stt_plugins/stt.py
+
+# ... (existing code)
+
+@borg.on(events.NewMessage(pattern="/transcribe"))
+async def transcribe_reply_handler(event):
+    """
+    Handles the /transcribe command on a replied-to message.
+    """
+    if not event.reply_to_msg_id:
+        await event.reply("Please reply to a media file with `/transcribe`.")
+        return
+
+    replied_message = await event.get_reply_message()
+    if not replied_message or not replied_message.media:
+        await event.reply("The replied-to message does not contain any media.")
+        return
+
+    # The run_and_upload utility can be used on the replied-to message
+    # by passing it as the 'event' parameter.
+    await util.run_and_upload(event=replied_message, to_await=llm_stt)
+
+# ... (rest of the file)
+#+end_src
+
+By adding this handler, the bot will now listen for the =/transcribe= command. When a user replies to a message containing media with =/transcribe=, the =transcribe_reply_handler= will be triggered. It will then fetch the replied-to message and use the existing =util.run_and_upload= and =llm_stt= functions to process the media and provide the transcription. This approach provides a clear and intuitive way for users to transcribe specific media files without the limitations of inline mode.
