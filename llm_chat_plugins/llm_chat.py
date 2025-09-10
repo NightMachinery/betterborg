@@ -6066,7 +6066,20 @@ async def chat_handler(event):
             api_kwargs["safety_settings"] = SAFETY_SETTINGS
             # Upstream Gemini Limitation: Only enable tools if JSON mode is OFF.
             if prefs.enabled_tools and not prefs.json_mode:
-                api_kwargs["tools"] = [{t: {}} for t in prefs.enabled_tools]
+                tools_to_use = list(prefs.enabled_tools)
+
+                # Fix for gemini/gemini-2.0-flash: cannot have both googleSearch and urlContext
+                if (
+                    "gemini-2.0-flash" in model_in_use
+                    and "googleSearch" in tools_to_use
+                    and "urlContext" in tools_to_use
+                ):
+                    tools_to_use.remove("urlContext")
+                    # print("Disabled url_context due to conflict with google_search for gemini/gemini-2.0-flash")
+
+                api_kwargs["tools"] = [{t: {}} for t in tools_to_use]
+                # ic(api_kwargs["tools"])
+
             if prefs.thinking and "2.5-pro" not in model_in_use:
                 #: Note: Gemini 2.5 Pro and 2.5 Flash come with thinking on by default.
                 #: [[https://ai.google.dev/gemini-api/docs/models][Gemini models  |  Gemini API  |  Google AI for Developers]]
