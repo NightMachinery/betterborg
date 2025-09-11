@@ -241,6 +241,7 @@ def _register_prompt_family(
 
 
 PROMPT_REPLACEMENTS = {
+    re.compile(r"^\.\.\.$", re.IGNORECASE): r"""Continue the conversation.""",
     re.compile(
         r"^\.ocr$", re.MULTILINE | re.IGNORECASE
     ): r"""
