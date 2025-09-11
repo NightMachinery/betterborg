@@ -424,6 +424,20 @@ REVIEW_PROMPTS = _register_prompt_family(
 )
 PROMPT_REPLACEMENTS.update(REVIEW_PROMPTS)
 ##
+COMPACT_PATTERN_PREFIX = r"^\.com(?:pact)?"
+COMPACT_FILE_NAME = "compacter"
+
+COMPACT_PROMPTS = _register_prompt_family(
+    pattern_prefix=COMPACT_PATTERN_PREFIX,
+    file_base=COMPACT_FILE_NAME,
+    default_version="GPT5_v1",
+    versions=[],
+    pattern_suffix=r"(?:\s+|$)",
+    content_postfix="\n\n",
+    description="Compact conversation history",
+)
+PROMPT_REPLACEMENTS.update(COMPACT_PROMPTS)
+##
 
 # Register manual prompts for help generation
 _register_manual_prompt(".ocr", "OCR images and combine text into clean document")
