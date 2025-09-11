@@ -5790,23 +5790,22 @@ async def as_file_handler(event):
                 chat_id=chat_id,
             )
 
-            # Create temporary markdown file
-            with tempfile.TemporaryDirectory() as temp_dir:
-                temp_path = Path(temp_dir)
-                timestamp = datetime.now().strftime("%Y_%m_%d__%H_%M")
-                filename = f"conversation_history_{timestamp}.md"
-                markdown_file = temp_path / filename
-                markdown_file.write_text(markdown_content, encoding="utf-8")
+            # Send as file with auto-generated title and description
+            sent_file = await util._send_as_file_with_filename(
+                text=markdown_content,
+                parse_mode="md",
+                file_name_mode="llm",
+                message_obj=event,
+                reply_to=None,
+                default_caption="",
+            )
 
-                # Send the file (use respond, not reply as requested)
-                sent_file = await event.respond(file=str(markdown_file))
-
-                # Include warnings if any
-                if history_result.warnings:
-                    warning_text = f"{BOT_META_INFO_PREFIX}⚠️ Warnings:\n" + "\n".join(
-                        f"• {warning}" for warning in history_result.warnings
-                    )
-                    await event.respond(warning_text, reply_to=sent_file)
+            # Include warnings if any
+            if history_result.warnings:
+                warning_text = f"{BOT_META_INFO_PREFIX}⚠️ Warnings:\n" + "\n".join(
+                    f"• {warning}" for warning in history_result.warnings
+                )
+                await event.respond(warning_text, reply_to=sent_file)
 
     except Exception as e:
         await llm_util.handle_llm_error(
