@@ -964,6 +964,10 @@ BOT_COMMANDS = [
         "command": "helpmagics",
         "description": "Show all available magic prompt shortcuts",
     },
+    {
+        "command": "asfile",
+        "description": "Export conversation history as markdown file",
+    },
 ]
 # Create a set of command strings (e.g., {"/start", "/help"}) for efficient lookup
 KNOWN_COMMAND_SET = {f"/{cmd['command']}".lower() for cmd in BOT_COMMANDS}
@@ -1010,6 +1014,20 @@ class ProcessMediaResult:
 
     media_part: Optional[Dict]
     warnings: List[str]
+
+
+@dataclass
+class FileReference:
+    """Dataclass for file references in export mode."""
+
+    name: str
+    type: str  # photo, audio, video, document
+    telegram_id: str
+
+    def to_export_string(self) -> str:
+        return (
+            f"File{{Name={self.name}, Type={self.type}, TelegramID={self.telegram_id}}}"
+        )
 
 
 @dataclass
@@ -2082,7 +2100,7 @@ def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
         return False
 
     if text in KNOWN_STRICT_COMMANDS:
-        return False
+        return True
 
     # Extract first word/command
     command = text.split(None, 1)[0].lower()
@@ -3026,32 +3044,26 @@ async def _log_conversation(
         prefs_dict.pop("system_prompt", None)
         prefs_json = json.dumps(prefs_dict, indent=2)
 
-        log_parts = [
-            f"Date: {timestamp}",
-            f"User ID: {user_id}",
-            f"Name: {full_name}",
-            f"Username: @{username}",
-            f"Model: {model_in_use}",
-            "--- Preferences ---",
-            prefs_json,
-            "--- Conversation ---",
+        # Add the final assistant response to messages for unified processing
+        messages_with_response = messages + [
+            {"role": "assistant", "content": final_response}
         ]
-        for msg in messages:
-            role = msg.get("role", "unknown").capitalize()
-            content = msg.get("content")
-            log_parts.append(f"\n[{role}]:")
-            if isinstance(content, str):
-                log_parts.append(content)
-            elif isinstance(content, list):
-                for part in content:
-                    if part.get("type") == "text":
-                        log_parts.append(part.get("text", ""))
-                    else:  # Handle media attachments in logs
-                        log_parts.append("[Attachment: Media Content]")
-        log_parts.append("\n[Assistant]:")
-        log_parts.append(final_response)
+
+        # Use unified formatter with full metadata mode and plain text format
+        formatted_content = _format_conversation_history(
+            messages_with_response,
+            format_type="plain",
+            metadata_mode="full",
+            timestamp=timestamp,
+            user_id=user_id,
+            full_name=full_name,
+            username=username,
+            model_in_use=model_in_use,
+            prefs_json=prefs_json,
+        )
+
         with open(log_file_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(log_parts))
+            f.write(formatted_content)
     except Exception as e:
         print(f"Failed to write chat log for user {event.sender_id}: {e}")
         traceback.print_exc()
@@ -3163,6 +3175,55 @@ async def _get_message_role(message: Message) -> str:
     return role
 
 
+async def _create_export_file_reference(message: Message) -> FileReference:
+    """Create a simple file reference for export mode without downloading/processing media."""
+    if not message.media:
+        return None
+
+    try:
+        # Extract basic file info from Telegram message
+        filename = "unknown_file"
+        file_type = "document"
+        telegram_id = str(message.id)
+
+        if hasattr(message.media, "document") and message.media.document:
+            doc = message.media.document
+            telegram_id = str(doc.id)
+
+            # Try to get filename from attributes
+            for attr in doc.attributes:
+                if hasattr(attr, "file_name") and attr.file_name:
+                    filename = attr.file_name
+                    break
+
+            # Determine file type from mime_type
+            if hasattr(doc, "mime_type") and doc.mime_type:
+                mime_type = doc.mime_type
+                if mime_type.startswith("image/"):
+                    file_type = "photo"
+                elif mime_type.startswith("video/"):
+                    file_type = "video"
+                elif mime_type.startswith("audio/"):
+                    file_type = "audio"
+                else:
+                    file_type = "document"
+
+        elif hasattr(message.media, "photo") and message.media.photo:
+            # Photo media
+            filename = "photo.jpg"
+            file_type = "photo"
+            telegram_id = str(message.media.photo.id)
+
+        # Return FileReference directly
+        return FileReference(name=filename, type=file_type, telegram_id=telegram_id)
+
+    except Exception as e:
+        print(f"Error creating export file reference: {e}")
+        return FileReference(
+            name="unknown_file", type="document", telegram_id=str(message.id)
+        )
+
+
 async def _process_message_content(
     message: Message,
     role: str,
@@ -3176,6 +3237,7 @@ async def _process_message_content(
     metadata_prefix: str = "",
     check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
     is_private: bool,
+    export_mode: bool = False,
 ) -> ProcessContentResult:
     """Processes a single message's text and media into litellm content parts."""
     text_buffer, media_parts, warnings = [], [], []
@@ -3230,20 +3292,28 @@ async def _process_message_content(
     if processed_text:
         text_buffer.append(processed_text)
 
-    media_result = await _process_media(
-        message,
-        temp_dir,
-        model_capabilities,
-        issued_warnings,
-        sender_id,
-        api_key,
-        model_in_use,
-        is_private=is_private,
-        check_gemini_cached_files_p=check_gemini_cached_files_p,
-    )
-    warnings.extend(media_result.warnings)
-    if media_result.media_part:
-        media_parts.append(media_result.media_part)
+    if export_mode:
+        # Export mode: create file references without processing
+        if message.media:
+            file_ref = await _create_export_file_reference(message)
+            if file_ref:
+                media_parts.append(file_ref)
+    else:
+        # Normal mode: process media fully
+        media_result = await _process_media(
+            message,
+            temp_dir,
+            model_capabilities,
+            issued_warnings,
+            sender_id,
+            api_key,
+            model_in_use,
+            is_private=is_private,
+            check_gemini_cached_files_p=check_gemini_cached_files_p,
+        )
+        warnings.extend(media_result.warnings)
+        if media_result.media_part:
+            media_parts.append(media_result.media_part)
 
     return ProcessContentResult(
         text_parts=text_buffer, media_parts=media_parts, warnings=warnings
@@ -3289,6 +3359,8 @@ async def _process_turns_to_history(
     check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
     *,
     is_private: bool,
+    export_mode: bool = False,
+    include_system_prompt_p: bool = True,
 ) -> tuple[List[dict], List[str]]:
     """
     Processes a final, sorted list of messages into litellm history format,
@@ -3299,8 +3371,15 @@ async def _process_turns_to_history(
     history = []
     all_warnings = []
     issued_warnings = set()  # Track issued warnings for this turn processing.
+
+    #: We do NOT include the system prompt if there are no messages to process.
     if not message_list:
         return history, all_warnings
+
+    if include_system_prompt_p:
+        prompt_info = get_system_prompt_info(event)
+        system_message = {"role": "system", "content": prompt_info.effective_prompt}
+        history.insert(0, system_message)
 
     user_prefs = user_manager.get_prefs(sender_id)
     active_metadata_mode = (
@@ -3335,6 +3414,7 @@ async def _process_turns_to_history(
                     metadata_prefix="",
                     check_gemini_cached_files_p=check_gemini_cached_files_p,
                     is_private=is_private,
+                    export_mode=export_mode,
                 )
                 text_buffer.extend(content_result.text_parts)
                 media_parts.extend(content_result.media_parts)
@@ -3382,6 +3462,7 @@ async def _process_turns_to_history(
                 metadata_prefix=metadata_prefix,
                 check_gemini_cached_files_p=check_gemini_cached_files_p,
                 is_private=is_private,
+                export_mode=export_mode,
             )
             all_warnings.extend(content_result.warnings)
 
@@ -3435,6 +3516,45 @@ async def _get_initial_messages_for_reply_chain(event) -> List[Message]:
     return messages
 
 
+async def build_conversation_history_for_export(
+    event,
+    context_mode: str,
+    *,
+    is_private: bool,
+    include_system_prompt_p: bool = True,
+) -> ConversationHistoryResult:
+    """
+    Wrapper for export mode with dummy credentials and export-optimized settings.
+    No API key required - creates file references without downloading media.
+    """
+    # Use dummy credentials that won't require actual API calls
+    dummy_api_key = "export_mode_dummy"
+    dummy_model = "export_dummy_model"
+    dummy_model_capabilities = {
+        "vision": True,
+        "audio_input": True,
+        "video_input": True,
+        "audio_output": True,
+        "pdf_input": True,
+        "image_generation": True,
+    }
+
+    # Use temporary directory for any processing that might be needed
+    with tempfile.TemporaryDirectory() as temp_dir:
+        return await build_conversation_history(
+            event,
+            context_mode=context_mode,
+            temp_dir=Path(temp_dir),
+            model_capabilities=dummy_model_capabilities,
+            api_key=dummy_api_key,
+            model_in_use=dummy_model,
+            check_gemini_cached_files_p=False,  # Trust cache, avoid API calls
+            is_private=is_private,
+            export_mode=True,  # Skip media processing, create file references
+            include_system_prompt_p=include_system_prompt_p,
+        )
+
+
 async def build_conversation_history(
     event,
     context_mode: str,
@@ -3445,6 +3565,8 @@ async def build_conversation_history(
     check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
     *,
     is_private: bool,
+    export_mode: bool = False,
+    include_system_prompt_p: bool = True,
 ) -> ConversationHistoryResult:
     """
     Orchestrates the construction of a conversation history based on the user's
@@ -3477,6 +3599,8 @@ async def build_conversation_history(
                 model_in_use,
                 check_gemini_cached_files_p=check_gemini_cached_files_p,
                 is_private=is_private,
+                export_mode=export_mode,
+                include_system_prompt_p=include_system_prompt_p,
             )
             return ConversationHistoryResult(history=history, warnings=warnings)
 
@@ -3587,7 +3711,10 @@ async def build_conversation_history(
         model_in_use,
         check_gemini_cached_files_p=check_gemini_cached_files_p,
         is_private=is_private,
+        export_mode=export_mode,
+        include_system_prompt_p=include_system_prompt_p,
     )
+
     return ConversationHistoryResult(history=history, warnings=warnings)
 
 
@@ -3809,6 +3936,18 @@ def register_handlers():
             func=lambda e: e.is_private,
         )
     )(testlive_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/asfile{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(as_file_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^\.\.\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(as_file_handler)
 
     # Func-based Handlers
     borg.on(
@@ -3975,6 +4114,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /status: Shows a summary of your current settings.
 - /stop: Stop all in-progress chat requests.
 - /log: Get your last {LOG_COUNT_LIMIT} conversation logs as files.
+- /asfile or ..: Export conversation history as markdown file.
 - /setgeminikey: Sets or updates your Gemini API key.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
 - /setSystemPrompt: Change my core instructions or reset to default.
@@ -5525,6 +5665,301 @@ async def testlive_handler(event):
         )
 
 
+async def _determine_context_mode_and_handle_transitions(
+    event,
+    *,
+    prefs,
+    user_id: int,
+    is_private: bool,
+    group_id,
+) -> Optional[str]:
+    """
+    Determine context mode and handle transitions/separators.
+
+    Returns:
+        None: Event was handled completely (early return case)
+        str: Context mode to use for conversation processing
+    """
+    # --- Context and Separator Logic ---
+    # Check for override context mode first
+    override_mode = override_chat_context_mode.get(event.chat_id)
+    if override_mode:
+        if override_mode == "recent":
+            return None  # Early return - first message handles the rest
+        context_mode_to_use = override_mode
+    else:
+        # Check for chat-specific context mode
+        chat_context_mode = chat_manager.get_context_mode(event.chat_id)
+        if chat_context_mode:
+            context_mode_to_use = chat_context_mode
+        else:
+            context_mode_to_use = (
+                prefs.context_mode if is_private else prefs.group_context_mode
+            )
+
+    # Smart Mode logic
+    if context_mode_to_use == "smart":
+        current_smart_mode = get_smart_context_mode(user_id)
+
+        # Separator message switches mode
+        if event.text and event.text.strip() == CONTEXT_SEPARATOR:
+            if not IS_BOT:
+                USERBOT_HISTORY_CACHE.pop(event.chat_id, None)
+
+            if current_smart_mode != "until_separator":
+                await set_smart_context_mode(user_id, "until_separator")
+                await event.reply(
+                    f"{BOT_META_INFO_PREFIX}**Smart Mode**: Switched to `Until Separator` context. "
+                    "All messages from now on will be included until you reply to a message."
+                )
+            else:  # Already in this mode
+                await event.reply(
+                    f"{BOT_META_INFO_PREFIX}**Smart Mode**: Context cleared. Still in `Until Separator` context mode."
+                )
+
+            return None
+
+        # Reply (not to a forward) switches back to reply_chain
+        if event.is_reply and not event.forward:
+            if current_smart_mode == "until_separator":
+                await set_smart_context_mode(user_id, "reply_chain")
+
+                await event.reply(
+                    f"{BOT_META_INFO_PREFIX}**Smart Mode**: Switched to `Reply Chain` context."
+                )
+            context_mode_to_use = "reply_chain"
+        else:  # Not a reply, use the current state
+            context_mode_to_use = current_smart_mode
+
+    # Standard separator logic for group chats or explicit "until_separator" mode
+    elif context_mode_to_use == "until_separator" and event.text and not group_id:
+        text_to_check = event.text.strip()
+        if BOT_USERNAME and text_to_check.startswith(BOT_USERNAME):
+            text_to_check = text_to_check[len(BOT_USERNAME) :].strip()
+
+        if text_to_check == CONTEXT_SEPARATOR:
+            if not IS_BOT:
+                USERBOT_HISTORY_CACHE.pop(event.chat_id, None)
+            reply_text = "Context cleared. The conversation will now start fresh from your next message"
+            if not is_private:
+                activation_mode = prefs.group_activation_mode
+                if activation_mode == "mention_and_reply":
+                    reply_text += " mentioning me or replying to me."
+                else:
+                    reply_text += " mentioning me."
+            else:
+                reply_text += "."
+            await event.reply(f"{BOT_META_INFO_PREFIX}{reply_text}")
+            return None
+
+    # --- ENDED: Context and Separator Logic ---
+    return context_mode_to_use
+
+
+async def as_file_handler(event):
+    """Export conversation history as markdown file."""
+    user_id = event.sender_id
+    chat_id = event.chat_id
+
+    try:
+        async with borg.action(event.chat, "document") as action:
+            # Get effective context mode (for export, transitions won't execute)
+            prefs = user_manager.get_prefs(user_id)
+            effective_context_mode = (
+                await _determine_context_mode_and_handle_transitions(
+                    event,
+                    prefs=prefs,
+                    user_id=user_id,
+                    is_private=event.is_private,
+                    group_id=event.grouped_id,
+                )
+            )
+
+            # Use export wrapper (no API key required)
+            history_result = await build_conversation_history_for_export(
+                event,
+                context_mode=effective_context_mode,
+                is_private=event.is_private,
+            )
+
+            # Format as markdown using unified formatter
+            markdown_content = _format_conversation_history(
+                history_result.history,
+                format_type="markdown",
+                metadata_mode="basic",
+                chat_id=chat_id,
+            )
+
+            # Create temporary markdown file
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                timestamp = datetime.now().strftime("%Y_%m_%d__%H_%M")
+                filename = f"conversation_history_{timestamp}.md"
+                markdown_file = temp_path / filename
+                markdown_file.write_text(markdown_content, encoding="utf-8")
+
+                # Send the file (use respond, not reply as requested)
+                sent_file = await event.respond(file=str(markdown_file))
+
+                # Include warnings if any
+                if history_result.warnings:
+                    warning_text = f"{BOT_META_INFO_PREFIX}⚠️ Warnings:\n" + "\n".join(
+                        f"• {warning}" for warning in history_result.warnings
+                    )
+                    await event.respond(warning_text, reply_to=sent_file)
+
+    except Exception as e:
+        await llm_util.handle_llm_error(
+            event=event,
+            exception=e,
+            base_error_message="Sorry, an error occurred while exporting conversation history.",
+            error_id_p=True,
+        )
+
+
+def _format_message_content(content) -> str:
+    """Format message content, handling both string and multi-part content.
+
+    Converts file references to File{Name=..., Type=..., TelegramID=...} format.
+    """
+    if isinstance(content, str):
+        return content
+    elif isinstance(content, list):
+        # Multi-part content
+        parts = []
+        for part in content:
+            if isinstance(part, FileReference):
+                # Direct FileReference - use its export string method
+                parts.append(part.to_export_string())
+            elif isinstance(part, dict):
+                if part.get("type") == "text":
+                    parts.append(part.get("text", ""))
+                elif part.get("type") == "image_url":
+                    # Convert image URLs to file reference format
+                    url = part.get("image_url", {}).get("url", "N/A")
+                    parts.append(f"File{{Name=image, Type=image, URL={url}}}")
+                elif part.get("type") == "file":
+                    # Convert file references to our standard format
+                    file_info = part.get("file", {})
+                    filename = file_info.get("filename", "unknown_file")
+                    file_id = file_info.get("file_id", "unknown_id")
+                    # Extract type from filename or file_id if available
+                    if "." in filename:
+                        ext = filename.split(".")[-1].lower()
+                        if ext in ["jpg", "jpeg", "png", "gif", "webp"]:
+                            file_type = "photo"
+                        elif ext in ["mp4", "mov", "avi", "mkv"]:
+                            file_type = "video"
+                        elif ext in ["mp3", "wav", "ogg", "m4a"]:
+                            file_type = "audio"
+                        else:
+                            file_type = "document"
+                    else:
+                        file_type = "document"
+                    parts.append(
+                        f"File{{Name={filename}, Type={file_type}, TelegramID={file_id}}}"
+                    )
+                else:
+                    # Handle any other content types as generic file reference
+                    content_type = part.get("type", "unknown")
+                    parts.append(
+                        f"File{{Name={content_type}_content, Type={content_type}, TelegramID=unknown}}"
+                    )
+            else:
+                parts.append(str(part))
+        return "\n".join(parts)
+    else:
+        return str(content)
+
+
+def _format_conversation_history(
+    messages: List[dict], format_type: str, metadata_mode: str, **metadata_kwargs
+) -> str:
+    """Format conversation history with unified content processing.
+
+    Args:
+        messages: List of message dictionaries
+        format_type: "plain" or "markdown"
+        metadata_mode: "none", "basic", or "full"
+        **metadata_kwargs: Additional metadata to include in headers
+    """
+    lines = []
+
+    # Add metadata headers based on mode
+    if metadata_mode == "basic":
+        if format_type == "markdown":
+            lines.append("# Conversation History")
+            lines.append("")
+            lines.append(
+                f"**Export Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+        else:
+            lines.append("=== Conversation History ===")
+            lines.append(f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            if "chat_id" in metadata_kwargs:
+                lines.append(f"Chat ID: {metadata_kwargs['chat_id']}")
+            lines.append("=" * 40)
+            lines.append("")
+
+    elif metadata_mode == "full":
+        if format_type == "markdown":
+            lines.append("# Conversation Log")
+            lines.append("")
+
+        # Add full metadata (for log files)
+        if "timestamp" in metadata_kwargs:
+            lines.append(f"Date: {metadata_kwargs['timestamp']}")
+        if "user_id" in metadata_kwargs:
+            lines.append(f"User ID: {metadata_kwargs['user_id']}")
+        if "full_name" in metadata_kwargs:
+            lines.append(f"Name: {metadata_kwargs['full_name']}")
+        if "username" in metadata_kwargs:
+            lines.append(f"Username: @{metadata_kwargs['username']}")
+        if "model_in_use" in metadata_kwargs:
+            lines.append(f"Model: {metadata_kwargs['model_in_use']}")
+
+        if "prefs_json" in metadata_kwargs:
+            lines.append("--- Preferences ---")
+            lines.append(metadata_kwargs["prefs_json"])
+
+        lines.append("--- Conversation ---")
+        lines.append("")
+
+    # Format each message
+    for i, turn in enumerate(messages, 1):
+        role = turn.get("role", "unknown")
+        content = turn.get("content", "")
+
+        # Format role header based on format type
+        if format_type == "markdown":
+            if role == "user":
+                lines.append(f"# 👤 User Message {i}")
+            elif role == "assistant":
+                lines.append(f"# 🤖 Assistant Message {i}")
+            elif role == "system":
+                lines.append(f"# ⚙️ System Message {i}")
+            else:
+                lines.append(f"# {role.title()} Message {i}")
+            lines.append("")
+        else:
+            # Plain text format
+            lines.append(f"\n[{role.capitalize()}]:")
+
+        # Format content using unified content formatter
+        formatted_content = _format_message_content(content)
+        lines.append(formatted_content)
+
+        if format_type == "markdown":
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+    return "\n".join(lines)
+
+
 async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     """
     Determines if a message is a valid conversational message to be
@@ -5885,84 +6320,24 @@ async def chat_handler(event):
         await handle_live_mode_message(event)
         return
 
-    # --- Context and Separator Logic ---
     group_id = event.grouped_id
+
+    if group_id:
+        if group_id in bot_util.PROCESSED_GROUP_IDS:
+            return  # Already being processed
+
+        bot_util.PROCESSED_GROUP_IDS.add(group_id)
+
     prefs = user_manager.get_prefs(user_id)
     is_private = event.is_private
 
-    # Check for override context mode first
-    override_mode = override_chat_context_mode.get(event.chat_id)
-    if override_mode:
-        if override_mode == "recent":
-            return  # Early return - first message handles the rest
-        context_mode_to_use = override_mode
-    else:
-        # Check for chat-specific context mode
-        chat_context_mode = chat_manager.get_context_mode(event.chat_id)
-        if chat_context_mode:
-            context_mode_to_use = chat_context_mode
-        else:
-            context_mode_to_use = (
-                prefs.context_mode if is_private else prefs.group_context_mode
-            )
-
-    # Smart Mode logic
-    if context_mode_to_use == "smart":
-        current_smart_mode = get_smart_context_mode(user_id)
-
-        # Separator message switches mode
-        if event.text and event.text.strip() == CONTEXT_SEPARATOR:
-            if not IS_BOT:
-                USERBOT_HISTORY_CACHE.pop(event.chat_id, None)
-
-            if current_smart_mode != "until_separator":
-                await set_smart_context_mode(user_id, "until_separator")
-                await event.reply(
-                    f"{BOT_META_INFO_PREFIX}**Smart Mode**: Switched to `Until Separator` context. "
-                    "All messages from now on will be included until you reply to a message."
-                )
-            else:  # Already in this mode
-                await event.reply(
-                    f"{BOT_META_INFO_PREFIX}**Smart Mode**: Context cleared. Still in `Until Separator` context mode."
-                )
-
-            return
-
-        # Reply (not to a forward) switches back to reply_chain
-        if event.is_reply and not event.forward:
-            if current_smart_mode == "until_separator":
-                await set_smart_context_mode(user_id, "reply_chain")
-
-                await event.reply(
-                    f"{BOT_META_INFO_PREFIX}**Smart Mode**: Switched to `Reply Chain` context."
-                )
-            context_mode_to_use = "reply_chain"
-        else:  # Not a reply, use the current state
-            context_mode_to_use = current_smart_mode
-
-    # Standard separator logic for group chats or explicit "until_separator" mode
-    elif context_mode_to_use == "until_separator" and event.text and not group_id:
-        text_to_check = event.text.strip()
-        if BOT_USERNAME and text_to_check.startswith(BOT_USERNAME):
-            text_to_check = text_to_check[len(BOT_USERNAME) :].strip()
-
-        if text_to_check == CONTEXT_SEPARATOR:
-            if not IS_BOT:
-                USERBOT_HISTORY_CACHE.pop(event.chat_id, None)
-            reply_text = "Context cleared. The conversation will now start fresh from your next message"
-            if not is_private:
-                activation_mode = prefs.group_activation_mode
-                if activation_mode == "mention_and_reply":
-                    reply_text += " mentioning me or replying to me."
-                else:
-                    reply_text += " mentioning me."
-            else:
-                reply_text += "."
-            await event.reply(f"{BOT_META_INFO_PREFIX}{reply_text}")
-            return
-
-    if group_id and group_id in bot_util.PROCESSED_GROUP_IDS:
-        return  # Already being processed
+    # --- Context and Separator Logic ---
+    context_mode_to_use = await _determine_context_mode_and_handle_transitions(
+        event, prefs=prefs, user_id=user_id, is_private=is_private, group_id=group_id
+    )
+    if context_mode_to_use is None:
+        return  # Event was handled by the function
+    # --- ENDED: Context and Separator Logic ---
 
     # Detect model prefix and process message text
     prefix_result = _detect_and_process_message_prefix(event.text)
@@ -5998,9 +6373,6 @@ async def chat_handler(event):
         await llm_db.request_api_key_message(event, service_needed)
         return
 
-    if group_id:
-        bot_util.PROCESSED_GROUP_IDS.add(group_id)
-
     if event.text and re.match(r"^\.s\b", event.text):
         RECENT_WAIT_TIME = 1
         override_chat_context_mode[event.chat_id] = "recent"
@@ -6035,6 +6407,7 @@ async def chat_handler(event):
             api_key,
             model_in_use,
             is_private=event.is_private,
+            include_system_prompt_p=True,
         )
         messages = history_result.history
         warnings = history_result.warnings
@@ -6051,21 +6424,11 @@ async def chat_handler(event):
             await util.edit_message(response_message, error_message, parse_mode="md")
             return
 
-        # --- System Prompt Selection Logic ---
-        prompt_info = get_system_prompt_info(event)
-        system_prompt_to_use = prompt_info.effective_prompt
-
-        system_message = {"role": "system", "content": system_prompt_to_use}
-        # Add context caching for native Gemini models
+        # --- Context Caching for Native Gemini Models ---
         if is_native_gemini(model_in_use):
-            # Add cache_control to system message
-            system_message["cache_control"] = {"type": "ephemeral"}
-
             # Add cache_control to ALL conversation messages for full context caching
             for message in messages:
                 message["cache_control"] = {"type": "ephemeral"}
-
-        messages.insert(0, system_message)
 
         # --- Construct API call arguments ---
         is_gemini_model_p = is_gemini_model(model_in_use)
