@@ -372,7 +372,10 @@ async def _handle_common_error_cases(
             print(f"Error while sending/editing rate limit exception message: {e}")
         return True
 
-    error_message = f"{BOT_META_INFO_PREFIX}\n```\n{str(exception)}\n```"
+    error_message = f"{BOT_META_INFO_PREFIX}\n\n{str(exception)}\n"
+    #: Not putting the code block markers allows more flexibility in the error message formatting. The caller can format its exception itself.
+    #: Note that we are only printing the exception if it is an explicit TelegramUserReplyException.
+    # error_message = f"{BOT_META_INFO_PREFIX}\n```\n{str(exception)}\n```"
 
     if isinstance(exception, TelegramUserReplyException):
         try:

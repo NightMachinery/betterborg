@@ -1756,11 +1756,18 @@ def _create_retry_logger():
     return retry_logger
 
 
-async def _create_server_error_message(event, exception) -> str:
+async def _create_server_error_message(
+    event,
+    exception,
+    *,
+    message_postfix="",
+) -> str:
     """Create a server error message with admin details if applicable."""
     base_message = "The AI model's server is currently unavailable. This is likely an upstream issue. Please try again later."
+    base_message += message_postfix
+
     if await util.isAdmin(event):
-        base_message += f"\n\n**Error:** {str(exception)}"
+        base_message += f"\n\n**Error:**\n```{str(exception)}\n```"
     return base_message
 
 
@@ -1888,10 +1895,13 @@ async def _call_llm_with_retry(
         if is_500_error and max_retries > 0:
             # Check if we have accumulated significant text - if so, avoid retrying
             if len(response_text) >= max_retriable_text_length:
-                print(
-                    f"LLM call failed but accumulated text ({len(response_text)} chars) exceeds retry threshold ({max_retriable_text_length}). Not retrying."
+                msg = f"LLM call failed but accumulated text ({len(response_text)} chars) exceeds retry threshold ({max_retriable_text_length}). Not retrying."
+                print(msg)
+                error_message = await _create_server_error_message(
+                    event,
+                    e,
+                    message_postfix=f"\n\n{msg}",
                 )
-                error_message = await _create_server_error_message(event, e)
                 raise llm_util.TelegramUserReplyException(error_message)
 
             print(
@@ -1912,8 +1922,13 @@ async def _call_llm_with_retry(
             )
         elif is_500_error:
             traceback.print_exc()
-            print(f"LLM call failed after {MAX_RETRIES} attempts.")
-            error_message = await _create_server_error_message(event, e)
+            msg = f"LLM call failed after {MAX_RETRIES} attempts."
+            print(msg)
+            error_message = await _create_server_error_message(
+                event,
+                e,
+                message_postfix=f"\n\n{msg}",
+            )
             raise llm_util.TelegramUserReplyException(error_message)
         else:
             # Re-raise other errors
