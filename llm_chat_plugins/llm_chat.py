@@ -430,7 +430,7 @@ COMPACT_FILE_NAME = "compacter"
 COMPACT_PROMPTS = _register_prompt_family(
     pattern_prefix=COMPACT_PATTERN_PREFIX,
     file_base=COMPACT_FILE_NAME,
-    default_version="GPT5_v1",
+    default_version=PromptVersion("GPT5_v1", []),
     versions=[],
     pattern_suffix=r"(?:\s+|$)",
     content_postfix="\n\n",
@@ -3365,15 +3365,35 @@ async def _process_message_content(
 
 
 async def _finalize_content_parts(text_buffer: list, media_parts: list) -> list:
-    """Combines text and media parts into a final list for a history entry."""
+    """Combines text and media parts into a final list for a history entry.
+
+    Handles both dict media parts (normal mode) and FileReference objects
+    (export mode). FileReference objects are converted into their export string
+    and merged into a text part to avoid attribute errors downstream.
+    """
     content_parts = []
 
     text_from_files = []
     for part in media_parts:
-        if part.get("type") == "text":
-            text_from_files.append(part["text"])
+        # Handle export-mode file references
+        if isinstance(part, FileReference):
+            try:
+                text_from_files.append(part.to_export_string())
+            except Exception:
+                # Fallback to a simple string representation if anything goes wrong
+                text_from_files.append(str(part))
+            continue
+
+        # Normal dict-based media parts
+        if isinstance(part, dict):
+            part_type = part.get("type")
+            if part_type == "text":
+                text_from_files.append(part.get("text", ""))
+            else:
+                content_parts.append(part)
         else:
-            content_parts.append(part)
+            # Unknown media part type; coerce to string and merge into text
+            text_from_files.append(str(part))
 
     #: It seems that if the media parts are put first, the model will also see them first? I am not really sure, but it seems to help the model not say it doesn't have access to files when a file and its textual instructions are in the same message.
 
@@ -3381,12 +3401,16 @@ async def _finalize_content_parts(text_buffer: list, media_parts: list) -> list:
         content_parts.append({"type": "text", "text": "\n".join(text_buffer)})
 
     if text_from_files:
-        combined_file_text = "\n".join(text_from_files)
+        combined_file_text = "\n".join(filter(None, text_from_files))
         existing_text_part = next(
-            (p for p in content_parts if p["type"] == "text"), None
+            (p for p in content_parts if isinstance(p, dict) and p.get("type") == "text"),
+            None,
         )
         if existing_text_part:
-            existing_text_part["text"] += "\n" + combined_file_text
+            if existing_text_part.get("text"):
+                existing_text_part["text"] += "\n" + combined_file_text
+            else:
+                existing_text_part["text"] = combined_file_text
         else:
             content_parts.insert(0, {"type": "text", "text": combined_file_text})
 
