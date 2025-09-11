@@ -1541,11 +1541,14 @@ async def _generate_file_data(
     api_keys: dict | None = None,
     title_model: str | None = None,
     message_obj=None,
+    default_caption: str | None = None,
 ) -> FileGeneration:
     """Generate file data (filename, caption, extension) based on the specified mode."""
     # Determine file extension based on parse_mode
     file_ext = ".md" if parse_mode == "md" else ".txt"
-    default_caption = "This message is too long, so it has been sent as a text file."
+
+    if default_caption is None:
+        default_caption = "This message is too long, so it has been sent as a text file."
 
     if file_name_mode == "random":
         filename = _generate_random_filename(file_ext)
@@ -1627,6 +1630,7 @@ async def _send_as_file_with_filename(
     title_model: str | None = None,
     api_keys: dict | None = None,
     api_user_id: int | None = None,
+    default_caption: str | None = None,
 ):
     """Helper function to send text as file with intelligent filename generation."""
     try:
@@ -1642,6 +1646,7 @@ async def _send_as_file_with_filename(
                 api_keys=api_keys,
                 title_model=title_model,
                 message_obj=message_obj,
+                default_caption=default_caption,
             )
 
             # Use existing send_text_as_file function
