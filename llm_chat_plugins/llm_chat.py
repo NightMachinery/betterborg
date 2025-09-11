@@ -967,6 +967,13 @@ BOT_COMMANDS = [
 ]
 # Create a set of command strings (e.g., {"/start", "/help"}) for efficient lookup
 KNOWN_COMMAND_SET = {f"/{cmd['command']}".lower() for cmd in BOT_COMMANDS}
+#: KNOWN_STRICT_COMMANDS will be skipped when constructing the message history only if the whole text of message equals them. KNOWN_COMMAND_SET only checks if the first word of the message is a command.
+KNOWN_STRICT_COMMANDS = {
+    ".",
+    #: allow single dot for simply bookmarking a message
+    ##
+    "..",
+}
 
 
 SAFETY_SETTINGS = [
@@ -2063,17 +2070,22 @@ async def _retry_on_no_response_with_reasons(
 
 def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
     """Checks if text starts with a known command, with optional bot username stripping."""
+    text = text.strip()
+
+    # Strip bot username if requested
+    if strip_bot_username and BOT_USERNAME:
+        text = re.sub(
+            re.escape(BOT_USERNAME) + r"\b", "", text, flags=re.IGNORECASE
+        ).strip()
+
     if not text:
+        return False
+
+    if text in KNOWN_STRICT_COMMANDS:
         return False
 
     # Extract first word/command
     command = text.split(None, 1)[0].lower()
-
-    # Strip bot username if requested (for event.text processing)
-    if strip_bot_username and BOT_USERNAME:
-        command = re.sub(
-            re.escape(BOT_USERNAME) + r"\b", "", command, flags=re.IGNORECASE
-        ).strip()
 
     return command in KNOWN_COMMAND_SET
 
@@ -5522,10 +5534,6 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     if not (event.text or event.media):
         return False
     if event.forward:
-        return False
-
-    if event.text.strip() == ".":
-        #: allow single dot for simply bookmarking a message
         return False
 
     if _is_known_command(event.text):
