@@ -1645,7 +1645,7 @@ async def _send_as_file_with_filename(
             )
 
             # Use existing send_text_as_file function
-            await send_text_as_file(
+            return await send_text_as_file(
                 text=text,
                 suffix=file_data.suffix,
                 chat=chat,
