@@ -1819,7 +1819,7 @@ async def _call_llm_with_retry(
     edit_interval: float = None,
     *,
     max_retries: int = MAX_RETRIES,
-    max_retriable_text_length: int = 300,
+    max_retriable_text_length: int = 3000,
 ) -> LLMResponse:
     """Call LLM with retry logic for both streaming and non-streaming responses.
 
