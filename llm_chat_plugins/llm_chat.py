@@ -17,6 +17,7 @@ import ipaddress
 import urllib.parse
 import tempfile
 from datetime import datetime, timedelta, timezone
+import pytz
 from pathlib import Path
 from shutil import rmtree
 from itertools import groupby
@@ -2661,7 +2662,13 @@ class SystemPromptInfo:
     source: str  # "chat", "user", or "default"
 
 
-def get_system_prompt_info(event) -> SystemPromptInfo:
+def get_system_prompt_info(
+    event,
+    *,
+    include_username_p=True,
+    include_current_time_p=True,
+    timezone="Asia/Tehran",
+) -> SystemPromptInfo:
     """Returns comprehensive system prompt information for the given event."""
     user_id = event.sender_id
     chat_prompt = chat_manager.get_system_prompt(event.chat_id)
@@ -2679,11 +2686,34 @@ def get_system_prompt_info(event) -> SystemPromptInfo:
         effective_prompt = DEFAULT_SYSTEM_PROMPT
         source = "default"
 
+    # Build additional context sections
+    additional_sections = []
+
+    if include_username_p and BOT_USERNAME:
+        additional_sections.append(
+            f"Your username on Telegram is {BOT_USERNAME}. The user might mention you using this username."
+        )
+
+    if include_current_time_p:
+        # Get current time in specified timezone
+        tz = pytz.timezone(timezone)
+        current_time = datetime.now(tz)
+        # %Z includes timezone abbreviation (e.g., "IRST", "UTC", "EST")
+        time_str = current_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+        additional_sections.append(f"Current date and time: {time_str}")
+
+    # Add additional sections to effective prompt if any exist
+    final_effective_prompt = effective_prompt
+    if additional_sections:
+        additional_context = "\n\n---\n\n" + "\n\n".join(additional_sections)
+        final_effective_prompt = effective_prompt + additional_context
+
     return SystemPromptInfo(
         chat_prompt=chat_prompt,
         user_prompt=user_prompt,
         default_prompt=DEFAULT_SYSTEM_PROMPT,
-        effective_prompt=effective_prompt,
+        effective_prompt=final_effective_prompt,
         source=source,
     )
 
@@ -3992,12 +4022,6 @@ async def initialize_llm_chat():
                 print(
                     "LLM_Chat (Userbot): No username found. Group mention features will be unavailable."
                 )
-
-    if BOT_USERNAME:
-        DEFAULT_SYSTEM_PROMPT += f"""
-
-Your username on Telegram is {BOT_USERNAME}. The user might mention you using this username.
-"""
 
     # Load smart context states from Redis on startup (both bot and userbot)
     await load_smart_context_states()
