@@ -557,3 +557,61 @@ def get_service_from_model(model: str) -> str:
         return "mistral"
     else:
         return "gemini"
+
+
+def truncate_text_for_llm(
+    text: str,
+    *,
+    mode: str = "start_end",
+    to_length: int = 10000,
+    semantic_boundaries_p: bool = False,
+    start_split=0.6,
+) -> str:
+    """
+    Intelligently truncate text for LLM processing, preserving meaningful context.
+
+    Args:
+        text: The text to truncate
+        mode: Truncation mode - "start_end" includes both beginning and end
+        to_length: Target length for truncated text
+
+    Returns:
+        Truncated text with indication if content was truncated
+    """
+    if len(text) <= to_length:
+        return text
+
+    if mode == "start_end":
+        # Reserve space for truncation indicator
+        truncation_msg = "\n\n[... content truncated for brevity ...]\n\n"
+        available_length = to_length - len(truncation_msg)
+
+        # Split available space between start and end (60/40 split)
+        start_length = int(available_length * start_split)
+        end_length = available_length - start_length
+
+        # Find good split points (prefer sentence/paragraph boundaries)
+        start_text = text[:start_length]
+        end_text = text[-end_length:]
+
+        if semantic_boundaries_p:
+            # Try to split at sentence boundaries for cleaner truncation
+            for boundary in ["\n\n", "\n", ". ", "! ", "? "]:
+                # Adjust start boundary
+                boundary_pos = start_text.rfind(boundary)
+                if boundary_pos > start_length * 0.7:  # Don't truncate too aggressively
+                    start_text = start_text[: boundary_pos + len(boundary)]
+                    break
+
+            # Adjust end boundary
+            for boundary in ["\n\n", "\n", ". ", "! ", "? "]:
+                boundary_pos = end_text.find(boundary)
+                if boundary_pos != -1 and boundary_pos < end_length * 0.3:
+                    end_text = end_text[boundary_pos:]
+                    break
+
+        return start_text.strip() + truncation_msg + end_text.strip()
+
+    else:
+        # Default fallback: simple truncation
+        return text[:to_length] + "..."

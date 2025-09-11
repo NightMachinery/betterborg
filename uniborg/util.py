@@ -1544,11 +1544,15 @@ async def _generate_file_data(
     default_caption: str | None = None,
 ) -> FileGeneration:
     """Generate file data (filename, caption, extension) based on the specified mode."""
+    from uniborg import llm_util
+
     # Determine file extension based on parse_mode
     file_ext = ".md" if parse_mode == "md" else ".txt"
 
     if default_caption is None:
-        default_caption = "This message is too long, so it has been sent as a text file."
+        default_caption = (
+            "This message is too long, so it has been sent as a text file."
+        )
 
     if file_name_mode == "random":
         filename = _generate_random_filename(file_ext)
@@ -1586,13 +1590,20 @@ async def _generate_file_data(
             else:
                 # Set up LiteLLM with the API key
                 # Use LiteLLM with structured output
-                response = litellm.completion(
+                truncated_text = llm_util.truncate_text_for_llm(
+                    text,
+                    mode="start_end",
+                    to_length=10000,
+                    semantic_boundaries_p=False,
+                    start_split=0.6,
+                )
+                response = await litellm.acompletion(
                     api_key=api_key_to_use,
                     model=model_in_use,
                     messages=[
                         {
                             "role": "user",
-                            "content": f"Generate a title and filename for this text content:\n\n{text[:10000]}...",
+                            "content": f"Generate a title and filename for this text content:\n\n{truncated_text}",
                         }
                     ],
                     response_format=FilenameGeneration,
