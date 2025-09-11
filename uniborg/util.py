@@ -842,6 +842,7 @@ async def discreet_send(
     file_name_mode="random",
     title_model: str | None = None,
     api_keys: dict | None = None,
+    api_user_id: int | None = None,
 ):
     """
     Send a message, splitting it into chunks if needed or sending as file.
@@ -878,6 +879,7 @@ async def discreet_send(
                 file_name_mode,
                 title_model=title_model,
                 api_keys=api_keys,
+                api_user_id=api_user_id,
                 message_obj=getattr(event, "message", None),
             )
 
@@ -1535,7 +1537,7 @@ async def _generate_file_data(
     parse_mode: str,
     file_name_mode: str,
     *,
-    user_id: int | None = None,
+    api_user_id: int | None = None,
     api_keys: dict | None = None,
     title_model: str | None = None,
     message_obj=None,
@@ -1566,15 +1568,15 @@ async def _generate_file_data(
             api_key_to_use, resolved_uid = await _resolve_title_api_key(
                 service_needed,
                 api_keys=api_keys,
-                user_id=user_id,
+                user_id=api_user_id,
                 message_obj=message_obj,
             )
-            if user_id is None:
-                user_id = resolved_uid
+            if api_user_id is None:
+                api_user_id = resolved_uid
 
             if not api_key_to_use:
                 print(
-                    f"Warning: {service_needed} API key not found for user {user_id}, falling back to random filename"
+                    f"Warning: {service_needed} API key not found for user {api_user_id}, falling back to random filename"
                 )
                 filename = _generate_random_filename(file_ext)
                 caption = default_caption
@@ -1624,6 +1626,7 @@ async def _send_as_file_with_filename(
     reply_to=None,
     title_model: str | None = None,
     api_keys: dict | None = None,
+    api_user_id: int | None = None,
 ):
     """Helper function to send text as file with intelligent filename generation."""
     try:
@@ -1635,6 +1638,7 @@ async def _send_as_file_with_filename(
                 text,
                 parse_mode,
                 file_name_mode,
+                api_user_id=api_user_id,
                 api_keys=api_keys,
                 title_model=title_model,
                 message_obj=message_obj,
