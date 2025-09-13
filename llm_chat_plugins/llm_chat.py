@@ -112,6 +112,8 @@ PROMPT_MATCH_LANGUAGE = r"""**Language**
 - Determine language from the message content only (ignore metadata).
 - If in doubt between Arabic and Persian/Farsi, assume Persian/Farsi."""
 
+TELEGRAM_MARKDOWN_PROMPT = r"""You are messaging the user in Telegram; you SHOULD use Telegram Markdown. Replace all markup with Telegram Markdown: `**bold**` (always use only double STARS for bold), `__italic__` (VERY IMPORTANT! Standard Markdown is different here. Be sure to always use the Telegram form with DOUBLE UNDERSCORES only.), `` `code` ``, `[links](url)`, ```code blocks```. `[` does NOT need to be escaped in Telegram Markdown and `\[` WILL RENDER INCORRECTLY; simply use its unescaped form `[`. E.g., `[some_tag: x]`."""
+
 # Pattern constants
 COMMON_PATTERN_SUFFIX = r"(?:\s+|$)"
 
@@ -424,6 +426,34 @@ REVIEW_PROMPTS = _register_prompt_family(
 )
 PROMPT_REPLACEMENTS.update(REVIEW_PROMPTS)
 ##
+DICTIONARY_LEXI_PATTERN_PREFIX = r"^\.(?:dic(?:t)?|def(?:ine)?)"
+DICTIONARY_LEXI_FILE_NAME = "dictionary_Lexi"
+lexi_postfix = f"\n\n{TELEGRAM_MARKDOWN_PROMPT} Avoid using  code literal (inline or blocks) formatting unless absolutely necessary.\n\nTarget to be defined: "
+
+DICTIONARY_LEXI_PROMPTS = _register_prompt_family(
+    pattern_prefix=DICTIONARY_LEXI_PATTERN_PREFIX,
+    file_base=DICTIONARY_LEXI_FILE_NAME,
+    default_version=PromptVersion("v1", []),
+    versions=[],
+    pattern_suffix=r"(?:\s+|$)",
+    content_postfix=lexi_postfix,
+    description="→English&Farsi dictionary",
+)
+PROMPT_REPLACEMENTS.update(DICTIONARY_LEXI_PROMPTS)
+
+
+DICTIONARY_LEXI_SHORT_PATTERN_PREFIX = r"^\.defc(?:oncise)?"
+DICTIONARY_LEXI_SHORT_PROMPTS = _register_prompt_family(
+    pattern_prefix=DICTIONARY_LEXI_SHORT_PATTERN_PREFIX,
+    file_base=DICTIONARY_LEXI_FILE_NAME,
+    default_version=PromptVersion("v1", []),
+    versions=[],
+    pattern_suffix=r"(?:\s+|$)",
+    content_postfix=f"\n\nCRITICAL OVERRIDE (ultra-concise mode): Include only English and Persian definitions, part of speech, IPA (only once globally if same for all senses, else per sense), and alternative spellings (if applicable, else elide). ELIDE (elide both per sense or general) all examples, etymology, collocations, thesaurus, cultural, regional, tags and badges, etc. Keep the output structure the same as normal mode, but elide all empty/none sections completely. Include all senses of the target word (even if rarely used), the concise mode is still thorough.{lexi_postfix}",
+    description="→English&Farsi dictionary (concise mode)",
+)
+PROMPT_REPLACEMENTS.update(DICTIONARY_LEXI_SHORT_PROMPTS)
+##
 COMPACT_PATTERN_PREFIX = r"^\.com(?:pact)?"
 COMPACT_FILE_NAME = "compacter"
 
@@ -484,6 +514,8 @@ Emit **actual control codepoints** in normal output; use `\\u` escapes only in c
 - Parentheses face content; punctuation clings to intended fragment; code/links remain untouched.
 """
 
+# - Telegram markdown only: `**bold**`, `__italic__`, `` `code` ``, `[links](url)`, ```code blocks```
+
 DEFAULT_SYSTEM_PROMPT_V3 = """
 You are a technically precise assistant with the personality of a warm, kind, to-the-point, challenging, smart, highly agentic friend. Your audience: advanced STEM postgraduate researchers.
 
@@ -497,7 +529,6 @@ You are a technically precise assistant with the personality of a warm, kind, to
 **Mobile-optimized:**
 - One idea per paragraph, one action per bullet
 - Short paragraphs, clear structure, minimal qualifiers
-- Telegram markdown only: `**bold**`, `__italic__`, `` `code` ``, `[links](url)`, ```code blocks```
 **Liberal emoji use:** Use emojis for personality, subtle humor (especially dark humor), and visual section breaks to improve readability in dense text.
 **Human tone:** Sound like a supportive peer: encouraging, clear, and unpretentious.
 **Language**
@@ -2681,6 +2712,7 @@ def get_system_prompt_info(
     *,
     include_username_p=True,
     include_current_time_p=True,
+    include_telegram_markdown_p=True,
     timezone="Asia/Tehran",
 ) -> SystemPromptInfo:
     """Returns comprehensive system prompt information for the given event."""
@@ -2707,6 +2739,9 @@ def get_system_prompt_info(
         additional_sections.append(
             f"Your username on Telegram is {BOT_USERNAME}. The user might mention you using this username."
         )
+
+    if include_telegram_markdown_p:
+        additional_sections.append(TELEGRAM_MARKDOWN_PROMPT)
 
     if include_current_time_p:
         # Get current time in specified timezone
