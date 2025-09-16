@@ -88,11 +88,11 @@ DEFAULT_MODEL = "gemini/gemini-2.5-flash"  #: Do NOT change the default model un
 #: @hiddenDep Update `Quick Model Selection Shortcuts` in `/help` command to reflect changes here.
 PREFIX_MODEL_MAPPING = {
     # ".f": "gemini/gemini-2.5-flash-lite",
-    [".f", ".ف"]: "gemini/gemini-2.0-flash",
-    [".ff", ".فف"]: "gemini/gemini-2.5-flash",
-    [".g", ".ج"]: "gemini/gemini-2.5-pro",
-    [".c", ".چ"]: "openrouter/openai/gpt-5-chat",
-    [".d", ".د"]: "deepseek/deepseek-reasoner",
+    (".f", ".ف"): "gemini/gemini-2.0-flash",
+    (".ff", ".فف"): "gemini/gemini-2.5-flash",
+    (".g", ".ج"): "gemini/gemini-2.5-pro",
+    (".c", ".چ"): "openrouter/openai/gpt-5-chat",
+    (".d", ".د"): "deepseek/deepseek-reasoner",
 }
 
 # Audio summarization prompt
