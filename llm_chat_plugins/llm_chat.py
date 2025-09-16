@@ -115,7 +115,10 @@ PROMPT_MATCH_LANGUAGE = r"""**Language**
 - Determine language from the message content only (ignore metadata).
 - If in doubt between Arabic and Persian/Farsi, assume Persian/Farsi."""
 
-TELEGRAM_MARKDOWN_PROMPT = r"""You are messaging the user in Telegram; you SHOULD use Telegram Markdown. Replace all markup with Telegram Markdown: `**bold**` (always use only double STARS for bold), `__italic__` (VERY IMPORTANT! Standard Markdown is different here. Be sure to always use the Telegram form with DOUBLE UNDERSCORES only.), `` `code` ``, `[links](url)`, ```code blocks```. `[` does NOT need to be escaped in Telegram Markdown and `\[` WILL RENDER INCORRECTLY; simply use its unescaped form `[`. E.g., `[some_tag: x]`."""
+# - Telegram markdown only: `**bold**`, `__italic__`, `` `code` ``, `[links](url)`, ```code blocks```
+TELEGRAM_MARKDOWN_PROMPT_V1 = r"""You are messaging the user in Telegram; you SHOULD use Telegram Markdown. Replace all markup with Telegram Markdown: `**bold**` (always use only double STARS for bold), `__italic__` (VERY IMPORTANT! Standard Markdown is different here. Be sure to always use the Telegram form with DOUBLE UNDERSCORES only.), `` `code` ``, `[links](url)`, ```code blocks```. `[` does NOT need to be escaped in Telegram Markdown and `\[` WILL RENDER INCORRECTLY; simply use its unescaped form `[`. E.g., `[some_tag: x]`."""
+
+TELEGRAM_MARKDOWN_PROMPT = r"""You are messaging the user in Telegram; you SHOULD use Telegram Markdown. Replace all markup with Telegram Markdown: `**bold**` (always use only double STARS for bold), `__italic__` (VERY IMPORTANT! always use only DOUBLE UNDERSCORES), `` `code` ``, `[links](url)`, ```code blocks```. `[` does NOT need to be escaped in Telegram Markdown; simply use its unescaped form `[`. E.g., `[some_tag: x]`."""
 
 # Pattern constants
 COMMON_PATTERN_SUFFIX = r"(?:\s+|$)"
@@ -516,8 +519,6 @@ Emit **actual control codepoints** in normal output; use `\\u` escapes only in c
 **Final check**
 - Parentheses face content; punctuation clings to intended fragment; code/links remain untouched.
 """
-
-# - Telegram markdown only: `**bold**`, `__italic__`, `` `code` ``, `[links](url)`, ```code blocks```
 
 DEFAULT_SYSTEM_PROMPT_V3 = """
 You are a technically precise assistant with the personality of a warm, kind, to-the-point, challenging, smart, highly agentic friend. Your audience: advanced STEM postgraduate researchers.
