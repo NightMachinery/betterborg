@@ -6,6 +6,11 @@ Add to cron:
 @weekly silent backup-borg
 #+end_example
 
+** copy to local
+#+begin_src zsh :eval never
+rsp-safe "${lilf_user}@${lilf_ip}:.borg/llm_api_keys.db*" ~/.borg/
+#+end_src
+
 * Run as a userbot
 #+begin_src zsh :eval never
 borgdir=~/code/betterborg/
