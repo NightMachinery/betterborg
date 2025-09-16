@@ -2,6 +2,9 @@ import asyncio
 from pynight.common_icecream import (
     ic,
 )  #: used for debugging, DO NOT REMOVE even if currently unused
+from pynight.common_iterable import (
+    to_iterable,
+)
 import traceback
 import os
 import uuid
@@ -85,11 +88,11 @@ DEFAULT_MODEL = "gemini/gemini-2.5-flash"  #: Do NOT change the default model un
 #: @hiddenDep Update `Quick Model Selection Shortcuts` in `/help` command to reflect changes here.
 PREFIX_MODEL_MAPPING = {
     # ".f": "gemini/gemini-2.5-flash-lite",
-    ".f": "gemini/gemini-2.0-flash",
-    ".ff": "gemini/gemini-2.5-flash",
-    ".g": "gemini/gemini-2.5-pro",
-    ".c": "openrouter/openai/gpt-5-chat",
-    ".d": "deepseek/deepseek-reasoner",
+    [".f", ".ف"]: "gemini/gemini-2.0-flash",
+    [".ff", ".فف"]: "gemini/gemini-2.5-flash",
+    [".g", ".ج"]: "gemini/gemini-2.5-pro",
+    [".c", ".چ"]: "openrouter/openai/gpt-5-chat",
+    [".d", ".د"]: "deepseek/deepseek-reasoner",
 }
 
 # Audio summarization prompt
@@ -1481,12 +1484,16 @@ def _detect_and_process_message_prefix(text: str) -> PrefixProcessResult:
 
     processed_text = text.lstrip()
     for prefix, model in PREFIX_MODEL_MAPPING.items():
-        if processed_text.startswith(prefix):
-            # Check if the prefix is followed by a space or the end of the message
-            if len(text) == len(prefix) or text[len(prefix)].isspace():
-                processed_text = text[len(prefix) :].lstrip()
-                processed_text = add_back_prefixes(processed_text)
-                return PrefixProcessResult(model=model, processed_text=processed_text)
+        prefixes = to_iterable(prefix)
+        for prefix in prefixes:
+            if processed_text.startswith(prefix):
+                # Check if the prefix is followed by a space or the end of the message
+                if len(text) == len(prefix) or text[len(prefix)].isspace():
+                    processed_text = text[len(prefix) :].lstrip()
+                    processed_text = add_back_prefixes(processed_text)
+                    return PrefixProcessResult(
+                        model=model, processed_text=processed_text
+                    )
 
     processed_text = add_back_prefixes(processed_text)
     return PrefixProcessResult(processed_text=processed_text)
@@ -3403,7 +3410,11 @@ async def _finalize_content_parts(text_buffer: list, media_parts: list) -> list:
     if text_from_files:
         combined_file_text = "\n".join(filter(None, text_from_files))
         existing_text_part = next(
-            (p for p in content_parts if isinstance(p, dict) and p.get("type") == "text"),
+            (
+                p
+                for p in content_parts
+                if isinstance(p, dict) and p.get("type") == "text"
+            ),
             None,
         )
         if existing_text_part:
