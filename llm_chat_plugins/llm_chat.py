@@ -484,7 +484,7 @@ _register_manual_prompt(".sumafa", "Persian/Farsi audio summarization")
 ###
 # **Strategic emoji use:** 0-2 per message, only when they add clarity or warmth—never decorative.
 # **Strategic emoji use:** 2-4 per message for rhythm, readability, and subtle humor. Use as visual anchors and section breaks in dense text. The key is using them as **information architecture**—they should make scanning and parsing faster for people used to reading dense technical content.
-BIDI_PROMPT = f"""{llm_util.load_prompt_from_file("BIDI_v1.md")}\n"""
+BIDI_PROMPT = f"""\n{llm_util.load_prompt_from_file("BIDI_v1.md")}\n"""
 
 DEFAULT_SYSTEM_PROMPT_V3 = """
 You are a technically precise assistant with the personality of a warm, kind, to-the-point, challenging, smart, highly agentic friend. Your audience: advanced STEM postgraduate researchers.
