@@ -2,6 +2,9 @@ import asyncio
 from pynight.common_icecream import (
     ic,
 )  #: used for debugging, DO NOT REMOVE even if currently unused
+from pynight.common_files import (
+    mime_guess,
+)
 from pynight.common_iterable import (
     to_iterable,
 )
@@ -2568,7 +2571,9 @@ async def _get_and_cache_media_info(message, file_id, temp_dir):
     file_path = Path(file_path_str)
     original_filename = file_path.name
 
-    mime_type, _ = mimetypes.guess_type(file_path)
+    mime_type = mime_guess(file_path)
+    print(f"Guessed MIME type: {original_filename}: {mime_type}")
+
     if (
         not mime_type
         and hasattr(message.media, "document")
@@ -2581,6 +2586,27 @@ async def _get_and_cache_media_info(message, file_id, temp_dir):
             if original_filename.lower().endswith(ext):
                 mime_type = m_type
                 break
+
+    # Fix file extension if we have a MIME type but no extension or a bad extension
+    if mime_type:
+        current_extension = file_path.suffix.lower()
+        bad_extensions = {
+            ".bin",
+            ".tmp",
+            ".dat",
+            "",
+        }  # Extensions that don't indicate file type
+
+        if not current_extension or current_extension in bad_extensions:
+            # Use Python's built-in mimetypes module to get proper extension
+            proper_extension = mimetypes.guess_extension(mime_type)
+            if proper_extension:
+                # Create new file path with proper extension
+                new_file_path = file_path.with_suffix(proper_extension)
+                # Rename the file
+                file_path.rename(new_file_path)
+                file_path = new_file_path
+                print(f"Fixed file extension: {original_filename} -> {file_path.name}")
 
     with open(file_path, "rb") as f:
         file_bytes = f.read()
@@ -2654,20 +2680,20 @@ async def _get_and_cache_media_info(message, file_id, temp_dir):
             file_id,
             data=text_content,
             data_storage_type="text",
-            filename=original_filename,
+            filename=file_path.name,
             mime_type=mime_type,
         )
-        return "text", text_content, original_filename, mime_type
+        return "text", text_content, file_path.name, mime_type
     else:
         b64_content = base64.b64encode(file_bytes).decode("utf-8")
         await history_util.cache_file(
             file_id,
             data=b64_content,
             data_storage_type="base64",
-            filename=original_filename,
+            filename=file_path.name,
             mime_type=mime_type,
         )
-        return "base64", b64_content, original_filename, mime_type
+        return "base64", b64_content, file_path.name, mime_type
 
 
 @dataclass
@@ -2882,9 +2908,14 @@ async def _process_media(
                 file_id, sender_id
             )
 
+            cached_mime_type = None
+            if cached_info:
+                cached_mime_type = cached_info.get("mime_type")
+
+            # ic(cached_mime_type)
+
             if cached_info and "name" in cached_info and "uri" in cached_info:
                 # New: check media capability before proceeding
-                cached_mime_type = cached_info.get("mime_type")
                 media_type = common_util.get_media_type(cached_mime_type)
                 check_result = _check_media_capability(
                     media_type,
@@ -2913,7 +2944,7 @@ async def _process_media(
                             "file": {
                                 "file_id": cached_info["uri"],
                                 "filename": "some_file",
-                                "format": cached_info.get("mime_type"),
+                                "format": cached_mime_type,
                             },
                         }
                         return ProcessMediaResult(media_part=part, warnings=[])
@@ -2936,7 +2967,7 @@ async def _process_media(
                         "file": {
                             "file_id": cached_info["uri"],
                             "filename": "some_file",
-                            "format": cached_info.get("mime_type"),
+                            "format": cached_mime_type,
                         },
                     }
                     return ProcessMediaResult(media_part=part, warnings=[])
@@ -2945,6 +2976,7 @@ async def _process_media(
             storage_type, content, filename, mime_type = (
                 await _get_and_cache_media_info(message, file_id, temp_dir)
             )
+            # ic(storage_type, type(content), filename, mime_type)
 
             if not storage_type:
                 return ProcessMediaResult(media_part=None, warnings=[])
@@ -2959,6 +2991,8 @@ async def _process_media(
             # It must be 'base64' type. 'content' is a b64 string.
             # Check capability before uploading.
             media_type = common_util.get_media_type(mime_type)
+            # ic(media_type)
+
             check_result = _check_media_capability(
                 media_type, model_capabilities, issued_warnings, private_p=is_private
             )
@@ -3230,6 +3264,8 @@ async def _get_message_role(message: Message) -> str:
 
 async def _create_export_file_reference(message: Message) -> FileReference:
     """Create a simple file reference for export mode without downloading/processing media."""
+    #: This function does not access the actual files, so it cannot guess the mime type based on the actual file.
+
     if not message.media:
         return None
 

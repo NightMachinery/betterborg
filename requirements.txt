@@ -51,6 +51,8 @@ litellm
 
 aiofiles
 
+python-magic
+
 # junk deps:
 # sortedcontainers
 # jsonpickle
