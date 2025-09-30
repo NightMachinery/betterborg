@@ -48,6 +48,8 @@ google-genai[live]
 typed-ffmpeg
 
 litellm
+llm
+llm-gemini
 
 aiofiles
 
