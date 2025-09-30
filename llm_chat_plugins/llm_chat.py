@@ -61,6 +61,8 @@ from uniborg.constants import (
     BOT_META_INFO_LINE,
     DEFAULT_FILE_LENGTH_THRESHOLD,
     DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
+    GEMINI_FLASH_LATEST,
+    GEMINI_FLASH_LITE_LATEST,
 )
 
 # Import live mode utilities
@@ -82,17 +84,18 @@ NOT_SET_HERE_DISPLAY_NAME = "Not Set for This Chat Specifically"
 
 # Use the litellm model naming convention.
 # See https://docs.litellm.ai/docs/providers/gemini
-DEFAULT_MODEL = "gemini/gemini-2.5-flash"  #: Do NOT change the default model unless explicitly instructed to.
+DEFAULT_MODEL = GEMINI_FLASH_LATEST  #: Do NOT change the default model unless explicitly instructed to.
 # Alternatives:
 # - "gemini/gemini-2.5-pro"
+# Old 2.5 version: "gemini/gemini-2.5-flash"
 ##
 
 # Prefix-to-model mapping for hardcoded model selection
 #: @hiddenDep Update `Quick Model Selection Shortcuts` in `/help` command to reflect changes here.
 PREFIX_MODEL_MAPPING = {
-    # ".f": "gemini/gemini-2.5-flash-lite",
+    (".fl", ".فل"): GEMINI_FLASH_LITE_LATEST,  # Old: "gemini/gemini-2.5-flash-lite"
     (".f", ".ف"): "gemini/gemini-2.0-flash",
-    (".ff", ".فف"): "gemini/gemini-2.5-flash",
+    (".ff", ".فف"): GEMINI_FLASH_LATEST,  # Old: "gemini/gemini-2.5-flash"
     (".g", ".ج"): "gemini/gemini-2.5-pro",
     (".c", ".چ"): "openrouter/openai/gpt-5-chat",
     (".d", ".د"): "deepseek/deepseek-reasoner",
@@ -782,10 +785,12 @@ MAGIC_PATTERN_AS_USER = re.compile(rf"\b{MAGIC_STR_AS_USER}\b")
 
 MODEL_CHOICES = {
     ## Gemini
-    "gemini/gemini-2.5-flash": "Gemini 2.5 Flash",
+    GEMINI_FLASH_LATEST: "Gemini Flash (Latest)",
+    GEMINI_FLASH_LITE_LATEST: "Gemini Flash Lite (Latest)",
+    # "gemini/gemini-2.5-flash": "Gemini 2.5 Flash",
+    # "gemini/gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
     "gemini/gemini-2.5-pro": "Gemini 2.5 Pro",
     "openrouter/google/gemini-2.5-pro": "Gemini 2.5 Pro (OpenRouter)",
-    "gemini/gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
     "gemini/gemini-2.0-flash": "Gemini 2.0 Flash",
     "gemini/gemini-2.0-flash-preview-image-generation": "Gemini 2.0 Flash Image",
     "gemini/gemini-2.5-flash-image-preview": "Gemini 2.5 Flash Image",
@@ -2505,6 +2510,8 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
             or is_gemini_model(model)
             or model
             in (
+                GEMINI_FLASH_LITE_LATEST,
+                GEMINI_FLASH_LATEST,
                 "gemini/gemini-2.5-flash-lite",
                 "gemini/gemini-2.5-flash",
             )
@@ -4248,7 +4255,8 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 Start your messages with these shortcuts to use specific models:
 - `.c` → GPT-5 Chat (OpenRouter): Latest Non-reasoning OpenAI model
 - `.f` → Gemini 2.0 Flash: Fast responses, more generous free tier
-- `.ff` → Gemini 2.5 Flash: Fast responses
+- `.ff` → Gemini Flash (Latest): Fast responses, always up-to-date
+- `.fl` → Gemini Flash Lite (Latest): Ultra-fast, efficient responses
 - `.g` → Gemini 2.5 Pro: Google's flagship model
 - `.d` → DeepSeek Reasoner
 """

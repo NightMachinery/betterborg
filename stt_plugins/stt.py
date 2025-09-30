@@ -2,6 +2,7 @@ from icecream import ic
 from uniborg import util
 from uniborg import llm_util
 from uniborg import llm_db
+from uniborg.constants import GEMINI_FLASH_LATEST
 import os
 import traceback
 import llm
@@ -108,7 +109,9 @@ print(f"STT Prompt Loaded:\n\n{TRANSCRIPTION_PROMPT}\n---\n\n")
 # --- Core Transcription Logic ---
 
 
-async def llm_stt(*, cwd, event, model_name="gemini-2.5-flash", log=True):
+async def llm_stt(
+    *, cwd, event, model_name=GEMINI_FLASH_LATEST, log=True
+):
     """
     Performs speech-to-text on media, enforcing a single structured JSON output
     that synthesizes all provided files.
