@@ -296,6 +296,21 @@ The goal is to produce a single, clean document as if it were the original, with
     ): r"https://greaterwrong.com/",
 }
 ##
+TELEGRAM_SUTCSE_REWRITE_PATTERN_PREFIX = r"^\.tlg"
+TELEGRAM_SUTCSE_REWRITE_FILE_NAME = "Telegram_SUTCSE_rewrite"
+telegram_sutcse_rewrite_postfix = f""
+
+TELEGRAM_SUTCSE_REWRITE_PROMPTS = _register_prompt_family(
+    pattern_prefix=TELEGRAM_SUTCSE_REWRITE_PATTERN_PREFIX,
+    file_base=TELEGRAM_SUTCSE_REWRITE_FILE_NAME,
+    default_version=PromptVersion("v1", []),
+    versions=[],
+    pattern_suffix=r"(?:\s+|$)",
+    content_postfix=telegram_sutcse_rewrite_postfix,
+    description="Rewrite content in Telegram style",
+)
+PROMPT_REPLACEMENTS.update(TELEGRAM_SUTCSE_REWRITE_PROMPTS)
+##
 TEACH_PATTERN_PREFIX = r"^\.teach"
 TEACH_FILE_NAME = "socratic_teacher"
 
