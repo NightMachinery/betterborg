@@ -298,7 +298,7 @@ The goal is to produce a single, clean document as if it were the original, with
 ##
 TELEGRAM_SUTCSE_REWRITE_PATTERN_PREFIX = r"^\.tlg"
 TELEGRAM_SUTCSE_REWRITE_FILE_NAME = "Telegram_SUTCSE_rewrite"
-telegram_sutcse_rewrite_postfix = f""
+telegram_sutcse_rewrite_postfix = f"\n---\n"
 
 TELEGRAM_SUTCSE_REWRITE_PROMPTS = _register_prompt_family(
     pattern_prefix=TELEGRAM_SUTCSE_REWRITE_PATTERN_PREFIX,
