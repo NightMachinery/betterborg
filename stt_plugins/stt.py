@@ -209,6 +209,7 @@ async def llm_stt(*, cwd, event, model_name=GEMINI_FLASH_LATEST, log=True):
         await util.edit_message(
             status_message,
             final_output_message,
+            reply_to=event.message,
             link_preview=False,
             parse_mode=parse_mode,
             file_name_mode="llm",
