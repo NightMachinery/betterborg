@@ -2,7 +2,11 @@ from icecream import ic
 from uniborg import util
 from uniborg import llm_util
 from uniborg import llm_db
-from uniborg.constants import GEMINI_FLASH_LATEST
+from uniborg.constants import (
+    GEMINI_FLASH_LATEST,
+    STT_FILE_LENGTH_THRESHOLD,
+    STT_FILE_ONLY_LENGTH_THRESHOLD,
+)
 import os
 import traceback
 import llm
@@ -208,6 +212,9 @@ async def llm_stt(*, cwd, event, model_name=GEMINI_FLASH_LATEST, log=True):
             link_preview=False,
             parse_mode=parse_mode,
             file_name_mode="llm",
+            send_file_mode=util.SendFileMode.ALSO_IF_LESS_THAN,
+            file_length_threshold=STT_FILE_LENGTH_THRESHOLD,
+            file_only_threshold=STT_FILE_ONLY_LENGTH_THRESHOLD,
         )
 
         if log:

@@ -1,11 +1,5 @@
 #+TITLE: stt_plugins/todo
 
-* _
-#+BEGIN_SRC markdown
-- rename `_send_as_file_with_filename` to `send_as_file_with_filename`; check for why NOT to do this first (chesterton's fence)
-- stt plugin: Use util.edit_message with `file_name_mode="llm",`
-#+END_SRC
-
 * STT Plugin: Refactor to use LiteLLM (try to reuse already existing functionality and DRY/refactor reusable parts from other plugins; also the STT function might be needed from other plugins, so also create =stt_util.py= and the logic there and only the UI code in the plugin.
 ** Add an option to =llm_chat.py= to basically replicate the STT plugin (reply to each voice sent by the user with its transcription using the default STT model)
 
@@ -51,3 +45,9 @@ async def transcribe_reply_handler(event):
 #+end_src
 
 By adding this handler, the bot will now listen for the =/transcribe= command. When a user replies to a message containing media with =/transcribe=, the =transcribe_reply_handler= will be triggered. It will then fetch the replied-to message and use the existing =util.run_and_upload= and =llm_stt= functions to process the media and provide the transcription. This approach provides a clear and intuitive way for users to transcribe specific media files without the limitations of inline mode.
+** DONE _
+#+BEGIN_SRC markdown
+- rename `_send_as_file_with_filename` to `send_as_file_with_filename`; check for why NOT to do this first (chesterton's fence)
+- stt plugin: Use util.edit_message with `file_name_mode="llm",`
+#+END_SRC
+
