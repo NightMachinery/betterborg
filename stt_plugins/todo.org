@@ -1,5 +1,14 @@
 #+TITLE: stt_plugins/todo
 
+* _
+#+BEGIN_SRC markdown
+- rename `_send_as_file_with_filename` to `send_as_file_with_filename`; check for why NOT to do this first (chesterton's fence)
+- stt plugin: Use util.edit_message with `file_name_mode="llm",`
+#+END_SRC
+
+* STT Plugin: Refactor to use LiteLLM (try to reuse already existing functionality and DRY/refactor reusable parts from other plugins; also the STT function might be needed from other plugins, so also create =stt_util.py= and the logic there and only the UI code in the plugin.
+** Add an option to =llm_chat.py= to basically replicate the STT plugin (reply to each voice sent by the user with its transcription using the default STT model)
+
 * @retired
 ** Inline Transcription
 #+BEGIN_SRC markdown
