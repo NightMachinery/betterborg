@@ -215,6 +215,9 @@ async def llm_stt(*, cwd, event, model_name=GEMINI_FLASH_LATEST, log=True):
             send_file_mode=util.SendFileMode.ALSO_IF_LESS_THAN,
             file_length_threshold=STT_FILE_LENGTH_THRESHOLD,
             file_only_threshold=STT_FILE_ONLY_LENGTH_THRESHOLD,
+            api_keys={
+                "gemini": api_key,
+            },
         )
 
         if log:
