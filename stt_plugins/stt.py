@@ -109,9 +109,7 @@ print(f"STT Prompt Loaded:\n\n{TRANSCRIPTION_PROMPT}\n---\n\n")
 # --- Core Transcription Logic ---
 
 
-async def llm_stt(
-    *, cwd, event, model_name=GEMINI_FLASH_LATEST, log=True
-):
+async def llm_stt(*, cwd, event, model_name=GEMINI_FLASH_LATEST, log=True):
     """
     Performs speech-to-text on media, enforcing a single structured JSON output
     that synthesizes all provided files.
@@ -204,12 +202,12 @@ async def llm_stt(
             final_output_message
             or "{italics_marker}No content was generated.{italics_marker}"
         )
-        await util.discreet_send(
-            event,
+        await util.edit_message(
+            status_message,
             final_output_message,
             link_preview=False,
-            reply_to=event.message,
             parse_mode=parse_mode,
+            file_name_mode="llm",
         )
 
         if log:
@@ -246,8 +244,6 @@ async def llm_stt(
             except Exception as log_e:
                 print(f"Failed to write transcription log: {log_e}")
                 print(traceback.format_exc())
-
-        await status_message.delete()
 
     except Exception as e:
         await llm_util.handle_llm_error(

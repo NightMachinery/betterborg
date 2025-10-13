@@ -1131,7 +1131,7 @@ async def edit_message(
 
         # Send the file
         try:
-            await _send_as_file_with_filename(
+            await send_as_file_with_filename(
                 text=new_text,
                 parse_mode=parse_mode,
                 file_name_mode=file_name_mode,
@@ -1250,7 +1250,7 @@ async def edit_message(
         # Send file after message editing (success or failure)
         if decision.send_file and decision.send_text:
             try:
-                await _send_as_file_with_filename(
+                await send_as_file_with_filename(
                     text=new_text,
                     parse_mode=parse_mode,
                     file_name_mode=file_name_mode,
@@ -1631,7 +1631,7 @@ async def _generate_file_data(
     return FileGeneration(filename=filename, caption=caption, extension=file_ext)
 
 
-async def _send_as_file_with_filename(
+async def send_as_file_with_filename(
     *,
     text: str,
     parse_mode: str,

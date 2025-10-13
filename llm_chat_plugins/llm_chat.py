@@ -5925,7 +5925,7 @@ async def as_file_handler(event):
             )
 
             # Send as file with auto-generated title and description
-            sent_file = await util._send_as_file_with_filename(
+            sent_file = await util.send_as_file_with_filename(
                 text=markdown_content,
                 parse_mode="md",
                 file_name_mode="llm",
