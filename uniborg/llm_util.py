@@ -327,7 +327,13 @@ def h_extract_exception_json_safely(text):
 
     # Extract and clean the raw JSON
     raw_json = remaining[:last_quote]
-    clean_json = raw_json.replace("\\n", "\n")
+    # The string is Python-escaped (e.g., \\n for newline, \\" for quote)
+    # Decode it properly using the unicode_escape codec
+    try:
+        clean_json = raw_json.encode("utf-8").decode("unicode_escape")
+    except Exception:
+        # Fallback to simple replacement
+        clean_json = raw_json.replace("\\n", "\n")
 
     # Find actual JSON end by counting braces
     brace_count = 0
@@ -345,7 +351,7 @@ def h_extract_exception_json_safely(text):
         valid_json = clean_json[:json_end]
         try:
             return json.loads(valid_json)
-        except:
+        except Exception:
             return None
 
     return None
@@ -368,7 +374,9 @@ async def _handle_common_error_cases(
     # New block for RateLimitException
     if isinstance(exception, RateLimitException):
         error_message = f"{BOT_META_INFO_PREFIX}🚫 **API Rate Limit Exceeded**\n\n"
-        original_msg = str(getattr(exception, "original_exception", ""))
+        original_msg = str(getattr(exception, "original_exception", "")) or str(
+            exception
+        )
 
         # Extract JSON from the exception if present
         error_data = h_extract_exception_json_safely(original_msg)
