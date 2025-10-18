@@ -186,17 +186,9 @@ async def request_api_key_message(event, service: str = "gemini"):
         "(Type `cancel` to stop this process.)"
     )
     try:
-        # Create a temporary event-like object for send_message to user's PM
-        from types import SimpleNamespace
-
-        pm_event = SimpleNamespace(
-            chat_id=user_id,
-            is_private=True,
-            reply=lambda text, **kw: borg.send_message(user_id, text, **kw),
-            respond=lambda text, **kw: borg.send_message(user_id, text, **kw),
-        )
-        await send_info_message(
-            pm_event, key_request_message, link_preview=False, reply_to=False
+        # Send PM directly to the user
+        await borg.send_message(
+            user_id, f"{BOT_META_INFO_PREFIX}{key_request_message}", link_preview=False
         )
 
         if hasattr(event, "reply") and not event.is_private:
@@ -267,15 +259,9 @@ async def handle_set_key_command(event, service: str):
             confirmation_message = f"✅ Your {config['name']} API key has been saved. Your message was deleted for security."
             try:
                 # Send PM confirmation
-                from types import SimpleNamespace
-
-                pm_event = SimpleNamespace(
-                    chat_id=user_id,
-                    is_private=True,
-                    reply=lambda text, **kw: borg.send_message(user_id, text, **kw),
-                    respond=lambda text, **kw: borg.send_message(user_id, text, **kw),
+                await borg.send_message(
+                    user_id, f"{BOT_META_INFO_PREFIX}{confirmation_message}"
                 )
-                await send_info_message(pm_event, confirmation_message, reply_to=False)
 
                 if not event.is_private:
                     await send_info_message(
