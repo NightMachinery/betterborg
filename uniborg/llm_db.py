@@ -9,7 +9,10 @@ from sqlalchemy.ext.declarative import declarative_base
 from telethon import events
 
 from uniborg.constants import BOT_META_INFO_PREFIX
-from uniborg.llm_util import send_info_message
+from uniborg.llm_util import (
+    send_info_message,
+    AutoDeleteMode,
+)
 
 # --- Client Instance & In-Memory State ---
 # The borg client instance will be populated by `_async_init` in `uniborg/uniborg.py`.
@@ -203,6 +206,7 @@ async def request_api_key_message(event, service: str = "gemini"):
                 event,
                 "I couldn't send you a private message. "
                 "Send `/start` to me in a private chat and setup a (free) API key to use me.",
+                auto_delete=AutoDeleteMode.GROUP_ONLY,
             )
 
     raise events.StopPropagation
