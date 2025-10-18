@@ -27,7 +27,7 @@ async def send_info_message(
         auto_delete: Auto-delete control:
             - False (default): No auto-deletion
             - True: Always auto-delete
-            - "from_chat": Use get_auto_delete_mode callable if provided, else DISABLED
+            - "MAGIC_FROM_CALLABLE": Use get_auto_delete_mode callable if provided, else DISABLED
             - AutoDeleteMode enum value: Explicit mode (DISABLED/GROUP_ONLY/ALWAYS)
         delay: Delay before deletion in seconds (default: 30)
         prefix: Prefix to prepend (default: BOT_META_INFO_PREFIX)
@@ -71,11 +71,11 @@ def get_chat_auto_delete_mode(chat_id: int) -> AutoDeleteMode:
         return AutoDeleteMode.ALWAYS
     return AutoDeleteMode.GROUP_ONLY
 
-# Use "from_chat" with the lambda
+# Use "MAGIC_FROM_CALLABLE" with the lambda
 await send_info_message(
     event,
     "This message may auto-delete",
-    auto_delete="from_chat",
+    auto_delete="MAGIC_FROM_CALLABLE",
     get_auto_delete_mode=get_chat_auto_delete_mode
 )
 

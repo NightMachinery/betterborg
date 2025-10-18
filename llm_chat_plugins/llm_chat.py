@@ -1498,6 +1498,10 @@ async def send_info_message(
     Returns:
         The sent message object
     """
+    # Transform "from_chat" to the generic "MAGIC_FROM_CALLABLE" sentinel
+    if auto_delete == "from_chat":
+        auto_delete = "MAGIC_FROM_CALLABLE"
+
     return await send_info_message_generic(
         event,
         text,

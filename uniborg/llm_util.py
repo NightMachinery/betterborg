@@ -35,7 +35,7 @@ async def auto_delete_info_message(
     message,
     delay: int = AUTO_DELETE_TIME,
     *,
-    auto_delete_override_p: "AutoDeleteMode | bool | str" = "from_chat",
+    auto_delete_override_p: "AutoDeleteMode | bool | str" = "MAGIC_FROM_CALLABLE",
     get_auto_delete_mode=None,
 ):
     """Auto-deletes info messages based on chat settings or override.
@@ -45,12 +45,12 @@ async def auto_delete_info_message(
         message: The message object to potentially delete
         delay: Seconds to wait before deleting
         auto_delete_override_p: Override for auto-deletion behavior:
-            - "from_chat" (default): Use get_auto_delete_mode callable if provided, else DISABLED
+            - "MAGIC_FROM_CALLABLE" (default): Use get_auto_delete_mode callable if provided, else DISABLED
             - AutoDeleteMode enum value: Explicit mode (DISABLED/GROUP_ONLY/ALWAYS)
             - bool: True = ALWAYS, False = DISABLED
         get_auto_delete_mode: Optional callable that takes chat_id and returns AutoDeleteMode
     """
-    if auto_delete_override_p == "from_chat":
+    if auto_delete_override_p == "MAGIC_FROM_CALLABLE":
         if get_auto_delete_mode is not None:
             auto_delete_mode = get_auto_delete_mode(event.chat_id)
         else:
@@ -92,7 +92,7 @@ async def send_info_message(
         event: The event to reply to
         text: Message text (prefix will be prepended automatically)
         auto_delete: Auto-delete control - False (default, no delete), True (always delete),
-                    "from_chat" (use get_auto_delete_mode), or AutoDeleteMode enum value
+                    "MAGIC_FROM_CALLABLE" (use get_auto_delete_mode), or AutoDeleteMode enum value
         delay: Delay before deletion in seconds
         prefix: Prefix to prepend (default: BOT_META_INFO_PREFIX)
         reply_to: If True, uses event.reply(); otherwise uses event.respond(reply_to=...)
