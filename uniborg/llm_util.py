@@ -507,17 +507,113 @@ async def _handle_common_error_cases(
             print(f"Error while sending/editing user reply exception message: {e}")
         return True
 
-    # Special handling for invalid API key
-    if service and "api key not valid" in error_message.lower():
-        if response_message:
+    # Special handling for invalid/suspended API keys
+    error_message_lower = error_message.lower()
+
+    # Check for various API key error patterns
+    api_key_error_patterns = [
+        "api key not valid",
+        "consumer_suspended",
+        "consumer has been suspended",
+        "permission denied: consumer",
+        "api_key_invalid",
+        "invalid api key",
+    ]
+
+    is_api_key_error = any(
+        pattern in error_message_lower for pattern in api_key_error_patterns
+    )
+
+    if service and is_api_key_error:
+        # Determine if we should show detailed error info
+        is_admin = await util.isAdmin(event)
+        is_private = event.is_private
+        should_show_details = is_admin and is_private
+
+        # Get the service-specific setkey command
+        service_lower = service.lower()
+        if service_lower == "gemini":
+            setkey_command = "/setGeminiKey"
+        elif service_lower == "openrouter":
+            setkey_command = "/setOpenRouterKey"
+        else:
+            setkey_command = f"/set{service.title()}Key"
+
+        # Extract error information from JSON if available
+        original_msg = str(exception)
+        error_data = h_extract_exception_json_safely(original_msg)
+        error_detail_msg = None
+        error_reason = None
+
+        if error_data:
             try:
-                await response_message.delete()
-            except Exception as delete_e:
-                print(f"Error deleting message: {delete_e}")
-        await llm_db.request_api_key_message(event, service)
-        # if error_id:
-        #     print(f"--- ERROR ID: {error_id} ---")
-        # traceback.print_exc()
+                error_info = error_data.get("error", {})
+                error_status = error_info.get("status", "")
+                error_detail_msg = error_info.get("message", "")
+
+                # Check for CONSUMER_SUSPENDED specifically
+                if error_status == "PERMISSION_DENIED":
+                    details = error_info.get("details", [])
+                    for detail in details:
+                        if detail.get("reason") == "CONSUMER_SUSPENDED":
+                            error_reason = "CONSUMER_SUSPENDED"
+                            break
+            except Exception as parse_err:
+                print(f"Error parsing API key error details: {parse_err}")
+
+        # Build user-friendly message
+        if error_reason == "CONSUMER_SUSPENDED":
+            user_friendly_message = (
+                f"{BOT_META_INFO_PREFIX}❌ **API Key Error: Account Suspended**\n\n"
+                f"Your {service.title()} API key's associated account has been suspended.\n\n"
+                f"**Possible reasons:**\n"
+                f"• Billing issue or payment method problem\n"
+                f"• Terms of service violation\n"
+                f"• Account verification required\n"
+                f"• Key expired or revoked\n\n"
+                f"**Next steps:**\n"
+                f"1. Check your {service.title()} account status\n"
+                f"2. Verify billing and payment information\n"
+                f"3. Create a new API key if the old one is invalid\n"
+                f"4. Update the bot with your new API key using `{setkey_command}`\n"
+            )
+        else:
+            # Generic API key error
+            user_friendly_message = (
+                f"{BOT_META_INFO_PREFIX}❌ **API Key Error: Invalid or Permission Denied**\n\n"
+                f"Your {service.title()} API key is invalid or doesn't have the necessary permissions.\n\n"
+                f"**Next steps:**\n"
+                f"1. Verify your {service.title()} API key is correct\n"
+                f"2. Check your API key permissions and billing status\n"
+                f"3. Create a new API key if needed\n"
+                f"4. Update the bot using `{setkey_command}`\n"
+            )
+
+        # Add error details if admin and private
+        if should_show_details and error_detail_msg:
+            user_friendly_message += (
+                f"\n**Error details (admin only):** {error_detail_msg}"
+            )
+
+        # Send the message
+        try:
+            if response_message:
+                await util.edit_message(
+                    response_message,
+                    user_friendly_message,
+                    parse_mode="md",
+                    append_p=True,
+                )
+            else:
+                await util.discreet_send(
+                    event,
+                    user_friendly_message,
+                    reply_to=event.message,
+                    parse_mode="md",
+                )
+        except Exception as e:
+            print(f"Error sending API key error message: {e}")
+
         return True
 
     return False
