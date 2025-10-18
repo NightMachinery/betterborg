@@ -124,7 +124,7 @@ PROMPT_MATCH_LANGUAGE = r"""**Language**
 # - Telegram markdown only: `**bold**`, `__italic__`, `` `code` ``, `[links](url)`, ```code blocks```
 TELEGRAM_MARKDOWN_PROMPT_V1 = r"""You are messaging the user in Telegram; you SHOULD use Telegram Markdown. Replace all markup with Telegram Markdown: `**bold**` (always use only double STARS for bold), `__italic__` (VERY IMPORTANT! Standard Markdown is different here. Be sure to always use the Telegram form with DOUBLE UNDERSCORES only.), `` `code` ``, `[links](url)`, ```code blocks```. `[` does NOT need to be escaped in Telegram Markdown and `\[` WILL RENDER INCORRECTLY; simply use its unescaped form `[`. E.g., `[some_tag: x]`."""
 
-TELEGRAM_MARKDOWN_PROMPT = r"""You are messaging the user in Telegram; you SHOULD use Telegram Markdown. Replace all markup with Telegram Markdown: `**bold**` (always use only double STARS for bold), `__italic__` (VERY IMPORTANT! always use only DOUBLE UNDERSCORES), `` `code` ``, `[links](url)`, ```code blocks```. `[` does NOT need to be escaped in Telegram Markdown; simply use its unescaped form `[`. E.g., `[some_tag: x]`."""
+TELEGRAM_MARKDOWN_PROMPT = r"""You are messaging the user in Telegram; you SHOULD use Telegram Markdown. Replace all markup with Telegram Markdown: `**bold**` (always use only double STARS for bold), `__italic__` (VERY IMPORTANT! always use only DOUBLE UNDERSCORES), `` `code` ``, `[links](url)`, ```code blocks```. `[` does NOT need to be escaped in Telegram Markdown; simply use its unescaped form `[`. E.g., `[some_tag: x]`. IMPORTANT: Markdown tables are NOT supported in Telegram and will not render correctly. Use plain text structures instead (e.g., bullet lists, numbered lists, or simple alignment with spaces)."""
 
 # Pattern constants
 COMMON_PATTERN_SUFFIX = r"(?:\s+|$)"
@@ -670,6 +670,16 @@ You are a helpful and knowledgeable assistant. Your primary audience is advanced
 """
 
 DEFAULT_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT_V3 + BIDI_PROMPT
+
+GROUP_CHAT_ETIQUETTE_PROMPT = """
+## Group Chat Etiquette
+This is a group chat with multiple participants. Be EXTREMELY concise:
+- Shortest possible satisfactory answer (1-3 sentences ideal, 5 max unless absolutely necessary)
+- Get straight to the point - no preamble, no elaboration unless asked
+- ONE sentence for follow-up questions at most (or skip entirely if answer is sufficient)
+- Avoid long lists, verbose explanations, or unnecessary context
+- In group settings, brevity shows respect for everyone's time
+"""
 
 
 # --- Event Proxy ---
@@ -2756,6 +2766,16 @@ def get_system_prompt_info(
 
     # Build additional context sections
     additional_sections = []
+
+    # Add group chat etiquette for group chats using default prompt
+    if (
+        source
+        not in [
+            "chat",
+        ]
+        and not event.is_private
+    ):
+        additional_sections.append(GROUP_CHAT_ETIQUETTE_PROMPT)
 
     if include_username_p and BOT_USERNAME:
         additional_sections.append(
