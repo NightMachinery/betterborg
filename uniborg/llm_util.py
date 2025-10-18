@@ -11,6 +11,115 @@ import uuid
 import json
 from google import genai
 from google.genai import types
+import asyncio
+from enum import Enum
+
+
+# --- Info Message Helpers ---
+
+
+class AutoDeleteMode(str, Enum):
+    """Mode for auto-deleting info messages."""
+
+    DISABLED = "disabled"
+    GROUP_ONLY = "group_only"
+    ALWAYS = "always"
+
+
+# Auto-delete time for info messages (in seconds)
+AUTO_DELETE_TIME = 30
+
+
+async def auto_delete_info_message(
+    event,
+    message,
+    delay: int = AUTO_DELETE_TIME,
+    *,
+    auto_delete_override_p: "AutoDeleteMode | bool | str" = "from_chat",
+    get_auto_delete_mode=None,
+):
+    """Auto-deletes info messages based on chat settings or override.
+
+    Args:
+        event: The Telegram event
+        message: The message object to potentially delete
+        delay: Seconds to wait before deleting
+        auto_delete_override_p: Override for auto-deletion behavior:
+            - "from_chat" (default): Use get_auto_delete_mode callable if provided, else DISABLED
+            - AutoDeleteMode enum value: Explicit mode (DISABLED/GROUP_ONLY/ALWAYS)
+            - bool: True = ALWAYS, False = DISABLED
+        get_auto_delete_mode: Optional callable that takes chat_id and returns AutoDeleteMode
+    """
+    if auto_delete_override_p == "from_chat":
+        if get_auto_delete_mode is not None:
+            auto_delete_mode = get_auto_delete_mode(event.chat_id)
+        else:
+            auto_delete_mode = AutoDeleteMode.DISABLED
+    elif isinstance(auto_delete_override_p, AutoDeleteMode):
+        auto_delete_mode = auto_delete_override_p
+    else:
+        # Convert bool to enum
+        auto_delete_mode = (
+            AutoDeleteMode.ALWAYS if auto_delete_override_p else AutoDeleteMode.DISABLED
+        )
+
+    should_delete = auto_delete_mode == AutoDeleteMode.ALWAYS or (
+        auto_delete_mode == AutoDeleteMode.GROUP_ONLY and not event.is_private
+    )
+
+    if should_delete:
+        await asyncio.sleep(delay)
+        try:
+            await message.delete()
+        except Exception:
+            pass  # Silently ignore deletion errors
+
+
+async def send_info_message(
+    event,
+    text: str,
+    *,
+    auto_delete: "AutoDeleteMode | bool | str" = False,
+    delay: int = AUTO_DELETE_TIME,
+    prefix: str = BOT_META_INFO_PREFIX,
+    reply_to=True,
+    get_auto_delete_mode=None,
+    **kwargs,
+):
+    """Sends an info message with automatic prefix and optional auto-deletion.
+
+    Args:
+        event: The event to reply to
+        text: Message text (prefix will be prepended automatically)
+        auto_delete: Auto-delete control - False (default, no delete), True (always delete),
+                    "from_chat" (use get_auto_delete_mode), or AutoDeleteMode enum value
+        delay: Delay before deletion in seconds
+        prefix: Prefix to prepend (default: BOT_META_INFO_PREFIX)
+        reply_to: If True, uses event.reply(); otherwise uses event.respond(reply_to=...)
+                 with the provided value (False/None/int/Message)
+        get_auto_delete_mode: Optional callable that takes chat_id and returns AutoDeleteMode
+        **kwargs: Additional arguments passed to reply/respond (parse_mode, link_preview, etc.)
+
+    Returns:
+        The sent message object
+    """
+    full_text = f"{prefix}{text}"
+
+    if reply_to is True:
+        msg = await event.reply(full_text, **kwargs)
+    else:
+        # reply_to can be False, None, int (message ID), or Message object
+        msg = await event.respond(full_text, reply_to=reply_to, **kwargs)
+
+    await auto_delete_info_message(
+        event,
+        msg,
+        delay,
+        auto_delete_override_p=auto_delete,
+        get_auto_delete_mode=get_auto_delete_mode,
+    )
+
+    return msg
 
 
 # --- Custom Exceptions ---

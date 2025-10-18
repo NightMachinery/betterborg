@@ -4,7 +4,9 @@ This file provides guidance for coding agents working with `llm_chat.py`.
 
 ## Helper Functions
 
-### `send_info_message()` - Send informational/meta messages to users
+### `send_info_message()` - Plugin-specific wrapper for informational messages
+
+This is a **plugin-specific wrapper** around `uniborg.llm_util.send_info_message()` that automatically integrates with the `chat_manager` to provide chat-specific auto-delete behavior.
 
 ```python
 async def send_info_message(
@@ -18,7 +20,10 @@ async def send_info_message(
     **kwargs,
 ):
     """
-    Sends an informational message with automatic prefix and optional auto-deletion.
+    Plugin-specific wrapper for send_info_message with chat_manager integration.
+
+    This automatically provides the chat_manager's auto-delete mode lookup function
+    to the generic helper in llm_util.py.
 
     Args:
         event: The Telegram event to respond to
@@ -26,7 +31,7 @@ async def send_info_message(
         auto_delete: Control auto-deletion behavior:
             - False (default): No auto-deletion
             - True: Always auto-delete
-            - "from_chat": Use the chat's auto_delete_info_p setting
+            - "from_chat": Use the chat's auto_delete_info_p setting via chat_manager
             - AutoDeleteMode enum value: Explicit mode (DISABLED/GROUP_ONLY/ALWAYS)
         delay: Seconds to wait before auto-deleting (default: 30)
         prefix: Prefix to prepend to the message (default: BOT_META_INFO_PREFIX)
@@ -50,6 +55,7 @@ await send_info_message(event, "Processing complete!")
 await send_info_message(event, "**Bold** text", parse_mode="md")
 
 # Auto-delete based on chat settings (useful for admin messages)
+# This uses chat_manager.get_auto_delete_info_p() automatically
 await send_info_message(event, "Admin only action", auto_delete="from_chat")
 
 # Always auto-delete
@@ -69,3 +75,29 @@ await send_info_message(event, "Broadcast message", reply_to=False)
 - For LLM-generated responses
 - For messages that will be edited later (use manual construction with BOT_META_INFO_PREFIX)
 - For user-generated content forwarding
+
+**Implementation Details:**
+
+This wrapper is implemented in `llm_chat.py` as:
+
+```python
+async def send_info_message(...):
+    return await send_info_message_generic(
+        event, text,
+        auto_delete=auto_delete,
+        delay=delay,
+        prefix=prefix,
+        reply_to=reply_to,
+        get_auto_delete_mode=lambda chat_id: chat_manager.get_auto_delete_info_p(chat_id),
+        **kwargs,
+    )
+```
+
+The `get_auto_delete_mode` lambda provides access to chat-specific settings while keeping the generic helper in `llm_util.py` independent of plugin-specific managers.
+
+**For other plugins:**
+
+If you need similar functionality in another plugin:
+1. Import the generic helper: `from uniborg.llm_util import send_info_message as send_info_message_generic`
+2. Create a wrapper that provides your own `get_auto_delete_mode` lambda
+3. See `uniborg/AGENTS.md` for documentation on the generic helper

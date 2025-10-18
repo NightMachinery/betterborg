@@ -9,6 +9,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from telethon import events
 
 from uniborg.constants import BOT_META_INFO_PREFIX
+from uniborg.llm_util import send_info_message
 
 # --- Client Instance & In-Memory State ---
 # The borg client instance will be populated by `_async_init` in `uniborg/uniborg.py`.
@@ -178,27 +179,38 @@ async def request_api_key_message(event, service: str = "gemini"):
     API_KEY_ATTEMPTS[user_id] = 0
 
     key_request_message = (
-        f"{BOT_META_INFO_PREFIX}{config['welcome_message']}\n\n"
+        f"{config['welcome_message']}\n\n"
         f"You can get a free API key from here:\n"
         f"➡️ **{config['url']}** ⬅️\n\n"
         "Once you have your key, please send it to me in the next message.\n\n"
         "(Type `cancel` to stop this process.)"
     )
     try:
-        await borg.send_message(user_id, key_request_message, link_preview=False)
+        # Create a temporary event-like object for send_message to user's PM
+        from types import SimpleNamespace
+
+        pm_event = SimpleNamespace(
+            chat_id=user_id,
+            is_private=True,
+            reply=lambda text, **kw: borg.send_message(user_id, text, **kw),
+            respond=lambda text, **kw: borg.send_message(user_id, text, **kw),
+        )
+        await send_info_message(
+            pm_event, key_request_message, link_preview=False, reply_to=False
+        )
+
         if hasattr(event, "reply") and not event.is_private:
-            await event.reply(
-                f"{BOT_META_INFO_PREFIX}I've sent you a private message for setup."
-            )
+            await send_info_message(event, "I've sent you a private message for setup.")
     except Exception as e:
         print(f"Could not send PM to {user_id}. Error: {e}")
 
         cancel_key_flow(user_id)
 
         if hasattr(event, "reply"):
-            await event.reply(
-                f"{BOT_META_INFO_PREFIX}I couldn't send you a private message. "
-                f"Send `/start` to me in a private chat and setup a (free) API key to use me."
+            await send_info_message(
+                event,
+                "I couldn't send you a private message. "
+                "Send `/start` to me in a private chat and setup a (free) API key to use me.",
             )
 
     raise events.StopPropagation
@@ -212,18 +224,18 @@ async def _save_key_with_error_handling(event, user_id, service, key):
         return True
     except OperationalError as e:
         if "database is locked" in str(e).lower():
-            await event.reply(
-                f"{BOT_META_INFO_PREFIX}The database is currently busy. Please try again in a moment."
+            await send_info_message(
+                event, "The database is currently busy. Please try again in a moment."
             )
         else:
-            await event.reply(
-                f"{BOT_META_INFO_PREFIX}A database error occurred. Please report this to the developer."
+            await send_info_message(
+                event, "A database error occurred. Please report this to the developer."
             )
             print(f"Database error for user {user_id}: {traceback.format_exc()}")
         return False
     except Exception:
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}An unexpected error occurred while saving your key."
+        await send_info_message(
+            event, "An unexpected error occurred while saving your key."
         )
         print(
             f"Unexpected error saving key for user {user_id}: {traceback.format_exc()}"
@@ -243,23 +255,34 @@ async def handle_set_key_command(event, service: str):
     if api_key_match and api_key_match.strip():
         api_key = api_key_match.strip()
         if not re.match(config["regex"], api_key):
-            await event.reply(
-                f"{BOT_META_INFO_PREFIX}The provided API key has an invalid format for {config['name']}. Please check and try again."
+            await send_info_message(
+                event,
+                f"The provided API key has an invalid format for {config['name']}. Please check and try again.",
             )
             return
 
         if await _save_key_with_error_handling(event, user_id, service, api_key):
             cancel_key_flow(user_id)
             await event.delete()
-            confirmation_message = f"{BOT_META_INFO_PREFIX}✅ Your {config['name']} API key has been saved. Your message was deleted for security."
+            confirmation_message = f"✅ Your {config['name']} API key has been saved. Your message was deleted for security."
             try:
-                await borg.send_message(user_id, confirmation_message)
+                # Send PM confirmation
+                from types import SimpleNamespace
+
+                pm_event = SimpleNamespace(
+                    chat_id=user_id,
+                    is_private=True,
+                    reply=lambda text, **kw: borg.send_message(user_id, text, **kw),
+                    respond=lambda text, **kw: borg.send_message(user_id, text, **kw),
+                )
+                await send_info_message(pm_event, confirmation_message, reply_to=False)
+
                 if not event.is_private:
-                    await event.reply(
-                        f"{BOT_META_INFO_PREFIX}I've confirmed your key update in a private message."
+                    await send_info_message(
+                        event, "I've confirmed your key update in a private message."
                     )
             except Exception:
-                await event.respond(confirmation_message)
+                await send_info_message(event, confirmation_message, reply_to=False)
     else:
         await request_api_key_message(event, service)
 
@@ -281,8 +304,9 @@ async def handle_key_submission(
 
     if text.lower() == "cancel":
         cancel_key_flow(user_id)
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}API key setup has been cancelled. You can start again with /set{service}key."
+        await send_info_message(
+            event,
+            f"API key setup has been cancelled. You can start again with /set{service}key.",
         )
         return
 
@@ -290,20 +314,24 @@ async def handle_key_submission(
         API_KEY_ATTEMPTS[user_id] = API_KEY_ATTEMPTS.get(user_id, 0) + 1
         if API_KEY_ATTEMPTS[user_id] >= MAX_KEY_ATTEMPTS:
             cancel_key_flow(user_id)
-            await event.reply(
-                f"{BOT_META_INFO_PREFIX}Too many invalid attempts. The API key setup has been cancelled. You can try again later with /set{service}key."
+            await send_info_message(
+                event,
+                f"Too many invalid attempts. The API key setup has been cancelled. You can try again later with /set{service}key.",
             )
         else:
             remaining = MAX_KEY_ATTEMPTS - API_KEY_ATTEMPTS[user_id]
-            await event.reply(
-                f"{BOT_META_INFO_PREFIX}This does not look like a valid {config['name']} API key. Please try again. You have {remaining} attempt(s) left."
+            await send_info_message(
+                event,
+                f"This does not look like a valid {config['name']} API key. Please try again. You have {remaining} attempt(s) left.",
             )
         return
 
     if await _save_key_with_error_handling(event, user_id, service, text):
         cancel_key_flow(user_id)
         await event.delete()
-        await event.respond(
-            f"{BOT_META_INFO_PREFIX}✅ Your {config['name']} API key has been saved. Your message was deleted for security.\n"
-            + success_msg
+        await send_info_message(
+            event,
+            f"✅ Your {config['name']} API key has been saved. Your message was deleted for security.\n"
+            + success_msg,
+            reply_to=False,
         )
