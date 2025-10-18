@@ -1884,7 +1884,7 @@ async def _process_audio_url_magic(event, url: str) -> bool:
     except Exception as e:
         traceback.print_exc()
         logger.error(f"Audio URL magic failed: {e}")
-        await event.reply(f"{BOT_META_INFO_PREFIX}❌ Error processing audio URL.")
+        await send_info_message(event, "❌ Error processing audio URL.")
         return False
 
 
@@ -4316,7 +4316,7 @@ async def help_handler(event):
     """Provides detailed help information about features and usage."""
     if llm_db.is_awaiting_key(event.sender_id):
         llm_db.cancel_key_flow(event.sender_id)
-        await event.reply(f"{BOT_META_INFO_PREFIX}API key setup cancelled.")
+        await send_info_message(event, "API key setup cancelled.")
     cancel_input_flow(event.sender_id)
     prefs = user_manager.get_prefs(event.sender_id)
 
@@ -4486,7 +4486,7 @@ async def stop_handler(event):
             f"{BOT_META_INFO_PREFIX}✅ Stopped {cancelled_count} active chat request(s)."
         )
     else:
-        await event.reply(f"{BOT_META_INFO_PREFIX}No active chat requests to stop.")
+        await send_info_message(event, "No active chat requests to stop.")
 
 
 async def status_handler(event):
@@ -4614,7 +4614,7 @@ async def status_handler(event):
         f"• **Metadata Mode:** `{group_metadata_mode_name}`\n"
         f"• **Activation:** `{group_activation_mode_name}`\n"
     )
-    await event.reply(f"{BOT_META_INFO_PREFIX}{status_message}", parse_mode="md")
+    await send_info_message(event, status_message, parse_mode="md")
 
 
 async def log_handler(event):
@@ -4644,7 +4644,7 @@ async def log_handler(event):
                 return
 
     if not user_log_dir.is_dir():
-        await event.reply(f"{BOT_META_INFO_PREFIX}You have no conversation logs yet.")
+        await send_info_message(event, "You have no conversation logs yet.")
         return
 
     try:
@@ -5202,7 +5202,7 @@ async def tools_handler(event):
             "type": "tool_selection",
             "keys": AVAILABLE_TOOLS,
         }
-        await event.reply(f"{BOT_META_INFO_PREFIX}\n".join(menu_text))
+        await send_info_message(event, "\n".join(menu_text))
 
 
 async def toggle_tool_handler(event):
@@ -5584,13 +5584,13 @@ async def generic_input_handler(event):
 
     if text.lower() in CANCEL_KEYWORDS:
         cancel_input_flow(user_id)
-        await event.reply(f"{BOT_META_INFO_PREFIX}Process cancelled.")
+        await send_info_message(event, "Process cancelled.")
         return
 
     # Handle simple text inputs
     if input_type == "model":
         user_manager.set_model(user_id, text)
-        await event.reply(f"{BOT_META_INFO_PREFIX}✅ Model updated to: `{text}`")
+        await send_info_message(event, f"✅ Model updated to: `{text}`")
     elif input_type == "chatmodel":
         chat_id = flow_data.get("chat_id", event.chat_id)
         if text.lower() in RESET_KEYWORDS:
@@ -5611,7 +5611,7 @@ async def generic_input_handler(event):
             )
         else:
             user_manager.set_system_prompt(user_id, text)
-            await event.reply(f"{BOT_META_INFO_PREFIX}✅ System prompt updated.")
+            await send_info_message(event, "✅ System prompt updated.")
     # Handle numeric menu selections
     elif input_type and input_type.endswith("_selection"):
         try:
@@ -5740,9 +5740,9 @@ async def live_handler(event):
         ended = await gemini_live_util.live_session_manager.end_session(chat_id)
         if ended:
             chat_manager.set_live_mode_enabled(chat_id, False)
-            await event.reply(f"{BOT_META_INFO_PREFIX}🔴 Live mode disabled.")
+            await send_info_message(event, "🔴 Live mode disabled.")
         else:
-            await event.reply(f"{BOT_META_INFO_PREFIX}❌ No active live session found.")
+            await send_info_message(event, "❌ No active live session found.")
     else:
         # Check if user can create a new session
         if not await gemini_live_util.live_session_manager.can_create_session(user_id):
@@ -5834,7 +5834,7 @@ async def testlive_handler(event):
         )
         return
 
-    await event.reply(f"{BOT_META_INFO_PREFIX}🧪 Testing live session connection...")
+    await send_info_message(event, "🧪 Testing live session connection...")
 
     try:
         print(f"[TestLive] Starting test for user {user_id}")
@@ -6005,7 +6005,7 @@ async def _determine_context_mode_and_handle_transitions(
                     reply_text += " mentioning me."
             else:
                 reply_text += "."
-            await event.reply(f"{BOT_META_INFO_PREFIX}{reply_text}")
+            await send_info_message(event, reply_text)
             return None
 
     # --- ENDED: Context and Separator Logic ---
@@ -6356,7 +6356,7 @@ async def handle_live_mode_message(event):
         # Get API key
         api_key = llm_db.get_api_key(user_id=event.sender_id, service="gemini")
         if not api_key:
-            await event.reply(f"{BOT_META_INFO_PREFIX}❌ API key not found.")
+            await send_info_message(event, "❌ API key not found.")
             return
 
         gemini_api = gemini_live_util.GeminiLiveAPI(api_key, user_id=event.sender_id)
@@ -6638,12 +6638,13 @@ async def chat_handler(event):
         event.message.text = event.text[2:].strip()
         event.text = event.message.text  #: might be redundant
 
-        response_message = await event.reply(
-            f"{BOT_META_INFO_PREFIX}**Recent Context Mode:** I'll use only the recent messages to form the conversation context. I have waited {RECENT_WAIT_TIME} second(s) to receive all your messages.\n\nProcessing ... "
+        response_message = await send_info_message(
+            event,
+            f"**Recent Context Mode:** I'll use only the recent messages to form the conversation context. I have waited {RECENT_WAIT_TIME} second(s) to receive all your messages.\n\nProcessing ... ",
         )
 
     else:
-        response_message = await event.reply(f"{BOT_META_INFO_PREFIX}...")
+        response_message = await send_info_message(event, "...")
 
     import tempfile
 
