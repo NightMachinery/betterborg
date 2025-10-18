@@ -672,7 +672,7 @@ You are a helpful and knowledgeable assistant. Your primary audience is advanced
 DEFAULT_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT_V3 + BIDI_PROMPT
 
 GROUP_CHAT_ETIQUETTE_PROMPT = """
-## Group Chat Etiquette
+# Group Chat Etiquette
 This is a group chat with multiple participants. Be EXTREMELY concise:
 - Shortest possible satisfactory answer (1-3 sentences ideal, 5 max unless absolutely necessary)
 - Get straight to the point - no preamble, no elaboration unless asked
