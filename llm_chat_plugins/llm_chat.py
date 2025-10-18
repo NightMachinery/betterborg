@@ -46,6 +46,7 @@ from telethon.tl.types import (
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass, field
+from enum import Enum
 
 # Import uniborg utilities and storage
 from uniborg import util
@@ -100,6 +101,18 @@ PREFIX_MODEL_MAPPING = {
     (".c", ".چ"): "openrouter/openai/gpt-5-chat",
     (".d", ".د"): "deepseek/deepseek-reasoner",
 }
+
+# Auto-delete time for info messages (in seconds)
+AUTO_DELETE_TIME = 30
+
+
+class AutoDeleteMode(str, Enum):
+    """Mode for auto-deleting info messages."""
+
+    DISABLED = "disabled"
+    GROUP_ONLY = "group_only"
+    ALWAYS = "always"
+
 
 # Audio summarization prompt
 PROMPT_SUMMARIZE_AUDIO = r"""Please listen to this audio file completely and provide a comprehensive, detailed analysis of its entire content.
@@ -1252,6 +1265,7 @@ class ChatPrefs(BaseModel):
     tts_voice_override: Optional[str] = Field(default=None)
     live_mode_enabled: bool = Field(default=False)
     last_n_messages_limit: Optional[int] = Field(default=None)
+    auto_delete_info_p: AutoDeleteMode = Field(default=AutoDeleteMode.GROUP_ONLY)
 
 
 class UserManager:
@@ -1440,6 +1454,14 @@ class ChatManager:
     def is_live_mode_enabled(self, chat_id: int) -> bool:
         return self.get_prefs(chat_id).live_mode_enabled
 
+    def get_auto_delete_info_p(self, chat_id: int) -> AutoDeleteMode:
+        return self.get_prefs(chat_id).auto_delete_info_p
+
+    def set_auto_delete_info_p(self, chat_id: int, mode: AutoDeleteMode):
+        prefs = self.get_prefs(chat_id)
+        prefs.auto_delete_info_p = mode
+        self._save_prefs(chat_id, prefs)
+
     def get_last_n_messages_limit(self, chat_id: int) -> Optional[int]:
         return self.get_prefs(chat_id).last_n_messages_limit
 
@@ -1451,6 +1473,86 @@ class ChatManager:
 
 user_manager = UserManager()
 chat_manager = ChatManager()
+
+
+async def auto_delete_info_message(
+    event,
+    message,
+    delay: int = AUTO_DELETE_TIME,
+    *,
+    auto_delete_override_p: AutoDeleteMode | bool | str = "from_chat",
+):
+    """Auto-deletes info messages based on chat settings or override.
+
+    Args:
+        event: The event containing chat context
+        message: The message to potentially delete
+        delay: Delay in seconds before deletion (default: AUTO_DELETE_TIME)
+        auto_delete_override_p: If "from_chat", uses chat settings;
+                               if AutoDeleteMode enum, uses that mode;
+                               if bool, forces that behavior (True=always, False=never)
+    """
+    if auto_delete_override_p == "from_chat":
+        auto_delete_mode = chat_manager.get_auto_delete_info_p(event.chat_id)
+    elif isinstance(auto_delete_override_p, AutoDeleteMode):
+        auto_delete_mode = auto_delete_override_p
+    else:
+        # bool: True means ALWAYS, False means DISABLED
+        auto_delete_mode = (
+            AutoDeleteMode.ALWAYS if auto_delete_override_p else AutoDeleteMode.DISABLED
+        )
+
+    should_delete = auto_delete_mode == AutoDeleteMode.ALWAYS or (
+        auto_delete_mode == AutoDeleteMode.GROUP_ONLY and not event.is_private
+    )
+
+    if should_delete:
+        await asyncio.sleep(delay)
+        try:
+            await message.delete()
+        except Exception:
+            pass  # Silently ignore deletion errors
+
+
+async def send_info_message(
+    event,
+    text: str,
+    *,
+    auto_delete: AutoDeleteMode | bool | str = False,
+    delay: int = AUTO_DELETE_TIME,
+    prefix: str = BOT_META_INFO_PREFIX,
+    reply_to=True,
+    **kwargs,
+):
+    """Sends an info message with automatic prefix and optional auto-deletion.
+
+    Args:
+        event: The event to reply to
+        text: Message text (prefix will be prepended automatically)
+        auto_delete: Auto-delete control - False (default, no delete), True (always delete),
+                    "from_chat" (use chat settings), or AutoDeleteMode enum value
+        delay: Delay before deletion in seconds
+        prefix: Prefix to prepend (default: BOT_META_INFO_PREFIX)
+        reply_to: If True, uses event.reply(); otherwise uses event.respond(reply_to=...)
+                 with the provided value (False/None/int/Message)
+        **kwargs: Additional arguments passed to reply/respond (parse_mode, link_preview, etc.)
+
+    Returns:
+        The sent message object
+    """
+    full_text = f"{prefix}{text}"
+
+    if reply_to is True:
+        msg = await event.reply(full_text, **kwargs)
+    else:
+        # reply_to can be False, None, int (message ID), or Message object
+        msg = await event.respond(full_text, reply_to=reply_to, **kwargs)
+
+    await auto_delete_info_message(
+        event, msg, delay, auto_delete_override_p=auto_delete
+    )
+
+    return msg
 
 
 # --- Core Logic & Helpers ---
@@ -4678,23 +4780,23 @@ async def set_system_prompt_here_handler(event):
     is_group_admin = await util.is_group_admin(event)
 
     if not event.is_private and not (is_bot_admin or is_group_admin):
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}You must be a group admin or bot admin to use this command in a group."
+        await send_info_message(
+            event,
+            "You must be a group admin or bot admin to use this command in a group.",
+            auto_delete="from_chat",
         )
         return
 
     prompt_match = event.pattern_match.group(1)
     if not prompt_match or not prompt_match.strip():
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}**Usage:** `/setSystemPromptHere <your prompt here>`"
+        await send_info_message(
+            event, "**Usage:** `/setSystemPromptHere <your prompt here>`"
         )
         return
 
     prompt = prompt_match.strip()
     chat_manager.set_system_prompt(event.chat_id, prompt)
-    await event.reply(
-        f"{BOT_META_INFO_PREFIX}✅ This chat's system prompt has been updated."
-    )
+    await send_info_message(event, "✅ This chat's system prompt has been updated.")
 
 
 async def reset_system_prompt_here_handler(event):
