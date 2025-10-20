@@ -990,6 +990,21 @@ async def _process_msg(
         elif m0_text == ".error":
             raise Exception(".error invoked")
             return "@impossible"
+        elif m0_text == "/colors":
+            out_add("Generating color legend...")
+            await edit(out)
+            try:
+                lock_tt.release()
+                img_path = await timetracker_util.generate_colors_legend()
+                await send_file(img_path)
+                out_add("Color legend sent!", prefix="\n")
+                await edit(out)
+            except Exception as e:
+                out_add(f"Error generating legend: {e}", prefix="\n")
+                await edit(out)
+            finally:
+                await lock_tt.acquire()
+            return out
 
         if not received_at:  # None, "" are both acceptable as null
             received_at = datetime.datetime.today()

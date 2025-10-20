@@ -1023,6 +1023,64 @@ def visualize_stacked_area(dated_act_roots, days=1, cmap=None):
     return out_links, out_files
 
 
+@force_async
+def generate_colors_legend():
+    """Generate a legend image showing all activity categories with their colors."""
+    import plotly.graph_objects as go
+
+    # Get categories, excluding "Total"
+    cats = [(name, color) for name, color in categories.items() if name != "Total"]
+
+    # Prepare data for display
+    names = [name for name, _ in cats]
+    colors_list = [color for _, color in cats]
+
+    # Create a table-like visualization
+    fig = go.Figure(
+        data=[
+            go.Table(
+                columnwidth=[300, 100],
+                header=dict(
+                    values=["<b>Activity</b>", "<b>Color</b>"],
+                    fill_color="lightgray",
+                    align="left",
+                    font=dict(size=14, color="black"),
+                ),
+                cells=dict(
+                    values=[names, ["█████" for _ in colors_list]],
+                    fill_color=["white", colors_list],
+                    align="left",
+                    font=dict(size=12, color=["black", colors_list]),
+                    height=25,
+                ),
+            )
+        ]
+    )
+
+    fig.update_layout(
+        # title=dict(
+        #     text="<b>Activity Categories Legend</b>",
+        #     x=0.5,
+        #     xanchor="center",
+        #     font=dict(size=18),
+        # ),
+        # margin=dict(t=60, l=20, r=20, b=20),
+        margin=dict(t=20, l=20, r=20, b=20),
+        height=max(500, 70 + len(cats) * 25),
+    )
+
+    # Export the figure
+    img_path = z("gmktemp --suffix .png").outrs
+    fig.write_image(
+        img_path,
+        width=300,
+        height=fig.layout.height,
+        scale=2,
+    )
+
+    return img_path
+
+
 def fig_export(
     fig,
     exported_name,
