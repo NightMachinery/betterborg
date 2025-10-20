@@ -629,6 +629,8 @@ categories = {
     "creative": "rgb(240, 107, 255)",
     "social": "rgb(188, 128, 189)",
     "social_online": "rgb(252, 205, 229)",
+    "social_exploration": "rgb(97, 82, 250)",
+    "social_chores": "rgb(179, 172, 250)",
     "chores": "rgb(255, 243, 185)",
     "chores_self_rest": "rgb(255, 237, 111)",
     "chores_others": "rgb(221, 255, 173)",
