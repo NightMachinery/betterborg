@@ -1,0 +1,15 @@
+#+TITLE: betterborg/tt_todo
+
+* DONE =/colors=
+#+BEGIN_SRC markdown
+```
+  categories = {
+      # @hiddenDep visualize_stacked_area/get_y needs to be able to calculate the
+  correct duration for each category.
+      "Total": "rgb(255, 255, 255)",
+      "career": "rgb(17, 99, 0)",
+      "study_ta": "rgb(89, 0, 255)",
+```
+  
+Add command `/colors` to the timetracker plugin which creates a legend for these  categories (activity: rectangle of color) and sends that. Read the timetracker  and utils files completely. 
+#+END_SRC
