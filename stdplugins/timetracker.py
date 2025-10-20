@@ -433,7 +433,8 @@ subs = {
     "👥": "social_others",
     "soc": "social_others",
     "soch": "social_chores",
-    "sov": "social_online_videocall",
+    "sox": "social_exploration",
+    "sov": "social_online_videocall",  #: @todo rename most social_online activities
     "soa": "social_online_audiocall",
     ##
     "tlg": "social_online_telegram",
@@ -523,6 +524,7 @@ subs = {
     "walking": "outdoors_walking",
     "park": "outdoors_walking_park",
     ##
+    "x": "exploration",
     "exp": "exploration",
     "expl": "exploration",
     "xbuy": "exploration_buying",
