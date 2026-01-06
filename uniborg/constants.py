@@ -1,11 +1,21 @@
 ##
 # Gemini model aliases that always point to the latest version
+# GEMINI_FLASH_3 = "gemini/gemini-3-flash-preview"
+GEMINI_FLASH_2_5 =  "gemini/gemini-2.5-flash-preview-09-2025"
+GEMINI_FLASH_3 = "gemini/gemini-3-flash-preview"
+GEMINI_STT_LATEST = GEMINI_FLASH_3
+# GEMINI_FLASH_LATEST = GEMINI_FLASH_3
+#: LiteLLM bug: says out of quota for flash 3
 GEMINI_FLASH_LATEST = "gemini/gemini-flash-latest"
 GEMINI_FLASH_LITE_LATEST = "gemini/gemini-flash-lite-latest"
+GEMINI_PRO_LATEST = "gemini/gemini-3-pro-preview"
 
 # Old 2.5 versions (commented for when 3.0 arrives)
 # GEMINI_FLASH_2_5 = "gemini/gemini-2.5-flash"
 # GEMINI_FLASH_LITE_2_5 = "gemini/gemini-2.5-flash-lite"
+
+OR_OPENAI_5_2 = "openrouter/openai/gpt-5.2"
+OR_OPENAI_LATEST = OR_OPENAI_5_2
 ##
 CHAT_TITLE_MODEL = GEMINI_FLASH_LITE_LATEST
 ##

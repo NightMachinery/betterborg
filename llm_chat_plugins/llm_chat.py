@@ -30,6 +30,8 @@ from itertools import groupby
 
 import httpx
 import litellm
+# litellm._turn_on_debug()
+
 from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
 )
@@ -69,6 +71,11 @@ from uniborg.constants import (
     DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
     GEMINI_FLASH_LATEST,
     GEMINI_FLASH_LITE_LATEST,
+    GEMINI_PRO_LATEST,
+    GEMINI_FLASH_2_5,
+    GEMINI_FLASH_3,
+    OR_OPENAI_5_2,
+    OR_OPENAI_LATEST,
 )
 
 # Import live mode utilities
@@ -99,11 +106,13 @@ DEFAULT_MODEL = GEMINI_FLASH_LATEST  #: Do NOT change the default model unless e
 # Prefix-to-model mapping for hardcoded model selection
 #: @hiddenDep Update `Quick Model Selection Shortcuts` in `/help` command to reflect changes here.
 PREFIX_MODEL_MAPPING = {
-    (".fl", ".فل"): GEMINI_FLASH_LITE_LATEST,  # Old: "gemini/gemini-2.5-flash-lite"
-    (".f", ".ف"): "gemini/gemini-2.0-flash",
-    (".ff", ".فف"): GEMINI_FLASH_LATEST,  # Old: "gemini/gemini-2.5-flash"
+    (".fl", ".فل"): GEMINI_FLASH_LITE_LATEST,
+    (".f2", ".ف۲"): GEMINI_FLASH_2_5,
+    (".f", ".ف"): GEMINI_FLASH_LATEST,
+    (".g3", ".ج۳"): GEMINI_PRO_LATEST,
     (".g", ".ج"): "gemini/gemini-2.5-pro",
-    (".c", ".چ"): "openrouter/openai/gpt-5-chat",
+    (".g2", ".ج۲"): "gemini/gemini-2.5-pro",
+    (".c", ".چ"): OR_OPENAI_LATEST,
     (".d", ".د"): "deepseek/deepseek-reasoner",
 }
 
@@ -820,19 +829,23 @@ MODEL_CHOICES = {
     GEMINI_FLASH_LITE_LATEST: "Gemini Flash Lite (Latest)",
     # "gemini/gemini-2.5-flash": "Gemini 2.5 Flash",
     # "gemini/gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
+    GEMINI_PRO_LATEST: "Gemini 3 Pro",
     "gemini/gemini-2.5-pro": "Gemini 2.5 Pro",
     "openrouter/google/gemini-2.5-pro": "Gemini 2.5 Pro (OpenRouter)",
-    "gemini/gemini-2.0-flash": "Gemini 2.0 Flash",
-    "gemini/gemini-2.0-flash-preview-image-generation": "Gemini 2.0 Flash Image",
+    GEMINI_FLASH_3: "Gemini 3 Flash",
+    "gemini/gemini-2.0-flash": "Gemini 2 Flash",
+    "gemini/gemini-2.0-flash-preview-image-generation": "Gemini 2 Flash Image",
     "gemini/gemini-2.5-flash-image-preview": "Gemini 2.5 Flash Image",
     ## Anthropic Claude
-    "openrouter/anthropic/claude-sonnet-4": "Claude Sonnet 4 (OpenRouter)",
-    "openrouter/anthropic/claude-opus-4.1": "Claude Opus 4.1 (OpenRouter)",
+    "openrouter/anthropic/claude-sonnet-4.5": "Claude Sonnet 4.5 (OpenRouter)",
+    "openrouter/anthropic/claude-opus-4.5": "Claude Opus 4.5 (OpenRouter)",
+    # "openrouter/anthropic/claude-opus-4.1": "Claude Opus 4.1 (OpenRouter)",
     ## Grok
     "openrouter/x-ai/grok-4": "Grok 4 (OpenRouter)",
     ## OpenAI
-    # openai/gpt-5-chat
-    "openrouter/openai/gpt-5-chat": "GPT-5 Chat (OpenRouter)",
+    OR_OPENAI_5_2: "GPT-5.2 (OpenRouter)",
+    # "openrouter/openai/gpt-5.2-chat": "GPT-5.2 Chat (OpenRouter)",
+    # "openrouter/openai/gpt-5-chat": "GPT-5 Chat (OpenRouter)",
     "openrouter/openai/chatgpt-4o-latest": "ChatGPT 4o (OpenRouter)",
     # openai/chatgpt-4o-latest: OpenAI ChatGPT 4o is continually updated by OpenAI to point to the current version of GPT-4o used by ChatGPT. It therefore differs slightly from the API version of GPT-4o in that it has additional RLHF. It is intended for research and evaluation.  OpenAI notes that this model is not suited for production use-cases as it may be removed or redirected to another model in the future.
     # "openrouter/openai/gpt-4o-mini": "GPT-4o Mini (OpenRouter)",

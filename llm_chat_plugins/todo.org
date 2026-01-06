@@ -9,6 +9,8 @@
 Extract the `.rev` in PROMPT_REPLACEMENTS into `~/scripts/prompt/review_v1.md` and load it from there.
 #+end_verse
 
+* Add =.gg= shortcut for answering both as Flash and Pro
+
 * DONE history as file 
 #+BEGIN_SRC markdown
 llm_chat: add command `/asFile` and its alias `..`, which will send the conversation history as a markdown file to the chat (do not reply, use `respond`). Any questions?

@@ -4,6 +4,7 @@ from uniborg import llm_util
 from uniborg import llm_db
 from uniborg.constants import (
     GEMINI_FLASH_LATEST,
+    GEMINI_STT_LATEST,
     STT_FILE_LENGTH_THRESHOLD,
     STT_FILE_ONLY_LENGTH_THRESHOLD,
 )
@@ -113,7 +114,7 @@ print(f"STT Prompt Loaded:\n\n{TRANSCRIPTION_PROMPT}\n---\n\n")
 # --- Core Transcription Logic ---
 
 
-async def llm_stt(*, cwd, event, model_name=GEMINI_FLASH_LATEST, log=True):
+async def llm_stt(*, cwd, event, model_name=GEMINI_STT_LATEST, log=True):
     """
     Performs speech-to-text on media, enforcing a single structured JSON output
     that synthesizes all provided files.
