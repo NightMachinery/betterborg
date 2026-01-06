@@ -11,6 +11,11 @@ Extract the `.rev` in PROMPT_REPLACEMENTS into `~/scripts/prompt/review_v1.md` a
 
 * Add =.gg= shortcut for answering both as Flash and Pro
 
+* rotate keys
+#+begin_verse
+if the user is admin (detect using by checking if their id is '195391705' in  function `user_gemini_rotate_keys_p` fn), and GEMINI_ROTATE_KEYS_P == True (add to  constants), instead of using the configured api key, rotate keys from  GEMINI_API_KEYS=~/.gemini_api_keys (add to constants). 
+#+end_verse
+
 * DONE _
 - [[https://www.reddit.com/r/Bard/comments/1pp3caj/gemini_3_flash_preview_has_zero_free_api_quota/][Gemini 3 Flash preview has zero free api quota : Bard]]
 #+begin_verse
