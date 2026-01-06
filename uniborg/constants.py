@@ -38,3 +38,6 @@ BOT_META_INFO_LINE = f"{BOT_META_INFO_PREFIX}── ※ ──{BOT_META_INFO
 GEMINI_CHAT_ROTATE_KEYS_P = True
 GEMINI_STT_ROTATE_KEYS_P = True
 GEMINI_API_KEYS = os.path.expanduser("~/.gemini_api_keys")
+ADMIN_ONLY_COMMAND_IGNORED = (
+    "You have invoked an admin-only command. Your request has been ignored."
+)

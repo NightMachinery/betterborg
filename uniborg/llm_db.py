@@ -140,10 +140,41 @@ def get_api_key(
 
 _GEMINI_ROTATE_KEYS = None
 _GEMINI_ROTATE_INDEX = 0
+_GEMINI_ROTATE_KEYS_ENABLED_USERS = {"chat": set(), "stt": set()}
 
 
-def user_gemini_rotate_keys_p(user_id: int, rotate_keys_p: bool = False) -> bool:
-    return rotate_keys_p and str(user_id) == "195391705"
+def user_gemini_rotate_keys_p(
+    user_id: int,
+    rotate_keys_p: bool = False,
+    *,
+    require_enabled_p: bool = True,
+    require_global_p: bool = True,
+    scope: str = "chat",
+) -> bool:
+    if str(user_id) != "195391705":
+        return False
+    if require_global_p and not rotate_keys_p:
+        return False
+    if require_enabled_p and user_id not in _get_rotate_scope_set(scope):
+        return False
+    return True
+
+
+def _get_rotate_scope_set(scope: str) -> set[int]:
+    return _GEMINI_ROTATE_KEYS_ENABLED_USERS.setdefault(scope, set())
+
+
+def gemini_rotate_keys_enabled_p(*, user_id: int, scope: str = "chat") -> bool:
+    return user_id in _get_rotate_scope_set(scope)
+
+
+def toggle_gemini_rotate_keys_enabled(*, user_id: int, scope: str = "chat") -> bool:
+    scope_set = _get_rotate_scope_set(scope)
+    if user_id in scope_set:
+        scope_set.remove(user_id)
+        return False
+    scope_set.add(user_id)
+    return True
 
 
 def _truncate_key(
@@ -187,11 +218,21 @@ def _get_rotated_gemini_api_key() -> tuple[str, int] | None:
 
 
 def get_gemini_api_key(
-    *, user_id: int, rotate_keys_p: bool = False, service: str = "gemini"
+    *,
+    user_id: int,
+    rotate_keys_p: bool = False,
+    service: str = "gemini",
+    scope: str = "chat",
 ) -> str | None:
     if service != "gemini":
         return get_api_key(user_id=user_id, service=service)
-    if user_gemini_rotate_keys_p(user_id, rotate_keys_p):
+    if user_gemini_rotate_keys_p(
+        user_id,
+        rotate_keys_p,
+        require_enabled_p=True,
+        require_global_p=True,
+        scope=scope,
+    ):
         rotated = _get_rotated_gemini_api_key()
         if rotated:
             key, line_no = rotated

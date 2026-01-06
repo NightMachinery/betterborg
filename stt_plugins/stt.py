@@ -8,6 +8,7 @@ from uniborg.constants import (
     STT_FILE_LENGTH_THRESHOLD,
     STT_FILE_ONLY_LENGTH_THRESHOLD,
     GEMINI_STT_ROTATE_KEYS_P,
+    ADMIN_ONLY_COMMAND_IGNORED,
 )
 import os
 import traceback
@@ -29,6 +30,7 @@ BOT_COMMANDS = [
     {"command": "help", "description": "Show help and instructions"},
     {"command": "setgeminikey", "description": "Set or update your Gemini API key"},
 ]
+KNOWN_STRICT_COMMANDS = {".rot"}  # Undocumented admin-only command; do not add to help.
 
 # --- Pydantic Schema and Prompt for Transcription ---
 
@@ -117,7 +119,10 @@ print(f"STT Prompt Loaded:\n\n{TRANSCRIPTION_PROMPT}\n---\n\n")
 
 def get_effective_gemini_api_key(user_id: int) -> str | None:
     return llm_db.get_gemini_api_key(
-        user_id=user_id, rotate_keys_p=GEMINI_STT_ROTATE_KEYS_P, service="gemini"
+        user_id=user_id,
+        rotate_keys_p=GEMINI_STT_ROTATE_KEYS_P,
+        service="gemini",
+        scope="stt",
     )
 
 
@@ -347,6 +352,24 @@ Here's how to use me:
 - `/setGeminiKey [API_KEY]`: Sets or updates your Gemini API key.
 """
     await event.reply(help_text, link_preview=False)
+
+
+@borg.on(events.NewMessage(func=lambda e: e.text and e.text.strip() in KNOWN_STRICT_COMMANDS))
+async def rotate_keys_handler(event):
+    """Toggle Gemini API key rotation (admin-only, undocumented)."""
+    user_id = event.sender_id
+    if not llm_db.user_gemini_rotate_keys_p(
+        user_id,
+        rotate_keys_p=GEMINI_STT_ROTATE_KEYS_P,
+        require_enabled_p=False,
+        require_global_p=False,
+        scope="stt",
+    ):
+        await event.reply(ADMIN_ONLY_COMMAND_IGNORED)
+        return
+    enabled = llm_db.toggle_gemini_rotate_keys_enabled(user_id=user_id, scope="stt")
+    state = "enabled" if enabled else "disabled"
+    await event.reply(f"Gemini key rotation {state}.")
 
 
 @borg.on(events.NewMessage(pattern=r"(?i)/setGeminiKey(?:\s+(.*))?"))

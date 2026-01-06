@@ -76,6 +76,7 @@ from uniborg.constants import (
     GEMINI_FLASH_2_5,
     GEMINI_FLASH_3,
     GEMINI_CHAT_ROTATE_KEYS_P,
+    ADMIN_ONLY_COMMAND_IGNORED,
     OR_OPENAI_5_2,
     OR_OPENAI_LATEST,
 )
@@ -1048,6 +1049,7 @@ KNOWN_STRICT_COMMANDS = {
     #: allow single dot for simply bookmarking a message
     ##
     "..",
+    ".rot",  # Undocumented admin-only command; do not add to help.
 }
 
 
@@ -1885,7 +1887,10 @@ def _get_effective_model_and_service(
 
 def get_effective_gemini_api_key(user_id: int) -> str | None:
     return llm_db.get_gemini_api_key(
-        user_id=user_id, rotate_keys_p=GEMINI_CHAT_ROTATE_KEYS_P, service="gemini"
+        user_id=user_id,
+        rotate_keys_p=GEMINI_CHAT_ROTATE_KEYS_P,
+        service="gemini",
+        scope="chat",
     )
 
 
@@ -3994,6 +3999,7 @@ def register_handlers():
             func=lambda e: e.is_private,
         )
     )(help_magics_handler)
+    borg.on(events.NewMessage(pattern=rf"(?i)^\.rot\s*$"))(rotate_keys_handler)
     borg.on(
         events.NewMessage(
             pattern=rf"(?i)^/status{bot_username_suffix_re}\s*$",
@@ -4391,6 +4397,23 @@ Start your messages with these shortcuts to use specific models:
     await event.reply(
         f"{BOT_META_INFO_PREFIX}{help_text}", link_preview=False, parse_mode="md"
     )
+
+
+async def rotate_keys_handler(event):
+    """Toggle Gemini API key rotation (admin-only, undocumented)."""
+    user_id = event.sender_id
+    if not llm_db.user_gemini_rotate_keys_p(
+        user_id,
+        rotate_keys_p=GEMINI_CHAT_ROTATE_KEYS_P,
+        require_enabled_p=False,
+        require_global_p=False,
+        scope="chat",
+    ):
+        await event.reply(ADMIN_ONLY_COMMAND_IGNORED)
+        return
+    enabled = llm_db.toggle_gemini_rotate_keys_enabled(user_id=user_id, scope="chat")
+    state = "enabled" if enabled else "disabled"
+    await send_info_message(event, f"Gemini key rotation {state}.")
 
 
 async def help_magics_handler(event):
@@ -6560,6 +6583,7 @@ async def chat_handler(event):
     # Intercept if user is in any waiting state first.
     if llm_db.is_awaiting_key(user_id) or user_id in AWAITING_INPUT_FROM_USERS:
         return
+
 
     # Intercept for live mode if active
     if gemini_live_util.live_session_manager.is_live_mode_active(chat_id):
