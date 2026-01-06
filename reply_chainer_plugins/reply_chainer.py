@@ -96,7 +96,7 @@ async def process_buffer(chat_id: int):
                     # `send_message` can forward both text and media simultaneously.
                     sent_message = await borg.send_message(
                         chat_id,
-                        message=item, # Forward the entire message object
+                        message=item,  # Forward the entire message object
                         reply_to=last_sent_message_id,
                     )
                     if sent_message:
@@ -104,7 +104,6 @@ async def process_buffer(chat_id: int):
             except Exception as e:
                 # If sending fails, log the error but don't stop the process.
                 print(f"Failed to resend message/album in reply chain: {e}")
-
 
         # --- Cleanup ---
         # Delete all the original messages in a single batch.

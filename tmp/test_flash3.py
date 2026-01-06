@@ -41,11 +41,17 @@ def main():
     parser = argparse.ArgumentParser(
         description="Repro for litellm gemini-3-flash-preview rate limit issues."
     )
-    parser.add_argument("--api-key", default=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+    parser.add_argument(
+        "--api-key", default=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    )
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--n", type=int, default=1, help="number of requests to send")
-    parser.add_argument("--sleep", type=float, default=0.0, help="sleep between requests (seconds)")
-    parser.add_argument("--debug", action="store_true", help="enable litellm debug logs")
+    parser.add_argument(
+        "--sleep", type=float, default=0.0, help="sleep between requests (seconds)"
+    )
+    parser.add_argument(
+        "--debug", action="store_true", help="enable litellm debug logs"
+    )
     args = parser.parse_args()
 
     if not args.api_key:

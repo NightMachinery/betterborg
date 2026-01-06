@@ -170,9 +170,7 @@ async def _run_with_llm_chat(
         if model_capabilities.get("image_generation", False):
             api_kwargs["modalities"] = ["image", "text"]
 
-    edit_interval = (
-        module.get_streaming_delay(model) if use_streaming else None
-    )
+    edit_interval = module.get_streaming_delay(model) if use_streaming else None
     response = await module._retry_on_no_response_with_reasons(
         user_id=0,
         event=None,
@@ -228,7 +226,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Repro for llm_chat plugin behavior with gemini-3-flash-preview."
     )
-    parser.add_argument("--api-key", default=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+    parser.add_argument(
+        "--api-key", default=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    )
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(
         "--no-stream",
@@ -301,7 +301,9 @@ def main():
         default=0.0,
         help="dump Python stack after N seconds (0 disables)",
     )
-    parser.add_argument("--debug", action="store_true", help="enable litellm debug logs")
+    parser.add_argument(
+        "--debug", action="store_true", help="enable litellm debug logs"
+    )
     args = parser.parse_args()
 
     if not args.api_key:

@@ -146,8 +146,12 @@ def user_gemini_rotate_keys_p(user_id: int, rotate_keys_p: bool = False) -> bool
     return rotate_keys_p and str(user_id) == "195391705"
 
 
-def _truncate_key(key: str, *, side_len=10,) -> str:
-    if len(key) <= 2*side_len + 2:
+def _truncate_key(
+    key: str,
+    *,
+    side_len=10,
+) -> str:
+    if len(key) <= 2 * side_len + 2:
         return key
 
     return f"{key[:side_len]}…{key[-side_len:]}"

@@ -1,8 +1,9 @@
 import os
+
 ##
 # Gemini model aliases that always point to the latest version
 # GEMINI_FLASH_3 = "gemini/gemini-3-flash-preview"
-GEMINI_FLASH_2_5 =  "gemini/gemini-2.5-flash-preview-09-2025"
+GEMINI_FLASH_2_5 = "gemini/gemini-2.5-flash-preview-09-2025"
 GEMINI_FLASH_3 = "gemini/gemini-3-flash-preview"
 GEMINI_STT_LATEST = GEMINI_FLASH_3
 GEMINI_FLASH_LATEST = GEMINI_FLASH_3
