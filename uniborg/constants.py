@@ -4,9 +4,8 @@
 GEMINI_FLASH_2_5 =  "gemini/gemini-2.5-flash-preview-09-2025"
 GEMINI_FLASH_3 = "gemini/gemini-3-flash-preview"
 GEMINI_STT_LATEST = GEMINI_FLASH_3
-# GEMINI_FLASH_LATEST = GEMINI_FLASH_3
-#: LiteLLM bug: says out of quota for flash 3
-GEMINI_FLASH_LATEST = "gemini/gemini-flash-latest"
+GEMINI_FLASH_LATEST = GEMINI_FLASH_3
+# GEMINI_FLASH_LATEST = "gemini/gemini-flash-latest"
 GEMINI_FLASH_LITE_LATEST = "gemini/gemini-flash-lite-latest"
 GEMINI_PRO_LATEST = "gemini/gemini-3-pro-preview"
 
