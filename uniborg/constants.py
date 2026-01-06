@@ -1,3 +1,4 @@
+import os
 ##
 # Gemini model aliases that always point to the latest version
 # GEMINI_FLASH_3 = "gemini/gemini-3-flash-preview"
@@ -33,3 +34,5 @@ BOT_META_INFO_PREFIX = "\u200b\u200b\u200b\u200b"
 # BOT_META_INFO_LINE = f"{BOT_META_INFO_PREFIX}---{BOT_META_INFO_PREFIX}"
 BOT_META_INFO_LINE = f"{BOT_META_INFO_PREFIX}── ※ ──{BOT_META_INFO_PREFIX}"
 ##
+GEMINI_ROTATE_KEYS_P = True
+GEMINI_API_KEYS = os.path.expanduser("~/.gemini_api_keys")

@@ -74,6 +74,8 @@ from uniborg.constants import (
     GEMINI_PRO_LATEST,
     GEMINI_FLASH_2_5,
     GEMINI_FLASH_3,
+    GEMINI_ROTATE_KEYS_P,
+    GEMINI_API_KEYS,
     OR_OPENAI_5_2,
     OR_OPENAI_LATEST,
 )
@@ -1879,6 +1881,57 @@ def _get_effective_model_and_service(
     service_needed = llm_util.get_service_from_model(model_in_use)
 
     return model_in_use, service_needed
+
+
+_GEMINI_ROTATE_KEYS = None
+_GEMINI_ROTATE_INDEX = 0
+
+
+def user_gemini_rotate_keys_p(user_id: int) -> bool:
+    return GEMINI_ROTATE_KEYS_P and str(user_id) == "195391705"
+
+
+def _load_gemini_rotate_keys() -> list[str]:
+    path = os.path.expanduser(GEMINI_API_KEYS)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            keys = []
+            for line in f:
+                key = line.strip()
+                if not key or key.startswith("#"):
+                    continue
+                keys.append(key)
+            return keys
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        print(f"Failed to load Gemini rotate keys: {e}")
+        return []
+
+
+def _get_rotated_gemini_api_key() -> str | None:
+    global _GEMINI_ROTATE_KEYS, _GEMINI_ROTATE_INDEX
+    if _GEMINI_ROTATE_KEYS is None:
+        _GEMINI_ROTATE_KEYS = _load_gemini_rotate_keys()
+    if not _GEMINI_ROTATE_KEYS:
+        return None
+    key = _GEMINI_ROTATE_KEYS[_GEMINI_ROTATE_INDEX % len(_GEMINI_ROTATE_KEYS)]
+    _GEMINI_ROTATE_INDEX = (_GEMINI_ROTATE_INDEX + 1) % len(_GEMINI_ROTATE_KEYS)
+    return key
+
+
+def get_effective_gemini_api_key(user_id: int) -> str | None:
+    if user_gemini_rotate_keys_p(user_id):
+        rotated = _get_rotated_gemini_api_key()
+        if rotated:
+            return rotated
+    return llm_db.get_api_key(user_id=user_id, service="gemini")
+
+
+def get_effective_api_key(user_id: int, service: str) -> str | None:
+    if service == "gemini":
+        return get_effective_gemini_api_key(user_id)
+    return llm_db.get_api_key(user_id=user_id, service=service)
 
 
 def _create_retry_logger():
@@ -4277,7 +4330,7 @@ async def start_handler(event):
     cancel_input_flow(user_id)
 
     # Check for Gemini API key specifically
-    if llm_db.get_api_key(user_id=user_id, service="gemini"):
+    if get_effective_gemini_api_key(user_id):
         await event.reply(
             f"{BOT_META_INFO_PREFIX}Welcome back! Your Gemini API key is configured. You can start chatting with me.\n\n"
             "Use /help to see all available commands."
@@ -5739,7 +5792,7 @@ async def live_handler(event):
         live_model = prefs.live_model
 
         # Get API key
-        api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
+        api_key = get_effective_gemini_api_key(user_id)
         if not api_key:
             await event.reply(
                 f"{BOT_META_INFO_PREFIX}❌ Please set your Gemini API key first using `/setgeminikey`."
@@ -5804,7 +5857,7 @@ async def testlive_handler(event):
         return
 
     # Get API key
-    api_key = llm_db.get_api_key(user_id=user_id, service="gemini")
+    api_key = get_effective_gemini_api_key(user_id)
     if not api_key:
         await event.reply(
             f"{BOT_META_INFO_PREFIX}❌ Gemini API key not found. Please set it first with /setgeminikey"
@@ -6253,7 +6306,7 @@ async def _handle_tts_response(event, response_text: str):
             return
 
         # Get user's Gemini API key
-        api_key = llm_db.get_api_key(user_id=sender_id, service="gemini")
+        api_key = get_effective_gemini_api_key(sender_id)
         if not api_key:
             return  # No API key, silently skip TTS
 
@@ -6331,7 +6384,7 @@ async def handle_live_mode_message(event):
 
     try:
         # Get API key
-        api_key = llm_db.get_api_key(user_id=event.sender_id, service="gemini")
+        api_key = get_effective_gemini_api_key(event.sender_id)
         if not api_key:
             await send_info_message(event, "❌ API key not found.")
             return
@@ -6599,7 +6652,7 @@ async def chat_handler(event):
         chat_id, user_id, prefix_model=prefix_result.model
     )
     model_capabilities = get_model_capabilities(model_in_use)
-    api_key = llm_db.get_api_key(user_id=user_id, service=service_needed)
+    api_key = get_effective_api_key(user_id, service_needed)
 
     if not api_key:
         await llm_db.request_api_key_message(event, service_needed)
@@ -6797,7 +6850,7 @@ async def chat_handler(event):
                 file_only_threshold=file_only_threshold,
                 file_name_mode="llm",
                 api_keys={
-                    "gemini": llm_db.get_api_key(user_id, service="gemini"),
+                    "gemini": get_effective_gemini_api_key(user_id),
                 },
                 reply_to=event.message,
             )
