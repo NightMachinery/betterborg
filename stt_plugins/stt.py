@@ -375,7 +375,7 @@ async def rotate_keys_handler(event):
 @borg.on(events.NewMessage(pattern=r"(?i)/setGeminiKey(?:\s+(.*))?"))
 async def set_key_handler(event):
     """Delegates /setgeminikey command logic to the shared module."""
-    await llm_db.handle_set_key_command(event)
+    await llm_db.handle_set_key_command(event, "gemini")
 
 
 @borg.on(
