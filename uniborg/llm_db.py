@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from telethon import events
 
-from uniborg.constants import BOT_META_INFO_PREFIX
+from uniborg.constants import BOT_META_INFO_PREFIX, GEMINI_API_KEYS
 from uniborg.llm_util import (
     send_info_message,
     AutoDeleteMode,
@@ -136,6 +136,66 @@ def get_api_key(
         return result.api_key if result else None
     finally:
         session.close()
+
+
+_GEMINI_ROTATE_KEYS = None
+_GEMINI_ROTATE_INDEX = 0
+
+
+def user_gemini_rotate_keys_p(user_id: int, rotate_keys_p: bool = False) -> bool:
+    return rotate_keys_p and str(user_id) == "195391705"
+
+
+def _truncate_key(key: str, *, side_len=10,) -> str:
+    if len(key) <= 2*side_len + 2:
+        return key
+
+    return f"{key[:side_len]}…{key[-side_len:]}"
+
+
+def _load_gemini_rotate_keys() -> list[tuple[str, int]]:
+    path = os.path.expanduser(GEMINI_API_KEYS)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            keys = []
+            for line_no, line in enumerate(f, start=1):
+                key = line.strip()
+                if not key or key.startswith("#"):
+                    continue
+                keys.append((key, line_no))
+            return keys
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        print(f"Failed to load Gemini rotate keys: {e}")
+        return []
+
+
+def _get_rotated_gemini_api_key() -> tuple[str, int] | None:
+    global _GEMINI_ROTATE_KEYS, _GEMINI_ROTATE_INDEX
+    if _GEMINI_ROTATE_KEYS is None:
+        _GEMINI_ROTATE_KEYS = _load_gemini_rotate_keys()
+    if not _GEMINI_ROTATE_KEYS:
+        return None
+    key = _GEMINI_ROTATE_KEYS[_GEMINI_ROTATE_INDEX % len(_GEMINI_ROTATE_KEYS)]
+    _GEMINI_ROTATE_INDEX = (_GEMINI_ROTATE_INDEX + 1) % len(_GEMINI_ROTATE_KEYS)
+    return key
+
+
+def get_gemini_api_key(
+    *, user_id: int, rotate_keys_p: bool = False, service: str = "gemini"
+) -> str | None:
+    if service != "gemini":
+        return get_api_key(user_id=user_id, service=service)
+    if user_gemini_rotate_keys_p(user_id, rotate_keys_p):
+        rotated = _get_rotated_gemini_api_key()
+        if rotated:
+            key, line_no = rotated
+            print(
+                f"Rotated Gemini API key for user_id={user_id} line={line_no} key={_truncate_key(key)}"
+            )
+            return key
+    return get_api_key(user_id=user_id, service=service)
 
 
 @atexit.register

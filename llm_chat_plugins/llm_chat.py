@@ -74,8 +74,7 @@ from uniborg.constants import (
     GEMINI_PRO_LATEST,
     GEMINI_FLASH_2_5,
     GEMINI_FLASH_3,
-    GEMINI_ROTATE_KEYS_P,
-    GEMINI_API_KEYS,
+    GEMINI_CHAT_ROTATE_KEYS_P,
     OR_OPENAI_5_2,
     OR_OPENAI_LATEST,
 )
@@ -1883,49 +1882,10 @@ def _get_effective_model_and_service(
     return model_in_use, service_needed
 
 
-_GEMINI_ROTATE_KEYS = None
-_GEMINI_ROTATE_INDEX = 0
-
-
-def user_gemini_rotate_keys_p(user_id: int) -> bool:
-    return GEMINI_ROTATE_KEYS_P and str(user_id) == "195391705"
-
-
-def _load_gemini_rotate_keys() -> list[str]:
-    path = os.path.expanduser(GEMINI_API_KEYS)
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            keys = []
-            for line in f:
-                key = line.strip()
-                if not key or key.startswith("#"):
-                    continue
-                keys.append(key)
-            return keys
-    except FileNotFoundError:
-        return []
-    except Exception as e:
-        print(f"Failed to load Gemini rotate keys: {e}")
-        return []
-
-
-def _get_rotated_gemini_api_key() -> str | None:
-    global _GEMINI_ROTATE_KEYS, _GEMINI_ROTATE_INDEX
-    if _GEMINI_ROTATE_KEYS is None:
-        _GEMINI_ROTATE_KEYS = _load_gemini_rotate_keys()
-    if not _GEMINI_ROTATE_KEYS:
-        return None
-    key = _GEMINI_ROTATE_KEYS[_GEMINI_ROTATE_INDEX % len(_GEMINI_ROTATE_KEYS)]
-    _GEMINI_ROTATE_INDEX = (_GEMINI_ROTATE_INDEX + 1) % len(_GEMINI_ROTATE_KEYS)
-    return key
-
-
 def get_effective_gemini_api_key(user_id: int) -> str | None:
-    if user_gemini_rotate_keys_p(user_id):
-        rotated = _get_rotated_gemini_api_key()
-        if rotated:
-            return rotated
-    return llm_db.get_api_key(user_id=user_id, service="gemini")
+    return llm_db.get_gemini_api_key(
+        user_id=user_id, rotate_keys_p=GEMINI_CHAT_ROTATE_KEYS_P, service="gemini"
+    )
 
 
 def get_effective_api_key(user_id: int, service: str) -> str | None:
