@@ -108,6 +108,7 @@ DEFAULT_MODEL = GEMINI_FLASH_LATEST  #: Do NOT change the default model unless e
 PREFIX_MODEL_MAPPING = {
     (".fl", ".فل"): GEMINI_FLASH_LITE_LATEST,
     (".f2", ".ف۲"): GEMINI_FLASH_2_5,
+    (".f3", ".ف۳"): GEMINI_FLASH_3,
     (".f", ".ف"): GEMINI_FLASH_LATEST,
     (".g3", ".ج۳"): GEMINI_PRO_LATEST,
     (".g", ".ج"): "gemini/gemini-2.5-pro",
@@ -4364,11 +4365,13 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 
 **Quick Model Selection Shortcuts**
 Start your messages with these shortcuts to use specific models:
-- `.c` → GPT-5 Chat (OpenRouter): Latest Non-reasoning OpenAI model
-- `.f` → Gemini 2.0 Flash: Fast responses, more generous free tier
-- `.ff` → Gemini Flash (Latest): Fast responses, always up-to-date
+- `.c` → GPT-5.2 (OpenRouter): Latest OpenAI model on OpenRouter
+- `.f` → Gemini Flash (Latest)
+- `.f2` → Gemini 2.5 Flash
+- `.f3` → Gemini 3 Flash (preview)
 - `.fl` → Gemini Flash Lite (Latest): Ultra-fast, efficient responses
-- `.g` → Gemini 2.5 Pro: Google's flagship model
+- `.g` / `.g2` → Gemini 2.5 Pro
+- `.g3` → Gemini 3 Pro (preview)
 - `.d` → DeepSeek Reasoner
 """
     await event.reply(
@@ -6693,6 +6696,12 @@ async def chat_handler(event):
                 ):
                     tools_to_use.remove("urlContext")
                     # print("Disabled url_context due to conflict with google_search for gemini/gemini-2.0-flash")
+                if (
+                    model_in_use == "gemini/gemini-3-flash-preview"
+                    and "googleSearch" in tools_to_use
+                ):
+                    # Avoid tool quota 429s for this model.
+                    tools_to_use.remove("googleSearch")
 
                 api_kwargs["tools"] = [{t: {}} for t in tools_to_use]
                 # ic(api_kwargs["tools"])
