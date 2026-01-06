@@ -7,6 +7,8 @@ from uniborg.constants import (
     GEMINI_STT_LATEST,
     STT_FILE_LENGTH_THRESHOLD,
     STT_FILE_ONLY_LENGTH_THRESHOLD,
+    GEMINI_STT_ROTATE_KEYS_P,
+    GEMINI_API_KEYS,
 )
 import os
 import traceback
@@ -113,6 +115,54 @@ print(f"STT Prompt Loaded:\n\n{TRANSCRIPTION_PROMPT}\n---\n\n")
 
 # --- Core Transcription Logic ---
 
+_GEMINI_STT_ROTATE_KEYS = None
+_GEMINI_STT_ROTATE_INDEX = 0
+
+
+def user_gemini_rotate_keys_p(user_id: int) -> bool:
+    return GEMINI_STT_ROTATE_KEYS_P and str(user_id) == "195391705"
+
+
+def _load_gemini_rotate_keys() -> list[str]:
+    path = os.path.expanduser(GEMINI_API_KEYS)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            keys = []
+            for line in f:
+                key = line.strip()
+                if not key or key.startswith("#"):
+                    continue
+                keys.append(key)
+            return keys
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        print(f"Failed to load Gemini rotate keys: {e}")
+        return []
+
+
+def _get_rotated_gemini_api_key() -> str | None:
+    global _GEMINI_STT_ROTATE_KEYS, _GEMINI_STT_ROTATE_INDEX
+    if _GEMINI_STT_ROTATE_KEYS is None:
+        _GEMINI_STT_ROTATE_KEYS = _load_gemini_rotate_keys()
+    if not _GEMINI_STT_ROTATE_KEYS:
+        return None
+    key = _GEMINI_STT_ROTATE_KEYS[
+        _GEMINI_STT_ROTATE_INDEX % len(_GEMINI_STT_ROTATE_KEYS)
+    ]
+    _GEMINI_STT_ROTATE_INDEX = (
+        _GEMINI_STT_ROTATE_INDEX + 1
+    ) % len(_GEMINI_STT_ROTATE_KEYS)
+    return key
+
+
+def get_effective_gemini_api_key(user_id: int) -> str | None:
+    if user_gemini_rotate_keys_p(user_id):
+        rotated = _get_rotated_gemini_api_key()
+        if rotated:
+            return rotated
+    return llm_db.get_api_key(user_id=user_id, service="gemini")
+
 
 async def llm_stt(*, cwd, event, model_name=GEMINI_STT_LATEST, log=True):
     """
@@ -122,7 +172,7 @@ async def llm_stt(*, cwd, event, model_name=GEMINI_STT_LATEST, log=True):
     parse_mode = "md"
     italics_marker = "__"
 
-    api_key = llm_db.get_api_key(user_id=event.sender_id, service="gemini")
+    api_key = get_effective_gemini_api_key(event.sender_id)
     if not api_key:
         await llm_db.request_api_key_message(event, "gemini")
         return
@@ -304,7 +354,7 @@ async def start_handler(event):
     user_id = event.sender_id
     if llm_db.is_awaiting_key(user_id):
         llm_db.cancel_key_flow(user_id)
-    if llm_db.get_api_key(user_id=user_id, service="gemini"):
+    if get_effective_gemini_api_key(user_id):
         await event.reply(
             "Welcome back! Your Gemini API key is already configured. You can send me media files to transcribe."
         )
