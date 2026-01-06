@@ -11,6 +11,22 @@ Extract the `.rev` in PROMPT_REPLACEMENTS into `~/scripts/prompt/review_v1.md` a
 
 * Add =.gg= shortcut for answering both as Flash and Pro
 
+* DONE _
+- [[https://www.reddit.com/r/Bard/comments/1pp3caj/gemini_3_flash_preview_has_zero_free_api_quota/][Gemini 3 Flash preview has zero free api quota : Bard]]
+#+begin_verse
+turns out i had search tool on and that was what causing the rate limit error, i got to use flash 3 when i turned search tool off. thanks to this commenter who pointed it out
+#+end_verse
+
+#+BEGIN_SRC markdown
+when I use litellm with the GEMINI_FLASH_3 = "gemini/gemini-3-flash-preview"  model, I get a rate limit error. Create a test script in tmp/test_flash3.py and  see if you can reproduce the issue. My gemini key is "AIzaSyC5 wc0oldibCKeQLOzQ8jNBohyiJhFCL0". If you can reproduce, try to debug why it  happens. 
+
+okay, so my error happens in the very firs req, so no need to try harder. The true  rate limit is 20 RPD anyhow, so we shouldn't waste them. It seems things work,  right? But when I use the llm chat plugin with this model I get an error. Write a  new test script that imports the llm chat plugin (or copy the needed functions  into the test script if importing it is difficult due to missing uniborg  functionality), and see if that works. if a single request succeeds, the bug isn't  repoducing. 
+#+END_SRC
+
+#+begin_src zsh :eval never
+GEMINI_API_KEY="${gemini_api_key}" python -u ~/code/betterborg/tmp/test_flash3_llm_chat.py 
+#+end_src
+
 * DONE history as file 
 #+BEGIN_SRC markdown
 llm_chat: add command `/asFile` and its alias `..`, which will send the conversation history as a markdown file to the chat (do not reply, use `respond`). Any questions?
