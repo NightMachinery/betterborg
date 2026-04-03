@@ -1,14 +1,15 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
-import sys
-from pynight.common_icecream import ic
 import asyncio
 import importlib.util
 import logging
+import os
 from pathlib import Path
+import sys
 import traceback
 from icecream import ic
+from pynight.common_icecream import ic
 
 from telethon import TelegramClient
 import telethon.utils
@@ -27,6 +28,16 @@ from . import hacks
 from .util import admins
 from .constants import BOT_META_INFO_PREFIX
 
+DEFAULT_API_ID = 6
+DEFAULT_API_HASH = "eb06d4abfb49dc3eeb1aeb98ae0f581e"
+
+
+def _get_env(name, default=None, cast=None):
+    value = os.environ.get(name, default)
+    if value in (None, ""):
+        return default
+    return cast(value) if cast else value
+
 
 class Uniborg(TelegramClient):
     # @warn this var can be None in which case send_message will fail and potentially crash the whole program
@@ -43,7 +54,18 @@ class Uniborg(TelegramClient):
         log_chat=None,
         **kwargs,
     ):
-        kwargs = {"api_id": 6, "api_hash": "eb06d4abfb49dc3eeb1aeb98ae0f581e", **kwargs}
+        kwargs = {
+            "api_id": _get_env(
+                "borg_api_id",
+                _get_env("TELEGRAM_API_ID", DEFAULT_API_ID, cast=int),
+                cast=int,
+            ),
+            "api_hash": _get_env(
+                "borg_api_hash",
+                _get_env("TELEGRAM_API_HASH", DEFAULT_API_HASH),
+            ),
+            **kwargs,
+        }
         self = Uniborg(session, **kwargs)
         # TODO: handle non-string session
         #

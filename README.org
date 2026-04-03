@@ -93,6 +93,11 @@ cd betterborg
 
 pip3 install -r requirements.txt
 
+# Optional: override Telethon API credentials.
+export borg_api_id='...'
+export borg_api_hash='...'
+# =TELEGRAM_API_ID= / =TELEGRAM_API_HASH= also work.
+
 python3 stdborg.py
 #+end_example
 
