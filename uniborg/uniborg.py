@@ -117,7 +117,14 @@ class Uniborg(TelegramClient):
                 print(f"Skipping '{p.stem}' due to leading dot")
                 continue
 
-            self.load_plugin_from_file(p)
+            try:
+                self.load_plugin_from_file(p)
+            except Exception:
+                self._logger.exception(
+                    "Failed to load plugin '%s' from %s; skipping it.",
+                    p.stem,
+                    p,
+                )
         return self
 
     async def _async_init(self, **kwargs):
@@ -160,13 +167,19 @@ class Uniborg(TelegramClient):
         name = f"_UniborgPlugins.{self._name}.{shortname}"
 
         spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Could not create import spec for plugin {path}")
         mod = importlib.util.module_from_spec(spec)
 
         mod.borg = self
         mod.logger = logging.getLogger(shortname)
         mod.storage = self.storage(f"{self._name}/{shortname}")
 
-        spec.loader.exec_module(mod)
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:
+            self.remove_events_of_mod(name)
+            raise
         self._plugins[shortname] = mod
         self._logger.info(f"Successfully loaded plugin {shortname}")
 
@@ -206,7 +219,7 @@ class Uniborg(TelegramClient):
             )
         except Exception as e:
             tb = traceback.format_exc()
-            logger.warn(f"Failed to (re)load plugin '{shortname}': {tb}")
+            logger.warning(f"Failed to (re)load plugin '{shortname}': {tb}")
             if chat:
                 await self.send_message(
                     chat,

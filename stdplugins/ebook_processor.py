@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import io
 import os
 import shutil
@@ -6,7 +7,7 @@ import traceback
 from pathlib import Path
 
 from telethon import events
-from uniborg import util, epub_util
+from uniborg import util
 from brish import zs
 
 # --- New: For handling grouped messages ---
@@ -38,6 +39,22 @@ EBOOK_COVER_EXTENSIONS = {
 AUTO_PROCESS_MODE = {
     "Books": -1001304139500,
 }
+
+
+def _get_epub_util():
+    return importlib.import_module("uniborg.epub_util")
+
+
+def _get_chunking_backend_notice():
+    chunking = importlib.import_module("epub_sum_lib.chunking")
+    is_available, reason = chunking.get_semantic_chunking_status()
+    if is_available:
+        return None
+
+    return (
+        "Semantic chunking dependencies are unavailable "
+        f"({reason}); using sentence-based fallback."
+    )
 
 
 async def should_auto_process(event):
@@ -206,6 +223,11 @@ async def split_ebook_and_clean(cwd, event):
     ebook_file = ebook_files[0]
 
     try:
+        fallback_notice = _get_chunking_backend_notice()
+        if fallback_notice:
+            await event.reply(fallback_notice)
+
+        epub_util = _get_epub_util()
         # Use the new, sophisticated chunking utility
         chunks = epub_util.chunk_epub(str(ebook_file))
 

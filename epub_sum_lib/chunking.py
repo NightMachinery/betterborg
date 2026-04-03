@@ -1,9 +1,11 @@
-import os
-import sys
-import re
 import csv
-from sentence_transformers import SentenceTransformer, util
+import logging
+import os
+import re
 from pathlib import Path
+import sys
+
+logger = logging.getLogger(__name__)
 
 try:
     max_int = sys.maxsize
@@ -35,24 +37,175 @@ def preprocess_text(text):
     return text
 
 
-# Add this at the global scope, outside of any function
+MODEL_NAME = "all-MiniLM-L6-v2"
 _model = None
+_sentence_transformer_cls = None
+_sentence_transformers_util = None
+_semantic_backend_error = None
+_semantic_backend_warning_emitted = False
+
+
+def _format_backend_error(exc):
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _remember_semantic_backend_failure(exc):
+    global _model
+    global _semantic_backend_error
+    global _semantic_backend_warning_emitted
+
+    _model = None
+    if _semantic_backend_error is None:
+        _semantic_backend_error = exc
+
+    if not _semantic_backend_warning_emitted:
+        logger.warning(
+            "Semantic chunking backend unavailable (%s); using sentence-based fallback.",
+            _format_backend_error(_semantic_backend_error),
+        )
+        _semantic_backend_warning_emitted = True
+
+    return _semantic_backend_error
+
+
+def _load_semantic_backend():
+    global _sentence_transformer_cls
+    global _sentence_transformers_util
+
+    if _semantic_backend_error is not None:
+        raise _semantic_backend_error
+
+    if _sentence_transformer_cls is not None and _sentence_transformers_util is not None:
+        return _sentence_transformer_cls, _sentence_transformers_util
+
+    try:
+        from sentence_transformers import SentenceTransformer, util
+    except Exception as exc:
+        raise _remember_semantic_backend_failure(exc) from exc
+
+    _sentence_transformer_cls = SentenceTransformer
+    _sentence_transformers_util = util
+    return _sentence_transformer_cls, _sentence_transformers_util
 
 
 def get_model():
     global _model
     if _model is None:
+        sentence_transformer_cls, _ = _load_semantic_backend()
         setup_transformer_cache()  # Set up cache before loading model
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
+        try:
+            _model = sentence_transformer_cls(MODEL_NAME)
+        except Exception as exc:
+            raise _remember_semantic_backend_failure(exc) from exc
     return _model
 
 
-def semantic_chunking(text, min_chunk_size=8000, max_chunk_size=12000):
+def get_semantic_chunking_status():
+    try:
+        _load_semantic_backend()
+    except Exception as exc:
+        return False, _format_backend_error(exc)
+    return True, None
+
+
+def _split_sentences(text):
+    normalized_text = re.sub(r"\s+", " ", text).strip()
+    if not normalized_text:
+        return []
+
     sentences = [
-        sent.strip() for sent in re.split(r"(?<=[.!?])\s+", text) if sent.strip()
+        sent.strip()
+        for sent in re.split(r"(?<=[.!?])\s+", normalized_text)
+        if sent.strip()
     ]
-    model = get_model()
-    embeddings = model.encode(sentences, convert_to_tensor=True)
+    return sentences or [normalized_text]
+
+
+def _split_text_by_size(text, max_chunk_size):
+    text = text.strip()
+    if not text:
+        return []
+
+    chunks = []
+    remaining = text
+    while len(remaining) > max_chunk_size:
+        split_at = remaining.rfind(" ", 0, max_chunk_size + 1)
+        if split_at <= 0:
+            split_at = max_chunk_size
+
+        chunk = remaining[:split_at].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_at:].strip()
+
+    if remaining:
+        chunks.append(remaining)
+
+    return chunks
+
+
+def sentence_chunking(text, min_chunk_size=8000, max_chunk_size=12000):
+    if max_chunk_size <= 0:
+        raise ValueError("max_chunk_size must be positive")
+    if min_chunk_size < 0:
+        raise ValueError("min_chunk_size must be non-negative")
+
+    min_chunk_size = min(min_chunk_size, max_chunk_size)
+    sentences = []
+    for sentence in _split_sentences(text):
+        sentences.extend(_split_text_by_size(sentence, max_chunk_size))
+
+    chunks = []
+    current_chunk = []
+    current_chunk_size = 0
+
+    for sentence in sentences:
+        projected_size = current_chunk_size + len(sentence) + (1 if current_chunk else 0)
+
+        if current_chunk and projected_size > max_chunk_size:
+            chunks.append(" ".join(current_chunk))
+            current_chunk = [sentence]
+            current_chunk_size = len(sentence)
+            continue
+
+        current_chunk.append(sentence)
+        current_chunk_size = projected_size
+
+        if current_chunk_size >= max_chunk_size:
+            chunks.append(" ".join(current_chunk))
+            current_chunk = []
+            current_chunk_size = 0
+
+    if current_chunk:
+        final_chunk = " ".join(current_chunk)
+        if (
+            chunks
+            and len(final_chunk) < min_chunk_size
+            and len(chunks[-1]) + 1 + len(final_chunk) <= max_chunk_size
+        ):
+            chunks[-1] = f"{chunks[-1]} {final_chunk}"
+        else:
+            chunks.append(final_chunk)
+
+    return chunks
+
+
+def semantic_chunking(text, min_chunk_size=8000, max_chunk_size=12000):
+    sentences = _split_sentences(text)
+    if not sentences:
+        return []
+
+    try:
+        model = get_model()
+        _, sentence_transformers_util = _load_semantic_backend()
+        embeddings = model.encode(sentences, convert_to_tensor=True)
+    except Exception:
+        return sentence_chunking(
+            text,
+            min_chunk_size=min_chunk_size,
+            max_chunk_size=max_chunk_size,
+        )
+
     chunks = []
     current_chunk = []
     current_chunk_size = 0
@@ -67,12 +220,14 @@ def semantic_chunking(text, min_chunk_size=8000, max_chunk_size=12000):
 
         # Once we reach minimum size, start looking for natural break points
         if i < len(sentences) - 1:
-            similarity = util.cos_sim(embeddings[i], embeddings[i + 1]).item()
+            similarity = sentence_transformers_util.cos_sim(
+                embeddings[i], embeddings[i + 1]
+            ).item()
 
             # Create dynamic threshold based on chunk size
             # As we get closer to max_size, we become more willing to split
-            size_factor = (current_chunk_size - min_chunk_size) / (
-                max_chunk_size - min_chunk_size
+            size_factor = (current_chunk_size - min_chunk_size) / max(
+                1, max_chunk_size - min_chunk_size
             )
             dynamic_threshold = 0.4 + (
                 size_factor * 0.2
