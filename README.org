@@ -128,5 +128,10 @@ By default exports are saved below =~/tmp/.borg/chat_exports/=. Set
 downloaded; placeholders and available media metadata are written instead. See
 [[file:docs/history_export.md][docs/history_export.md]].
 
+** Codex GPT-5.5
+=llm_chat= can expose =openai-codex/gpt-5.5= as an admin-only chat model using
+the published =llm-openai-via-codex= package and local Codex OAuth credentials.
+See [[file:docs/codex_gpt55.md][docs/codex_gpt55.md]].
+
 ** learning
 Check out the already-mentioned [[https://github.com/uniborg/uniborg/tree/master/stdplugins][plugins]] directory to learn how to write your own, and consider reading [[http://telethon.readthedocs.io/][Telethon's documentation]].

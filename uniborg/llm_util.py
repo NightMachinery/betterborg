@@ -758,10 +758,12 @@ def get_service_from_model(model: str) -> str:
         model: The model name (e.g., "openrouter/openai/gpt-5-chat", "deepseek/deepseek-chat")
 
     Returns:
-        str: The service name ("openrouter", "openai", "deepseek", "mistral", or "gemini" as default)
+        str: The service name ("openrouter", "openai", "codex", "deepseek", "mistral", or "gemini" as default)
     """
     if model.startswith("openrouter/"):
         return "openrouter"
+    elif model.startswith("openai-codex/"):
+        return "codex"
     elif model.startswith("openai/"):
         return "openai"
     elif model.startswith("deepseek/"):

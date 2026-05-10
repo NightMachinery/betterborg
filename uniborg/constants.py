@@ -17,6 +17,7 @@ GEMINI_PRO_LATEST = "gemini/gemini-3-pro-preview"
 
 OR_OPENAI_5_2 = "openrouter/openai/gpt-5.2"
 OR_OPENAI_LATEST = OR_OPENAI_5_2
+OPENAI_CODEX_GPT_5_5 = "openai-codex/gpt-5.5"
 ##
 CHAT_TITLE_MODEL = GEMINI_FLASH_LITE_LATEST
 ##

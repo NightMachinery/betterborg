@@ -50,6 +50,7 @@ typed-ffmpeg
 litellm
 llm
 llm-gemini
+llm-openai-via-codex
 
 aiofiles
 

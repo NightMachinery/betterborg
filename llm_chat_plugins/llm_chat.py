@@ -79,10 +79,12 @@ from uniborg.constants import (
     ADMIN_ONLY_COMMAND_IGNORED,
     OR_OPENAI_5_2,
     OR_OPENAI_LATEST,
+    OPENAI_CODEX_GPT_5_5,
 )
 
 # Import live mode utilities
 from uniborg import gemini_live_util
+from uniborg import codex_util
 
 # Redis utilities for smart context state persistence
 from uniborg import redis_util
@@ -881,9 +883,55 @@ MODEL_CHOICES = {
     ##
 }
 
+ADMIN_MODEL_CHOICES = {
+    OPENAI_CODEX_GPT_5_5: "GPT-5.5 (Codex, Admin)",
+}
+
 # Chat model options including "Not Set" option for removing chat-specific model
 CHAT_MODEL_OPTIONS = {"": "Not Set (Use Personal Default)"}
 CHAT_MODEL_OPTIONS.update(MODEL_CHOICES)
+
+
+def _model_display_name(model: str, *, include_admin: bool = True) -> str:
+    if model in MODEL_CHOICES:
+        return MODEL_CHOICES[model]
+    if include_admin and model in ADMIN_MODEL_CHOICES:
+        return ADMIN_MODEL_CHOICES[model]
+    return model
+
+
+def _model_choices_for_admin_p(admin_p: bool) -> dict:
+    choices = dict(MODEL_CHOICES)
+    if admin_p:
+        choices.update(ADMIN_MODEL_CHOICES)
+    return choices
+
+
+def _chat_model_options_for_admin_p(admin_p: bool) -> dict:
+    choices = {"": "Not Set (Use Personal Default)"}
+    choices.update(_model_choices_for_admin_p(admin_p))
+    return choices
+
+
+def _reasoning_levels_for_admin_p(admin_p: bool) -> list[str]:
+    return ADMIN_REASONING_LEVELS if admin_p else REASONING_LEVELS
+
+
+def _is_admin_only_model(model: str) -> bool:
+    return codex_util.is_codex_model(model) or model in ADMIN_MODEL_CHOICES
+
+
+async def _can_user_access_model(event, model: str) -> bool:
+    if not model or not _is_admin_only_model(model):
+        return True
+    return await util.isAdmin(event)
+
+
+async def _guard_model_access(event, model: str) -> bool:
+    if await _can_user_access_model(event, model):
+        return True
+    await send_info_message(event, ADMIN_ONLY_COMMAND_IGNORED)
+    return False
 
 # Text input patterns for clearing/resetting values
 CANCEL_KEYWORDS = ["cancel"]
@@ -903,6 +951,7 @@ WARN_UNSUPPORTED_TO_USER_P = os.getenv("WARN_UNSUPPORTED_TO_USER_P", "private_on
 WARN_UNAVAILABLE_TOOLS_P = False
 WARN_UNAVAILABLE_THINKING_P = False
 REASONING_LEVELS = ["disable", "low", "medium", "high"]
+ADMIN_REASONING_LEVELS = REASONING_LEVELS + ["xhigh"]
 CONTEXT_SEPARATOR = "---"
 CONTEXT_MODE_NAMES = {
     "reply_chain": "Reply Chain",
@@ -1895,6 +1944,8 @@ def get_effective_gemini_api_key(user_id: int) -> str | None:
 
 
 def get_effective_api_key(user_id: int, service: str) -> str | None:
+    if service == "codex":
+        return "codex-oauth"
     if service == "gemini":
         return get_effective_gemini_api_key(user_id)
     return llm_db.get_api_key(user_id=user_id, service=service)
@@ -2621,6 +2672,9 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
         "pdf_input": False,
         "image_generation": False,
     }
+    if codex_util.is_codex_model(model):
+        capabilities["vision"] = True
+        return capabilities
     try:
         capabilities["vision"] = litellm.supports_vision(model)
     except Exception as e:
@@ -4253,7 +4307,7 @@ async def initialize_llm_chat():
     await load_smart_context_states()
 
     # Populate callback hash map for persistent button handling
-    bot_util.populate_callback_hash_map(MODEL_CHOICES)
+    bot_util.populate_callback_hash_map(MODEL_CHOICES, ADMIN_MODEL_CHOICES)
 
     register_handlers()
 
@@ -4527,8 +4581,13 @@ async def status_handler(event):
         chat_system_prompt_status = "Custom (Overrides your personal prompt)"
 
     # Determine model status - check for chat-specific model
-    model_status = f"`{prefs.model}`"
+    visible_user_model = prefs.model
+    if not await _can_user_access_model(event, visible_user_model):
+        visible_user_model = DEFAULT_MODEL
+    model_status = f"`{visible_user_model}`"
     chat_model = chat_manager.get_model(chat_id)
+    if chat_model and not await _can_user_access_model(event, chat_model):
+        chat_model = None
     if chat_model:
         model_status += f" (overridden in this chat)"
 
@@ -4734,16 +4793,19 @@ async def set_model_handler(event):
 
     if model_name_match:
         model_name = model_name_match.strip()
+        if not await _guard_model_access(event, model_name):
+            return
         user_manager.set_model(user_id, model_name)
         cancel_input_flow(user_id)
         await event.reply(
             f"{BOT_META_INFO_PREFIX}Your chat model has been set to: `{model_name}`"
         )
     else:
+        model_choices = _model_choices_for_admin_p(await util.isAdmin(event))
         await bot_util.present_options(
             event,
             title="Set Chat Model",
-            options=MODEL_CHOICES,
+            options=model_choices,
             current_value=prefs.model,
             callback_prefix="model_",
             awaiting_key="model_selection",
@@ -4869,16 +4931,19 @@ async def set_model_here_handler(event):
 
     if model_match and model_match.strip():
         model = model_match.strip()
+        if not await _guard_model_access(event, model):
+            return
         chat_manager.set_model(chat_id, model)
         cancel_input_flow(user_id)
         await event.reply(
             f"{BOT_META_INFO_PREFIX}✅ This chat's model has been set to: `{model}`"
         )
     else:
+        chat_model_options = _chat_model_options_for_admin_p(await util.isAdmin(event))
         await bot_util.present_options(
             event,
             title="Set Chat Model",
-            options=CHAT_MODEL_OPTIONS,
+            options=chat_model_options,
             current_value=current_chat_model or "",
             callback_prefix="chatmodel_",
             awaiting_key="chatmodel_selection",
@@ -4898,6 +4963,9 @@ async def get_model_here_handler(event):
     chat_id = event.chat_id
     effective_model, _ = _get_effective_model_and_service(chat_id, user_id)
     chat_model = chat_manager.get_model(chat_id)
+    if not await _can_user_access_model(event, effective_model):
+        effective_model = DEFAULT_MODEL
+        chat_model = None
 
     if chat_model:
         await event.reply(
@@ -5179,7 +5247,8 @@ async def group_activation_mode_handler(event):
 async def set_think_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     # Add "clear" option
-    think_options = {level: level.capitalize() for level in REASONING_LEVELS}
+    reasoning_levels = _reasoning_levels_for_admin_p(await util.isAdmin(event))
+    think_options = {level: level.capitalize() for level in reasoning_levels}
     think_options["clear"] = "Clear (Default)"
     await bot_util.present_options(
         event,
@@ -5317,6 +5386,12 @@ async def callback_handler(event):
 
     if data_str.startswith("model_"):
         model_id = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
+        model_choices = _model_choices_for_admin_p(await util.isAdmin(event))
+        if model_id not in model_choices or not await _can_user_access_model(
+            event, model_id
+        ):
+            await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+            return
         user_manager.set_model(user_id, model_id)
         cancel_input_flow(user_id)  # Cancel the custom input flow
         prefs = user_manager.get_prefs(user_id)  # update prefs
@@ -5325,13 +5400,19 @@ async def callback_handler(event):
                 f"✅ {name}" if key == prefs.model else name,
                 data=f"model_{bot_util.sanitize_callback_data(key)}",
             )
-            for key, name in MODEL_CHOICES.items()
+            for key, name in model_choices.items()
         ]
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
-        await event.answer(f"Model set to {MODEL_CHOICES[model_id]}")
+        await event.answer(f"Model set to {model_choices[model_id]}")
 
     elif data_str.startswith("chatmodel_"):
         model_id = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
+        chat_model_options = _chat_model_options_for_admin_p(await util.isAdmin(event))
+        if model_id not in chat_model_options or not await _can_user_access_model(
+            event, model_id
+        ):
+            await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+            return
         chat_id = event.chat_id
         # Handle "Not Set" option (empty string means remove chat-specific model)
         if model_id == "":
@@ -5339,7 +5420,7 @@ async def callback_handler(event):
             feedback_msg = "Chat model cleared (using personal default)"
         else:
             chat_manager.set_model(chat_id, model_id)
-            feedback_msg = f"Chat model set to {MODEL_CHOICES[model_id]}"
+            feedback_msg = f"Chat model set to {_model_display_name(model_id)}"
         cancel_input_flow(user_id)  # Cancel the custom input flow
 
         # Update the menu to show the new selection
@@ -5350,16 +5431,20 @@ async def callback_handler(event):
                 f"✅ {name}" if key == (current_chat_model or "") else name,
                 data=f"chatmodel_{bot_util.sanitize_callback_data(key)}",
             )
-            for key, name in CHAT_MODEL_OPTIONS.items()
+            for key, name in chat_model_options.items()
         ]
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
         await event.answer(feedback_msg)
 
     elif data_str.startswith("think_"):
         level = data_str.split("_")[1]
+        reasoning_levels = _reasoning_levels_for_admin_p(await util.isAdmin(event))
+        if level not in reasoning_levels and level != "clear":
+            await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+            return
         user_manager.set_thinking(user_id, None if level == "clear" else level)
         prefs = user_manager.get_prefs(user_id)  # update prefs
-        think_options = {level: level.capitalize() for level in REASONING_LEVELS}
+        think_options = {level: level.capitalize() for level in reasoning_levels}
         think_options["clear"] = "Clear (Default)"
         buttons = [
             KeyboardButtonCallback(
@@ -5603,6 +5688,9 @@ async def generic_input_handler(event):
 
     # Handle simple text inputs
     if input_type == "model":
+        if not await _guard_model_access(event, text):
+            cancel_input_flow(user_id)
+            return
         user_manager.set_model(user_id, text)
         await send_info_message(event, f"✅ Model updated to: `{text}`")
     elif input_type == "chatmodel":
@@ -5613,6 +5701,9 @@ async def generic_input_handler(event):
                 f"{BOT_META_INFO_PREFIX}✅ This chat's model cleared (using personal default)"
             )
         else:
+            if not await _guard_model_access(event, text):
+                cancel_input_flow(user_id)
+                return
             chat_manager.set_model(chat_id, text)
             await event.reply(
                 f"{BOT_META_INFO_PREFIX}✅ This chat's model updated to: `{text}`"
@@ -5672,6 +5763,9 @@ async def generic_input_handler(event):
                     )
                 elif input_type == "think_selection":
                     level = None if selected_key == "clear" else selected_key
+                    if level == "xhigh" and not await util.isAdmin(event):
+                        await event.reply(ADMIN_ONLY_COMMAND_IGNORED)
+                        return
                     user_manager.set_thinking(user_id, level)
                     await event.reply(
                         f"{BOT_META_INFO_PREFIX}✅ Reasoning level updated."
@@ -6636,6 +6730,9 @@ async def chat_handler(event):
     model_in_use, service_needed = _get_effective_model_and_service(
         chat_id, user_id, prefix_model=prefix_result.model
     )
+    if not await _can_user_access_model(event, model_in_use):
+        model_in_use = DEFAULT_MODEL
+        service_needed = llm_util.get_service_from_model(model_in_use)
     model_capabilities = get_model_capabilities(model_in_use)
     api_key = get_effective_api_key(user_id, service_needed)
 
@@ -6703,6 +6800,7 @@ async def chat_handler(event):
 
         # --- Construct API call arguments ---
         is_gemini_model_p = is_gemini_model(model_in_use)
+        is_codex_model_p = codex_util.is_codex_model(model_in_use)
 
         # Image generation models don't support streaming
         # Note: Native Gemini image generation has separate handling with its own streaming
@@ -6715,10 +6813,12 @@ async def chat_handler(event):
             "stream": use_streaming,
         }
 
-        if prefs.json_mode:
+        if prefs.json_mode and not is_codex_model_p:
             api_kwargs["response_format"] = {"type": "json_object"}
             if prefs.enabled_tools:
                 warnings.append("Tools are disabled (not supported in JSON mode).")
+        elif prefs.json_mode and is_codex_model_p:
+            warnings.append("JSON mode is disabled for Codex models.")
 
         if is_gemini_model_p:
             api_kwargs["safety_settings"] = SAFETY_SETTINGS
@@ -6751,6 +6851,11 @@ async def chat_handler(event):
             # Add modalities for image generation models
             if model_capabilities.get("image_generation", False):
                 api_kwargs["modalities"] = ["image", "text"]
+        elif is_codex_model_p:
+            if prefs.enabled_tools:
+                warnings.append("Tools are disabled for Codex models.")
+            if prefs.thinking and prefs.thinking not in ("disable",):
+                api_kwargs["reasoning_effort"] = prefs.thinking
         else:
             # Add warnings if user has Gemini-specific settings enabled
             if prefs.enabled_tools and WARN_UNAVAILABLE_TOOLS_P:
@@ -6776,6 +6881,34 @@ async def chat_handler(event):
             finish_reason = (
                 None  # Native Gemini image generation doesn't provide finish_reason
             )
+        elif is_codex_model_p:
+            edit_interval = get_streaming_delay(model_in_use)
+            codex_task = asyncio.create_task(
+                codex_util.stream_codex_response(
+                    event=event,
+                    response_message=response_message,
+                    model=model_in_use,
+                    messages=messages,
+                    reasoning_effort=api_kwargs.get("reasoning_effort"),
+                    edit_interval=edit_interval,
+                )
+            )
+            add_active_llm_task(user_id, codex_task)
+            try:
+                codex_response = await codex_task
+                response_text = codex_response.text
+                finish_reason = codex_response.finish_reason
+                has_image = False
+            except asyncio.CancelledError:
+                await util.edit_message(
+                    response_message,
+                    f"{BOT_META_INFO_PREFIX}❌ Request was canceled.",
+                    append_p=True,
+                    parse_mode="md",
+                )
+                raise
+            finally:
+                remove_active_llm_task(user_id, codex_task)
         else:
             if use_streaming:
                 edit_interval = get_streaming_delay(model_in_use)
