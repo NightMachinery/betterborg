@@ -128,7 +128,8 @@ By default exports are saved below =~/tmp/.borg/chat_exports/=. Set
 available reactor identities. Media files are not downloaded; placeholders and
 available media metadata are written instead. Progress is printed in the server
 terminal, and =SIGINT= during an active export writes a partial export instead of
-interrupting the process. See
+interrupting the process. Collection is newest-first for useful partial exports,
+while the saved JSON remains oldest-first. See
 [[file:docs/history_export.md][docs/history_export.md]].
 
 ** Codex GPT-5.5

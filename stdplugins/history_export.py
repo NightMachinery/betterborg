@@ -606,7 +606,7 @@ async def history_export_handler(event):
         _ACTIVE_EXPORTS.append(state)
         _print_progress(state, force=True)
         if limit is None:
-            async for message in event.client.iter_messages(input_chat, reverse=True):
+            async for message in event.client.iter_messages(input_chat):
                 if state.stop_requested:
                     break
                 messages.append(
@@ -617,12 +617,7 @@ async def history_export_handler(event):
                 state.exported_count = len(messages)
                 _print_progress(state)
         else:
-            fetched = []
             async for message in event.client.iter_messages(input_chat, limit=limit):
-                if state.stop_requested:
-                    break
-                fetched.append(message)
-            for message in reversed(fetched):
                 if state.stop_requested:
                     break
                 messages.append(
@@ -639,11 +634,12 @@ async def history_export_handler(event):
                 f"{chat_name!r} ({event.chat_id}) after interrupt"
             )
 
+        output_messages = list(reversed(messages))
         export_data = {
             "name": chat_name,
             "type": _chat_type(chat),
             "id": getattr(chat, "id", event.chat_id),
-            "messages": messages,
+            "messages": output_messages,
         }
         _write_json_with_jq(export_data, output_path)
         _print_progress(state, force=True)

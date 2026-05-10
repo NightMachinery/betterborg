@@ -12,8 +12,9 @@ current Telegram chat to a Telegram Desktop-style `result.json`.
 ```
 
 `.export` and `.export all` stream all messages visible to the logged-in
-Telegram account. `.export N` exports the latest `N` messages, written
-oldest-to-newest in the JSON file.
+Telegram account. `.export N` exports the latest `N` messages. Collection runs
+newest-to-oldest so interrupted exports keep the most recent messages, but
+`result.json` is still written oldest-to-newest.
 
 The command is silent in Telegram. Completion and failure details are printed
 only in the server terminal. Long exports also print periodic terminal progress.
