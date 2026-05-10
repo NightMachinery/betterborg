@@ -23,7 +23,7 @@ only in the server terminal.
 By default exports are written under:
 
 ```text
-~/tmp/.borg/chat_exports/<chat name>/ChatExport_<YYYY-MM-DD>/result.json
+~/tmp/.borg/chat_exports/<chat name>/ChatExport_<YYYY-MM-DD>-<UNIXTIME_NS>/result.json
 ```
 
 Set `BORG_HISTORY_EXPORT_DIR` to override the root directory.

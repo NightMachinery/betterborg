@@ -511,10 +511,11 @@ async def history_export_handler(event):
         chat = await event.get_chat()
         input_chat = await event.get_input_chat()
         chat_name = _entity_display_name(chat)
+        export_unix_time = time.time_ns()
         output_dir = (
             _export_root()
             / _sanitize_path_part(chat_name)
-            / f"ChatExport_{date.today().isoformat()}"
+            / f"ChatExport_{date.today().isoformat()}-{export_unix_time}"
         )
         output_path = output_dir / "result.json"
 
