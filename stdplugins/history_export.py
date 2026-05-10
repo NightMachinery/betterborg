@@ -1,12 +1,14 @@
 import json
 import os
+import signal
 import subprocess
 import tempfile
 import time
 import traceback
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import List, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 from telethon import events, utils
 from telethon.helpers import add_surrogate, del_surrogate
@@ -45,6 +47,25 @@ from uniborg import util
 
 DEFAULT_EXPORT_ROOT = "~/tmp/.borg/chat_exports"
 TEXT_ONLY_PLACEHOLDER = "(File not included. Text-only export.)"
+PROGRESS_EVERY_MESSAGES = 250
+PROGRESS_EVERY_SECONDS = 10
+
+
+@dataclass
+class ExportState:
+    chat_name: str
+    chat_id: int
+    limit: Optional[int]
+    output_path: Path
+    started_at: float
+    stop_requested: bool = False
+    exported_count: int = 0
+    last_progress_at: float = 0
+    last_progress_count: int = 0
+
+
+_ACTIVE_EXPORTS = []
+_PREVIOUS_SIGINT_HANDLER = signal.getsignal(signal.SIGINT)
 
 
 ENTITY_TYPE_MAP = {
@@ -68,6 +89,57 @@ ENTITY_TYPE_MAP = {
     MessageEntityCustomEmoji: "custom_emoji",
     MessageEntityBlockquote: "blockquote",
 }
+
+
+def _bubble_signal(signum, frame):
+    if callable(_PREVIOUS_SIGINT_HANDLER):
+        _PREVIOUS_SIGINT_HANDLER(signum, frame)
+    elif _PREVIOUS_SIGINT_HANDLER == signal.SIG_DFL:
+        signal.default_int_handler(signum, frame)
+    elif _PREVIOUS_SIGINT_HANDLER == signal.SIG_IGN:
+        return
+
+
+def _handle_sigint(signum, frame):
+    if not _ACTIVE_EXPORTS:
+        _bubble_signal(signum, frame)
+        return
+
+    for state in list(_ACTIVE_EXPORTS):
+        state.stop_requested = True
+        print(
+            "HistoryExport: interrupt received; finishing partial export for "
+            f"{state.chat_name!r} ({state.chat_id}) with "
+            f"{state.exported_count} gathered messages"
+        )
+
+
+signal.signal(signal.SIGINT, _handle_sigint)
+
+
+def _print_progress(state: ExportState, *, force: bool = False):
+    now = time.monotonic()
+    count_delta = state.exported_count - state.last_progress_count
+    time_delta = now - state.last_progress_at
+    if (
+        not force
+        and count_delta < PROGRESS_EVERY_MESSAGES
+        and time_delta < PROGRESS_EVERY_SECONDS
+    ):
+        return
+
+    elapsed = now - state.started_at
+    if state.limit is None:
+        count_text = f"{state.exported_count} messages"
+    else:
+        count_text = f"{state.exported_count}/{state.limit} messages"
+    print(
+        "HistoryExport: "
+        f"{state.chat_name!r} ({state.chat_id}) gathered {count_text} "
+        f"in {elapsed:.1f}s"
+    )
+    state.last_progress_at = now
+    state.last_progress_count = state.exported_count
 
 
 def _export_root() -> Path:
@@ -519,27 +591,53 @@ async def history_export_handler(event):
         )
         output_path = output_dir / "result.json"
 
+        state = ExportState(
+            chat_name=chat_name,
+            chat_id=event.chat_id,
+            limit=limit,
+            output_path=output_path,
+            started_at=started_at,
+            last_progress_at=started_at,
+        )
+
         messages = []
         sender_cache = {}
         peer_cache = {}
+        _ACTIVE_EXPORTS.append(state)
+        _print_progress(state, force=True)
         if limit is None:
             async for message in event.client.iter_messages(input_chat, reverse=True):
+                if state.stop_requested:
+                    break
                 messages.append(
                     await _message_to_export(
                         message, input_chat, sender_cache, peer_cache
                     )
                 )
+                state.exported_count = len(messages)
+                _print_progress(state)
         else:
-            fetched = [
-                message
-                async for message in event.client.iter_messages(input_chat, limit=limit)
-            ]
+            fetched = []
+            async for message in event.client.iter_messages(input_chat, limit=limit):
+                if state.stop_requested:
+                    break
+                fetched.append(message)
             for message in reversed(fetched):
+                if state.stop_requested:
+                    break
                 messages.append(
                     await _message_to_export(
                         message, input_chat, sender_cache, peer_cache
                     )
                 )
+                state.exported_count = len(messages)
+                _print_progress(state)
+
+        if state.stop_requested:
+            print(
+                "HistoryExport: writing partial export for "
+                f"{chat_name!r} ({event.chat_id}) after interrupt"
+            )
 
         export_data = {
             "name": chat_name,
@@ -548,6 +646,7 @@ async def history_export_handler(event):
             "messages": messages,
         }
         _write_json_with_jq(export_data, output_path)
+        _print_progress(state, force=True)
 
         elapsed = time.monotonic() - started_at
         print(
@@ -555,6 +654,11 @@ async def history_export_handler(event):
             f"{len(messages)} messages from {chat_name!r} ({event.chat_id}) "
             f"to {output_path} in {elapsed:.1f}s"
         )
+        if state in _ACTIVE_EXPORTS:
+            _ACTIVE_EXPORTS.remove(state)
     except Exception:
+        state = locals().get("state")
+        if state in _ACTIVE_EXPORTS:
+            _ACTIVE_EXPORTS.remove(state)
         print("HistoryExport: export failed")
         print(traceback.format_exc())

@@ -16,7 +16,11 @@ Telegram account. `.export N` exports the latest `N` messages, written
 oldest-to-newest in the JSON file.
 
 The command is silent in Telegram. Completion and failure details are printed
-only in the server terminal.
+only in the server terminal. Long exports also print periodic terminal progress.
+If `SIGINT` is received while an export is active, the plugin stops collecting
+new messages and writes a partial `result.json` with the messages already
+gathered. If no export is active, `SIGINT` is left to the process's normal
+handler.
 
 ## Output
 

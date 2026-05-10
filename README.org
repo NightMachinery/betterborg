@@ -126,7 +126,9 @@ for the current chat.
 By default exports are saved below =~/tmp/.borg/chat_exports/=. Set
 =BORG_HISTORY_EXPORT_DIR= to override the root directory. Reactions include
 available reactor identities. Media files are not downloaded; placeholders and
-available media metadata are written instead. See
+available media metadata are written instead. Progress is printed in the server
+terminal, and =SIGINT= during an active export writes a partial export instead of
+interrupting the process. See
 [[file:docs/history_export.md][docs/history_export.md]].
 
 ** Codex GPT-5.5
