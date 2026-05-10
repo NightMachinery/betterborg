@@ -382,6 +382,8 @@ async def history_export_handler(event):
     if not (await util.isAdmin(event) and event.message.forward is None):
         return
 
+    await event.delete()
+
     started_at = time.monotonic()
     limit_arg = event.pattern_match.group("limit")
     limit = None if not limit_arg or limit_arg.lower() == "all" else int(limit_arg)
