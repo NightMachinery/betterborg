@@ -10,6 +10,7 @@ from typing import List, Tuple, Union
 
 from telethon import events, utils
 from telethon.helpers import add_surrogate, del_surrogate
+from telethon.tl.functions.messages import GetMessageReactionsListRequest
 from telethon.tl import types
 from telethon.tl.types import (
     DocumentAttributeAnimated,
@@ -93,6 +94,12 @@ def _unix_time_str(dt: datetime) -> str:
 def _peer_export_id(peer):
     if peer is None:
         return None
+    if isinstance(peer, types.User):
+        return f"user{peer.id}"
+    if isinstance(peer, types.Channel):
+        return f"channel{peer.id}"
+    if isinstance(peer, types.Chat):
+        return f"chat{peer.id}"
     if isinstance(peer, types.PeerUser):
         return f"user{peer.user_id}"
     if isinstance(peer, types.PeerChannel):
@@ -103,6 +110,12 @@ def _peer_export_id(peer):
     if user_id is not None:
         return f"user{user_id}"
     return None
+
+
+def _peer_cache_add(entity, peer_cache: dict):
+    peer_id = _peer_export_id(entity)
+    if peer_id:
+        peer_cache[peer_id] = entity
 
 
 def _chat_type(entity) -> str:
@@ -281,6 +294,112 @@ def _reaction_results(reactions) -> list:
     return out
 
 
+def _reaction_key(reaction) -> tuple:
+    if isinstance(reaction, types.ReactionEmoji):
+        return ("emoji", reaction.emoticon)
+    if isinstance(reaction, types.ReactionCustomEmoji):
+        return ("custom_emoji", str(reaction.document_id))
+    return (type(reaction).__name__, repr(reaction))
+
+
+def _reaction_identity(reaction) -> dict:
+    if isinstance(reaction, types.ReactionEmoji):
+        return {"type": "emoji", "emoji": reaction.emoticon}
+    if isinstance(reaction, types.ReactionCustomEmoji):
+        return {"type": "custom_emoji", "document_id": str(reaction.document_id)}
+    return {"type": type(reaction).__name__}
+
+
+async def _reaction_sender_fields(peer_id, peer_cache: dict, client) -> dict:
+    export_id = _peer_export_id(peer_id)
+    entity = peer_cache.get(export_id) if export_id else None
+    if entity is None and peer_id is not None:
+        try:
+            entity = await client.get_entity(peer_id)
+        except Exception:
+            entity = None
+        if entity is not None:
+            _peer_cache_add(entity, peer_cache)
+
+    out = {}
+    if entity is not None:
+        out["from"] = _entity_display_name(entity)
+    if export_id:
+        out["from_id"] = export_id
+    elif entity is not None:
+        out["from_id"] = _peer_export_id(entity)
+    return out
+
+
+async def _reaction_recent_item(reaction_entry, peer_cache: dict, client) -> dict:
+    out = await _reaction_sender_fields(reaction_entry.peer_id, peer_cache, client)
+    if reaction_entry.date:
+        out["date"] = _isoformat_no_tz(reaction_entry.date)
+    out.update(_reaction_identity(reaction_entry.reaction))
+    return out
+
+
+def _group_reaction_entries(entries) -> dict:
+    grouped = {}
+    for entry in entries or []:
+        grouped.setdefault(_reaction_key(entry.reaction), []).append(entry)
+    return grouped
+
+
+async def _fetch_reaction_entries(message, input_chat, peer_cache: dict) -> list:
+    reactions = getattr(message, "reactions", None)
+    if not reactions or not getattr(reactions, "results", None):
+        return []
+
+    if getattr(reactions, "can_see_list", False):
+        entries = []
+        offset = None
+        while True:
+            result = await message.client(
+                GetMessageReactionsListRequest(
+                    peer=input_chat,
+                    id=message.id,
+                    limit=100,
+                    offset=offset,
+                )
+            )
+            for user in getattr(result, "users", []) or []:
+                _peer_cache_add(user, peer_cache)
+            for chat in getattr(result, "chats", []) or []:
+                _peer_cache_add(chat, peer_cache)
+            entries.extend(getattr(result, "reactions", []) or [])
+            offset = getattr(result, "next_offset", None)
+            if not offset:
+                return entries
+
+    return getattr(reactions, "recent_reactions", None) or []
+
+
+async def _reaction_results_with_senders(message, input_chat, peer_cache: dict) -> list:
+    reactions = getattr(message, "reactions", None)
+    if not reactions or not getattr(reactions, "results", None):
+        return []
+
+    try:
+        entries = await _fetch_reaction_entries(message, input_chat, peer_cache)
+    except Exception:
+        entries = getattr(reactions, "recent_reactions", None) or []
+
+    entries_by_reaction = _group_reaction_entries(entries)
+    out = []
+    for result in reactions.results:
+        item = _reaction_identity(result.reaction)
+        item["count"] = result.count
+        recent = [
+            await _reaction_recent_item(entry, peer_cache, message.client)
+            for entry in entries_by_reaction.get(_reaction_key(result.reaction), [])
+        ]
+        if recent:
+            item["recent"] = recent
+        out.append(item)
+    return out
+
+
 async def _sender_fields(message, sender_cache: dict) -> dict:
     sender = getattr(message, "sender", None)
     sender_key = _peer_export_id(getattr(message, "from_id", None))
@@ -305,7 +424,7 @@ async def _sender_fields(message, sender_cache: dict) -> dict:
     return {"from_id": from_id} if from_id else {}
 
 
-async def _message_to_export(message, sender_cache: dict) -> dict:
+async def _message_to_export(message, input_chat, sender_cache: dict, peer_cache: dict) -> dict:
     text, text_entities = _text_and_entities(message.message or "", message.entities)
     row = {
         "id": message.id,
@@ -333,7 +452,7 @@ async def _message_to_export(message, sender_cache: dict) -> dict:
 
     row.update(_media_fields(message))
 
-    reactions = _reaction_results(getattr(message, "reactions", None))
+    reactions = await _reaction_results_with_senders(message, input_chat, peer_cache)
     if reactions:
         row["reactions"] = reactions
 
@@ -401,16 +520,25 @@ async def history_export_handler(event):
 
         messages = []
         sender_cache = {}
+        peer_cache = {}
         if limit is None:
             async for message in event.client.iter_messages(input_chat, reverse=True):
-                messages.append(await _message_to_export(message, sender_cache))
+                messages.append(
+                    await _message_to_export(
+                        message, input_chat, sender_cache, peer_cache
+                    )
+                )
         else:
             fetched = [
                 message
                 async for message in event.client.iter_messages(input_chat, limit=limit)
             ]
             for message in reversed(fetched):
-                messages.append(await _message_to_export(message, sender_cache))
+                messages.append(
+                    await _message_to_export(
+                        message, input_chat, sender_cache, peer_cache
+                    )
+                )
 
         export_data = {
             "name": chat_name,

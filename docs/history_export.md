@@ -40,7 +40,8 @@ The JSON uses the same broad shape as Telegram Desktop exports:
 ```
 
 Messages include text, text entities, sender ids, reply ids, forward/edit
-metadata, reaction counts, and media metadata when available.
+metadata, reaction counts with available reactor identities, and media metadata
+when available.
 
 ## Limitations
 
