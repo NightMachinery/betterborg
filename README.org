@@ -118,5 +118,15 @@ Each plugin gets the =borg=, =logger= and =storage= magical [[https://github.com
 ** internals
 The core features offered by the custom =TelegramClient= live under the [[https://github.com/uniborg/uniborg/tree/master/uniborg][=uniborg/=]] directory, with some utilities, enhancements and the core plugin.
 
+** history export
+=stdplugins/history_export.py= adds an admin-only =.export [number-of-messages=all]=
+command that silently writes a Telegram Desktop-style, text-only =result.json=
+for the current chat.
+
+By default exports are saved below =~/tmp/.borg/chat_exports/=. Set
+=BORG_HISTORY_EXPORT_DIR= to override the root directory. Media files are not
+downloaded; placeholders and available media metadata are written instead. See
+[[file:docs/history_export.md][docs/history_export.md]].
+
 ** learning
 Check out the already-mentioned [[https://github.com/uniborg/uniborg/tree/master/stdplugins][plugins]] directory to learn how to write your own, and consider reading [[http://telethon.readthedocs.io/][Telethon's documentation]].
