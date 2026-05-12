@@ -119,6 +119,7 @@ async def stream_codex_response(
     model: str,
     messages: list[dict],
     reasoning_effort: Optional[str] = None,
+    tools: Optional[list[dict]] = None,
     edit_interval: float = 0.8,
 ) -> CodexResponse:
     client = await _create_async_client()
@@ -133,6 +134,8 @@ async def stream_codex_response(
     }
     if reasoning_effort:
         kwargs["reasoning"] = {"effort": reasoning_effort}
+    if tools:
+        kwargs["tools"] = tools
 
     response_text = ""
     finish_reason = None
