@@ -17,3 +17,6 @@ message conversion, admin gating, and streaming response handling.
 
 Reasoning effort uses the existing `/setthink` preference. Admins can select
 `xhigh`; non-admin menus stay limited to the public levels.
+
+Gemini tool toggles are not mapped to Codex tools. The Codex adapter suppresses
+the tools-disabled warning via `CODEX_HIDE_WARNINGS = ["tools"]`.

@@ -950,6 +950,7 @@ override_chat_context_mode: Dict[int, Optional[str]] = {}
 WARN_UNSUPPORTED_TO_USER_P = os.getenv("WARN_UNSUPPORTED_TO_USER_P", "private_only")
 WARN_UNAVAILABLE_TOOLS_P = False
 WARN_UNAVAILABLE_THINKING_P = False
+CODEX_HIDE_WARNINGS = ["tools"]
 REASONING_LEVELS = ["disable", "low", "medium", "high"]
 ADMIN_REASONING_LEVELS = REASONING_LEVELS + ["xhigh"]
 CONTEXT_SEPARATOR = "---"
@@ -6852,7 +6853,7 @@ async def chat_handler(event):
             if model_capabilities.get("image_generation", False):
                 api_kwargs["modalities"] = ["image", "text"]
         elif is_codex_model_p:
-            if prefs.enabled_tools:
+            if prefs.enabled_tools and "tools" not in CODEX_HIDE_WARNINGS:
                 warnings.append("Tools are disabled for Codex models.")
             if prefs.thinking and prefs.thinking not in ("disable",):
                 api_kwargs["reasoning_effort"] = prefs.thinking
