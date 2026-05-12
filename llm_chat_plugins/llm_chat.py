@@ -122,6 +122,14 @@ PREFIX_MODEL_MAPPING = {
     (".d", ".د"): "deepseek/deepseek-reasoner",
 }
 
+ADMIN_PREFIX_MODEL_MAPPING = {
+    ".cl": (OPENAI_CODEX_GPT_5_5, "low"),
+    ".cm": (OPENAI_CODEX_GPT_5_5, "medium"),
+    ".ch": (OPENAI_CODEX_GPT_5_5, "high"),
+    ".cx": (OPENAI_CODEX_GPT_5_5, "xhigh"),
+    (".c", ".چ"): (OPENAI_CODEX_GPT_5_5, "medium"),
+}
+
 # Audio summarization prompt
 PROMPT_SUMMARIZE_AUDIO = r"""Please listen to this audio file completely and provide a comprehensive, detailed analysis of its entire content.
 
@@ -1174,6 +1182,7 @@ class PrefixProcessResult:
     """Dataclass for the return type of _detect_and_process_message_prefix."""
 
     model: Optional[str] = None
+    reasoning_effort: Optional[str] = None
     processed_text: str = ""
 
 
@@ -1615,7 +1624,15 @@ def _build_context_mode_menu_options(chat_id: int, user_id: int) -> Dict[str, st
     return options
 
 
-def _detect_and_process_message_prefix(text: str) -> PrefixProcessResult:
+def _coerce_prefix_model_config(config) -> tuple[str, Optional[str]]:
+    if isinstance(config, tuple):
+        return config[0], config[1]
+    return config, None
+
+
+def _detect_and_process_message_prefix(
+    text: str, *, admin_p: bool = False
+) -> PrefixProcessResult:
     """
     Detects if a message starts with a model prefix and returns the model and processed text.
 
@@ -1623,7 +1640,7 @@ def _detect_and_process_message_prefix(text: str) -> PrefixProcessResult:
         text: The original message text
 
     Returns:
-        PrefixProcessResult: Contains model name (if detected) and processed text with prefix removed
+        PrefixProcessResult: Contains model/reasoning (if detected) and processed text with prefix removed
     """
     if not text:
         return PrefixProcessResult(processed_text=text or "")
@@ -1644,21 +1661,29 @@ def _detect_and_process_message_prefix(text: str) -> PrefixProcessResult:
         return text
 
     processed_text = text.lstrip()
-    for prefix, model in PREFIX_MODEL_MAPPING.items():
-        prefixes = to_iterable(prefix)
-        for prefix in prefixes:
-            if processed_text.startswith(prefix):
-                # Check if the prefix is followed by a space or the end of the message
-                if len(text) == len(prefix) or text[len(prefix)].isspace():
-                    processed_text = text[len(prefix) :].lstrip()
-                    processed_text = add_back_prefixes(processed_text)
-                    return PrefixProcessResult(
-                        model=model, processed_text=processed_text
-                    )
+    prefix_mappings = []
+    if admin_p:
+        prefix_mappings.append(ADMIN_PREFIX_MODEL_MAPPING)
+    prefix_mappings.append(PREFIX_MODEL_MAPPING)
+
+    for prefix_mapping in prefix_mappings:
+        for prefix, config in prefix_mapping.items():
+            prefixes = to_iterable(prefix)
+            for prefix in prefixes:
+                if processed_text.startswith(prefix):
+                    # Check if the prefix is followed by a space or the end of the message
+                    if len(text) == len(prefix) or text[len(prefix)].isspace():
+                        model, reasoning_effort = _coerce_prefix_model_config(config)
+                        processed_text = text[len(prefix) :].lstrip()
+                        processed_text = add_back_prefixes(processed_text)
+                        return PrefixProcessResult(
+                            model=model,
+                            reasoning_effort=reasoning_effort,
+                            processed_text=processed_text,
+                        )
 
     processed_text = add_back_prefixes(processed_text)
     return PrefixProcessResult(processed_text=processed_text)
-
 
 def _validate_url_security(url: str) -> Optional[str]:
     """
@@ -4368,6 +4393,7 @@ async def help_handler(event):
         await send_info_message(event, "API key setup cancelled.")
     cancel_input_flow(event.sender_id)
     prefs = user_manager.get_prefs(event.sender_id)
+    is_admin = await util.isAdmin(event)
 
     # Dynamically build the group trigger instructions based on user settings
     activation_instructions = []
@@ -4382,6 +4408,15 @@ async def help_handler(event):
         )
 
     group_trigger_text = " or ".join(activation_instructions)
+
+    codex_shortcuts_text = (
+        "- `.c` / `.cm` → Codex GPT-5.5 (medium, admin-only)\n"
+        "- `.cl` → Codex GPT-5.5 (low, admin-only)\n"
+        "- `.ch` → Codex GPT-5.5 (high, admin-only)\n"
+        "- `.cx` → Codex GPT-5.5 (xhigh, admin-only)"
+        if is_admin
+        else "- `.c` → GPT-5.2 (OpenRouter): Latest OpenAI model on OpenRouter"
+    )
 
     help_text = f"""
 **Hello! I am a Telegram chat bot powered by third-party AI providers.** It's like ChatGPT but in Telegram!
@@ -4439,7 +4474,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 
 **Quick Model Selection Shortcuts**
 Start your messages with these shortcuts to use specific models:
-- `.c` → GPT-5.2 (OpenRouter): Latest OpenAI model on OpenRouter
+{codex_shortcuts_text}
 - `.f` → Gemini Flash (Latest)
 - `.f2` → Gemini 2.5 Flash
 - `.f3` → Gemini 3 Flash (preview)
@@ -6694,6 +6729,7 @@ async def chat_handler(event):
 
     prefs = user_manager.get_prefs(user_id)
     is_private = event.is_private
+    user_is_admin = await util.isAdmin(event)
 
     # --- Context and Separator Logic ---
     context_mode_to_use = await _determine_context_mode_and_handle_transitions(
@@ -6704,12 +6740,14 @@ async def chat_handler(event):
     # --- ENDED: Context and Separator Logic ---
 
     # Detect model prefix and process message text
-    prefix_result = _detect_and_process_message_prefix(event.text)
+    prefix_result = _detect_and_process_message_prefix(
+        event.text, admin_p=user_is_admin
+    )
 
     # Audio URL Magic: Check if message contains only a URL pointing to audio
     if (
         AUDIO_URL_MAGIC_P
-        and await util.isAdmin(event)
+        and user_is_admin
         and not event.file
         and not group_id
     ):
@@ -6857,8 +6895,15 @@ async def chat_handler(event):
                 codex_tools.append({"type": "web_search"})
             if codex_tools:
                 api_kwargs["tools"] = codex_tools
-            if prefs.thinking and prefs.thinking not in ("disable",):
-                api_kwargs["reasoning_effort"] = prefs.thinking
+            codex_reasoning_effort = prefix_result.reasoning_effort
+            if codex_reasoning_effort is None:
+                codex_reasoning_effort = (
+                    None if prefs.thinking == "disable" else prefs.thinking
+                )
+            if codex_reasoning_effort is None:
+                codex_reasoning_effort = "medium"
+            if codex_reasoning_effort:
+                api_kwargs["reasoning_effort"] = codex_reasoning_effort
         else:
             # Add warnings if user has Gemini-specific settings enabled
             if prefs.enabled_tools and WARN_UNAVAILABLE_TOOLS_P:

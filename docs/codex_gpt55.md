@@ -17,6 +17,15 @@ message conversion, admin gating, and streaming response handling.
 
 Reasoning effort uses the existing `/setthink` preference. Admins can select
 `xhigh`; non-admin menus stay limited to the public levels.
+When a Codex model is used without an explicit reasoning preference, Betterborg
+defaults reasoning effort to `medium`.
+
+Admin-only quick prefixes:
+
+- `.c` and `.cm`: GPT-5.5 with `medium` reasoning.
+- `.cl`: GPT-5.5 with `low` reasoning.
+- `.ch`: GPT-5.5 with `high` reasoning.
+- `.cx`: GPT-5.5 with `xhigh` reasoning.
 
 The `googleSearch` toggle maps to the OpenAI Responses `web_search` tool for
 Codex models. Other Gemini-specific tools are not mapped.
