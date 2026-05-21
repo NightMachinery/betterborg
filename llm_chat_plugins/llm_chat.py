@@ -6873,10 +6873,12 @@ async def chat_handler(event):
                     tools_to_use.remove("urlContext")
                     # print("Disabled url_context due to conflict with google_search for gemini/gemini-2.0-flash")
                 if (
-                    model_in_use == "gemini/gemini-3-flash-preview"
+                    model_in_use in [GEMINI_FLASH_3, GEMINI_FLASH_LATEST]
                     and "googleSearch" in tools_to_use
                 ):
-                    # Avoid tool quota 429s for this model.
+                    #: Gemini 3 models have no free Search Grounding tool call quota.
+                    #:
+                    #: Avoid tool quota 429s for this model.
                     tools_to_use.remove("googleSearch")
 
                 api_kwargs["tools"] = [{t: {}} for t in tools_to_use]
