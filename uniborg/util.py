@@ -1597,7 +1597,7 @@ async def _generate_file_data(
                     semantic_boundaries_p=False,
                     start_split=0.6,
                 )
-                response = await litellm.acompletion(
+                acompletion_kwargs = dict(
                     api_key=api_key_to_use,
                     model=model_in_use,
                     messages=[
@@ -1608,6 +1608,12 @@ async def _generate_file_data(
                     ],
                     response_format=FilenameGeneration,
                 )
+                # Route native Gemini (Google API) traffic through the special proxy.
+                if model_in_use.startswith("gemini/"):
+                    proxy_client = llm_util.create_litellm_proxy_client(api_user_id)
+                    if proxy_client is not None:
+                        acompletion_kwargs["client"] = proxy_client
+                response = await litellm.acompletion(**acompletion_kwargs)
 
                 # Parse the structured response using Pydantic
                 result = FilenameGeneration.model_validate_json(

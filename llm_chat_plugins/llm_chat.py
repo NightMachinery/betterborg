@@ -3150,7 +3150,7 @@ async def _process_media(
                     try:
                         if gemini_client is None:
                             gemini_client = llm_util.create_genai_client(
-                                api_key=api_key, user_id=sender_id
+                                api_key=api_key, user_id=sender_id, proxy_p=True
                             )
 
                         # This API call verifies the file's existence.
@@ -3221,7 +3221,7 @@ async def _process_media(
             # Upload to Gemini Files API
             if gemini_client is None:
                 gemini_client = llm_util.create_genai_client(
-                    api_key=api_key, user_id=sender_id
+                    api_key=api_key, user_id=sender_id, proxy_p=True
                 )
             with tempfile.NamedTemporaryFile(
                 delete=False, suffix=Path(filename).suffix
@@ -6860,6 +6860,12 @@ async def chat_handler(event):
 
         if is_gemini_model_p:
             api_kwargs["safety_settings"] = SAFETY_SETTINGS
+            # Route native Gemini (Google API) traffic through the special proxy.
+            # OpenRouter google/* models are excluded as they don't hit Google endpoints.
+            if is_native_gemini(model_in_use):
+                proxy_client = llm_util.create_litellm_proxy_client(event.sender_id)
+                if proxy_client is not None:
+                    api_kwargs["client"] = proxy_client
             # Upstream Gemini Limitation: Only enable tools if JSON mode is OFF.
             if prefs.enabled_tools and not prefs.json_mode:
                 tools_to_use = list(prefs.enabled_tools)

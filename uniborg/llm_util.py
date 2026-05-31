@@ -218,6 +218,32 @@ def create_genai_client(
     return genai.Client(api_key=api_key, http_options=http_options)
 
 
+def create_litellm_proxy_client(user_id: int):
+    """Build a litellm AsyncHTTPHandler routed through GEMINI_SPECIAL_HTTP_PROXY.
+
+    Returns:
+        A litellm ``AsyncHTTPHandler`` whose underlying httpx client is proxied,
+        or ``None`` when no proxy is configured.
+
+    Raises:
+        ProxyRestrictedException: If a proxy is configured but the user is not
+            permitted to use it (same access control as ``create_genai_client``).
+    """
+    proxy_url, _ = get_proxy_config_or_error(user_id)
+    if not proxy_url:
+        return None
+
+    import httpx
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    handler = AsyncHTTPHandler()
+    # ``create_client`` has no proxy argument and uses a transport that ignores
+    # HTTP_PROXY, so swap the internal httpx client for a proxied one.
+    handler.client = httpx.AsyncClient(proxy=proxy_url, follow_redirects=True)
+    print(f"LLM_Util: Using litellm proxy {proxy_url} for user {user_id}")
+    return handler
+
+
 # --- Prompt Loading Utilities ---
 
 # Environment and prompt loading setup
