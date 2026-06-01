@@ -39,6 +39,17 @@ BOT_META_INFO_LINE = f"{BOT_META_INFO_PREFIX}── ※ ──{BOT_META_INFO
 GEMINI_CHAT_ROTATE_KEYS_P = True
 GEMINI_STT_ROTATE_KEYS_P = True
 GEMINI_API_KEYS = os.path.expanduser("~/.gemini_api_keys")
+
+# STT model list — first entry is the default; the rest are tried in order when
+# the primary model returns a high-demand / transient error.
+STT_MODELS = [
+    GEMINI_STT_LATEST,
+    GEMINI_FLASH_2_5,
+    GEMINI_FLASH_3,
+]
+STT_RETRIES_PER_MODEL = 4  # attempts on each model before moving to the next
+STT_RETRY_SLEEP = 10.0  # seconds between all retry attempts
+STT_RETRY_MAX_DELAY = 180.0  # upper cap per sleep
 ADMIN_ONLY_COMMAND_IGNORED = (
     "You have invoked an admin-only command. Your request has been ignored."
 )

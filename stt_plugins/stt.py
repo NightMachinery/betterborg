@@ -9,6 +9,10 @@ from uniborg.constants import (
     STT_FILE_ONLY_LENGTH_THRESHOLD,
     GEMINI_STT_ROTATE_KEYS_P,
     ADMIN_ONLY_COMMAND_IGNORED,
+    STT_MODELS,
+    STT_RETRIES_PER_MODEL,
+    STT_RETRY_SLEEP,
+    STT_RETRY_MAX_DELAY,
 )
 import os
 import traceback
@@ -129,10 +133,11 @@ def get_effective_gemini_api_key(user_id: int) -> str | None:
     )
 
 
-# Retry config for transient Gemini errors (high-demand / overloaded / rate limits).
-STT_MAX_RETRIES = 20
-STT_RETRY_BASE_DELAY = 2.0  # seconds; exponential backoff base
-STT_RETRY_MAX_DELAY = 60.0  # cap per-wait at this many seconds
+# Retry config lives in uniborg/constants.py:
+#   STT_MODELS            — ordered model list; first is default, rest are fallbacks
+#   STT_RETRIES_PER_MODEL — attempts per model before cycling to the next
+#   STT_RETRY_SLEEP       — base sleep between attempts (seconds)
+#   STT_RETRY_MAX_DELAY   — upper cap on sleep (seconds)
 
 
 def _is_retriable_stt_error(exception) -> bool:
@@ -169,60 +174,109 @@ def _is_retriable_stt_error(exception) -> bool:
 
 async def _transcribe_with_retry(
     *,
-    model,
+    model_name,
     attachments,
     api_key,
     status_message,
     italics_marker,
 ):
-    """Run the transcription prompt, retrying transient errors with exponential backoff.
+    """Run the transcription prompt, cycling through STT_MODELS on transient errors.
 
-    Edits ``status_message`` to show retry progress. Returns the raw response text.
-    Raises the last exception if all retries are exhausted, or immediately for
-    non-retriable errors.
+    Each model in STT_MODELS gets STT_RETRIES_PER_MODEL attempts before the next
+    model is tried. Sleeps STT_RETRY_SLEEP seconds between every attempt (capped at
+    STT_RETRY_MAX_DELAY). Edits ``status_message`` to show retry progress.
+
+    Returns the raw response text, or raises on the last failure.
     """
+    # Build the ordered model sequence starting from the requested model.
+    models_to_try = list(STT_MODELS)
+    if model_name in models_to_try:
+        idx = models_to_try.index(model_name)
+        models_to_try = models_to_try[idx:] + models_to_try[:idx]
+    else:
+        models_to_try = [model_name] + models_to_try
+
+    total_attempts = len(models_to_try) * STT_RETRIES_PER_MODEL
+    global_attempt = 0
     last_exception = None
-    for attempt in range(1, STT_MAX_RETRIES + 1):
+
+    for current_model_name in models_to_try:
         try:
-            response = await model.prompt(
-                prompt=TRANSCRIPTION_PROMPT,
-                attachments=attachments,
-                schema=TranscriptionResult,
-                key=api_key,
-                temperature=0,
-            )
-            return await response.text()
-        except asyncio.CancelledError:
-            raise
+            current_model = llm.get_async_model(current_model_name)
         except Exception as e:
+            print(f"STT: could not load model {current_model_name!r}: {e}")
             last_exception = e
-            if not _is_retriable_stt_error(e) or attempt >= STT_MAX_RETRIES:
-                raise
+            continue
 
-            delay = min(
-                STT_RETRY_BASE_DELAY * (2 ** (attempt - 1)), STT_RETRY_MAX_DELAY
-            )
-            print(
-                f"STT: transcription attempt {attempt}/{STT_MAX_RETRIES} failed "
-                f"({type(e).__name__}: {e}); retrying in {delay:.0f}s."
-            )
+        for model_attempt in range(1, STT_RETRIES_PER_MODEL + 1):
+            global_attempt += 1
             try:
-                await util.edit_message(
-                    status_message,
-                    f"{italics_marker}High demand — retrying "
-                    f"({attempt}/{STT_MAX_RETRIES}), waiting {delay:.0f}s…{italics_marker}",
-                    parse_mode="md",
-                    link_preview=False,
+                response = await current_model.prompt(
+                    prompt=TRANSCRIPTION_PROMPT,
+                    attachments=attachments,
+                    schema=TranscriptionResult,
+                    key=api_key,
+                    temperature=0,
                 )
-            except Exception:
-                pass  # Progress edit is best-effort.
-            await asyncio.sleep(delay)
+                return await response.text()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                last_exception = e
+                if not _is_retriable_stt_error(e):
+                    raise
 
-    # Defensive: loop either returns or raises above.
-    raise last_exception
+                is_last = global_attempt >= total_attempts
+                if is_last:
+                    raise
+
+                delay = min(STT_RETRY_SLEEP, STT_RETRY_MAX_DELAY)
+                current_idx = models_to_try.index(current_model_name)
+                switching = model_attempt >= STT_RETRIES_PER_MODEL
+                next_model_name = (
+                    models_to_try[current_idx + 1]
+                    if switching and current_idx + 1 < len(models_to_try)
+                    else None
+                )
+
+                print(
+                    f"STT: attempt {global_attempt}/{total_attempts} "
+                    f"(model={current_model_name}, try={model_attempt}/{STT_RETRIES_PER_MODEL}) "
+                    f"failed ({type(e).__name__}: {e}); "
+                    + (
+                        f"switching to {next_model_name} after {delay:.0f}s."
+                        if switching
+                        else f"retrying in {delay:.0f}s."
+                    )
+                )
+                try:
+                    model_label = current_model_name.split("/")[-1]
+                    if switching:
+                        next_label = next_model_name.split("/")[-1]
+                        status = (
+                            f"{italics_marker}High demand on {model_label} — "
+                            f"switching to {next_label} "
+                            f"({global_attempt}/{total_attempts}), "
+                            f"waiting {delay:.0f}s…{italics_marker}"
+                        )
+                    else:
+                        status = (
+                            f"{italics_marker}High demand — retrying with {model_label} "
+                            f"({global_attempt}/{total_attempts}), "
+                            f"waiting {delay:.0f}s…{italics_marker}"
+                        )
+                    await util.edit_message(
+                        status_message,
+                        status,
+                        parse_mode="md",
+                        link_preview=False,
+                    )
+                except Exception:
+                    pass  # Progress edit is best-effort.
+                await asyncio.sleep(delay)
 
 
-async def llm_stt(*, cwd, event, model_name=GEMINI_STT_LATEST, log=True):
+async def llm_stt(*, cwd, event, model_name=STT_MODELS[0], log=True):
     """
     Performs speech-to-text on media, enforcing a single structured JSON output
     that synthesizes all provided files.
@@ -274,9 +328,9 @@ async def llm_stt(*, cwd, event, model_name=GEMINI_STT_LATEST, log=True):
         proxy_url, _ = llm_util.get_proxy_config_or_error(event.sender_id)
         proxy_token = llm_util.set_llm_gemini_proxy(proxy_url)
         try:
-            # Transcribe, retrying transient upstream errors with exponential backoff.
+            # Transcribe, cycling through fallback models on transient upstream errors.
             json_response_text = await _transcribe_with_retry(
-                model=model,
+                model_name=model_name,
                 attachments=attachments,
                 api_key=api_key,
                 status_message=status_message,
