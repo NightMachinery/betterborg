@@ -158,6 +158,7 @@ def _is_retriable_stt_error(exception) -> bool:
         "temporarily",
         "rate limit",
         "resource_exhausted",
+        "quota",
         "429",
         "503",
         "500",
