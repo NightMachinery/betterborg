@@ -129,6 +129,99 @@ def get_effective_gemini_api_key(user_id: int) -> str | None:
     )
 
 
+# Retry config for transient Gemini errors (high-demand / overloaded / rate limits).
+STT_MAX_RETRIES = 20
+STT_RETRY_BASE_DELAY = 2.0  # seconds; exponential backoff base
+STT_RETRY_MAX_DELAY = 60.0  # cap per-wait at this many seconds
+
+
+def _is_retriable_stt_error(exception) -> bool:
+    """Whether an error from the transcription call is transient and worth retrying.
+
+    Retries upstream-capacity / rate-limit style errors. Does NOT retry permanent
+    failures (proxy restriction, unknown model, bad request, auth).
+    """
+    # Permanent: never retry (proxy gate and other user-facing permanent failures).
+    if isinstance(exception, llm_util.TelegramUserReplyException):
+        return False
+
+    text = str(exception).lower()
+    retriable_markers = (
+        "high demand",
+        "overloaded",
+        "try again later",
+        "temporarily",
+        "rate limit",
+        "resource_exhausted",
+        "429",
+        "503",
+        "500",
+        "unavailable",
+        "deadline",
+        "timeout",
+        "timed out",
+        "connection",
+        "readerror",
+        "remoteprotocolerror",
+    )
+    return any(marker in text for marker in retriable_markers)
+
+
+async def _transcribe_with_retry(
+    *,
+    model,
+    attachments,
+    api_key,
+    status_message,
+    italics_marker,
+):
+    """Run the transcription prompt, retrying transient errors with exponential backoff.
+
+    Edits ``status_message`` to show retry progress. Returns the raw response text.
+    Raises the last exception if all retries are exhausted, or immediately for
+    non-retriable errors.
+    """
+    last_exception = None
+    for attempt in range(1, STT_MAX_RETRIES + 1):
+        try:
+            response = await model.prompt(
+                prompt=TRANSCRIPTION_PROMPT,
+                attachments=attachments,
+                schema=TranscriptionResult,
+                key=api_key,
+                temperature=0,
+            )
+            return await response.text()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            last_exception = e
+            if not _is_retriable_stt_error(e) or attempt >= STT_MAX_RETRIES:
+                raise
+
+            delay = min(
+                STT_RETRY_BASE_DELAY * (2 ** (attempt - 1)), STT_RETRY_MAX_DELAY
+            )
+            print(
+                f"STT: transcription attempt {attempt}/{STT_MAX_RETRIES} failed "
+                f"({type(e).__name__}: {e}); retrying in {delay:.0f}s."
+            )
+            try:
+                await util.edit_message(
+                    status_message,
+                    f"{italics_marker}High demand — retrying "
+                    f"({attempt}/{STT_MAX_RETRIES}), waiting {delay:.0f}s…{italics_marker}",
+                    parse_mode="md",
+                    link_preview=False,
+                )
+            except Exception:
+                pass  # Progress edit is best-effort.
+            await asyncio.sleep(delay)
+
+    # Defensive: loop either returns or raises above.
+    raise last_exception
+
+
 async def llm_stt(*, cwd, event, model_name=GEMINI_STT_LATEST, log=True):
     """
     Performs speech-to-text on media, enforcing a single structured JSON output
@@ -181,16 +274,14 @@ async def llm_stt(*, cwd, event, model_name=GEMINI_STT_LATEST, log=True):
         proxy_url, _ = llm_util.get_proxy_config_or_error(event.sender_id)
         proxy_token = llm_util.set_llm_gemini_proxy(proxy_url)
         try:
-            # Pass the single TranscriptionResult schema directly
-            response = await model.prompt(
-                prompt=TRANSCRIPTION_PROMPT,
+            # Transcribe, retrying transient upstream errors with exponential backoff.
+            json_response_text = await _transcribe_with_retry(
+                model=model,
                 attachments=attachments,
-                schema=TranscriptionResult,
-                key=api_key,
-                temperature=0,
+                api_key=api_key,
+                status_message=status_message,
+                italics_marker=italics_marker,
             )
-
-            json_response_text = await response.text()
         finally:
             llm_util.reset_llm_gemini_proxy(proxy_token)
 
