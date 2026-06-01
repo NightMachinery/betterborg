@@ -95,6 +95,15 @@ def smart_context_key(user_id: int) -> str:
     return f"borg:smart_context:{user_id}"
 
 
+def gemini_cache_disabled_key(key_hash: str, model: str) -> str:
+    """Redis key marking that context caching is disabled for a (api key, model) pair.
+
+    Keyed by a hash of the API key (never the raw key) so the flag is correct under
+    key rotation and shared keys, independent of which user issued the request.
+    """
+    return f"borg:gemini:nocache:{key_hash}:{model}"
+
+
 # --- Common Redis Operations ---
 
 

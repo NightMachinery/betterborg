@@ -6,6 +6,7 @@ from pynight.common_icecream import ic
 import os
 import json
 import asyncio
+import hashlib
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from telethon import events
@@ -22,6 +23,11 @@ from . import redis_util
 HISTORY_LIMIT = 5000  # Max number of message IDs to store per chat
 LAST_N_MAX = HISTORY_LIMIT  # Max number of messages user can request in "last N" mode
 GEMINI_FILE_CACHE_DURATION = 47 * 3600  # 47 hours, just under the 48h expiry
+
+# Free-tier Gemini keys have a per-model cached-content storage limit of 0, so context
+# caching for that (key, model) pair permanently 429s. Once detected we stop caching for
+# it; the TTL is a re-probe window in case the key is later upgraded to a paid tier.
+GEMINI_CACHE_DISABLED_DURATION = 30 * 24 * 3600  # 30 days
 
 
 # --- Data Structures ---
@@ -413,6 +419,33 @@ async def get_cached_gemini_file_info(file_id: str, user_id: int) -> Optional[di
         redis_util.gemini_file_cache_key(file_id, user_id),
         expire_seconds=GEMINI_FILE_CACHE_DURATION,
         renew=False,
+    )
+
+
+def _gemini_api_key_hash(api_key: str) -> str:
+    """Short, stable hash of an API key for use in cache-state Redis keys (never the raw key)."""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:32]
+
+
+async def is_gemini_caching_disabled(api_key: str, model: str) -> bool:
+    """Whether context caching has been disabled for this (api key, model) pair.
+
+    Returns False when no api_key/model is given or Redis is unavailable, so caching
+    is attempted by default and the worst case is a recoverable one-time 429.
+    """
+    if not api_key or not model:
+        return False
+    key = redis_util.gemini_cache_disabled_key(_gemini_api_key_hash(api_key), model)
+    return await redis_util.get_and_renew(key, renew=False) is not None
+
+
+async def disable_gemini_caching(api_key: str, model: str) -> bool:
+    """Mark a (api key, model) pair as unable to use context caching (free-tier quota=0)."""
+    if not api_key or not model:
+        return False
+    key = redis_util.gemini_cache_disabled_key(_gemini_api_key_hash(api_key), model)
+    return await redis_util.set_with_expiry(
+        key, "1", expire_seconds=GEMINI_CACHE_DISABLED_DURATION
     )
 
 

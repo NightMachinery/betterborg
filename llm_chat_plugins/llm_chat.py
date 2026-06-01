@@ -2344,6 +2344,28 @@ def is_native_gemini(model: str) -> bool:
     return model.startswith("gemini/")
 
 
+def _apply_cache_control(messages: list) -> None:
+    """Add ephemeral cache_control to all messages for full context caching."""
+    for message in messages:
+        message["cache_control"] = {"type": "ephemeral"}
+
+
+def _strip_cache_control(messages: list) -> None:
+    """Remove cache_control from all messages (used when caching is disabled for a key/model)."""
+    for message in messages:
+        message.pop("cache_control", None)
+
+
+def is_cache_storage_quota_error(exception) -> bool:
+    """Detect the free-tier 'cached content storage tokens' 429 (limit=0).
+
+    This is distinct from an ordinary rate limit: it only affects caching, so it is
+    recoverable by retrying the same request without cache_control.
+    """
+    text = str(getattr(exception, "original_exception", "")) or str(exception)
+    return "CachedContentStorageTokens" in text
+
+
 def is_image_generation_model(model: str) -> bool:
     """Check if model supports image generation."""
     return model in IMAGE_GENERATION_MODELS
@@ -6831,10 +6853,15 @@ async def chat_handler(event):
             return
 
         # --- Context Caching for Native Gemini Models ---
+        # Free-tier keys have a per-model cached-content storage limit of 0; once we've seen
+        # that 429 for this (key, model) we skip caching pre-emptively to avoid recurring errors.
+        caching_applied_p = False
         if is_native_gemini(model_in_use):
-            # Add cache_control to ALL conversation messages for full context caching
-            for message in messages:
-                message["cache_control"] = {"type": "ephemeral"}
+            if await history_util.is_gemini_caching_disabled(api_key, model_in_use):
+                _strip_cache_control(messages)
+            else:
+                _apply_cache_control(messages)
+                caching_applied_p = True
 
         # --- Construct API call arguments ---
         is_gemini_model_p = is_gemini_model(model_in_use)
@@ -6967,27 +6994,35 @@ async def chat_handler(event):
             finally:
                 remove_active_llm_task(user_id, codex_task)
         else:
-            if use_streaming:
-                edit_interval = get_streaming_delay(model_in_use)
-                llm_response = await _retry_on_no_response_with_reasons(
+            edit_interval = get_streaming_delay(model_in_use) if use_streaming else None
+
+            async def _run_llm_call():
+                return await _retry_on_no_response_with_reasons(
                     user_id,
                     event,
                     response_message,
                     api_kwargs,
                     edit_interval,
                     model_capabilities,
-                    streaming_p=True,
+                    streaming_p=use_streaming,
                 )
-            else:
-                llm_response = await _retry_on_no_response_with_reasons(
-                    user_id,
-                    event,
-                    response_message,
-                    api_kwargs,
-                    None,
-                    model_capabilities,
-                    streaming_p=False,
+
+            try:
+                llm_response = await _run_llm_call()
+            except llm_util.RateLimitException as e:
+                # Free-tier cached-content storage limit: caching can't work for this
+                # (key, model), but the request itself can. Disable caching for it and
+                # silently retry once without cache_control so the user still gets a reply.
+                if not (caching_applied_p and is_cache_storage_quota_error(e)):
+                    raise
+                print(
+                    f"Gemini cache storage quota hit for model {model_in_use}; "
+                    "disabling context caching for this key/model and retrying."
                 )
+                await history_util.disable_gemini_caching(api_key, model_in_use)
+                _strip_cache_control(messages)
+                caching_applied_p = False
+                llm_response = await _run_llm_call()
 
             response_text = llm_response.text
             finish_reason = llm_response.finish_reason
