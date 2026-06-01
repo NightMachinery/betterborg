@@ -12,6 +12,7 @@ import json
 from google import genai
 from google.genai import types
 import asyncio
+import contextvars
 from enum import Enum
 
 
@@ -148,7 +149,7 @@ class ProxyRestrictedException(TelegramUserReplyException):
 # --- Proxy Configuration ---
 
 GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P = os.getenv(
-    "GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P", "y"
+    "GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P", "n"
 ).lower() in ("true", "y")
 
 
@@ -242,6 +243,93 @@ def create_litellm_proxy_client(user_id: int):
     handler.client = httpx.AsyncClient(proxy=proxy_url, follow_redirects=True)
     print(f"LLM_Util: Using litellm proxy {proxy_url} for user {user_id}")
     return handler
+
+
+# --- llm-library (Simon Willison's `llm`) Gemini proxy support ---
+#
+# The `llm-gemini` plugin builds httpx clients with no args, so it ignores
+# GEMINI_SPECIAL_HTTP_PROXY (a no-arg httpx client only honors HTTPS_PROXY/ALL_PROXY).
+# We patch httpx's client constructors to inject a proxy from a contextvar that the STT
+# plugin sets around its `model.prompt(...)` call. The contextvar is None everywhere else,
+# so all other httpx traffic (Telegram, etc.) is unaffected.
+
+_GEMINI_LLMLIB_PROXY_URL = contextvars.ContextVar(
+    "gemini_llmlib_proxy_url", default=None
+)
+_LLM_GEMINI_PATCH_INSTALLED = False
+
+
+def set_llm_gemini_proxy(proxy_url):
+    """Set the proxy URL the patched llm_gemini httpx client should use for the current task.
+
+    Returns a token to pass to reset_llm_gemini_proxy() in a finally block.
+    """
+    return _GEMINI_LLMLIB_PROXY_URL.set(proxy_url)
+
+
+def reset_llm_gemini_proxy(token):
+    """Reset the per-task llm_gemini proxy contextvar using the token from set_llm_gemini_proxy."""
+    try:
+        _GEMINI_LLMLIB_PROXY_URL.reset(token)
+    except (ValueError, LookupError):
+        pass
+
+
+def install_llm_gemini_proxy_patch():
+    """Patch httpx client construction so llm_gemini honors a per-request proxy URL.
+
+    Idempotent. The proxy is only injected while the _GEMINI_LLMLIB_PROXY_URL contextvar is
+    set (i.e. during a gated STT Gemini call); all other httpx usage sees proxy=None and gets
+    the original behavior.
+    """
+    global _LLM_GEMINI_PATCH_INSTALLED
+    if _LLM_GEMINI_PATCH_INSTALLED:
+        return
+
+    try:
+        import httpx
+        import llm_gemini  # noqa: F401 - ensure the module we proxy for is importable
+    except ImportError:
+        print("LLM_Util: WARNING - llm_gemini not importable; STT proxy patch skipped.")
+        return
+
+    real_async_client = httpx.AsyncClient
+    real_client = httpx.Client
+    real_stream = httpx.stream
+    real_get = httpx.get
+
+    def _proxied_kwargs(kwargs):
+        proxy = _GEMINI_LLMLIB_PROXY_URL.get()
+        if (
+            proxy
+            and "proxy" not in kwargs
+            and "proxies" not in kwargs
+            and "mounts" not in kwargs
+            and "transport" not in kwargs
+        ):
+            kwargs = {**kwargs, "proxy": proxy}
+        return kwargs
+
+    class _ProxyAsyncClient(real_async_client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **_proxied_kwargs(kwargs))
+
+    class _ProxyClient(real_client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **_proxied_kwargs(kwargs))
+
+    def _proxy_stream(method, url, **kwargs):
+        return real_stream(method, url, **_proxied_kwargs(kwargs))
+
+    def _proxy_get(url, **kwargs):
+        return real_get(url, **_proxied_kwargs(kwargs))
+
+    httpx.AsyncClient = _ProxyAsyncClient
+    httpx.Client = _ProxyClient
+    httpx.stream = _proxy_stream
+    httpx.get = _proxy_get
+    _LLM_GEMINI_PATCH_INSTALLED = True
+    print("LLM_Util: Installed llm_gemini proxy patch.")
 
 
 # --- Prompt Loading Utilities ---

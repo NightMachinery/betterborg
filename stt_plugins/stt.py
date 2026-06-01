@@ -113,6 +113,9 @@ Do not add any commentary, apologies, or text outside of the final JSON object.
 TRANSCRIPTION_PROMPT = TRANSCRIPTION_PROMPT_V6
 print(f"STT Prompt Loaded:\n\n{TRANSCRIPTION_PROMPT}\n---\n\n")
 
+# Route llm-library Gemini calls through GEMINI_SPECIAL_HTTP_PROXY (no-op if unset).
+llm_util.install_llm_gemini_proxy_patch()
+
 
 # --- Core Transcription Logic ---
 
@@ -173,16 +176,23 @@ async def llm_stt(*, cwd, event, model_name=GEMINI_STT_LATEST, log=True):
 
     json_response_text = None
     try:
-        # Pass the single TranscriptionResult schema directly
-        response = await model.prompt(
-            prompt=TRANSCRIPTION_PROMPT,
-            attachments=attachments,
-            schema=TranscriptionResult,
-            key=api_key,
-            temperature=0,
-        )
+        # Route this request's Gemini traffic through GEMINI_SPECIAL_HTTP_PROXY if configured.
+        # Honors the admin-only gate (may raise ProxyRestrictedException for blocked users).
+        proxy_url, _ = llm_util.get_proxy_config_or_error(event.sender_id)
+        proxy_token = llm_util.set_llm_gemini_proxy(proxy_url)
+        try:
+            # Pass the single TranscriptionResult schema directly
+            response = await model.prompt(
+                prompt=TRANSCRIPTION_PROMPT,
+                attachments=attachments,
+                schema=TranscriptionResult,
+                key=api_key,
+                temperature=0,
+            )
 
-        json_response_text = await response.text()
+            json_response_text = await response.text()
+        finally:
+            llm_util.reset_llm_gemini_proxy(proxy_token)
 
         # Parse the single JSON object and format it for the user
         final_output_message = ""
