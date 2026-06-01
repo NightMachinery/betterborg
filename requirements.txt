@@ -47,7 +47,7 @@ google-genai[live]
 
 typed-ffmpeg
 
-litellm
+litellm>=1.82.0
 llm
 llm-gemini
 llm-openai-via-codex

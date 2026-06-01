@@ -38,6 +38,15 @@ proxied one, then passes it via the `client=` kwarg. For `gemini/*` models litel
 that client to its Gemini handler. The handler is added only when
 `is_native_gemini(model)` (chat) or `model.startswith("gemini/")` (filename gen) is true.
 
+> **Streaming requires litellm >= 1.82.0.** Older litellm (e.g. 1.80.11) had a bug where
+> `CustomStreamWrapper.fetch_stream` overrode the per-call `client=` with the global
+> `module_level_aclient`, silently bypassing the proxy on streaming requests (manifesting as a
+> 403 from Google's edge for region-restricted server IPs). Upstream fixed this in
+> [BerriAI/litellm#17148](https://github.com/BerriAI/litellm/issues/17148) (released in
+> v1.82.0) by adding a `gemini_client` parameter to the Gemini `make_call`, so the user's
+> client survives the override. `requirements.txt` pins `litellm>=1.82.0` for this reason.
+> Non-streaming was never affected.
+
 Both mechanisms reuse `get_proxy_config_or_error()` for access control, so the admin-only
 check and `ProxyRestrictedException` behavior are identical across all Gemini call sites.
 
