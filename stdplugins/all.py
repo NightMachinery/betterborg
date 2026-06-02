@@ -4,6 +4,7 @@
 
 from telethon import events
 from uniborg import util
+from pynight.common_icecream import ic
 
 # TODO Support specifying the message content. The subsequent mentions should just reply to this message and have a ☝🏻 emoji.
 
@@ -31,7 +32,7 @@ async def _(event):
         except:
             pass
 
-    mention_limit = 50
+    mention_limit = 30
     current_mentions = 0
     mentions = "@all\n"
 
@@ -49,6 +50,9 @@ async def _(event):
     async def send_current_mentions():
         nonlocal mentions
         nonlocal event
+
+        ic(mentions)
+
         await event.respond(mentions, reply_to=event.message.reply_to_msg_id)
         reset_mentions()
 
