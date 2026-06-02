@@ -132,6 +132,12 @@ interrupting the process. Collection is newest-first for useful partial exports,
 while the saved JSON remains oldest-first. See
 [[file:docs/history_export.md][docs/history_export.md]].
 
+** deleter
+=stdplugins/deleter.py= adds the admin-only =.del N= and =.del s N=
+commands. The self-only form deletes the userbot account's own messages and
+selectively clears that account's reactions from scanned messages. See
+[[file:docs/deleter.md][docs/deleter.md]].
+
 ** Codex GPT-5.5
 =llm_chat= can expose =openai-codex/gpt-5.5= as an admin-only chat model using
 the published =llm-openai-via-codex= package and local Codex OAuth credentials.
