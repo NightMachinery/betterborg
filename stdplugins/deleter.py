@@ -1,6 +1,7 @@
 ###
 # * @usage
 # ** `.del s 99999999`
+# ** `.delallself`
 #
 # * @warning =self_only= is currently implemented as admin-only instead!
 ###
