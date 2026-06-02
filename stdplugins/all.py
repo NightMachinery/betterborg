@@ -3,6 +3,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from telethon import events
+from uniborg import util
 
 # TODO Support specifying the message content. The subsequent mentions should just reply to this message and have a ☝🏻 emoji.
 
@@ -17,6 +18,7 @@ async def _(event):
         await util.isAdmin(event)
         or str(input_chat.id)
         in [
+            #: The Order
             "3901506504",
             "-1003901506504",
         ]
