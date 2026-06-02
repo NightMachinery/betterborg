@@ -18,4 +18,6 @@ If Telegram marks the reaction metadata as reduced with `min`, the plugin
 batches those message IDs into chunked `GetMessagesReactionsRequest` calls
 first, then only sends clear requests for messages confirmed to have a reaction
 from the current account. It does not send a clear request for every scanned
-message.
+message. If Telegram returns a flood wait while clearing reactions, the plugin
+waits and retries instead of continuing to send more clear requests during the
+wait window.

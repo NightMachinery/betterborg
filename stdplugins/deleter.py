@@ -4,7 +4,10 @@
 #
 # * @warning =self_only= is currently implemented as admin-only instead!
 ###
+import asyncio
+
 from telethon import events
+from telethon.errors import FloodWaitError
 from telethon.tl.functions.messages import (
     GetMessagesReactionsRequest,
     SendReactionRequest,
@@ -63,7 +66,18 @@ def _chunks(items, size):
 
 
 async def _clear_own_reaction(chat, msg):
-    await borg(SendReactionRequest(peer=chat, msg_id=msg.id, reaction=[]))
+    while True:
+        try:
+            await borg(SendReactionRequest(peer=chat, msg_id=msg.id, reaction=[]))
+            return
+        except FloodWaitError as e:
+            wait_seconds = getattr(e, "seconds", None) or getattr(e, "value", 0)
+            wait_seconds = int(wait_seconds) + 1
+            print(
+                f"reaction flood wait for {wait_seconds}s on message {msg.id}",
+                flush=True,
+            )
+            await asyncio.sleep(wait_seconds)
 
 
 async def _clear_confirmed_min_reactions(chat, min_reaction_messages):
