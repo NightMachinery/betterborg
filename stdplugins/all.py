@@ -25,8 +25,13 @@ async def _(event):
     ):
         return
 
-    await event.delete()
-    mention_limit = 30
+    if False:
+        try:
+            await event.delete()
+        except:
+            pass
+
+    mention_limit = 50
     current_mentions = 0
     mentions = "@all\n"
 
