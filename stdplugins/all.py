@@ -67,7 +67,7 @@ async def _(event):
                 mentions += f"{x.first_name} {x.last_name} ({x.username}): id={x.id}\n"
             else:
                 # mentions += f"[\u2063](tg://user?id={x.id})"
-                mentions += f"[@{x.username or x.first_name or x.last_name or "NA"}](tg://user?id={x.id})\n"
+                mentions += f"[@{x.username or x.first_name or x.last_name or 'NA'}](tg://user?id={x.id})\n"
             # mentions += f"@{x.username} "
             # await event.respond(f"[Hey, {x.first_name}!](tg://user?id={x.id})")
         else:
