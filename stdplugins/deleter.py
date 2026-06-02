@@ -8,6 +8,7 @@ import asyncio
 
 from telethon import events
 from telethon.errors import FloodWaitError
+from telethon.tl.functions.channels import DeleteParticipantHistoryRequest
 from telethon.tl.functions.messages import (
     GetMessagesReactionsRequest,
     SendReactionRequest,
@@ -21,6 +22,11 @@ from tqdm.asyncio import tqdm
 
 
 REACTION_REFRESH_CHUNK_SIZE = 100
+
+
+def _flood_wait_seconds(e):
+    wait_seconds = getattr(e, "seconds", None) or getattr(e, "value", 0)
+    return int(wait_seconds) + 1
 
 
 def _reactions_have_own_reaction(reactions):
@@ -71,8 +77,7 @@ async def _clear_own_reaction(chat, msg):
             await borg(SendReactionRequest(peer=chat, msg_id=msg.id, reaction=[]))
             return
         except FloodWaitError as e:
-            wait_seconds = getattr(e, "seconds", None) or getattr(e, "value", 0)
-            wait_seconds = int(wait_seconds) + 1
+            wait_seconds = _flood_wait_seconds(e)
             print(
                 f"reaction flood wait for {wait_seconds}s on message {msg.id}",
                 flush=True,
@@ -164,3 +169,44 @@ async def _(event):
             chat, min_reaction_messages
         )
         print(f"deleted {reaction_delete_count} reactions!", flush=True)
+
+
+@borg.on(events.NewMessage(pattern=r"(?i)^\.delallself$"))
+async def _(event):
+    if not (await util.isAdmin(event) and event.message.forward == None):
+        return
+
+    await event.delete()
+
+    channel = await event.get_input_chat()
+    participant = await borg.get_input_entity("me")
+    call_count = 0
+
+    while True:
+        try:
+            result = await borg(
+                DeleteParticipantHistoryRequest(
+                    channel=channel,
+                    participant=participant,
+                )
+            )
+        except FloodWaitError as e:
+            wait_seconds = _flood_wait_seconds(e)
+            print(f"delallself flood wait for {wait_seconds}s", flush=True)
+            await asyncio.sleep(wait_seconds)
+            continue
+        except Exception as e:
+            print(f"delallself failed: {e}", flush=True)
+            return
+
+        call_count += 1
+        offset = getattr(result, "offset", 0) or 0
+        pts_count = getattr(result, "pts_count", None)
+        print(
+            f"delallself call {call_count}: pts_count={pts_count}, offset={offset}",
+            flush=True,
+        )
+
+        if offset == 0:
+            print(f"delallself finished after {call_count} calls", flush=True)
+            return
