@@ -14,5 +14,6 @@ recent chat messages.
 Reaction removal is selective. The plugin checks the reaction metadata already
 present on each fetched message and only sends a Telegram `SendReactionRequest`
 when the message is marked as having a reaction chosen by the current account.
-It does not fetch full reaction lists or send a clear request for every scanned
-message.
+If Telegram marks the reaction metadata as reduced with `min`, the plugin sends
+a best-effort clear request instead of fetching the full reaction list. It does
+not send a clear request for every scanned message.

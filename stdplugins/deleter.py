@@ -18,6 +18,9 @@ def _has_own_reaction(msg):
     if not reactions:
         return False
 
+    if getattr(reactions, "min", False):
+        return True
+
     for result in getattr(reactions, "results", None) or []:
         if getattr(result, "chosen_order", None) is not None:
             return True
