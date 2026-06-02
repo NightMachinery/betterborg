@@ -7,15 +7,26 @@ from telethon import events
 # TODO Support specifying the message content. The subsequent mentions should just reply to this message and have a ☝🏻 emoji.
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^\.all(IDs)?$", outgoing=True))
+@borg.on(events.NewMessage(pattern=r"(?i)^(?:\.|@)all(IDs)?$"))
 async def _(event):
     if event.fwd_from:
         return
+
+    input_chat = await event.get_input_chat()
+    if not (
+        await util.isAdmin(event)
+        or str(input_chat.id)
+        in [
+            "3901506504",
+            "-1003901506504",
+        ]
+    ):
+        return
+
     await event.delete()
     mention_limit = 30
     current_mentions = 0
     mentions = "@all\n"
-    input_chat = await event.get_input_chat()
 
     def reset_mentions():
         nonlocal current_mentions
