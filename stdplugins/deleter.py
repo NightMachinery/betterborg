@@ -261,7 +261,13 @@ async def _(event):
     skip_count = 0
     offset_id = 0
 
-    with tqdm(total=n, desc="Deleting text messages") as progress:
+    with tqdm(
+        total=n,
+        desc="Deleting text messages",
+        mininterval=0.2,
+        miniters=1,
+        dynamic_ncols=True,
+    ) as progress:
         while scanned_count < n:
             page_limit = min(TEXT_DELETE_SCAN_CHUNK_SIZE, n - scanned_count)
             page = [
@@ -274,10 +280,11 @@ async def _(event):
                 break
 
             offset_id = page[-1].id
-            scanned_count += len(page)
-            progress.update(len(page))
 
             for msg in page:
+                scanned_count += 1
+                progress.update(1)
+
                 if not _is_deletable_text_only_message(msg):
                     skip_count += 1
                     continue
@@ -285,6 +292,7 @@ async def _(event):
                 try:
                     await msg.delete()
                     delete_count += 1
+                    progress.set_postfix(deleted=delete_count, skipped=skip_count)
                 except Exception as e:
                     print(f"failed to delete text message {msg.id}: {e}", flush=True)
 
