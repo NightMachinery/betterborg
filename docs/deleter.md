@@ -13,6 +13,9 @@ recent chat messages.
 - `.delallself` uses Telegram's `channels.deleteParticipantHistory` admin
   action to delete all messages authored by the userbot/admin account in the
   current supergroup or channel.
+- `.delallselfreactions` uses Telegram's `messages.deleteParticipantReactions`
+  admin action to delete all reactions added by the userbot/admin account in the
+  current chat.
 
 Reaction removal is selective. The plugin checks the reaction metadata already
 present on each fetched message and only sends a Telegram `SendReactionRequest`
@@ -29,3 +32,8 @@ wait window.
 returns an `offset` of `0`. Telegram may reject the command in chats where this
 admin action is unavailable or where the userbot account lacks sufficient
 permissions; those errors are printed in the server log.
+
+`.delallselfreactions` uses a raw MTProto request that is present in Telegram
+Android but not yet exposed by Telethon 1.42.0. Telegram may reject the command
+server-side if deleting the current account's own reactions through the admin
+action is not allowed.

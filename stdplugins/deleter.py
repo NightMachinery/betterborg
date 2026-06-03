@@ -2,13 +2,16 @@
 # * @usage
 # ** `.del s 99999999`
 # ** `.delallself`
+# ** `.delallselfreactions`
 #
 # * @warning =self_only= is currently implemented as admin-only instead!
 ###
 import asyncio
+import struct
 
 from telethon import events
 from telethon.errors import FloodWaitError
+from telethon.tl.tlobject import TLObject, TLRequest
 from telethon.tl.functions.channels import DeleteParticipantHistoryRequest
 from telethon.tl.functions.messages import (
     GetMessagesReactionsRequest,
@@ -23,6 +26,39 @@ from tqdm.asyncio import tqdm
 
 
 REACTION_REFRESH_CHUNK_SIZE = 100
+
+
+class DeleteParticipantReactionsRequest(TLRequest):
+    CONSTRUCTOR_ID = 0xA0B80CF8
+    SUBCLASS_OF_ID = 0x0F5B399AC
+
+    def __init__(self, peer, participant):
+        self.peer = peer
+        self.participant = participant
+
+    async def resolve(self, client, utils):
+        self.peer = utils.get_input_peer(await client.get_input_entity(self.peer))
+        self.participant = utils.get_input_peer(
+            await client.get_input_entity(self.participant)
+        )
+
+    def to_dict(self):
+        return {
+            "_": "DeleteParticipantReactionsRequest",
+            "peer": self.peer.to_dict() if isinstance(self.peer, TLObject) else self.peer,
+            "participant": self.participant.to_dict()
+            if isinstance(self.participant, TLObject)
+            else self.participant,
+        }
+
+    def _bytes(self):
+        return b"".join(
+            (
+                struct.pack("<I", self.CONSTRUCTOR_ID),
+                self.peer._bytes(),
+                self.participant._bytes(),
+            )
+        )
 
 
 def _flood_wait_seconds(e):
@@ -211,3 +247,34 @@ async def _(event):
         if offset == 0:
             print(f"delallself finished after {call_count} calls", flush=True)
             return
+
+
+@borg.on(events.NewMessage(pattern=r"(?i)^\.delallselfreactions$"))
+async def _(event):
+    if not (await util.isAdmin(event) and event.message.forward == None):
+        return
+
+    await event.delete()
+
+    peer = await event.get_input_chat()
+    participant = await borg.get_input_entity("me")
+
+    while True:
+        try:
+            result = await borg(
+                DeleteParticipantReactionsRequest(
+                    peer=peer,
+                    participant=participant,
+                )
+            )
+        except FloodWaitError as e:
+            wait_seconds = _flood_wait_seconds(e)
+            print(f"delallselfreactions flood wait for {wait_seconds}s", flush=True)
+            await asyncio.sleep(wait_seconds)
+            continue
+        except Exception as e:
+            print(f"delallselfreactions failed: {e}", flush=True)
+            return
+
+        print(f"delallselfreactions finished: {result}", flush=True)
+        return
