@@ -8,8 +8,12 @@
 # * @warning =self_only= is currently implemented as admin-only instead!
 ###
 import asyncio
+import json
+import os
 import re
 import struct
+from datetime import datetime
+from pathlib import Path
 
 from telethon import events
 from telethon.errors import FloodWaitError
@@ -21,6 +25,13 @@ from telethon.tl.functions.messages import (
 )
 from telethon.tl.types import UpdateMessageReactions
 from uniborg import util
+from uniborg.export_util import (
+    export_root,
+    make_chat_export_data,
+    message_to_export,
+    sanitize_path_part,
+    write_json_with_jq,
+)
 from uniborg.util import admin_cmd, embed2
 from brish import z
 from icecream import ic
@@ -29,6 +40,8 @@ from tqdm.asyncio import tqdm
 
 REACTION_REFRESH_CHUNK_SIZE = 100
 TEXT_DELETE_SCAN_CHUNK_SIZE = 100
+DEFAULT_DELETE_EXPORT_ROOT = "~/tmp/tlg-deleter"
+TEXT_FILE_SUFFIXES = {".txt", ".md", ".markdown", ".org", ".rst", ".log"}
 HASHTAG_ONLY_RE = re.compile(r"#[^\W_]\w*", re.UNICODE)
 
 
@@ -125,6 +138,116 @@ def _is_deletable_text_only_message(msg):
     return not _is_hashtag_only_text(text)
 
 
+def _message_file_name(msg):
+    file = getattr(msg, "file", None)
+    if not file:
+        return None
+    return getattr(file, "name", None)
+
+
+def _is_text_file_message(msg):
+    if not getattr(msg, "document", None):
+        return False
+
+    file = getattr(msg, "file", None)
+    mime_type = (getattr(file, "mime_type", None) or "").lower()
+    if mime_type.startswith("text/"):
+        return True
+
+    file_name = _message_file_name(msg)
+    return bool(file_name and Path(file_name).suffix.lower() in TEXT_FILE_SUFFIXES)
+
+
+def _is_deletable_text_message(msg):
+    return _is_deletable_text_only_message(msg) or _is_text_file_message(msg)
+
+
+async def _create_delete_export_session(event, command_name, chat, input_chat):
+    human_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    chat_id = event.chat_id
+    output_dir = (
+        export_root("BORG_DELETER_EXPORT_DIR", DEFAULT_DELETE_EXPORT_ROOT)
+        / f"DeleteSession_{command_name}_{chat_id}_{human_time}"
+    )
+    session = {
+        "command": command_name,
+        "chat": chat,
+        "input_chat": input_chat,
+        "chat_id": chat_id,
+        "output_dir": output_dir,
+        "output_path": output_dir / "result.json",
+        "wip_jsonl_path": output_dir / "deleted_messages.wip.jsonl",
+        "messages": [],
+        "sender_cache": {},
+        "peer_cache": {},
+        "started_at": human_time,
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    session["wip_jsonl_path"].touch()
+    return session
+
+
+def _append_delete_wip_jsonl(session, row):
+    with session["wip_jsonl_path"].open("a", encoding="utf-8") as out:
+        out.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
+        out.write("\n")
+        out.flush()
+        os.fsync(out.fileno())
+
+
+async def _export_deleted_message(session, msg):
+    row = await message_to_export(
+        msg,
+        session["input_chat"],
+        session["sender_cache"],
+        session["peer_cache"],
+    )
+
+    if _is_text_file_message(msg):
+        files_dir = session["output_dir"] / "files"
+        files_dir.mkdir(parents=True, exist_ok=True)
+        file_name = _message_file_name(msg) or f"message_{msg.id}.txt"
+        file_path = files_dir / f"{msg.id}_{sanitize_path_part(file_name)}"
+        try:
+            downloaded_path = await borg.download_media(message=msg, file=str(file_path))
+            if downloaded_path:
+                row["file"] = str(Path(downloaded_path).relative_to(session["output_dir"]))
+        except Exception as e:
+            row["file_export_error"] = str(e)
+            print(f"failed to export text file for message {msg.id}: {e}", flush=True)
+
+    session["messages"].append(row)
+    _append_delete_wip_jsonl(session, row)
+
+
+def _export_delete_metadata_jsonl(session, row):
+    _append_delete_wip_jsonl(session, row)
+
+
+def _write_delete_export_session(session, *, extra=None):
+    metadata = {
+        "command": session["command"],
+        "chat_id": session["chat_id"],
+        "started_at": session["started_at"],
+        "export_type": "deleter",
+    }
+    if extra:
+        metadata.update(extra)
+
+    export_data = make_chat_export_data(
+        session["chat"],
+        session["chat_id"],
+        list(reversed(session["messages"])),
+        deletion_session=metadata,
+    )
+    write_json_with_jq(export_data, session["output_path"])
+    print(
+        f"{session['command']} export wrote {len(session['messages'])} messages "
+        f"to {session['output_path']}",
+        flush=True,
+    )
+
+
 async def _clear_own_reaction(chat, msg):
     while True:
         try:
@@ -212,6 +335,8 @@ async def _(event):
     print(f"del received: n={n}, self_only={self_only}", flush=True)
 
     chat = await event.get_chat()
+    input_chat = await event.get_input_chat()
+    export_session = await _create_delete_export_session(event, "del", chat, input_chat)
     delete_count = 0
     reaction_delete_count = 0
     min_reaction_messages = {}
@@ -235,6 +360,7 @@ async def _(event):
             continue
 
         ic(msg.raw_text)
+        await _export_deleted_message(export_session, msg)
         await msg.delete()
         delete_count += 1
         # embed2()
@@ -245,6 +371,14 @@ async def _(event):
             chat, min_reaction_messages
         )
         print(f"deleted {reaction_delete_count} reactions!", flush=True)
+    _write_delete_export_session(
+        export_session,
+        extra={
+            "requested_limit": n,
+            "self_only": self_only,
+            "deleted_count": delete_count,
+        },
+    )
 
 
 @borg.on(events.NewMessage(pattern=r"(?i)^\.delalltext\s+(?P<n>\d+)$"))
@@ -256,6 +390,10 @@ async def _(event):
 
     n = int(event.pattern_match.group("n"))
     chat = await event.get_chat()
+    input_chat = await event.get_input_chat()
+    export_session = await _create_delete_export_session(
+        event, "delalltext", chat, input_chat
+    )
     scanned_count = 0
     delete_count = 0
     skip_count = 0
@@ -273,7 +411,7 @@ async def _(event):
             page = [
                 msg
                 async for msg in borg.iter_messages(
-                    chat, limit=page_limit, offset_id=offset_id
+                    input_chat, limit=page_limit, offset_id=offset_id
                 )
             ]
             if not page:
@@ -285,11 +423,12 @@ async def _(event):
                 scanned_count += 1
                 progress.update(1)
 
-                if not _is_deletable_text_only_message(msg):
+                if not _is_deletable_text_message(msg):
                     skip_count += 1
                     continue
 
                 try:
+                    await _export_deleted_message(export_session, msg)
                     await msg.delete()
                     delete_count += 1
                     progress.set_postfix(deleted=delete_count, skipped=skip_count)
@@ -297,9 +436,19 @@ async def _(event):
                     print(f"failed to delete text message {msg.id}: {e}", flush=True)
 
     print(
-        f"scanned {scanned_count} messages; deleted {delete_count} text-only messages; "
+        f"scanned {scanned_count} messages; deleted {delete_count} text messages/files; "
         f"skipped {skip_count} messages",
         flush=True,
+    )
+    _write_delete_export_session(
+        export_session,
+        extra={
+            "requested_limit": n,
+            "scanned_count": scanned_count,
+            "deleted_count": delete_count,
+            "skipped_count": skip_count,
+            "text_file_suffixes": sorted(TEXT_FILE_SUFFIXES),
+        },
     )
 
 
@@ -310,8 +459,21 @@ async def _(event):
 
     await event.delete()
 
+    chat = await event.get_chat()
     channel = await event.get_input_chat()
     participant = await borg.get_input_entity("me")
+    export_session = await _create_delete_export_session(
+        event, "delallself", chat, channel
+    )
+    _export_delete_metadata_jsonl(
+        export_session,
+        {
+            "type": "metadata",
+            "command": "delallself",
+            "note": "channels.deleteParticipantHistory deletes server-side without returning message text",
+            "text_unavailable": True,
+        },
+    )
     await _delete_participant_reactions(channel, participant, "delallself")
     call_count = 0
 
@@ -341,6 +503,15 @@ async def _(event):
         )
 
         if offset == 0:
+            _write_delete_export_session(
+                export_session,
+                extra={
+                    "bulk_delete_method": "channels.deleteParticipantHistory",
+                    "text_unavailable": True,
+                    "call_count": call_count,
+                    "final_pts_count": pts_count,
+                },
+            )
             print(f"delallself finished after {call_count} calls", flush=True)
             return
 

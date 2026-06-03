@@ -137,7 +137,9 @@ while the saved JSON remains oldest-first. See
 =.delalltext N=, =.delallself=, and =.delallselfreactions= commands. The self-only
 form deletes the userbot account's own messages and selectively clears that
 account's reactions from scanned messages. The bulk text command deletes
-text-only posts from the scanned window except hashtag-only marker posts. The
+text-only posts and conservative text-file attachments from the scanned window
+except hashtag-only marker posts. Message-deleting commands export deleted text
+to =~/tmp/tlg-deleter/= with a durable WIP JSONL plus final =result.json=. The
 bulk self-delete command clears all of the account's reactions before deleting
 all of its messages; the reaction-only bulk command is available separately. See
 [[file:docs/deleter.md][docs/deleter.md]].
