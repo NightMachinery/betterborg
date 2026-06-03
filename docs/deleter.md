@@ -34,6 +34,11 @@ admin action is unavailable or where the userbot account lacks sufficient
 permissions; those errors are printed in the server log.
 
 `.delallselfreactions` uses a raw MTProto request that is present in Telegram
-Android but not yet exposed by Telethon 1.42.0. Telegram may reject the command
+Android but not yet exposed by Telethon 1.43.2. Telegram may reject the command
 server-side if deleting the current account's own reactions through the admin
 action is not allowed.
+
+Uniborg registers a narrow Telethon compatibility parser for Telegram's newer
+`TL_message` constructor `0x95ef6f2b`. This avoids noisy update parsing errors
+after bulk reaction deletion while Telethon's generated schema is behind
+Telegram Android. Remove the shim once Telethon exposes that constructor.

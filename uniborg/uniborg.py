@@ -22,11 +22,14 @@ from uniborg import (
     llm_util,
     tts_util,
     llm_db,
+    telethon_compat,
 )
 from .storage import Storage
 from . import hacks
 from .util import admins
 from .constants import BOT_META_INFO_PREFIX
+
+telethon_compat.register_telethon_schema_compat()
 
 DEFAULT_API_ID = 6
 DEFAULT_API_HASH = "eb06d4abfb49dc3eeb1aeb98ae0f581e"
