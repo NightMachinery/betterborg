@@ -1,6 +1,7 @@
 ###
 # * @usage
 # ** `.del s 99999999`
+# ** `.delalltext 99999999`
 # ** `.delallself`
 # ** `.delallselfreactions`
 #
@@ -245,18 +246,21 @@ async def _(event):
         print(f"deleted {reaction_delete_count} reactions!", flush=True)
 
 
-@borg.on(events.NewMessage(pattern=r"(?i)^\.delalltext$"))
+@borg.on(events.NewMessage(pattern=r"(?i)^\.delalltext\s+(?P<n>\d+)$"))
 async def _(event):
     if not (await util.isAdmin(event) and event.message.forward == None):
         return
 
     await event.delete()
 
+    n = int(event.pattern_match.group("n"))
     chat = await event.get_chat()
     delete_count = 0
     skip_count = 0
 
-    async for msg in tqdm(borg.iter_messages(chat), desc="Deleting text messages"):
+    async for msg in tqdm(
+        borg.iter_messages(chat, limit=n), total=n, desc="Deleting text messages"
+    ):
         if not _is_deletable_text_only_message(msg):
             skip_count += 1
             continue
@@ -268,7 +272,8 @@ async def _(event):
             print(f"failed to delete text message {msg.id}: {e}", flush=True)
 
     print(
-        f"deleted {delete_count} text-only messages; skipped {skip_count} messages",
+        f"scanned {n} messages; deleted {delete_count} text-only messages; "
+        f"skipped {skip_count} messages",
         flush=True,
     )
 
