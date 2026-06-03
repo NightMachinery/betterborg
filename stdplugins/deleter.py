@@ -28,6 +28,7 @@ from tqdm.asyncio import tqdm
 
 
 REACTION_REFRESH_CHUNK_SIZE = 100
+TEXT_DELETE_SCAN_CHUNK_SIZE = 100
 HASHTAG_ONLY_RE = re.compile(r"#[^\W_]\w*", re.UNICODE)
 
 
@@ -255,24 +256,40 @@ async def _(event):
 
     n = int(event.pattern_match.group("n"))
     chat = await event.get_chat()
+    scanned_count = 0
     delete_count = 0
     skip_count = 0
+    offset_id = 0
 
-    async for msg in tqdm(
-        borg.iter_messages(chat, limit=n), total=n, desc="Deleting text messages"
-    ):
-        if not _is_deletable_text_only_message(msg):
-            skip_count += 1
-            continue
+    with tqdm(total=n, desc="Deleting text messages") as progress:
+        while scanned_count < n:
+            page_limit = min(TEXT_DELETE_SCAN_CHUNK_SIZE, n - scanned_count)
+            page = [
+                msg
+                async for msg in borg.iter_messages(
+                    chat, limit=page_limit, offset_id=offset_id
+                )
+            ]
+            if not page:
+                break
 
-        try:
-            await msg.delete()
-            delete_count += 1
-        except Exception as e:
-            print(f"failed to delete text message {msg.id}: {e}", flush=True)
+            offset_id = page[-1].id
+            scanned_count += len(page)
+            progress.update(len(page))
+
+            for msg in page:
+                if not _is_deletable_text_only_message(msg):
+                    skip_count += 1
+                    continue
+
+                try:
+                    await msg.delete()
+                    delete_count += 1
+                except Exception as e:
+                    print(f"failed to delete text message {msg.id}: {e}", flush=True)
 
     print(
-        f"scanned {n} messages; deleted {delete_count} text-only messages; "
+        f"scanned {scanned_count} messages; deleted {delete_count} text-only messages; "
         f"skipped {skip_count} messages",
         flush=True,
     )
