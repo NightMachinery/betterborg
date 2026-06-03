@@ -10,6 +10,8 @@ recent chat messages.
 - `.del s N` scans the last `N` messages, deletes messages authored by the
   userbot/admin account, and removes that account's reactions from scanned
   messages.
+- `.delalltext` deletes all text-only messages in the current chat, regardless
+  of sender, except messages whose text is only whitespace-separated hashtags.
 - `.delallself` uses Telegram admin actions to delete all reactions and
   messages authored by the userbot/admin account in the current supergroup or
   channel.
@@ -27,6 +29,11 @@ from the current account. It does not send a clear request for every scanned
 message. If Telegram returns a flood wait while clearing reactions, the plugin
 waits and retries instead of continuing to send more clear requests during the
 wait window.
+
+`.delalltext` scans the full current chat history visible to the userbot. A
+message is considered text-only when it has non-empty text and no Telethon media
+object. Messages such as `#xyzpic #lobby #sth` are kept because every token is a
+hashtag; mixed text like `hello #lobby` is deleted.
 
 `.delallself` first calls the same participant reaction deletion used by
 `.delallselfreactions`, then repeatedly calls `DeleteParticipantHistoryRequest`

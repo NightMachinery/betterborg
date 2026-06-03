@@ -7,6 +7,7 @@
 # * @warning =self_only= is currently implemented as admin-only instead!
 ###
 import asyncio
+import re
 import struct
 
 from telethon import events
@@ -26,6 +27,7 @@ from tqdm.asyncio import tqdm
 
 
 REACTION_REFRESH_CHUNK_SIZE = 100
+HASHTAG_ONLY_RE = re.compile(r"#[^\W_]\w*", re.UNICODE)
 
 
 class DeleteParticipantReactionsRequest(TLRequest):
@@ -106,6 +108,19 @@ def _iter_reaction_updates(updates):
 def _chunks(items, size):
     for index in range(0, len(items), size):
         yield items[index : index + size]
+
+
+def _is_hashtag_only_text(text):
+    tokens = text.strip().split()
+    return bool(tokens) and all(HASHTAG_ONLY_RE.fullmatch(token) for token in tokens)
+
+
+def _is_deletable_text_only_message(msg):
+    text = getattr(msg, "raw_text", None) or ""
+    if not text.strip() or getattr(msg, "media", None):
+        return False
+
+    return not _is_hashtag_only_text(text)
 
 
 async def _clear_own_reaction(chat, msg):
@@ -228,6 +243,34 @@ async def _(event):
             chat, min_reaction_messages
         )
         print(f"deleted {reaction_delete_count} reactions!", flush=True)
+
+
+@borg.on(events.NewMessage(pattern=r"(?i)^\.delalltext$"))
+async def _(event):
+    if not (await util.isAdmin(event) and event.message.forward == None):
+        return
+
+    await event.delete()
+
+    chat = await event.get_chat()
+    delete_count = 0
+    skip_count = 0
+
+    async for msg in tqdm(borg.iter_messages(chat), desc="Deleting text messages"):
+        if not _is_deletable_text_only_message(msg):
+            skip_count += 1
+            continue
+
+        try:
+            await msg.delete()
+            delete_count += 1
+        except Exception as e:
+            print(f"failed to delete text message {msg.id}: {e}", flush=True)
+
+    print(
+        f"deleted {delete_count} text-only messages; skipped {skip_count} messages",
+        flush=True,
+    )
 
 
 @borg.on(events.NewMessage(pattern=r"(?i)^\.delallself$"))
