@@ -157,6 +157,28 @@ async def _clear_confirmed_min_reactions(chat, min_reaction_messages):
     return reaction_delete_count
 
 
+async def _delete_participant_reactions(peer, participant, command_name):
+    while True:
+        try:
+            result = await borg(
+                DeleteParticipantReactionsRequest(
+                    peer=peer,
+                    participant=participant,
+                )
+            )
+        except FloodWaitError as e:
+            wait_seconds = _flood_wait_seconds(e)
+            print(f"{command_name} reactions flood wait for {wait_seconds}s", flush=True)
+            await asyncio.sleep(wait_seconds)
+            continue
+        except Exception as e:
+            print(f"{command_name} reactions failed: {e}", flush=True)
+            return False
+
+        print(f"{command_name} reactions finished: {result}", flush=True)
+        return bool(result)
+
+
 @borg.on(events.NewMessage(pattern=r"(?i)^\.del\s+(?P<self_only>s?)\s*(?P<n>\d+)$"))
 async def _(event):
     # USERBOT ONLY (Can't get_messages in bot API)
@@ -217,6 +239,7 @@ async def _(event):
 
     channel = await event.get_input_chat()
     participant = await borg.get_input_entity("me")
+    await _delete_participant_reactions(channel, participant, "delallself")
     call_count = 0
 
     while True:
@@ -258,23 +281,4 @@ async def _(event):
 
     peer = await event.get_input_chat()
     participant = await borg.get_input_entity("me")
-
-    while True:
-        try:
-            result = await borg(
-                DeleteParticipantReactionsRequest(
-                    peer=peer,
-                    participant=participant,
-                )
-            )
-        except FloodWaitError as e:
-            wait_seconds = _flood_wait_seconds(e)
-            print(f"delallselfreactions flood wait for {wait_seconds}s", flush=True)
-            await asyncio.sleep(wait_seconds)
-            continue
-        except Exception as e:
-            print(f"delallselfreactions failed: {e}", flush=True)
-            return
-
-        print(f"delallselfreactions finished: {result}", flush=True)
-        return
+    await _delete_participant_reactions(peer, participant, "delallselfreactions")

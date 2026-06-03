@@ -136,8 +136,9 @@ while the saved JSON remains oldest-first. See
 =stdplugins/deleter.py= adds the admin-only =.del N=, =.del s N=,
 =.delallself=, and =.delallselfreactions= commands. The self-only form deletes
 the userbot account's own messages and selectively clears that account's
-reactions from scanned messages. The bulk commands use Telegram's participant
-history and participant reaction deletion. See
+reactions from scanned messages. The bulk self-delete command clears all of the
+account's reactions before deleting all of its messages; the reaction-only bulk
+command is available separately. See
 [[file:docs/deleter.md][docs/deleter.md]].
 
 ** Codex GPT-5.5
