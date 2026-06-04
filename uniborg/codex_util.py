@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
@@ -23,6 +24,12 @@ def is_codex_model(model: str) -> bool:
 
 def codex_model_name(model: str) -> str:
     return model.removeprefix(CODEX_MODEL_PREFIX)
+
+
+def codex_prompt_cache_key(*, model: str, chat_id=None, user_id=None) -> str:
+    """Build a stable, non-secret cache routing key for Codex Responses calls."""
+    raw_key = f"betterborg:codex:{codex_model_name(model)}:chat:{chat_id}:user:{user_id}"
+    return "bb-codex-" + hashlib.sha256(raw_key.encode("utf-8")).hexdigest()[:32]
 
 
 def _get_codex_auth():
@@ -95,6 +102,34 @@ def _content_part_to_codex(part: dict) -> Optional[dict]:
     return None
 
 
+def prepare_codex_response_kwargs(
+    *,
+    model: str,
+    instructions: str,
+    input_messages: list[dict],
+    reasoning_effort: Optional[str] = None,
+    tools: Optional[list[dict]] = None,
+    prompt_cache_key: Optional[str] = None,
+    prompt_cache_retention: Optional[str] = None,
+) -> dict:
+    kwargs = {
+        "model": codex_model_name(model),
+        "input": input_messages,
+        "store": False,
+        "stream": True,
+        "instructions": instructions or "You are a helpful assistant.",
+    }
+    if reasoning_effort:
+        kwargs["reasoning"] = {"effort": reasoning_effort}
+    if prompt_cache_key:
+        kwargs["prompt_cache_key"] = prompt_cache_key
+    if prompt_cache_retention:
+        kwargs["prompt_cache_retention"] = prompt_cache_retention
+    if tools:
+        kwargs["tools"] = tools
+    return kwargs
+
+
 def messages_to_codex(messages: list[dict]) -> tuple[str, list[dict]]:
     instructions = []
     codex_messages = []
@@ -149,21 +184,21 @@ async def stream_codex_response(
     reasoning_effort: Optional[str] = None,
     tools: Optional[list[dict]] = None,
     edit_interval: float = 0.8,
+    prompt_cache_key: Optional[str] = None,
+    prompt_cache_retention: Optional[str] = None,
 ) -> CodexResponse:
     client = await _create_async_client()
     instructions, input_messages = messages_to_codex(messages)
 
-    kwargs = {
-        "model": codex_model_name(model),
-        "input": input_messages,
-        "store": False,
-        "stream": True,
-        "instructions": instructions or "You are a helpful assistant.",
-    }
-    if reasoning_effort:
-        kwargs["reasoning"] = {"effort": reasoning_effort}
-    if tools:
-        kwargs["tools"] = tools
+    kwargs = prepare_codex_response_kwargs(
+        model=model,
+        instructions=instructions,
+        input_messages=input_messages,
+        reasoning_effort=reasoning_effort,
+        tools=tools,
+        prompt_cache_key=prompt_cache_key,
+        prompt_cache_retention=prompt_cache_retention,
+    )
 
     response_text = ""
     finish_reason = None

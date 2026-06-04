@@ -37,3 +37,8 @@ forwards image attachments as `input_image` parts for Codex models; non-image
 binary attachments such as videos, audio, PDFs, stickers, and unknown MIME types
 are skipped before the request is sent. Inline data URLs are validated to ensure
 they use an `image/*` MIME type.
+
+
+## Prompt caching
+
+See [docs/codex_caching.md](codex_caching.md) for Codex prompt caching behavior.

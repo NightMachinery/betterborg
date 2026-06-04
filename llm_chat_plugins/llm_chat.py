@@ -2991,7 +2991,7 @@ def get_system_prompt_info(
     event,
     *,
     include_username_p=True,
-    include_current_time_p=True,
+    include_current_time_p=False,
     include_telegram_markdown_p=True,
     timezone="Asia/Tehran",
 ) -> SystemPromptInfo:
@@ -3055,6 +3055,41 @@ def get_system_prompt_info(
         effective_prompt=final_effective_prompt,
         source=source,
     )
+
+
+def get_runtime_context_text(*, timezone_name="Asia/Tehran") -> str:
+    """Return volatile per-request facts that should stay out of the cacheable prefix."""
+    tz = pytz.timezone(timezone_name)
+    current_time = datetime.now(tz)
+    time_str = current_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+    return f"Current date and time: {time_str}"
+
+
+def _append_text_to_content(content, text: str):
+    if not text:
+        return content
+    if isinstance(content, str):
+        return f"{content}\n\n---\nRuntime context:\n{text}" if content else text
+    if isinstance(content, list):
+        content = list(content)
+        content.append({"type": "text", "text": f"---\nRuntime context:\n{text}"})
+        return content
+    return f"{content}\n\n---\nRuntime context:\n{text}"
+
+
+def append_runtime_context_to_latest_user_message(
+    history: list[dict], runtime_context: str
+) -> None:
+    """Append volatile runtime context to the latest user turn to preserve prefix stability."""
+    if not runtime_context:
+        return
+    for message in reversed(history):
+        if message.get("role") == "user":
+            message["content"] = _append_text_to_content(
+                message.get("content", ""), runtime_context
+            )
+            return
+    history.append({"role": "user", "content": f"Runtime context:\n{runtime_context}"})
 
 
 async def _get_context_mode_status_text(event) -> str:
@@ -3790,7 +3825,7 @@ async def _process_turns_to_history(
         return history, all_warnings
 
     if include_system_prompt_p:
-        prompt_info = get_system_prompt_info(event)
+        prompt_info = get_system_prompt_info(event, include_current_time_p=False)
         system_message = {"role": "system", "content": prompt_info.effective_prompt}
         history.insert(0, system_message)
 
@@ -4015,6 +4050,10 @@ async def build_conversation_history(
                 export_mode=export_mode,
                 include_system_prompt_p=include_system_prompt_p,
             )
+            if include_system_prompt_p:
+                append_runtime_context_to_latest_user_message(
+                    history, get_runtime_context_text()
+                )
             return ConversationHistoryResult(history=history, warnings=warnings)
 
         elif context_mode == "last_N":
@@ -4127,6 +4166,10 @@ async def build_conversation_history(
         export_mode=export_mode,
         include_system_prompt_p=include_system_prompt_p,
     )
+    if include_system_prompt_p:
+        append_runtime_context_to_latest_user_message(
+            history, get_runtime_context_text()
+        )
 
     return ConversationHistoryResult(history=history, warnings=warnings)
 
@@ -7056,6 +7099,10 @@ async def chat_handler(event):
                     reasoning_effort=api_kwargs.get("reasoning_effort"),
                     tools=api_kwargs.get("tools"),
                     edit_interval=edit_interval,
+                    prompt_cache_key=codex_util.codex_prompt_cache_key(
+                        model=model_in_use, chat_id=chat_id, user_id=user_id
+                    ),
+                    prompt_cache_retention="24h",
                 )
             )
             add_active_llm_task(user_id, codex_task)

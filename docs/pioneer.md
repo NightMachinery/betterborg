@@ -36,7 +36,9 @@ adds `allowed_openai_params=["reasoning_effort"]` when sending that setting.
 Betterborg sends `store: false` on Pioneer calls so Pioneer does not persist the
 request/response payload for adaptive training or evaluation.
 
-Betterborg does not add its own `cache_control` to Pioneer requests. Pioneer docs
-state that prompt caching is automatic: GPT-family models cache prompt prefixes
-upstream, and Claude/Opus models get Pioneer-inserted cache breakpoints when the
-prompt is large enough.
+Betterborg does not add its own `cache_control` or OpenAI cache-specific params
+to Pioneer requests. It does keep volatile runtime facts out of the system prompt
+and appends them to the latest user turn, preserving a stable prefix for
+Pioneer's automatic prompt caching. Pioneer docs state that GPT-family models
+cache prompt prefixes upstream, and Claude/Opus models get Pioneer-inserted
+cache breakpoints when the prompt is large enough.
