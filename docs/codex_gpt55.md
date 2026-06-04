@@ -29,3 +29,11 @@ Admin-only quick prefixes:
 
 The `googleSearch` toggle maps to the OpenAI Responses `web_search` tool for
 Codex models. Other Gemini-specific tools are not mapped.
+
+## Attachment handling
+
+Codex requests are sent through the OpenAI Responses API. Betterborg only
+forwards image attachments as `input_image` parts for Codex models; non-image
+binary attachments such as videos, audio, PDFs, stickers, and unknown MIME types
+are skipped before the request is sent. Inline data URLs are validated to ensure
+they use an `image/*` MIME type.
