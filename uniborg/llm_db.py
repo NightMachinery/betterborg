@@ -30,7 +30,7 @@ API_KEY_CONFIG = {
     "gemini": {
         "name": "Gemini",
         "url": "https://aistudio.google.com/app/apikey",
-        "regex": r"^(?P<gemini_key>AIza[0-9A-Za-z_-]{30,50})$",
+        "regex": r"^(?P<gemini_key>(?!sk-or-v1-)(?!sk-)[A-Za-z0-9_.-]{20,200})\Z",
         "welcome_message": "**Welcome! To use this service, I need a Gemini API key.**",
     },
     "openrouter": {
