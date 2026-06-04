@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from telethon import events
+from telethon.errors import BotMethodInvalidError
 
 from uniborg import util
 from uniborg.export_util import (
@@ -97,7 +98,10 @@ async def history_export_handler(event):
     if not (await util.isAdmin(event) and event.message.forward is None):
         return
 
-    await event.delete()
+    try:
+        await event.delete()
+    except Exception:
+        pass
 
     started_at = time.monotonic()
     limit_arg = event.pattern_match.group("limit")
@@ -171,6 +175,18 @@ async def history_export_handler(event):
         )
         if state in _ACTIVE_EXPORTS:
             _ACTIVE_EXPORTS.remove(state)
+    except BotMethodInvalidError:
+        try:
+            await event.reply(
+                "This command is not available for bot accounts. "
+                "Run the bot in userbot mode to export history."
+            )
+        except Exception:
+            pass
+        state = locals().get("state")
+        if state in _ACTIVE_EXPORTS:
+            _ACTIVE_EXPORTS.remove(state)
+        print("HistoryExport: iter_messages not available for bots")
     except Exception:
         state = locals().get("state")
         if state in _ACTIVE_EXPORTS:
