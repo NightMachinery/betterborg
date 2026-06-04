@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import urlparse
 
 import openai
 
@@ -40,6 +41,33 @@ def _get_codex_auth():
     return token, headers, CODEX_BASE_URL
 
 
+def _is_image_data_url(url: str) -> bool:
+    """Return True when a URL is an inline data URL with an image MIME type."""
+    if not isinstance(url, str) or not url.startswith("data:"):
+        return False
+
+    metadata = url.split(",", 1)[0]
+    mime_type = metadata.removeprefix("data:").split(";", 1)[0].lower()
+    return mime_type.startswith("image/")
+
+
+def _is_supported_codex_image_url(url: str) -> bool:
+    """Codex image inputs support image data URLs and remote URLs.
+
+    Betterborg currently produces inline data URLs for Telegram attachments;
+    validate those strictly so video/audio/file parts cannot be forwarded as
+    OpenAI Responses `input_image` content. Remote URLs are preserved for any
+    future callers that pass them through.
+    """
+    if not isinstance(url, str) or not url:
+        return False
+    if url.startswith("data:"):
+        return _is_image_data_url(url)
+
+    scheme = urlparse(url).scheme.lower()
+    return scheme in {"http", "https"}
+
+
 async def _create_async_client() -> openai.AsyncOpenAI:
     token, headers, base_url = await asyncio.to_thread(_get_codex_auth)
     return openai.AsyncOpenAI(
@@ -57,7 +85,7 @@ def _content_part_to_codex(part: dict) -> Optional[dict]:
 
     if part_type == "image_url":
         image_url = (part.get("image_url") or {}).get("url")
-        if image_url:
+        if _is_supported_codex_image_url(image_url):
             return {
                 "type": "input_image",
                 "image_url": image_url,

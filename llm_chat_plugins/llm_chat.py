@@ -1173,6 +1173,7 @@ class ProcessContentResult:
 class MediaCapabilityCheckResult:
     """Dataclass for the return type of _check_media_capability."""
 
+    should_skip: bool = False
     has_warning: bool = False
     warnings: List[str] = field(default_factory=list)
 
@@ -3071,11 +3072,13 @@ def _check_media_capability(
 ) -> MediaCapabilityCheckResult:
     """
     Checks if the model supports the given media type and returns a consolidated
-    warning if not, tracking which warnings have been issued.
+    warning if not, tracking which warnings have been issued. Unsupported media
+    must always be skipped, even after its warning has already been emitted.
     """
     result = MediaCapabilityCheckResult()
 
     if media_type == "image" and not model_capabilities.get("vision", False):
+        result.should_skip = True
         if "image" not in issued_warnings:
             issued_warnings.add("image")
             result.has_warning = True
@@ -3083,6 +3086,7 @@ def _check_media_capability(
                 "Images were skipped because the current model does not support vision."
             )
     elif media_type == "audio" and not model_capabilities.get("audio_input", False):
+        result.should_skip = True
         if "audio" not in issued_warnings:
             issued_warnings.add("audio")
             result.has_warning = True
@@ -3090,6 +3094,7 @@ def _check_media_capability(
                 "Audio files were skipped because the current model does not support audio input."
             )
     elif media_type == "video" and not model_capabilities.get("video_input", False):
+        result.should_skip = True
         if "video" not in issued_warnings:
             issued_warnings.add("video")
             result.has_warning = True
@@ -3097,6 +3102,7 @@ def _check_media_capability(
                 "Video files were skipped because the current model does not support video input."
             )
     elif media_type == "pdf" and not model_capabilities.get("pdf_input", False):
+        result.should_skip = True
         if "pdf" not in issued_warnings:
             issued_warnings.add("pdf")
             result.has_warning = True
@@ -3104,6 +3110,7 @@ def _check_media_capability(
                 "PDF files were skipped because the current model does not support PDF input."
             )
     elif media_type is None:
+        result.should_skip = True
         if "unknown" not in issued_warnings:
             issued_warnings.add("unknown")
             result.has_warning = True
@@ -3162,7 +3169,7 @@ async def _process_media(
                     issued_warnings,
                     private_p=is_private,
                 )
-                if check_result.has_warning:
+                if check_result.should_skip:
                     return ProcessMediaResult(
                         media_part=None, warnings=check_result.warnings
                     )
@@ -3235,7 +3242,7 @@ async def _process_media(
             check_result = _check_media_capability(
                 media_type, model_capabilities, issued_warnings, private_p=is_private
             )
-            if check_result.has_warning:
+            if check_result.should_skip:
                 return ProcessMediaResult(
                     media_part=None, warnings=check_result.warnings
                 )
@@ -3308,7 +3315,7 @@ async def _process_media(
             check_result = _check_media_capability(
                 media_type, model_capabilities, issued_warnings, private_p=is_private
             )
-            if check_result.has_warning:
+            if check_result.should_skip:
                 return ProcessMediaResult(
                     media_part=None, warnings=check_result.warnings
                 )
