@@ -72,6 +72,7 @@ class PioneerBackendTests(unittest.TestCase):
         self.assertIs(prepared["store"], False)
         self.assertEqual(prepared["extra_headers"], {"X-API-Key": "pio_test_key"})
         self.assertEqual(prepared["reasoning_effort"], "high")
+        self.assertIn("reasoning_effort", prepared["allowed_openai_params"])
 
     def test_pioneer_reasoning_defaults_to_medium(self):
         self.assertEqual(self.llm_chat._pioneer_reasoning_effort(None, None), "medium")

@@ -2400,6 +2400,10 @@ def prepare_pioneer_api_kwargs(api_kwargs: dict, *, reasoning_effort: str = None
     prepared["extra_headers"] = headers
     if reasoning_effort:
         prepared["reasoning_effort"] = reasoning_effort
+        allowed_openai_params = list(prepared.get("allowed_openai_params") or [])
+        if "reasoning_effort" not in allowed_openai_params:
+            allowed_openai_params.append("reasoning_effort")
+        prepared["allowed_openai_params"] = allowed_openai_params
     return prepared
 
 

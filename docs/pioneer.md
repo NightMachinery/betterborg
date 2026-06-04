@@ -30,6 +30,8 @@ same per-user API key storage used by the other chat backends.
 
 Pioneer reasoning effort defaults to `medium`. A prefix-selected reasoning effort
 overrides `/setthink`; otherwise `/setthink` is used unless it is `disable`.
+Because Pioneer is reached through LiteLLM's OpenAI-compatible route, Betterborg
+adds `allowed_openai_params=["reasoning_effort"]` when sending that setting.
 
 Betterborg sends `store: false` on Pioneer calls so Pioneer does not persist the
 request/response payload for adaptive training or evaluation.
