@@ -18,6 +18,11 @@ GEMINI_PRO_LATEST = "gemini/gemini-3-pro-preview"
 OR_OPENAI_5_2 = "openrouter/openai/gpt-5.2"
 OR_OPENAI_LATEST = OR_OPENAI_5_2
 OPENAI_CODEX_GPT_5_5 = "openai-codex/gpt-5.5"
+
+PIONEER_BASE_URL = "https://api.pioneer.ai/v1"
+PIONEER_OPUS_4_8 = "pioneer/claude-opus-4-8"
+PIONEER_GPT_5_5 = "pioneer/gpt-5.5"
+PIONEER_SONNET_4_6 = "pioneer/claude-sonnet-4-6"
 ##
 CHAT_TITLE_MODEL = GEMINI_FLASH_LITE_LATEST
 ##

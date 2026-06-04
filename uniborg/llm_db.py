@@ -51,6 +51,12 @@ API_KEY_CONFIG = {
         "regex": r"^(?P<mistral_key>[a-zA-Z0-9]{30,100})$",
         "welcome_message": "**To use Mistral models, I need a Mistral AI API key.**",
     },
+    "pioneer": {
+        "name": "Pioneer",
+        "url": "https://pioneer.ai",
+        "regex": r"^(?P<pioneer_key>[A-Za-z0-9_.-]{20,200})\Z",
+        "welcome_message": "**To use Pioneer models, I need a Pioneer API key.**",
+    },
 }
 
 

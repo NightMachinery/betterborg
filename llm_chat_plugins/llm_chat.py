@@ -80,6 +80,10 @@ from uniborg.constants import (
     OR_OPENAI_5_2,
     OR_OPENAI_LATEST,
     OPENAI_CODEX_GPT_5_5,
+    PIONEER_BASE_URL,
+    PIONEER_OPUS_4_8,
+    PIONEER_GPT_5_5,
+    PIONEER_SONNET_4_6,
 )
 
 # Import live mode utilities
@@ -893,6 +897,9 @@ MODEL_CHOICES = {
 
 ADMIN_MODEL_CHOICES = {
     OPENAI_CODEX_GPT_5_5: "GPT-5.5 (Codex, Admin)",
+    PIONEER_OPUS_4_8: "Pioneer Opus 4.8 (Admin)",
+    PIONEER_GPT_5_5: "Pioneer GPT-5.5 (Admin)",
+    PIONEER_SONNET_4_6: "Pioneer Sonnet 4.6 (Admin)",
 }
 
 # Chat model options including "Not Set" option for removing chat-specific model
@@ -925,8 +932,20 @@ def _reasoning_levels_for_admin_p(admin_p: bool) -> list[str]:
     return ADMIN_REASONING_LEVELS if admin_p else REASONING_LEVELS
 
 
+def is_pioneer_model(model: str) -> bool:
+    return bool(model and model.startswith("pioneer/"))
+
+
+def pioneer_model_name(model: str) -> str:
+    return model.removeprefix("pioneer/")
+
+
 def _is_admin_only_model(model: str) -> bool:
-    return codex_util.is_codex_model(model) or model in ADMIN_MODEL_CHOICES
+    return (
+        codex_util.is_codex_model(model)
+        or is_pioneer_model(model)
+        or model in ADMIN_MODEL_CHOICES
+    )
 
 
 async def _can_user_access_model(event, model: str) -> bool:
@@ -2355,6 +2374,33 @@ def _strip_cache_control(messages: list) -> None:
     """Remove cache_control from all messages (used when caching is disabled for a key/model)."""
     for message in messages:
         message.pop("cache_control", None)
+
+
+def _pioneer_reasoning_effort(prefix_reasoning_effort, prefs_thinking) -> str:
+    reasoning_effort = prefix_reasoning_effort
+    if reasoning_effort is None and prefs_thinking != "disable":
+        reasoning_effort = prefs_thinking
+    return reasoning_effort or "medium"
+
+
+def prepare_pioneer_api_kwargs(api_kwargs: dict, *, reasoning_effort: str = None) -> dict:
+    """Rewrite Betterborg's pioneer/<id> model names for LiteLLM/OpenAI-compatible calls."""
+    model = api_kwargs.get("model")
+    if not is_pioneer_model(model):
+        return api_kwargs
+
+    prepared = api_kwargs.copy()
+    prepared["model"] = f"openai/{pioneer_model_name(model)}"
+    prepared["base_url"] = PIONEER_BASE_URL
+    prepared["store"] = False
+    headers = dict(prepared.get("extra_headers") or {})
+    api_key = prepared.get("api_key")
+    if api_key:
+        headers["X-API-Key"] = api_key
+    prepared["extra_headers"] = headers
+    if reasoning_effort:
+        prepared["reasoning_effort"] = reasoning_effort
+    return prepared
 
 
 def is_cache_storage_quota_error(exception) -> bool:
@@ -4152,6 +4198,12 @@ def register_handlers():
     )(set_mistral_key_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^/setpioneerkey{bot_username_suffix_re}(?:\s+(.*))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(set_pioneer_key_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/setmodel{bot_username_suffix_re}(?:\s+(.*))?\s*$",
             func=lambda e: e.is_private,
         )
@@ -4840,6 +4892,14 @@ async def set_deepseek_key_handler(event):
 async def set_mistral_key_handler(event):
     """Delegates /setmistralkey command logic to the shared module."""
     await llm_db.handle_set_key_command(event, "mistral")
+
+
+async def set_pioneer_key_handler(event):
+    """Delegates /setpioneerkey command logic to the shared module."""
+    if not await util.isAdmin(event):
+        await send_info_message(event, ADMIN_ONLY_COMMAND_IGNORED)
+        return
+    await llm_db.handle_set_key_command(event, "pioneer")
 
 
 async def key_submission_handler(event):
@@ -6873,6 +6933,7 @@ async def chat_handler(event):
         # --- Construct API call arguments ---
         is_gemini_model_p = is_gemini_model(model_in_use)
         is_codex_model_p = codex_util.is_codex_model(model_in_use)
+        is_pioneer_model_p = is_pioneer_model(model_in_use)
 
         # Image generation models don't support streaming
         # Note: Native Gemini image generation has separate handling with its own streaming
@@ -6931,6 +6992,15 @@ async def chat_handler(event):
             # Add modalities for image generation models
             if model_capabilities.get("image_generation", False):
                 api_kwargs["modalities"] = ["image", "text"]
+        elif is_pioneer_model_p:
+            pioneer_reasoning_effort = _pioneer_reasoning_effort(
+                prefix_result.reasoning_effort, prefs.thinking
+            )
+            api_kwargs = prepare_pioneer_api_kwargs(
+                api_kwargs, reasoning_effort=pioneer_reasoning_effort
+            )
+            if prefs.enabled_tools and WARN_UNAVAILABLE_TOOLS_P:
+                warnings.append("Tools are disabled for Pioneer models.")
         elif is_codex_model_p:
             codex_tools = []
             if "googleSearch" in prefs.enabled_tools:
