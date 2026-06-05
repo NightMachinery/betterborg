@@ -127,6 +127,8 @@ PREFIX_MODEL_MAPPING = {
 }
 
 ADMIN_PREFIX_MODEL_MAPPING = {
+    ".sn": (PIONEER_SONNET_4_6, None),
+    ".o": (PIONEER_OPUS_4_8, None),
     ".cl": (OPENAI_CODEX_GPT_5_5, "low"),
     ".cm": (OPENAI_CODEX_GPT_5_5, "medium"),
     ".ch": (OPENAI_CODEX_GPT_5_5, "high"),
@@ -4541,7 +4543,9 @@ async def help_handler(event):
         "- `.c` / `.cm` → Codex GPT-5.5 (medium, admin-only)\n"
         "- `.cl` → Codex GPT-5.5 (low, admin-only)\n"
         "- `.ch` → Codex GPT-5.5 (high, admin-only)\n"
-        "- `.cx` → Codex GPT-5.5 (xhigh, admin-only)"
+        "- `.cx` → Codex GPT-5.5 (xhigh, admin-only)\n"
+        "- `.sn` → Pioneer Sonnet 4.6 (admin-only)\n"
+        "- `.o` → Pioneer Opus 4.8 (admin-only)"
         if is_admin
         else "- `.c` → GPT-5.2 (OpenRouter): Latest OpenAI model on OpenRouter"
     )

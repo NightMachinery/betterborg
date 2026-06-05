@@ -6,6 +6,7 @@ import unittest
 from uniborg import llm_util
 from uniborg import pioneer_util
 from uniborg.constants import (
+    GEMINI_FLASH_LATEST,
     PIONEER_GPT_5_5,
     PIONEER_OPUS_4_8,
     PIONEER_SONNET_4_6,
@@ -96,6 +97,42 @@ class PioneerBackendTests(unittest.TestCase):
             ),
             [{"type": "web_search"}],
         )
+
+    def test_pioneer_admin_prefixes_select_pioneer_models(self):
+        sonnet = self.llm_chat._detect_and_process_message_prefix(
+            ".sn hello", admin_p=True
+        )
+        opus = self.llm_chat._detect_and_process_message_prefix(
+            ".o hello", admin_p=True
+        )
+
+        self.assertEqual(sonnet.model, PIONEER_SONNET_4_6)
+        self.assertIsNone(sonnet.reasoning_effort)
+        self.assertEqual(sonnet.processed_text, "hello")
+        self.assertEqual(opus.model, PIONEER_OPUS_4_8)
+        self.assertIsNone(opus.reasoning_effort)
+        self.assertEqual(opus.processed_text, "hello")
+
+    def test_pioneer_admin_prefixes_are_admin_only(self):
+        sonnet = self.llm_chat._detect_and_process_message_prefix(
+            ".sn hello", admin_p=False
+        )
+        opus = self.llm_chat._detect_and_process_message_prefix(
+            ".o hello", admin_p=False
+        )
+
+        self.assertIsNone(sonnet.model)
+        self.assertEqual(sonnet.processed_text, ".sn hello")
+        self.assertIsNone(opus.model)
+        self.assertEqual(opus.processed_text, ".o hello")
+
+    def test_recent_context_prefix_still_combines_with_model_prefix(self):
+        result = self.llm_chat._detect_and_process_message_prefix(
+            ".s .f hello", admin_p=True
+        )
+
+        self.assertEqual(result.model, GEMINI_FLASH_LATEST)
+        self.assertEqual(result.processed_text, ".s hello")
 
     def test_pioneer_reasoning_defaults_to_medium(self):
         self.assertEqual(self.llm_chat._pioneer_reasoning_effort(None, None), "medium")

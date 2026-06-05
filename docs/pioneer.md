@@ -18,6 +18,11 @@ The Pioneer models are shown in chat model menus only for admins:
 - `pioneer/gpt-5.5` — Pioneer GPT-5.5
 - `pioneer/claude-sonnet-4-6` — Pioneer Sonnet 4.6
 
+Admin-only quick prefixes:
+
+- `.sn` — Pioneer Sonnet 4.6
+- `.o` — Pioneer Opus 4.8
+
 They are sent through Pioneer's OpenAI-compatible Responses API directly with
 the OpenAI Python client pointed at `https://api.pioneer.ai/v1`. Betterborg
 bypasses LiteLLM for Pioneer chat responses because LiteLLM's Responses bridge
