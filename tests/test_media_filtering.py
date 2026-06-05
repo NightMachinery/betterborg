@@ -122,5 +122,81 @@ class CodexMediaFilteringTests(unittest.TestCase):
         )
 
 
+class PioneerResponsesConversionTests(unittest.TestCase):
+    def test_pioneer_converts_images_and_pdf_files(self):
+        from uniborg import pioneer_util
+
+        _, converted = pioneer_util.messages_to_pioneer_responses(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hello"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,BBBB"},
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:video/webm;base64,AAAA"},
+                        },
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_id": "data:application/pdf;base64,CCCC",
+                                "format": "application/pdf",
+                                "filename": "doc.pdf",
+                            },
+                        },
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual(
+            converted,
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "hello"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,BBBB",
+                            "detail": "low",
+                        },
+                        {
+                            "type": "input_file",
+                            "file_data": "data:application/pdf;base64,CCCC",
+                            "filename": "doc.pdf",
+                        },
+                    ],
+                }
+            ],
+        )
+
+    def test_pioneer_preserves_assistant_text_only(self):
+        from uniborg import pioneer_util
+
+        instructions, converted = pioneer_util.messages_to_pioneer_responses(
+            [
+                {"role": "system", "content": "stable"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "previous answer"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,BBBB"},
+                        },
+                    ],
+                },
+            ]
+        )
+
+        self.assertEqual(instructions, "stable")
+        self.assertEqual(converted, [{"role": "assistant", "content": "previous answer"}])
+
+
 if __name__ == "__main__":
     unittest.main()

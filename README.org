@@ -152,7 +152,7 @@ See [[file:docs/codex_gpt55.md][docs/codex_gpt55.md]] and
 
 ** Pioneer
 =llm_chat= supports admin-menu-only Pioneer chat models through Pioneer's
-OpenAI-compatible endpoint. See [[file:docs/pioneer.md][docs/pioneer.md]].
+OpenAI-compatible Responses endpoint. See [[file:docs/pioneer.md][docs/pioneer.md]].
 
 ** learning
 Check out the already-mentioned [[https://github.com/uniborg/uniborg/tree/master/stdplugins][plugins]] directory to learn how to write your own, and consider reading [[http://telethon.readthedocs.io/][Telethon's documentation]].

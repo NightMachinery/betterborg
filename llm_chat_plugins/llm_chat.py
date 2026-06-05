@@ -80,7 +80,6 @@ from uniborg.constants import (
     OR_OPENAI_5_2,
     OR_OPENAI_LATEST,
     OPENAI_CODEX_GPT_5_5,
-    PIONEER_BASE_URL,
     PIONEER_OPUS_4_8,
     PIONEER_GPT_5_5,
     PIONEER_SONNET_4_6,
@@ -89,6 +88,7 @@ from uniborg.constants import (
 # Import live mode utilities
 from uniborg import gemini_live_util
 from uniborg import codex_util
+from uniborg import pioneer_util
 
 # Redis utilities for smart context state persistence
 from uniborg import redis_util
@@ -933,11 +933,11 @@ def _reasoning_levels_for_admin_p(admin_p: bool) -> list[str]:
 
 
 def is_pioneer_model(model: str) -> bool:
-    return bool(model and model.startswith("pioneer/"))
+    return pioneer_util.is_pioneer_model(model)
 
 
 def pioneer_model_name(model: str) -> str:
-    return model.removeprefix("pioneer/")
+    return pioneer_util.pioneer_model_name(model)
 
 
 def _is_admin_only_model(model: str) -> bool:
@@ -2390,40 +2390,6 @@ def pioneer_tools_from_enabled(enabled_tools: list[str]) -> list[dict]:
     return []
 
 
-def _add_allowed_openai_params(prepared: dict, params: list[str]) -> None:
-    allowed_openai_params = list(prepared.get("allowed_openai_params") or [])
-    for param in params:
-        if param not in allowed_openai_params:
-            allowed_openai_params.append(param)
-    if allowed_openai_params:
-        prepared["allowed_openai_params"] = allowed_openai_params
-
-
-def prepare_pioneer_api_kwargs(api_kwargs: dict, *, reasoning_effort: str = None) -> dict:
-    """Rewrite Betterborg's pioneer/<id> model names for LiteLLM/OpenAI-compatible calls."""
-    model = api_kwargs.get("model")
-    if not is_pioneer_model(model):
-        return api_kwargs
-
-    prepared = api_kwargs.copy()
-    prepared["model"] = f"openai/{pioneer_model_name(model)}"
-    prepared["base_url"] = PIONEER_BASE_URL
-    prepared["store"] = False
-    headers = dict(prepared.get("extra_headers") or {})
-    api_key = prepared.get("api_key")
-    if api_key:
-        headers["X-API-Key"] = api_key
-    prepared["extra_headers"] = headers
-    allowed_params = []
-    if reasoning_effort:
-        prepared["reasoning_effort"] = reasoning_effort
-        allowed_params.append("reasoning_effort")
-    if prepared.get("tools"):
-        allowed_params.extend(["tools", "tool_choice"])
-    _add_allowed_openai_params(prepared, allowed_params)
-    return prepared
-
-
 def is_cache_storage_quota_error(exception) -> bool:
     """Detect the free-tier 'cached content storage tokens' 429 (limit=0).
 
@@ -2789,6 +2755,10 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
     }
     if codex_util.is_codex_model(model):
         capabilities["vision"] = True
+        return capabilities
+    if pioneer_util.is_pioneer_model(model):
+        capabilities["vision"] = True
+        capabilities["pdf_input"] = True
         return capabilities
     try:
         capabilities["vision"] = litellm.supports_vision(model)
@@ -7063,9 +7033,8 @@ async def chat_handler(event):
             pioneer_reasoning_effort = _pioneer_reasoning_effort(
                 prefix_result.reasoning_effort, prefs.thinking
             )
-            api_kwargs = prepare_pioneer_api_kwargs(
-                api_kwargs, reasoning_effort=pioneer_reasoning_effort
-            )
+            if pioneer_reasoning_effort:
+                api_kwargs["reasoning_effort"] = pioneer_reasoning_effort
             unsupported_pioneer_tools = set(prefs.enabled_tools) - {"googleSearch"}
             if unsupported_pioneer_tools and WARN_UNAVAILABLE_TOOLS_P:
                 warnings.append("Only Google Search is supported for Pioneer models.")
@@ -7109,6 +7078,36 @@ async def chat_handler(event):
             finish_reason = (
                 None  # Native Gemini image generation doesn't provide finish_reason
             )
+        elif is_pioneer_model_p:
+            edit_interval = get_streaming_delay(model_in_use)
+            pioneer_task = asyncio.create_task(
+                pioneer_util.stream_pioneer_response(
+                    event=event,
+                    response_message=response_message,
+                    model=model_in_use,
+                    messages=messages,
+                    api_key=api_key,
+                    reasoning_effort=api_kwargs.get("reasoning_effort"),
+                    tools=api_kwargs.get("tools"),
+                    edit_interval=edit_interval,
+                )
+            )
+            add_active_llm_task(user_id, pioneer_task)
+            try:
+                pioneer_response = await pioneer_task
+                response_text = pioneer_response.text
+                finish_reason = pioneer_response.finish_reason
+                has_image = False
+            except asyncio.CancelledError:
+                await util.edit_message(
+                    response_message,
+                    f"{BOT_META_INFO_PREFIX}❌ Request was canceled.",
+                    append_p=True,
+                    parse_mode="md",
+                )
+                raise
+            finally:
+                remove_active_llm_task(user_id, pioneer_task)
         elif is_codex_model_p:
             edit_interval = get_streaming_delay(model_in_use)
             codex_task = asyncio.create_task(

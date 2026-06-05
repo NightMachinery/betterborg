@@ -4,8 +4,8 @@ import importlib
 import unittest
 
 from uniborg import llm_util
+from uniborg import pioneer_util
 from uniborg.constants import (
-    PIONEER_BASE_URL,
     PIONEER_GPT_5_5,
     PIONEER_OPUS_4_8,
     PIONEER_SONNET_4_6,
@@ -56,29 +56,28 @@ class PioneerBackendTests(unittest.TestCase):
     def test_pioneer_model_maps_to_pioneer_service(self):
         self.assertEqual(llm_util.get_service_from_model(PIONEER_GPT_5_5), "pioneer")
 
-    def test_prepare_pioneer_api_kwargs_rewrites_for_openai_compatible_litellm(self):
-        prepared = self.llm_chat.prepare_pioneer_api_kwargs(
-            {
-                "model": PIONEER_GPT_5_5,
-                "messages": [{"role": "user", "content": "hi"}],
-                "api_key": "pio_test_key",
-                "stream": True,
-                "tools": [{"type": "web_search"}],
-                "allowed_openai_params": ["existing_param"],
-            },
+    def test_prepare_pioneer_response_kwargs_uses_responses_api_shape(self):
+        instructions, input_messages = pioneer_util.messages_to_pioneer_responses(
+            [
+                {"role": "system", "content": "be helpful"},
+                {"role": "user", "content": "hi"},
+            ]
+        )
+        prepared = pioneer_util.prepare_pioneer_response_kwargs(
+            model=PIONEER_GPT_5_5,
+            instructions=instructions,
+            input_messages=input_messages,
             reasoning_effort="high",
+            tools=[{"type": "web_search"}],
         )
 
-        self.assertEqual(prepared["model"], "openai/gpt-5.5")
-        self.assertEqual(prepared["base_url"], PIONEER_BASE_URL)
+        self.assertEqual(prepared["model"], "gpt-5.5")
+        self.assertEqual(prepared["instructions"], "be helpful")
+        self.assertEqual(prepared["input"], [{"role": "user", "content": "hi"}])
         self.assertIs(prepared["store"], False)
-        self.assertEqual(prepared["extra_headers"], {"X-API-Key": "pio_test_key"})
-        self.assertEqual(prepared["reasoning_effort"], "high")
+        self.assertIs(prepared["stream"], True)
+        self.assertEqual(prepared["reasoning"], {"effort": "high"})
         self.assertEqual(prepared["tools"], [{"type": "web_search"}])
-        self.assertEqual(
-            prepared["allowed_openai_params"],
-            ["existing_param", "reasoning_effort", "tools", "tool_choice"],
-        )
 
     def test_pioneer_tools_map_google_search_only(self):
         self.assertEqual(
@@ -96,22 +95,6 @@ class PioneerBackendTests(unittest.TestCase):
                 ["googleSearch", "urlContext", "codeExecution"]
             ),
             [{"type": "web_search"}],
-        )
-
-    def test_allowed_openai_params_are_not_duplicated(self):
-        prepared = self.llm_chat.prepare_pioneer_api_kwargs(
-            {
-                "model": PIONEER_GPT_5_5,
-                "api_key": "pio_test_key",
-                "tools": [{"type": "web_search"}],
-                "allowed_openai_params": ["tools", "reasoning_effort"],
-            },
-            reasoning_effort="medium",
-        )
-
-        self.assertEqual(
-            prepared["allowed_openai_params"],
-            ["tools", "reasoning_effort", "tool_choice"],
         )
 
     def test_pioneer_reasoning_defaults_to_medium(self):
