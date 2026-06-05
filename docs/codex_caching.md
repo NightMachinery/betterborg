@@ -18,9 +18,11 @@ Codex requests use:
 - `store: false` — disables provider-side response persistence; it is not a
   cache opt-out.
 - `prompt_cache_key` — a deterministic, non-secret hash scoped to Betterborg,
-  Codex, model, chat, and user, to improve OpenAI cache routing.
-- `prompt_cache_retention: "24h"` — requests extended retention for supported
-  Codex/Responses models.
+  Codex, model, and chat, to improve OpenAI cache routing. It intentionally
+  does not include the Telegram user ID.
+
+Betterborg does not send `prompt_cache_retention` for Codex/ChatGPT-auth calls
+because that endpoint rejects the parameter.
 
 Betterborg still sends the full selected conversation context on each request;
 OpenAI decides which repeated prefix is served from cache.

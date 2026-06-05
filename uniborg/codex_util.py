@@ -27,8 +27,12 @@ def codex_model_name(model: str) -> str:
 
 
 def codex_prompt_cache_key(*, model: str, chat_id=None, user_id=None) -> str:
-    """Build a stable, non-secret cache routing key for Codex Responses calls."""
-    raw_key = f"betterborg:codex:{codex_model_name(model)}:chat:{chat_id}:user:{user_id}"
+    """Build a stable, non-secret cache routing key for Codex Responses calls.
+
+    ``user_id`` is accepted for backward compatibility with existing callers, but
+    cache affinity is intentionally scoped only by model and chat.
+    """
+    raw_key = f"betterborg:codex:{codex_model_name(model)}:chat:{chat_id}"
     return "bb-codex-" + hashlib.sha256(raw_key.encode("utf-8")).hexdigest()[:32]
 
 
@@ -110,7 +114,6 @@ def prepare_codex_response_kwargs(
     reasoning_effort: Optional[str] = None,
     tools: Optional[list[dict]] = None,
     prompt_cache_key: Optional[str] = None,
-    prompt_cache_retention: Optional[str] = None,
 ) -> dict:
     kwargs = {
         "model": codex_model_name(model),
@@ -123,8 +126,6 @@ def prepare_codex_response_kwargs(
         kwargs["reasoning"] = {"effort": reasoning_effort}
     if prompt_cache_key:
         kwargs["prompt_cache_key"] = prompt_cache_key
-    if prompt_cache_retention:
-        kwargs["prompt_cache_retention"] = prompt_cache_retention
     if tools:
         kwargs["tools"] = tools
     return kwargs
@@ -185,7 +186,6 @@ async def stream_codex_response(
     tools: Optional[list[dict]] = None,
     edit_interval: float = 0.8,
     prompt_cache_key: Optional[str] = None,
-    prompt_cache_retention: Optional[str] = None,
 ) -> CodexResponse:
     client = await _create_async_client()
     instructions, input_messages = messages_to_codex(messages)
@@ -197,7 +197,6 @@ async def stream_codex_response(
         reasoning_effort=reasoning_effort,
         tools=tools,
         prompt_cache_key=prompt_cache_key,
-        prompt_cache_retention=prompt_cache_retention,
     )
 
     response_text = ""

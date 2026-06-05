@@ -147,28 +147,31 @@ class CodexPromptCacheHintTests(unittest.TestCase):
         self.assertNotIn("123", key1)
         self.assertNotIn("456", key1)
 
-    def test_codex_response_kwargs_include_cache_hints(self):
+    def test_codex_response_kwargs_include_supported_cache_hint(self):
         kwargs = codex_util.prepare_codex_response_kwargs(
             model=OPENAI_CODEX_GPT_5_5,
             instructions="stable",
             input_messages=[{"role": "user", "content": "hello"}],
             prompt_cache_key="bb-codex-test",
-            prompt_cache_retention="24h",
         )
 
         self.assertIs(kwargs["store"], False)
         self.assertEqual(kwargs["prompt_cache_key"], "bb-codex-test")
-        self.assertEqual(kwargs["prompt_cache_retention"], "24h")
+        self.assertNotIn("prompt_cache_retention", kwargs)
 
-    def test_codex_prompt_cache_key_varies_by_scope(self):
+    def test_codex_prompt_cache_key_is_chat_scoped_not_user_scoped(self):
         key1 = codex_util.codex_prompt_cache_key(
             model=OPENAI_CODEX_GPT_5_5, chat_id=123, user_id=456
         )
         key2 = codex_util.codex_prompt_cache_key(
             model=OPENAI_CODEX_GPT_5_5, chat_id=123, user_id=789
         )
+        key3 = codex_util.codex_prompt_cache_key(
+            model=OPENAI_CODEX_GPT_5_5, chat_id=999, user_id=456
+        )
 
-        self.assertNotEqual(key1, key2)
+        self.assertEqual(key1, key2)
+        self.assertNotEqual(key1, key3)
 
 
 if __name__ == "__main__":

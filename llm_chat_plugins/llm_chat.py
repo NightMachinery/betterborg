@@ -7138,7 +7138,6 @@ async def chat_handler(event):
                     prompt_cache_key=codex_util.codex_prompt_cache_key(
                         model=model_in_use, chat_id=chat_id, user_id=user_id
                     ),
-                    prompt_cache_retention="24h",
                 )
             )
             add_active_llm_task(user_id, codex_task)
