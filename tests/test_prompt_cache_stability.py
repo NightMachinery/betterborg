@@ -5,7 +5,11 @@ import re
 import unittest
 
 from uniborg import codex_util
-from uniborg.constants import OPENAI_CODEX_GPT_5_5
+from uniborg.constants import (
+    GEMINI_FLASH_LATEST,
+    GEMINI_FLASH_LITE_LATEST,
+    OPENAI_CODEX_GPT_5_5,
+)
 
 
 class _FakeLoop:
@@ -80,6 +84,53 @@ class RuntimeContextPlacementTests(unittest.TestCase):
         self.llm_chat.append_runtime_context_to_latest_user_message(history, "now")
 
         self.assertEqual(history[-1], {"role": "user", "content": "Runtime context:\nnow"})
+
+
+class ModelPrefixAfterMentionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.llm_chat = _load_llm_chat()
+
+    def setUp(self):
+        self.original_bot_username = self.llm_chat.BOT_USERNAME
+        self.llm_chat.BOT_USERNAME = "@vlm_chat_bot"
+
+    def tearDown(self):
+        self.llm_chat.BOT_USERNAME = self.original_bot_username
+
+    def _detect_after_leading_mention_strip(self, text: str):
+        normalized = self.llm_chat.strip_leading_bot_username(text)
+        return self.llm_chat._detect_and_process_message_prefix(normalized)
+
+    def test_leading_mention_then_flash_prefix(self):
+        result = self._detect_after_leading_mention_strip("@vlm_chat_bot .f hello")
+
+        self.assertEqual(result.model, GEMINI_FLASH_LATEST)
+        self.assertEqual(result.processed_text, "hello")
+
+    def test_leading_mention_then_flash_lite_prefix(self):
+        result = self._detect_after_leading_mention_strip("@vlm_chat_bot .fl hello")
+
+        self.assertEqual(result.model, GEMINI_FLASH_LITE_LATEST)
+        self.assertEqual(result.processed_text, "hello")
+
+    def test_leading_mention_recent_mode_keeps_existing_prefix_behavior(self):
+        result = self._detect_after_leading_mention_strip("@vlm_chat_bot .s .f hello")
+
+        self.assertEqual(result.model, GEMINI_FLASH_LATEST)
+        self.assertEqual(result.processed_text, ".s hello")
+
+    def test_non_leading_mention_does_not_enable_prefix(self):
+        result = self._detect_after_leading_mention_strip("hello @vlm_chat_bot .f")
+
+        self.assertIsNone(result.model)
+        self.assertEqual(result.processed_text, "hello @vlm_chat_bot .f")
+
+    def test_direct_prefix_still_works(self):
+        result = self.llm_chat._detect_and_process_message_prefix(".f hello")
+
+        self.assertEqual(result.model, GEMINI_FLASH_LATEST)
+        self.assertEqual(result.processed_text, "hello")
 
 
 class CodexPromptCacheHintTests(unittest.TestCase):

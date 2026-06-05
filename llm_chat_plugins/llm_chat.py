@@ -2331,15 +2331,30 @@ async def _retry_on_no_response_with_reasons(
     return final_response
 
 
+def strip_leading_bot_username(text: str) -> str:
+    """Strip a leading bot @username mention from text, preserving other mentions."""
+    stripped = (text or "").strip()
+    if not stripped or not BOT_USERNAME:
+        return stripped
+
+    return re.sub(
+        rf"^{re.escape(BOT_USERNAME)}(?:\s+|$)",
+        "",
+        stripped,
+        count=1,
+        flags=re.IGNORECASE,
+    ).strip()
+
+
 def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
     """Checks if text starts with a known command, with optional bot username stripping."""
-    text = text.strip()
+    if not text:
+        return False
 
-    # Strip bot username if requested
-    if strip_bot_username and BOT_USERNAME:
-        text = re.sub(
-            re.escape(BOT_USERNAME) + r"\b", "", text, flags=re.IGNORECASE
-        ).strip()
+    if strip_bot_username:
+        text = strip_leading_bot_username(text)
+    else:
+        text = text.strip()
 
     if not text:
         return False
@@ -3663,10 +3678,8 @@ async def _process_message_content(
     if processed_text:
         processed_text = processed_text.split(BOT_META_INFO_LINE, 1)[0].strip()
 
-    if role == "user" and processed_text and BOT_USERNAME:
-        stripped = processed_text.strip()
-        if stripped.startswith(BOT_USERNAME):
-            processed_text = stripped[len(BOT_USERNAME) :].strip()
+    if role == "user" and processed_text:
+        processed_text = strip_leading_bot_username(processed_text)
 
     if role == "user" and processed_text:
         if re.match(r"^\.s\b", processed_text):
@@ -6255,9 +6268,7 @@ async def _determine_context_mode_and_handle_transitions(
 
     # Standard separator logic for group chats or explicit "until_separator" mode
     elif context_mode_to_use == "until_separator" and event.text and not group_id:
-        text_to_check = event.text.strip()
-        if BOT_USERNAME and text_to_check.startswith(BOT_USERNAME):
-            text_to_check = text_to_check[len(BOT_USERNAME) :].strip()
+        text_to_check = strip_leading_bot_username(event.text)
 
         if text_to_check == CONTEXT_SEPARATOR:
             if not IS_BOT:
@@ -6863,8 +6874,9 @@ async def chat_handler(event):
     # --- ENDED: Context and Separator Logic ---
 
     # Detect model prefix and process message text
+    prefix_text = strip_leading_bot_username(event.text)
     prefix_result = _detect_and_process_message_prefix(
-        event.text, admin_p=user_is_admin
+        prefix_text, admin_p=user_is_admin
     )
 
     # Audio URL Magic: Check if message contains only a URL pointing to audio
@@ -6901,14 +6913,14 @@ async def chat_handler(event):
         await llm_db.request_api_key_message(event, service_needed)
         return
 
-    if event.text and re.match(r"^\.s\b", event.text):
+    if prefix_text and re.match(r"^\.s\b", prefix_text):
         RECENT_WAIT_TIME = 1
         override_chat_context_mode[event.chat_id] = "recent"
         await asyncio.sleep(RECENT_WAIT_TIME)
         # Pop the recent mode after waiting
         override_chat_context_mode.pop(event.chat_id, None)
         context_mode_to_use = "recent"
-        event.message.text = event.text[2:].strip()
+        event.message.text = prefix_text[2:].strip()
         event.text = event.message.text  #: might be redundant
 
         response_message = await send_info_message(
