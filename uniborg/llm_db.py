@@ -60,6 +60,39 @@ API_KEY_CONFIG = {
 }
 
 
+def _service_command_name(service: str) -> str:
+    return f"set{service}key"
+
+
+def api_key_command_pattern(service: str, bot_username: str | None = None) -> str:
+    """Return the canonical /set<service>key command pattern.
+
+    The returned regex is anchored, case-insensitive, captures an optional inline
+    key as group 1, and can accept a concrete @bot username suffix when supplied.
+    """
+    command = re.escape(_service_command_name(service))
+    username_suffix = ""
+    if bot_username:
+        normalized_username = (
+            bot_username if bot_username.startswith("@") else f"@{bot_username}"
+        )
+        username_suffix = f"(?:{re.escape(normalized_username)})?"
+    return rf"(?i)^/{command}{username_suffix}(?:\s+(.*))?\s*$"
+
+
+def gemini_api_key_command_pattern(bot_username: str | None = None) -> str:
+    """Return the canonical /setgeminikey command pattern."""
+    return api_key_command_pattern("gemini", bot_username=bot_username)
+
+
+def validate_api_key_format(service: str, key: str) -> bool:
+    """Validate an API key against the centralized service config."""
+    config = API_KEY_CONFIG.get(service)
+    if not config or not isinstance(key, str):
+        return False
+    return re.fullmatch(config["regex"], key) is not None
+
+
 # --- Database Setup ---
 
 Base = declarative_base()
@@ -361,7 +394,7 @@ async def handle_set_key_command(event, service: str):
 
     if api_key_match and api_key_match.strip():
         api_key = api_key_match.strip()
-        if not re.match(config["regex"], api_key):
+        if not validate_api_key_format(service, api_key):
             await send_info_message(
                 event,
                 f"The provided API key has an invalid format for {config['name']}. Please check and try again.",
@@ -411,7 +444,7 @@ async def handle_key_submission(
         )
         return
 
-    if not re.match(config["regex"], text):
+    if not validate_api_key_format(service, text):
         API_KEY_ATTEMPTS[user_id] = API_KEY_ATTEMPTS.get(user_id, 0) + 1
         if API_KEY_ATTEMPTS[user_id] >= MAX_KEY_ATTEMPTS:
             cancel_key_flow(user_id)

@@ -4208,7 +4208,7 @@ def register_handlers():
     )(log_handler)
     borg.on(
         events.NewMessage(
-            pattern=rf"(?i)^/setgeminikey{bot_username_suffix_re}(?:\s+(.*))?\s*$",
+            pattern=llm_db.gemini_api_key_command_pattern(BOT_USERNAME),
             func=lambda e: e.is_private,
         )
     )(set_key_handler)
