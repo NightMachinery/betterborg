@@ -2383,6 +2383,22 @@ def _pioneer_reasoning_effort(prefix_reasoning_effort, prefs_thinking) -> str:
     return reasoning_effort or "medium"
 
 
+def pioneer_tools_from_enabled(enabled_tools: list[str]) -> list[dict]:
+    """Map Betterborg tool toggles to Pioneer/OpenAI-compatible built-in tools."""
+    if "googleSearch" in (enabled_tools or []):
+        return [{"type": "web_search"}]
+    return []
+
+
+def _add_allowed_openai_params(prepared: dict, params: list[str]) -> None:
+    allowed_openai_params = list(prepared.get("allowed_openai_params") or [])
+    for param in params:
+        if param not in allowed_openai_params:
+            allowed_openai_params.append(param)
+    if allowed_openai_params:
+        prepared["allowed_openai_params"] = allowed_openai_params
+
+
 def prepare_pioneer_api_kwargs(api_kwargs: dict, *, reasoning_effort: str = None) -> dict:
     """Rewrite Betterborg's pioneer/<id> model names for LiteLLM/OpenAI-compatible calls."""
     model = api_kwargs.get("model")
@@ -2398,12 +2414,13 @@ def prepare_pioneer_api_kwargs(api_kwargs: dict, *, reasoning_effort: str = None
     if api_key:
         headers["X-API-Key"] = api_key
     prepared["extra_headers"] = headers
+    allowed_params = []
     if reasoning_effort:
         prepared["reasoning_effort"] = reasoning_effort
-        allowed_openai_params = list(prepared.get("allowed_openai_params") or [])
-        if "reasoning_effort" not in allowed_openai_params:
-            allowed_openai_params.append("reasoning_effort")
-        prepared["allowed_openai_params"] = allowed_openai_params
+        allowed_params.append("reasoning_effort")
+    if prepared.get("tools"):
+        allowed_params.extend(["tools", "tool_choice"])
+    _add_allowed_openai_params(prepared, allowed_params)
     return prepared
 
 
@@ -7040,14 +7057,18 @@ async def chat_handler(event):
             if model_capabilities.get("image_generation", False):
                 api_kwargs["modalities"] = ["image", "text"]
         elif is_pioneer_model_p:
+            pioneer_tools = pioneer_tools_from_enabled(prefs.enabled_tools)
+            if pioneer_tools:
+                api_kwargs["tools"] = pioneer_tools
             pioneer_reasoning_effort = _pioneer_reasoning_effort(
                 prefix_result.reasoning_effort, prefs.thinking
             )
             api_kwargs = prepare_pioneer_api_kwargs(
                 api_kwargs, reasoning_effort=pioneer_reasoning_effort
             )
-            if prefs.enabled_tools and WARN_UNAVAILABLE_TOOLS_P:
-                warnings.append("Tools are disabled for Pioneer models.")
+            unsupported_pioneer_tools = set(prefs.enabled_tools) - {"googleSearch"}
+            if unsupported_pioneer_tools and WARN_UNAVAILABLE_TOOLS_P:
+                warnings.append("Only Google Search is supported for Pioneer models.")
         elif is_codex_model_p:
             codex_tools = []
             if "googleSearch" in prefs.enabled_tools:

@@ -63,6 +63,8 @@ class PioneerBackendTests(unittest.TestCase):
                 "messages": [{"role": "user", "content": "hi"}],
                 "api_key": "pio_test_key",
                 "stream": True,
+                "tools": [{"type": "web_search"}],
+                "allowed_openai_params": ["existing_param"],
             },
             reasoning_effort="high",
         )
@@ -72,7 +74,45 @@ class PioneerBackendTests(unittest.TestCase):
         self.assertIs(prepared["store"], False)
         self.assertEqual(prepared["extra_headers"], {"X-API-Key": "pio_test_key"})
         self.assertEqual(prepared["reasoning_effort"], "high")
-        self.assertIn("reasoning_effort", prepared["allowed_openai_params"])
+        self.assertEqual(prepared["tools"], [{"type": "web_search"}])
+        self.assertEqual(
+            prepared["allowed_openai_params"],
+            ["existing_param", "reasoning_effort", "tools", "tool_choice"],
+        )
+
+    def test_pioneer_tools_map_google_search_only(self):
+        self.assertEqual(
+            self.llm_chat.pioneer_tools_from_enabled(["googleSearch"]),
+            [{"type": "web_search"}],
+        )
+        self.assertEqual(
+            self.llm_chat.pioneer_tools_from_enabled(
+                ["urlContext", "codeExecution"]
+            ),
+            [],
+        )
+        self.assertEqual(
+            self.llm_chat.pioneer_tools_from_enabled(
+                ["googleSearch", "urlContext", "codeExecution"]
+            ),
+            [{"type": "web_search"}],
+        )
+
+    def test_allowed_openai_params_are_not_duplicated(self):
+        prepared = self.llm_chat.prepare_pioneer_api_kwargs(
+            {
+                "model": PIONEER_GPT_5_5,
+                "api_key": "pio_test_key",
+                "tools": [{"type": "web_search"}],
+                "allowed_openai_params": ["tools", "reasoning_effort"],
+            },
+            reasoning_effort="medium",
+        )
+
+        self.assertEqual(
+            prepared["allowed_openai_params"],
+            ["tools", "reasoning_effort", "tool_choice"],
+        )
 
     def test_pioneer_reasoning_defaults_to_medium(self):
         self.assertEqual(self.llm_chat._pioneer_reasoning_effort(None, None), "medium")

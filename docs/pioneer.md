@@ -26,6 +26,15 @@ They are sent to LiteLLM as OpenAI-compatible calls by rewriting
 Admins can set the Pioneer key with `/setpioneerkey`. The key is stored using the
 same per-user API key storage used by the other chat backends.
 
+## Tools
+
+Pioneer docs describe OpenAI-compatible chat/completions and Responses endpoints,
+but do not explicitly document every built-in tool. Betterborg maps the existing
+`googleSearch` toggle to the OpenAI-compatible built-in tool
+`{"type": "web_search"}` for Pioneer requests.
+
+`urlContext` and `codeExecution` are not mapped for Pioneer.
+
 ## Reasoning, storage, and caching
 
 Pioneer reasoning effort defaults to `medium`. A prefix-selected reasoning effort
