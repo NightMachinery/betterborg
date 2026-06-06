@@ -19,7 +19,7 @@ MODE_CONFIG = {
     #: Invisible mention: silent pings, with a visible "@all" header.
     "all": {"limit": 10, "header": lambda event: "@all\n"},
     #: Full mention: visible @name links, no header.
-    "allf": {"limit": 50, "header": lambda event: ""},
+    "allf": {"limit": 4, "header": lambda event: ""},
     #: IDs: human-readable dump of name/username/id.
     "allids": {"limit": 50, "header": _ids_header},
 }
