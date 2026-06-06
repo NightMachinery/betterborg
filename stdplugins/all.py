@@ -25,6 +25,44 @@ MODE_CONFIG = {
 }
 
 
+def _should_skip_participant(user):
+    return bool(getattr(user, "bot", False) or getattr(user, "is_self", False))
+
+
+def _format_user(mode, user):
+    if mode == "allids":
+        return f"{user.first_name} {user.last_name} ({user.username}): id={user.id}\n"
+    elif mode == "allf":
+        name = user.username or user.first_name or user.last_name or "NA"
+        return f"[@{name}](tg://user?id={user.id})\n"
+    elif mode == "all":
+        return f"[⁣](tg://user?id={user.id})"
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
+
+async def _iter_mention_messages(mode, event, participants):
+    config = MODE_CONFIG[mode]
+    mention_limit = config["limit"]
+    current_mentions = 0
+    mentions = config["header"](event)
+
+    async for user in participants:
+        if _should_skip_participant(user):
+            continue
+
+        if current_mentions >= mention_limit:
+            yield mentions
+            current_mentions = 0
+            mentions = config["header"](event)
+
+        current_mentions += 1
+        mentions += _format_user(mode, user)
+
+    if current_mentions > 0:
+        yield mentions
+
+
 @borg.on(events.NewMessage(pattern=r"(?i)^(?:\.|@)(all|allf|allIDs)$"))
 async def _(event):
     if event.fwd_from:
@@ -49,43 +87,9 @@ async def _(event):
             pass
 
     mode = event.pattern_match.group(1).lower()
-    config = MODE_CONFIG[mode]
-    mention_limit = config["limit"]
-    current_mentions = 0
-    mentions = ""
 
-    def reset_mentions():
-        nonlocal current_mentions
-        nonlocal mentions
-        current_mentions = 0
-        mentions = config["header"](event)
-
-    async def send_current_mentions():
-        nonlocal mentions
-        nonlocal event
-
+    async for mentions in _iter_mention_messages(
+        mode, event, borg.iter_participants(input_chat, 9000)
+    ):
         ic(mentions)
-
         await event.respond(mentions, reply_to=event.message.reply_to_msg_id)
-        reset_mentions()
-
-    def format_user(x):
-        if mode == "allids":
-            return f"{x.first_name} {x.last_name} ({x.username}): id={x.id}\n"
-        elif mode == "allf":
-            name = x.username or x.first_name or x.last_name or "NA"
-            return f"[@{name}](tg://user?id={x.id})\n"
-        elif mode == "all":
-            return f"[⁣](tg://user?id={x.id})"
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
-
-    reset_mentions()
-    async for x in borg.iter_participants(input_chat, 9000):
-        if current_mentions < mention_limit:
-            current_mentions += 1
-            mentions += format_user(x)
-        else:
-            await send_current_mentions()
-    if current_mentions > 0:
-        await send_current_mentions()

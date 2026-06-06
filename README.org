@@ -118,6 +118,12 @@ Each plugin gets the =borg=, =logger= and =storage= magical [[https://github.com
 ** internals
 The core features offered by the custom =TelegramClient= live under the [[https://github.com/uniborg/uniborg/tree/master/uniborg][=uniborg/=]] directory, with some utilities, enhancements and the core plugin.
 
+** all mentions
+=stdplugins/all.py= adds admin-only =.all=/=@all=, =.allf=/=@allf=, and
+=.allIDs=/=@allIDs= commands for mentioning or listing chat participants. These
+commands skip Telegram bots and the Borg/userbot account itself before batching.
+See [[file:docs/all.md][docs/all.md]].
+
 ** history export
 =stdplugins/history_export.py= adds an admin-only =.export [number-of-messages=all]=
 command that silently writes a Telegram Desktop-style, text-only =result.json=
