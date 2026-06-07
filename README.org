@@ -131,6 +131,10 @@ cache and require bot admin status in the group. Set
 ~REACTION_HISTORY_CACHE_VERBOSITY_MODE=print_each_update~ to debug reaction
 delivery. See [[file:docs/llm_chat_reactions.md][docs/llm_chat_reactions.md]].
 
+** LLM chat prompting
+=llm_chat= appends a short instruction telling models to use injected metadata as
+context, not as reply wording. See [[file:docs/llm_chat_prompting.md][docs/llm_chat_prompting.md]].
+
 ** history export
 =stdplugins/history_export.py= adds an admin-only =.export [number-of-messages=all]=
 command that silently writes a Telegram Desktop-style, text-only =result.json=

@@ -1175,6 +1175,11 @@ You are a helpful and knowledgeable assistant. Your primary audience is advanced
 
 DEFAULT_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT_V3 + BIDI_PROMPT
 
+METADATA_CONTEXT_PROMPT = """
+# Context Metadata
+Use injected metadata only as context, not as wording or output format. Do not quote or imitate metadata labels such as `[Replying to ...]`, `[Forwarded ...]`, `[Media-ID: ...]`, sender/timestamp prefixes, reaction summaries, or runtime context unless the user explicitly asks for raw logs/context.
+"""
+
 GROUP_CHAT_ETIQUETTE_PROMPT = """
 # Group Chat Etiquette
 This is a group chat with multiple participants. Be EXTREMELY concise:
@@ -3534,7 +3539,7 @@ def get_system_prompt_info(
         source = "default"
 
     # Build additional context sections
-    additional_sections = []
+    additional_sections = [METADATA_CONTEXT_PROMPT]
 
     # Add group chat etiquette for group chats using default prompt
     if (

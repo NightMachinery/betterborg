@@ -3,6 +3,7 @@ import builtins
 import importlib
 import re
 import unittest
+from unittest.mock import patch
 
 from uniborg import codex_util
 from uniborg.constants import (
@@ -53,6 +54,48 @@ class RuntimeContextPlacementTests(unittest.TestCase):
         info = self.llm_chat.get_system_prompt_info(Event())
 
         self.assertNotIn("Current date and time", info.effective_prompt)
+
+    def test_system_prompt_includes_metadata_context_instruction(self):
+        class Event:
+            sender_id = 1
+            chat_id = 2
+            is_private = True
+
+        info = self.llm_chat.get_system_prompt_info(Event())
+
+        self.assertIn("Use injected metadata only as context", info.effective_prompt)
+        self.assertIn("not as wording or output format", info.effective_prompt)
+
+    def test_metadata_context_instruction_applies_to_custom_chat_prompt(self):
+        class Event:
+            sender_id = 1
+            chat_id = 2
+            is_private = True
+
+        with patch.object(
+            self.llm_chat.chat_manager, "get_system_prompt", return_value="custom chat"
+        ):
+            info = self.llm_chat.get_system_prompt_info(Event())
+
+        self.assertEqual(info.source, "chat")
+        self.assertTrue(info.effective_prompt.startswith("custom chat"))
+        self.assertIn("Use injected metadata only as context", info.effective_prompt)
+
+    def test_metadata_context_instruction_applies_to_custom_user_prompt(self):
+        class Event:
+            sender_id = 1
+            chat_id = 2
+            is_private = True
+
+        prefs = self.llm_chat.UserPrefs(system_prompt="custom user")
+        with patch.object(
+            self.llm_chat.chat_manager, "get_system_prompt", return_value=None
+        ), patch.object(self.llm_chat.user_manager, "get_prefs", return_value=prefs):
+            info = self.llm_chat.get_system_prompt_info(Event())
+
+        self.assertEqual(info.source, "user")
+        self.assertTrue(info.effective_prompt.startswith("custom user"))
+        self.assertIn("Use injected metadata only as context", info.effective_prompt)
 
     def test_runtime_context_appends_to_latest_string_user_turn(self):
         history = [
