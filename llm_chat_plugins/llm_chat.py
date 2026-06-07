@@ -27,7 +27,6 @@ import pytz
 from pathlib import Path
 from shutil import rmtree
 from itertools import groupby
-from collections import OrderedDict
 
 import httpx
 import litellm
@@ -40,18 +39,13 @@ from litellm.llms.vertex_ai.gemini.transformation import (
 from google import genai
 from google.genai import types
 from google.api_core import exceptions as google_exceptions
-from telethon import events, errors, utils as telethon_utils
+from telethon import events, errors
 from telethon.tl.functions.messages import GetMessagesReactionsRequest
 from telethon.tl.types import (
     BotCommand,
     BotCommandScopeDefault,
     KeyboardButtonCallback,
     Message,
-    MessagePeerReaction,
-    MessageReactions,
-    ReactionCount,
-    UpdateBotMessageReaction,
-    UpdateBotMessageReactions,
     UpdateMessageReactions,
 )
 from pydantic import BaseModel, Field
@@ -61,385 +55,6 @@ from enum import Enum
 
 
 REACTION_REFRESH_CHUNK_SIZE = 100
-REACTION_CACHE_MAX_MESSAGES = 2000
-REACTION_HISTORY_CACHE_VERBOSITY_MODE = os.environ.get(
-    "REACTION_HISTORY_CACHE_VERBOSITY_MODE", "silent"
-)
-REACTION_CACHE_DEBUG = True
-REACTION_CACHE_BY_CHAT_AND_MESSAGE = OrderedDict()
-REACTION_AGGREGATE_RESULTS_BY_CHAT_MESSAGE = OrderedDict()
-REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR = OrderedDict()
-
-
-def _reaction_history_cache_print_enabled(*modes):
-    mode = (REACTION_HISTORY_CACHE_VERBOSITY_MODE or "silent").lower()
-    return bool(REACTION_CACHE_DEBUG and mode in modes)
-
-
-def _reaction_debug(*args):
-    if _reaction_history_cache_print_enabled("debug", "all"):
-        ic(*args)
-
-
-def _reaction_peer_summary(peer):
-    if peer is None:
-        return None
-    out = {"type": type(peer).__name__}
-    for attr in ("user_id", "chat_id", "channel_id"):
-        value = getattr(peer, attr, None)
-        if value is not None:
-            out[attr] = value
-    try:
-        out["peer_id"] = telethon_utils.get_peer_id(peer)
-    except Exception:
-        pass
-    return out
-
-
-def _reaction_summary_value(reaction):
-    if reaction is None:
-        return None
-    if hasattr(reaction, "emoticon"):
-        return getattr(reaction, "emoticon", None)
-    if hasattr(reaction, "document_id"):
-        return f"custom:{getattr(reaction, 'document_id', None)}"
-    return type(reaction).__name__
-
-
-def _reaction_list_summary(reactions):
-    return [_reaction_summary_value(reaction) for reaction in reactions or []]
-
-
-def _reaction_count_summary(results):
-    return [
-        {
-            "reaction": _reaction_summary_value(getattr(result, "reaction", None)),
-            "count": getattr(result, "count", None),
-            "chosen_order": getattr(result, "chosen_order", None),
-        }
-        for result in (results or [])
-    ]
-
-
-def _message_reactions_summary(reactions):
-    if reactions is None:
-        return None
-    recent = getattr(reactions, "recent_reactions", None) or []
-    return {
-        "type": type(reactions).__name__,
-        "min": getattr(reactions, "min", None),
-        "can_see_list": getattr(reactions, "can_see_list", None),
-        "results": _reaction_count_summary(getattr(reactions, "results", None)),
-        "recent_count": len(recent),
-        "recent": [
-            {
-                "peer": _reaction_peer_summary(getattr(entry, "peer_id", None)),
-                "reaction": _reaction_summary_value(getattr(entry, "reaction", None)),
-            }
-            for entry in recent[:10]
-        ],
-    }
-
-
-def _reaction_update_summary(update, key=None, reactions=None):
-    return {
-        "update_type": type(update).__name__,
-        "cache_key": key,
-        "peer": _reaction_peer_summary(getattr(update, "peer", None)),
-        "msg_id": getattr(update, "msg_id", None),
-        "actor": _reaction_peer_summary(getattr(update, "actor", None)),
-        "old_reactions": _reaction_list_summary(
-            getattr(update, "old_reactions", None)
-        ),
-        "new_reactions": _reaction_list_summary(
-            getattr(update, "new_reactions", None)
-        ),
-        "aggregate_update_reactions": _reaction_count_summary(
-            getattr(update, "reactions", None)
-        ),
-        "cached_reactions": _message_reactions_summary(reactions),
-        "reaction_cache_size": len(REACTION_CACHE_BY_CHAT_AND_MESSAGE),
-        "aggregate_cache_size": len(REACTION_AGGREGATE_RESULTS_BY_CHAT_MESSAGE),
-        "actor_cache_size": len(REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR),
-    }
-
-
-def _reaction_history_cache_print(label, **payload):
-    if not _reaction_history_cache_print_enabled(
-        "print_each_update", "debug", "all"
-    ):
-        return
-
-    print(
-        "LLM_Chat reaction_history_cache "
-        + label
-        + ": "
-        + json.dumps(payload, ensure_ascii=False, default=str, sort_keys=True),
-        flush=True,
-    )
-
-
-def _reaction_cache_key_from_peer(peer, msg_id):
-    try:
-        chat_id = telethon_utils.get_peer_id(peer)
-    except Exception:
-        chat_id = (
-            getattr(peer, "channel_id", None)
-            or getattr(peer, "chat_id", None)
-            or getattr(peer, "user_id", None)
-        )
-    if chat_id is None or msg_id is None:
-        return None
-    return (int(chat_id), int(msg_id))
-
-
-def _peer_cache_id(peer):
-    try:
-        return telethon_utils.get_peer_id(peer)
-    except Exception:
-        value = (
-            getattr(peer, "channel_id", None)
-            or getattr(peer, "chat_id", None)
-            or getattr(peer, "user_id", None)
-        )
-        return int(value) if value is not None else None
-
-
-def _cache_message_reactions(chat_id, msg_id, reactions):
-    if chat_id is None or msg_id is None or reactions is None:
-        return
-
-    key = (int(chat_id), int(msg_id))
-    REACTION_CACHE_BY_CHAT_AND_MESSAGE[key] = reactions
-    REACTION_CACHE_BY_CHAT_AND_MESSAGE.move_to_end(key)
-    while len(REACTION_CACHE_BY_CHAT_AND_MESSAGE) > REACTION_CACHE_MAX_MESSAGES:
-        REACTION_CACHE_BY_CHAT_AND_MESSAGE.popitem(last=False)
-
-
-def _cache_aggregate_reaction_results(chat_id, msg_id, results):
-    if chat_id is None or msg_id is None:
-        return
-
-    key = (int(chat_id), int(msg_id))
-    REACTION_AGGREGATE_RESULTS_BY_CHAT_MESSAGE[key] = list(results or [])
-    REACTION_AGGREGATE_RESULTS_BY_CHAT_MESSAGE.move_to_end(key)
-    while (
-        len(REACTION_AGGREGATE_RESULTS_BY_CHAT_MESSAGE)
-        > REACTION_CACHE_MAX_MESSAGES
-    ):
-        REACTION_AGGREGATE_RESULTS_BY_CHAT_MESSAGE.popitem(last=False)
-
-
-def _get_aggregate_reaction_results(chat_id, msg_id):
-    return REACTION_AGGREGATE_RESULTS_BY_CHAT_MESSAGE.get((int(chat_id), int(msg_id)))
-
-
-def _reaction_signature(reaction):
-    if hasattr(reaction, "emoticon"):
-        return (type(reaction).__name__, getattr(reaction, "emoticon", None))
-    if hasattr(reaction, "document_id"):
-        return (type(reaction).__name__, getattr(reaction, "document_id", None))
-    return (type(reaction).__name__, repr(reaction))
-
-
-def _reaction_key_to_reaction(reaction_by_key, reaction):
-    key = _reaction_signature(reaction)
-    reaction_by_key.setdefault(key, reaction)
-    return key
-
-
-def _remember_bot_reaction_actor_state(chat_id, msg_id, actor, reactions, date):
-    actor_id = _peer_cache_id(actor)
-    if actor_id is None:
-        return
-
-    state_key = (int(chat_id), int(msg_id), int(actor_id))
-    if reactions:
-        REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR[state_key] = (
-            actor,
-            list(reactions),
-            date,
-        )
-        REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR.move_to_end(state_key)
-    else:
-        REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR.pop(state_key, None)
-
-    while (
-        len(REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR)
-        > REACTION_CACHE_MAX_MESSAGES * 5
-    ):
-        REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR.popitem(last=False)
-
-
-def _message_reactions_from_actor_state(chat_id, msg_id):
-    reactions_by_key = {}
-    counts_by_key = {}
-    entries = []
-
-    for (cached_chat_id, cached_msg_id, _actor_id), (actor, reactions, date) in list(
-        REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR.items()
-    ):
-        if cached_chat_id != int(chat_id) or cached_msg_id != int(msg_id):
-            continue
-        for reaction in reactions:
-            reaction_key = _reaction_key_to_reaction(reactions_by_key, reaction)
-            counts_by_key[reaction_key] = counts_by_key.get(reaction_key, 0) + 1
-            entries.append(
-                MessagePeerReaction(peer_id=actor, date=date, reaction=reaction)
-            )
-
-    results = [
-        ReactionCount(reaction=reactions_by_key[key], count=count)
-        for key, count in counts_by_key.items()
-    ]
-    return MessageReactions(
-        results=results,
-        can_see_list=bool(entries),
-        recent_reactions=entries or None,
-    )
-
-
-def _actor_state_recent_entries(chat_id, msg_id):
-    entries = []
-    for (cached_chat_id, cached_msg_id, _actor_id), (actor, reactions, date) in list(
-        REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR.items()
-    ):
-        if cached_chat_id != int(chat_id) or cached_msg_id != int(msg_id):
-            continue
-        for reaction in reactions:
-            entries.append(
-                MessagePeerReaction(peer_id=actor, date=date, reaction=reaction)
-            )
-    return entries
-
-
-def _reaction_counts_from_results(results):
-    reactions_by_key = {}
-    counts_by_key = {}
-    for result in results or []:
-        reaction = getattr(result, "reaction", None)
-        if reaction is None:
-            continue
-        key = _reaction_key_to_reaction(reactions_by_key, reaction)
-        counts_by_key[key] = counts_by_key.get(key, 0) + int(
-            getattr(result, "count", 0) or 0
-        )
-    return reactions_by_key, counts_by_key
-
-
-def _reaction_results_from_counts(reactions_by_key, counts_by_key):
-    return [
-        ReactionCount(reaction=reactions_by_key[key], count=count)
-        for key, count in counts_by_key.items()
-        if count > 0
-    ]
-
-
-def _message_reactions_with_actor_recent(chat_id, msg_id, results):
-    entries = _actor_state_recent_entries(chat_id, msg_id)
-    return MessageReactions(
-        results=list(results or []),
-        can_see_list=bool(entries),
-        recent_reactions=entries or None,
-    )
-
-
-def _message_reactions_from_bot_reaction_update(update, chat_id, msg_id):
-    _remember_bot_reaction_actor_state(
-        chat_id,
-        msg_id,
-        getattr(update, "actor", None),
-        getattr(update, "new_reactions", None) or [],
-        getattr(update, "date", None),
-    )
-
-    # If Telegram gave us aggregate counts, preserve them and apply individual
-    # reaction deltas as they arrive. Otherwise, the best bot-visible state is
-    # the set of actors observed since startup.
-    aggregate_results = _get_aggregate_reaction_results(chat_id, msg_id)
-    if aggregate_results is not None:
-        reactions_by_key, counts_by_key = _reaction_counts_from_results(
-            aggregate_results
-        )
-        for reaction in getattr(update, "old_reactions", None) or []:
-            key = _reaction_key_to_reaction(reactions_by_key, reaction)
-            counts_by_key[key] = counts_by_key.get(key, 0) - 1
-        for reaction in getattr(update, "new_reactions", None) or []:
-            key = _reaction_key_to_reaction(reactions_by_key, reaction)
-            counts_by_key[key] = counts_by_key.get(key, 0) + 1
-        updated_results = _reaction_results_from_counts(reactions_by_key, counts_by_key)
-        _cache_aggregate_reaction_results(chat_id, msg_id, updated_results)
-        return _message_reactions_with_actor_recent(chat_id, msg_id, updated_results)
-
-    return _message_reactions_from_actor_state(chat_id, msg_id)
-
-
-def _message_reactions_from_bot_reactions_update(update, chat_id, msg_id):
-    results = list(getattr(update, "reactions", None) or [])
-    _cache_aggregate_reaction_results(chat_id, msg_id, results)
-    return _message_reactions_with_actor_recent(chat_id, msg_id, results)
-
-
-def _merge_reaction_cache_into_messages(chat_id, messages: List[Message]) -> int:
-    applied = 0
-    for message in messages or []:
-        msg_id = getattr(message, "id", None)
-        if msg_id is None:
-            continue
-        cached = REACTION_CACHE_BY_CHAT_AND_MESSAGE.get((int(chat_id), int(msg_id)))
-        if cached is not None and not getattr(message, "reactions", None):
-            message.reactions = cached
-            applied += 1
-    if applied:
-        _reaction_history_cache_print(
-            "cached_reactions_applied_to_history",
-            chat_id=chat_id,
-            applied=applied,
-            message_ids=[getattr(message, "id", None) for message in messages or []],
-        )
-        _reaction_debug("reaction cache applied", chat_id, applied)
-    return applied
-
-
-async def reaction_update_handler(event):
-    update = getattr(event, "original_update", event)
-    key = _reaction_cache_key_from_peer(
-        getattr(update, "peer", None), getattr(update, "msg_id", None)
-    )
-    if key is None:
-        _reaction_history_cache_print(
-            "reaction_update_received_but_not_cached",
-            update=_reaction_update_summary(update),
-            reason="missing peer/msg_id cache key",
-        )
-        return
-
-    if isinstance(update, UpdateMessageReactions):
-        reactions = getattr(update, "reactions", None)
-    elif isinstance(update, UpdateBotMessageReaction):
-        reactions = _message_reactions_from_bot_reaction_update(update, key[0], key[1])
-    elif isinstance(update, UpdateBotMessageReactions):
-        reactions = _message_reactions_from_bot_reactions_update(update, key[0], key[1])
-    else:
-        _reaction_history_cache_print(
-            "reaction_update_received_but_not_cached",
-            update=_reaction_update_summary(update, key),
-            reason="unsupported update type",
-        )
-        return
-
-    _cache_message_reactions(key[0], key[1], reactions)
-    _reaction_history_cache_print(
-        "reaction_update_cached",
-        update=_reaction_update_summary(update, key, reactions),
-    )
-    _reaction_debug(
-        "reaction update cached",
-        type(update).__name__,
-        key,
-        getattr(reactions, "results", None),
-        getattr(reactions, "recent_reactions", None),
-    )
 
 
 def _reaction_refresh_chunks(items, size):
@@ -473,14 +88,9 @@ async def _refresh_message_reactions(client, chat_id, messages: List[Message]) -
     if not messages:
         return
 
-    _merge_reaction_cache_into_messages(chat_id, messages)
+    await history_util.hydrate_message_reactions(chat_id, messages)
 
     if IS_BOT:
-        _reaction_debug(
-            "reaction refresh skipped for bot",
-            chat_id,
-            [getattr(message, "id", None) for message in messages],
-        )
         return
 
     messages_by_id = {
@@ -493,8 +103,7 @@ async def _refresh_message_reactions(client, chat_id, messages: List[Message]) -
 
     try:
         input_chat = await client.get_input_entity(chat_id)
-    except Exception as exc:
-        _reaction_debug("reaction input chat lookup failed", chat_id, type(exc).__name__, str(exc))
+    except Exception:
         return
 
     for message_ids in _reaction_refresh_chunks(
@@ -504,20 +113,20 @@ async def _refresh_message_reactions(client, chat_id, messages: List[Message]) -
             updates = await client(
                 GetMessagesReactionsRequest(peer=input_chat, id=message_ids)
             )
-        except Exception as exc:
-            _reaction_debug("reaction refresh failed", chat_id, message_ids, type(exc).__name__, str(exc))
+        except Exception:
             continue
 
-        seen_update = False
         for update in _iter_reaction_updates(updates):
-            seen_update = True
             message = messages_by_id.get(getattr(update, "msg_id", None))
             if message is not None:
                 reactions = getattr(update, "reactions", None)
                 message.reactions = reactions
-                _cache_message_reactions(chat_id, message.id, reactions)
-        if not seen_update:
-            _reaction_debug("reaction refresh returned no updates", chat_id, message_ids, type(updates).__name__)
+                await history_util.record_message_reactions(
+                    chat_id,
+                    message.id,
+                    reactions,
+                    updated_at=getattr(update, "date", None),
+                )
 
 
 # Import uniborg utilities and storage
@@ -5143,9 +4752,6 @@ def register_handlers():
     borg.on(events.NewMessage(func=is_valid_chat_message))(chat_handler)
 
     # Other Event Handlers
-    borg.on(events.Raw(UpdateMessageReactions))(reaction_update_handler)
-    borg.on(events.Raw(UpdateBotMessageReaction))(reaction_update_handler)
-    borg.on(events.Raw(UpdateBotMessageReactions))(reaction_update_handler)
     borg.on(events.CallbackQuery())(callback_handler)
 
     print("LLM_Chat: All event handlers registered.")
