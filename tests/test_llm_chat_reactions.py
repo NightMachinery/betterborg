@@ -7,8 +7,11 @@ from types import SimpleNamespace
 from telethon.tl.types import (
     MessageReactions,
     PeerChannel,
+    PeerUser,
     ReactionCount,
     ReactionEmoji,
+    UpdateBotMessageReaction,
+    UpdateBotMessageReactions,
     UpdateMessageReactions,
     Updates,
 )
@@ -69,6 +72,22 @@ class ReactionHydrationTests(unittest.TestCase):
     def setUpClass(cls):
         cls.llm_chat = _load_llm_chat()
 
+    def setUp(self):
+        self.original_is_bot = self.llm_chat.IS_BOT
+        self.original_reaction_debug = self.llm_chat.REACTION_CACHE_DEBUG
+        self.llm_chat.IS_BOT = None
+        self.llm_chat.REACTION_CACHE_DEBUG = False
+        self.llm_chat.REACTION_CACHE_BY_CHAT_AND_MESSAGE.clear()
+        self.llm_chat.REACTION_AGGREGATE_RESULTS_BY_CHAT_MESSAGE.clear()
+        self.llm_chat.REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR.clear()
+
+    def tearDown(self):
+        self.llm_chat.IS_BOT = self.original_is_bot
+        self.llm_chat.REACTION_CACHE_DEBUG = self.original_reaction_debug
+        self.llm_chat.REACTION_CACHE_BY_CHAT_AND_MESSAGE.clear()
+        self.llm_chat.REACTION_AGGREGATE_RESULTS_BY_CHAT_MESSAGE.clear()
+        self.llm_chat.REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR.clear()
+
     def test_refresh_populates_matching_message_reactions(self):
         reactions = _reaction_payload("❤️", 2)
         messages = [
@@ -111,6 +130,102 @@ class ReactionHydrationTests(unittest.TestCase):
     def test_refresh_failure_leaves_messages_unchanged(self):
         message = SimpleNamespace(id=1209, reactions=None)
         client = _FakeClient(fail_refresh=True)
+
+        asyncio.run(self.llm_chat._refresh_message_reactions(client, 123, [message]))
+
+        self.assertIsNone(message.reactions)
+        self.assertEqual(len(client.requests), 1)
+
+    def test_bot_refresh_uses_cached_individual_reaction_update(self):
+        update = UpdateBotMessageReaction(
+            peer=PeerChannel(123),
+            msg_id=1209,
+            date=None,
+            actor=PeerUser(456),
+            old_reactions=[],
+            new_reactions=[ReactionEmoji("👍")],
+            qts=0,
+        )
+        chat_id = self.llm_chat._reaction_cache_key_from_peer(update.peer, update.msg_id)[0]
+        message = SimpleNamespace(id=1209, reactions=None)
+        client = _FakeClient()
+
+        asyncio.run(self.llm_chat.reaction_update_handler(SimpleNamespace(original_update=update)))
+        self.llm_chat.IS_BOT = True
+        asyncio.run(self.llm_chat._refresh_message_reactions(client, chat_id, [message]))
+
+        self.assertEqual(client.requests, [])
+        self.assertEqual(message.reactions.results[0].count, 1)
+        self.assertEqual(message.reactions.results[0].reaction.emoticon, "👍")
+        self.assertEqual(message.reactions.recent_reactions[0].peer_id.user_id, 456)
+
+    def test_bot_refresh_uses_cached_aggregate_reactions_update(self):
+        update = UpdateBotMessageReactions(
+            peer=PeerChannel(123),
+            msg_id=1210,
+            date=None,
+            reactions=[ReactionCount(reaction=ReactionEmoji("❤️"), count=3)],
+            qts=0,
+        )
+        chat_id = self.llm_chat._reaction_cache_key_from_peer(update.peer, update.msg_id)[0]
+        message = SimpleNamespace(id=1210, reactions=None)
+        client = _FakeClient()
+
+        asyncio.run(self.llm_chat.reaction_update_handler(SimpleNamespace(original_update=update)))
+        self.llm_chat.IS_BOT = True
+        asyncio.run(self.llm_chat._refresh_message_reactions(client, chat_id, [message]))
+
+        self.assertEqual(client.requests, [])
+        self.assertEqual(message.reactions.results[0].count, 3)
+        self.assertEqual(message.reactions.results[0].reaction.emoticon, "❤️")
+
+
+    def test_individual_reaction_update_preserves_cached_aggregate_count(self):
+        aggregate_update = UpdateBotMessageReactions(
+            peer=PeerChannel(123),
+            msg_id=1211,
+            date=None,
+            reactions=[ReactionCount(reaction=ReactionEmoji("👍"), count=4)],
+            qts=0,
+        )
+        actor_update = UpdateBotMessageReaction(
+            peer=PeerChannel(123),
+            msg_id=1211,
+            date=None,
+            actor=PeerUser(456),
+            old_reactions=[],
+            new_reactions=[ReactionEmoji("❤️")],
+            qts=0,
+        )
+        chat_id = self.llm_chat._reaction_cache_key_from_peer(
+            aggregate_update.peer, aggregate_update.msg_id
+        )[0]
+        message = SimpleNamespace(id=1211, reactions=None)
+        client = _FakeClient()
+
+        asyncio.run(
+            self.llm_chat.reaction_update_handler(
+                SimpleNamespace(original_update=aggregate_update)
+            )
+        )
+        asyncio.run(
+            self.llm_chat.reaction_update_handler(
+                SimpleNamespace(original_update=actor_update)
+            )
+        )
+        self.llm_chat.IS_BOT = True
+        asyncio.run(self.llm_chat._refresh_message_reactions(client, chat_id, [message]))
+
+        counts = {
+            result.reaction.emoticon: result.count
+            for result in message.reactions.results
+        }
+        self.assertEqual(counts, {"👍": 4, "❤️": 1})
+        self.assertEqual(message.reactions.recent_reactions[0].peer_id.user_id, 456)
+
+    def test_empty_unexpected_refresh_response_does_not_crash(self):
+        message = SimpleNamespace(id=1209, reactions=None)
+        client = _FakeClient(SimpleNamespace(updates=[]))
 
         asyncio.run(self.llm_chat._refresh_message_reactions(client, 123, [message]))
 

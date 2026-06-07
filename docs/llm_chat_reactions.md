@@ -1,7 +1,7 @@
 # LLM Chat Reaction Hydration
 
-`llm_chat` explicitly refreshes Telegram reaction metadata before converting selected messages into model history. Telethon history calls such as `get_messages()` and `iter_messages()` may return `Message` objects with `message.reactions is None` even when the messages have reactions.
+`llm_chat` includes Telegram reaction metadata in model history when Telegram exposes it. Userbot sessions can refresh reactions retrospectively with `GetMessagesReactionsRequest`; bot sessions cannot, because Telegram rejects that method for bots.
 
-Before `_process_turns_to_history()` runs, `llm_chat` calls Telegram's `GetMessagesReactionsRequest` for the final expanded message set, then copies each returned `UpdateMessageReactions.reactions` value back onto the matching `Message`. If the refresh fails, history generation continues without reaction text.
+For bot sessions, `llm_chat` listens for live raw reaction updates (`UpdateBotMessageReaction`, `UpdateBotMessageReactions`, and `UpdateMessageReactions`) and keeps an in-memory cache keyed by chat/message. When history is built, cached reactions are copied onto the selected messages before `_process_turns_to_history()` formats them. This means bot reaction visibility is forward-looking from process startup/restart; old reactions that were never delivered as updates are not recoverable through bot auth.
 
-The existing reaction formatting then appends aggregate counts such as `[Reactions: ❤️×2 👍]`; when Telegram exposes the reaction list, sender-specific `Alice reacted: ❤️` lines may also be included.
+The formatter appends aggregate counts such as `[Reactions: ❤️×2 👍]`; when actor-specific updates were observed, sender-specific `Alice reacted: ❤️` lines may also be included. Diagnostic `ic()` lines currently log cached reaction updates, cache application, and bot refresh skips so the tmux session can confirm whether Telegram is delivering reaction updates.
