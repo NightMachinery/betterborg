@@ -970,7 +970,7 @@ RESET_KEYWORDS = ["not set", "none", "clear", "remove", "reset"]
 LAST_N_MESSAGES_LIMIT = 50
 HISTORY_MESSAGE_LIMIT = 1000
 REPLY_QUOTE_MAX_CHARS = 120
-REACTIONS_MAX_SENDERS = 5
+REACTIONS_MAX_SENDERS = 20
 LOG_COUNT_LIMIT = 3
 AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
 DEFAULT_ENABLED_TOOLS = ["googleSearch", "urlContext"]
@@ -3623,6 +3623,7 @@ async def _build_reply_quote(
     """
     Returns a Markdown blockquote of the replied-to message, for injecting into context.
     Falls back to fetching from Telegram if the parent is not in the context window.
+    Includes a Media-ID tag when the parent has media.
     """
     if not message.reply_to_msg_id:
         return ""
@@ -3636,12 +3637,7 @@ async def _build_reply_quote(
             return ""
     if not parent:
         return ""
-    parent_text = (parent.text or "").strip()
-    if not parent_text:
-        return ""
-    snippet = parent_text[:REPLY_QUOTE_MAX_CHARS]
-    if len(parent_text) > REPLY_QUOTE_MAX_CHARS:
-        snippet += "…"
+
     sender = await parent.get_sender()
     sender_name = (
         getattr(sender, "username", None)
@@ -3649,64 +3645,126 @@ async def _build_reply_quote(
         or "Unknown"
     )
     ts = parent.date.isoformat() if parent.date else ""
-    attribution = f"@{sender_name} ({ts})" if ts else f"@{sender_name}"
+    media_id_part = f", Media-ID: {parent.id}" if parent.media else ""
+    attribution = (
+        f"@{sender_name} ({ts}{media_id_part})"
+        if ts
+        else f"@{sender_name}{media_id_part}"
+    )
+
+    parent_text = (parent.text or "").strip()
+    if not parent_text:
+        if parent.media:
+            return f"[Replying to {attribution} — media message]"
+        return ""
+
+    snippet = parent_text[:REPLY_QUOTE_MAX_CHARS]
+    if len(parent_text) > REPLY_QUOTE_MAX_CHARS:
+        snippet += "…"
     return f"[Replying to {attribution}]:\n> {snippet}"
 
 
-def _resolve_reaction_peer_name(peer) -> str:
-    return (
-        getattr(peer, "first_name", None)
-        or getattr(peer, "title", None)
-        or str(
-            getattr(peer, "user_id", None) or getattr(peer, "channel_id", None) or "?"
+async def _resolve_reaction_peer_name(peer, client) -> str:
+    """Resolve a PeerUser/PeerChannel reference to a display name via the Telegram API."""
+    try:
+        entity = await client.get_entity(peer)
+        return (
+            getattr(entity, "username", None)
+            or getattr(entity, "first_name", None)
+            or getattr(entity, "title", None)
+            or str(getattr(entity, "id", "?"))
         )
+    except Exception:
+        pass
+    return str(
+        getattr(peer, "user_id", None)
+        or getattr(peer, "channel_id", None)
+        or getattr(peer, "chat_id", None)
+        or "?"
     )
 
 
 async def _build_reactions_suffix(message: Message) -> str:
     """
-    Returns per-reactor reaction lines to append at the end of a message body.
-    Format: 'Name reacted: ❤️ 😁'
+    Returns per-reactor reaction lines followed by an aggregate count line.
+    Format:
+        Alice reacted: ❤️ 😁
+        Bob reacted: 👍
+        [Reactions: ❤️×2 👍×1]
     """
     reactions = getattr(message, "reactions", None)
+    ic(message.id, reactions)
     if not reactions or not getattr(reactions, "results", None):
         return ""
 
+    ic(
+        reactions.results,
+        getattr(reactions, "can_see_list", None),
+        getattr(reactions, "recent_reactions", None),
+    )
+
     from uniborg import export_util
 
-    try:
-        input_chat = await message.client.get_input_entity(message.chat_id)
-        entries = await export_util._fetch_reaction_entries(message, input_chat, {})
-    except Exception:
-        entries = getattr(reactions, "recent_reactions", None) or []
+    # Collect entries from recent_reactions (always available on live events, sometimes on fetched)
+    all_entries = list(getattr(reactions, "recent_reactions", None) or [])
 
-    if not entries:
-        # Fall back to aggregate counts without sender info
-        parts = []
-        for r in reactions.results:
-            emoji = getattr(r.reaction, "emoticon", "?")
-            parts.append(f"{emoji}×{r.count}" if r.count > 1 else emoji)
-        if parts:
-            return "[Reactions: " + " ".join(parts) + "]"
-        return ""
+    # If the full list is accessible, union with _fetch_reaction_entries results
+    if getattr(reactions, "can_see_list", False):
+        try:
+            input_chat = await message.client.get_input_entity(message.chat_id)
+            fetched = await export_util._fetch_reaction_entries(message, input_chat, {})
+            # Union by (peer_id, reaction) to avoid duplicates
+            seen = {
+                (
+                    getattr(e.peer_id, "user_id", None)
+                    or getattr(e.peer_id, "channel_id", None),
+                    getattr(e.reaction, "emoticon", None),
+                )
+                for e in all_entries
+            }
+            for e in fetched:
+                key = (
+                    getattr(e.peer_id, "user_id", None)
+                    or getattr(e.peer_id, "channel_id", None),
+                    getattr(e.reaction, "emoticon", None),
+                )
+                if key not in seen:
+                    all_entries.append(e)
+                    seen.add(key)
+        except Exception as exc:
+            ic(exc)
 
-    # Group emoji lists by sender name
+    ic(all_entries)
+
+    # Build aggregate counts line — always emit this as a safety net
+    agg_parts = []
+    for r in reactions.results:
+        emoji = getattr(r.reaction, "emoticon", "?")
+        agg_parts.append(f"{emoji}×{r.count}" if r.count > 1 else emoji)
+    agg_line = ("[Reactions: " + " ".join(agg_parts) + "]") if agg_parts else ""
+
+    if not all_entries:
+        return agg_line
+
+    # Resolve names and group emojis per sender
     sender_emojis: Dict[str, list] = {}
-    for entry in entries:
-        peer = entry.peer_id
-        name = _resolve_reaction_peer_name(peer)
+    for entry in all_entries:
+        name = await _resolve_reaction_peer_name(entry.peer_id, message.client)
         emoji = getattr(entry.reaction, "emoticon", "?")
         sender_emojis.setdefault(name, []).append(emoji)
 
     items = list(sender_emojis.items())
-    lines = [
+    named_lines = [
         f"{name} reacted: {' '.join(emojis)}"
         for name, emojis in items[:REACTIONS_MAX_SENDERS]
     ]
     overflow = len(items) - REACTIONS_MAX_SENDERS
     if overflow > 0:
-        lines.append(f"… and {overflow} more")
-    return "\n".join(lines)
+        named_lines.append(f"… and {overflow} more")
+
+    if agg_line:
+        named_lines.append(agg_line)
+    return "\n".join(named_lines)
 
 
 async def _get_message_role(message: Message) -> str:
@@ -3846,12 +3904,15 @@ async def _process_message_content(
             )
 
     reply_quote = await _build_reply_quote(message, context_messages_by_id)
+    media_id_tag = f"[Media-ID: {message.id}]" if message.media else ""
 
     parts = []
     if metadata_prefix:
         parts.append(metadata_prefix)
     if reply_quote:
         parts.append(reply_quote)
+    if media_id_tag:
+        parts.append(media_id_tag)
     if processed_text:
         parts.append(processed_text)
     processed_text = "\n".join(parts)
