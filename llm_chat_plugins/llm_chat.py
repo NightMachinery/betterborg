@@ -62,15 +62,121 @@ from enum import Enum
 
 REACTION_REFRESH_CHUNK_SIZE = 100
 REACTION_CACHE_MAX_MESSAGES = 2000
+REACTION_HISTORY_CACHE_VERBOSITY_MODE = os.environ.get(
+    "REACTION_HISTORY_CACHE_VERBOSITY_MODE", "silent"
+)
 REACTION_CACHE_DEBUG = True
 REACTION_CACHE_BY_CHAT_AND_MESSAGE = OrderedDict()
 REACTION_AGGREGATE_RESULTS_BY_CHAT_MESSAGE = OrderedDict()
 REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR = OrderedDict()
 
 
+def _reaction_history_cache_print_enabled(*modes):
+    mode = (REACTION_HISTORY_CACHE_VERBOSITY_MODE or "silent").lower()
+    return bool(REACTION_CACHE_DEBUG and mode in modes)
+
+
 def _reaction_debug(*args):
-    if REACTION_CACHE_DEBUG:
+    if _reaction_history_cache_print_enabled("debug", "all"):
         ic(*args)
+
+
+def _reaction_peer_summary(peer):
+    if peer is None:
+        return None
+    out = {"type": type(peer).__name__}
+    for attr in ("user_id", "chat_id", "channel_id"):
+        value = getattr(peer, attr, None)
+        if value is not None:
+            out[attr] = value
+    try:
+        out["peer_id"] = telethon_utils.get_peer_id(peer)
+    except Exception:
+        pass
+    return out
+
+
+def _reaction_summary_value(reaction):
+    if reaction is None:
+        return None
+    if hasattr(reaction, "emoticon"):
+        return getattr(reaction, "emoticon", None)
+    if hasattr(reaction, "document_id"):
+        return f"custom:{getattr(reaction, 'document_id', None)}"
+    return type(reaction).__name__
+
+
+def _reaction_list_summary(reactions):
+    return [_reaction_summary_value(reaction) for reaction in reactions or []]
+
+
+def _reaction_count_summary(results):
+    return [
+        {
+            "reaction": _reaction_summary_value(getattr(result, "reaction", None)),
+            "count": getattr(result, "count", None),
+            "chosen_order": getattr(result, "chosen_order", None),
+        }
+        for result in (results or [])
+    ]
+
+
+def _message_reactions_summary(reactions):
+    if reactions is None:
+        return None
+    recent = getattr(reactions, "recent_reactions", None) or []
+    return {
+        "type": type(reactions).__name__,
+        "min": getattr(reactions, "min", None),
+        "can_see_list": getattr(reactions, "can_see_list", None),
+        "results": _reaction_count_summary(getattr(reactions, "results", None)),
+        "recent_count": len(recent),
+        "recent": [
+            {
+                "peer": _reaction_peer_summary(getattr(entry, "peer_id", None)),
+                "reaction": _reaction_summary_value(getattr(entry, "reaction", None)),
+            }
+            for entry in recent[:10]
+        ],
+    }
+
+
+def _reaction_update_summary(update, key=None, reactions=None):
+    return {
+        "update_type": type(update).__name__,
+        "cache_key": key,
+        "peer": _reaction_peer_summary(getattr(update, "peer", None)),
+        "msg_id": getattr(update, "msg_id", None),
+        "actor": _reaction_peer_summary(getattr(update, "actor", None)),
+        "old_reactions": _reaction_list_summary(
+            getattr(update, "old_reactions", None)
+        ),
+        "new_reactions": _reaction_list_summary(
+            getattr(update, "new_reactions", None)
+        ),
+        "aggregate_update_reactions": _reaction_count_summary(
+            getattr(update, "reactions", None)
+        ),
+        "cached_reactions": _message_reactions_summary(reactions),
+        "reaction_cache_size": len(REACTION_CACHE_BY_CHAT_AND_MESSAGE),
+        "aggregate_cache_size": len(REACTION_AGGREGATE_RESULTS_BY_CHAT_MESSAGE),
+        "actor_cache_size": len(REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR),
+    }
+
+
+def _reaction_history_cache_print(label, **payload):
+    if not _reaction_history_cache_print_enabled(
+        "print_each_update", "debug", "all"
+    ):
+        return
+
+    print(
+        "LLM_Chat reaction_history_cache "
+        + label
+        + ": "
+        + json.dumps(payload, ensure_ascii=False, default=str, sort_keys=True),
+        flush=True,
+    )
 
 
 def _reaction_cache_key_from_peer(peer, msg_id):
@@ -108,8 +214,6 @@ def _cache_message_reactions(chat_id, msg_id, reactions):
     REACTION_CACHE_BY_CHAT_AND_MESSAGE.move_to_end(key)
     while len(REACTION_CACHE_BY_CHAT_AND_MESSAGE) > REACTION_CACHE_MAX_MESSAGES:
         REACTION_CACHE_BY_CHAT_AND_MESSAGE.popitem(last=False)
-
-
 
 
 def _cache_aggregate_reaction_results(chat_id, msg_id, results):
@@ -287,6 +391,12 @@ def _merge_reaction_cache_into_messages(chat_id, messages: List[Message]) -> int
             message.reactions = cached
             applied += 1
     if applied:
+        _reaction_history_cache_print(
+            "cached_reactions_applied_to_history",
+            chat_id=chat_id,
+            applied=applied,
+            message_ids=[getattr(message, "id", None) for message in messages or []],
+        )
         _reaction_debug("reaction cache applied", chat_id, applied)
     return applied
 
@@ -297,6 +407,11 @@ async def reaction_update_handler(event):
         getattr(update, "peer", None), getattr(update, "msg_id", None)
     )
     if key is None:
+        _reaction_history_cache_print(
+            "reaction_update_received_but_not_cached",
+            update=_reaction_update_summary(update),
+            reason="missing peer/msg_id cache key",
+        )
         return
 
     if isinstance(update, UpdateMessageReactions):
@@ -306,9 +421,18 @@ async def reaction_update_handler(event):
     elif isinstance(update, UpdateBotMessageReactions):
         reactions = _message_reactions_from_bot_reactions_update(update, key[0], key[1])
     else:
+        _reaction_history_cache_print(
+            "reaction_update_received_but_not_cached",
+            update=_reaction_update_summary(update, key),
+            reason="unsupported update type",
+        )
         return
 
     _cache_message_reactions(key[0], key[1], reactions)
+    _reaction_history_cache_print(
+        "reaction_update_cached",
+        update=_reaction_update_summary(update, key, reactions),
+    )
     _reaction_debug(
         "reaction update cached",
         type(update).__name__,

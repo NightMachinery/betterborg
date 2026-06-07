@@ -1,6 +1,8 @@
 import asyncio
 import builtins
+import contextlib
 import importlib
+import io
 import unittest
 from types import SimpleNamespace
 
@@ -75,8 +77,12 @@ class ReactionHydrationTests(unittest.TestCase):
     def setUp(self):
         self.original_is_bot = self.llm_chat.IS_BOT
         self.original_reaction_debug = self.llm_chat.REACTION_CACHE_DEBUG
+        self.original_verbosity_mode = (
+            self.llm_chat.REACTION_HISTORY_CACHE_VERBOSITY_MODE
+        )
         self.llm_chat.IS_BOT = None
         self.llm_chat.REACTION_CACHE_DEBUG = False
+        self.llm_chat.REACTION_HISTORY_CACHE_VERBOSITY_MODE = "silent"
         self.llm_chat.REACTION_CACHE_BY_CHAT_AND_MESSAGE.clear()
         self.llm_chat.REACTION_AGGREGATE_RESULTS_BY_CHAT_MESSAGE.clear()
         self.llm_chat.REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR.clear()
@@ -84,6 +90,9 @@ class ReactionHydrationTests(unittest.TestCase):
     def tearDown(self):
         self.llm_chat.IS_BOT = self.original_is_bot
         self.llm_chat.REACTION_CACHE_DEBUG = self.original_reaction_debug
+        self.llm_chat.REACTION_HISTORY_CACHE_VERBOSITY_MODE = (
+            self.original_verbosity_mode
+        )
         self.llm_chat.REACTION_CACHE_BY_CHAT_AND_MESSAGE.clear()
         self.llm_chat.REACTION_AGGREGATE_RESULTS_BY_CHAT_MESSAGE.clear()
         self.llm_chat.REACTION_ACTOR_STATE_BY_CHAT_MESSAGE_ACTOR.clear()
@@ -146,13 +155,21 @@ class ReactionHydrationTests(unittest.TestCase):
             new_reactions=[ReactionEmoji("👍")],
             qts=0,
         )
-        chat_id = self.llm_chat._reaction_cache_key_from_peer(update.peer, update.msg_id)[0]
+        chat_id = self.llm_chat._reaction_cache_key_from_peer(
+            update.peer, update.msg_id
+        )[0]
         message = SimpleNamespace(id=1209, reactions=None)
         client = _FakeClient()
 
-        asyncio.run(self.llm_chat.reaction_update_handler(SimpleNamespace(original_update=update)))
+        asyncio.run(
+            self.llm_chat.reaction_update_handler(
+                SimpleNamespace(original_update=update)
+            )
+        )
         self.llm_chat.IS_BOT = True
-        asyncio.run(self.llm_chat._refresh_message_reactions(client, chat_id, [message]))
+        asyncio.run(
+            self.llm_chat._refresh_message_reactions(client, chat_id, [message])
+        )
 
         self.assertEqual(client.requests, [])
         self.assertEqual(message.reactions.results[0].count, 1)
@@ -167,18 +184,25 @@ class ReactionHydrationTests(unittest.TestCase):
             reactions=[ReactionCount(reaction=ReactionEmoji("❤️"), count=3)],
             qts=0,
         )
-        chat_id = self.llm_chat._reaction_cache_key_from_peer(update.peer, update.msg_id)[0]
+        chat_id = self.llm_chat._reaction_cache_key_from_peer(
+            update.peer, update.msg_id
+        )[0]
         message = SimpleNamespace(id=1210, reactions=None)
         client = _FakeClient()
 
-        asyncio.run(self.llm_chat.reaction_update_handler(SimpleNamespace(original_update=update)))
+        asyncio.run(
+            self.llm_chat.reaction_update_handler(
+                SimpleNamespace(original_update=update)
+            )
+        )
         self.llm_chat.IS_BOT = True
-        asyncio.run(self.llm_chat._refresh_message_reactions(client, chat_id, [message]))
+        asyncio.run(
+            self.llm_chat._refresh_message_reactions(client, chat_id, [message])
+        )
 
         self.assertEqual(client.requests, [])
         self.assertEqual(message.reactions.results[0].count, 3)
         self.assertEqual(message.reactions.results[0].reaction.emoticon, "❤️")
-
 
     def test_individual_reaction_update_preserves_cached_aggregate_count(self):
         aggregate_update = UpdateBotMessageReactions(
@@ -214,7 +238,9 @@ class ReactionHydrationTests(unittest.TestCase):
             )
         )
         self.llm_chat.IS_BOT = True
-        asyncio.run(self.llm_chat._refresh_message_reactions(client, chat_id, [message]))
+        asyncio.run(
+            self.llm_chat._refresh_message_reactions(client, chat_id, [message])
+        )
 
         counts = {
             result.reaction.emoticon: result.count
@@ -222,6 +248,103 @@ class ReactionHydrationTests(unittest.TestCase):
         }
         self.assertEqual(counts, {"👍": 4, "❤️": 1})
         self.assertEqual(message.reactions.recent_reactions[0].peer_id.user_id, 456)
+
+    def test_print_each_update_logs_individual_reaction_update(self):
+        self.llm_chat.REACTION_CACHE_DEBUG = True
+        self.llm_chat.REACTION_HISTORY_CACHE_VERBOSITY_MODE = "print_each_update"
+        update = UpdateBotMessageReaction(
+            peer=PeerChannel(123),
+            msg_id=1212,
+            date=None,
+            actor=PeerUser(456),
+            old_reactions=[],
+            new_reactions=[ReactionEmoji("🤣")],
+            qts=0,
+        )
+        out = io.StringIO()
+
+        with contextlib.redirect_stdout(out):
+            asyncio.run(
+                self.llm_chat.reaction_update_handler(
+                    SimpleNamespace(original_update=update)
+                )
+            )
+
+        printed = out.getvalue()
+        self.assertIn("LLM_Chat reaction_history_cache reaction_update_cached", printed)
+        self.assertIn('"update_type": "UpdateBotMessageReaction"', printed)
+        self.assertIn('"new_reactions": ["🤣"]', printed)
+        self.assertIn('"cache_key": [-1000000000123, 1212]', printed)
+
+    def test_print_each_update_logs_aggregate_reaction_update(self):
+        self.llm_chat.REACTION_CACHE_DEBUG = True
+        self.llm_chat.REACTION_HISTORY_CACHE_VERBOSITY_MODE = "print_each_update"
+        update = UpdateBotMessageReactions(
+            peer=PeerChannel(123),
+            msg_id=1213,
+            date=None,
+            reactions=[ReactionCount(reaction=ReactionEmoji("❤️"), count=3)],
+            qts=0,
+        )
+        out = io.StringIO()
+
+        with contextlib.redirect_stdout(out):
+            asyncio.run(
+                self.llm_chat.reaction_update_handler(
+                    SimpleNamespace(original_update=update)
+                )
+            )
+
+        printed = out.getvalue()
+        self.assertIn("LLM_Chat reaction_history_cache reaction_update_cached", printed)
+        self.assertIn('"update_type": "UpdateBotMessageReactions"', printed)
+        self.assertIn('"aggregate_update_reactions": [{"chosen_order": null, "count": 3, "reaction": "❤️"}]', printed)
+
+    def test_print_each_update_logs_cache_application_to_history(self):
+        self.llm_chat.REACTION_CACHE_DEBUG = True
+        self.llm_chat.REACTION_HISTORY_CACHE_VERBOSITY_MODE = "print_each_update"
+        reactions = _reaction_payload("👍", 2)
+        message = SimpleNamespace(id=1214, reactions=None)
+        self.llm_chat._cache_message_reactions(123, 1214, reactions)
+        out = io.StringIO()
+
+        with contextlib.redirect_stdout(out):
+            applied = self.llm_chat._merge_reaction_cache_into_messages(
+                123, [message]
+            )
+
+        self.assertEqual(applied, 1)
+        self.assertIs(message.reactions, reactions)
+        printed = out.getvalue()
+        self.assertIn(
+            "LLM_Chat reaction_history_cache cached_reactions_applied_to_history",
+            printed,
+        )
+        self.assertIn('"applied": 1', printed)
+        self.assertIn('"message_ids": [1214]', printed)
+
+    def test_silent_verbosity_suppresses_reaction_cache_prints(self):
+        self.llm_chat.REACTION_CACHE_DEBUG = True
+        self.llm_chat.REACTION_HISTORY_CACHE_VERBOSITY_MODE = "silent"
+        update = UpdateBotMessageReaction(
+            peer=PeerChannel(123),
+            msg_id=1215,
+            date=None,
+            actor=PeerUser(456),
+            old_reactions=[],
+            new_reactions=[ReactionEmoji("🔥")],
+            qts=0,
+        )
+        out = io.StringIO()
+
+        with contextlib.redirect_stdout(out):
+            asyncio.run(
+                self.llm_chat.reaction_update_handler(
+                    SimpleNamespace(original_update=update)
+                )
+            )
+
+        self.assertEqual(out.getvalue(), "")
 
     def test_empty_unexpected_refresh_response_does_not_crash(self):
         message = SimpleNamespace(id=1209, reactions=None)

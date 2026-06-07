@@ -127,7 +127,9 @@ See [[file:docs/all.md][docs/all.md]].
 ** reactions in LLM chat
 =llm_chat= adds Telegram reaction metadata to model history when available. Userbot
 sessions can refresh it retrospectively; bot sessions use a live reaction-update
-cache. See [[file:docs/llm_chat_reactions.md][docs/llm_chat_reactions.md]].
+cache and require bot admin status in the group. Set
+~REACTION_HISTORY_CACHE_VERBOSITY_MODE=print_each_update~ to debug reaction
+delivery. See [[file:docs/llm_chat_reactions.md][docs/llm_chat_reactions.md]].
 
 ** history export
 =stdplugins/history_export.py= adds an admin-only =.export [number-of-messages=all]=
