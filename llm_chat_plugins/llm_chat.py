@@ -40,16 +40,82 @@ from google import genai
 from google.genai import types
 from google.api_core import exceptions as google_exceptions
 from telethon import events, errors
+from telethon.tl.functions.messages import GetMessagesReactionsRequest
 from telethon.tl.types import (
     BotCommand,
     BotCommandScopeDefault,
     KeyboardButtonCallback,
     Message,
+    UpdateMessageReactions,
 )
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
+
+
+REACTION_REFRESH_CHUNK_SIZE = 100
+
+
+def _reaction_refresh_chunks(items, size):
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def _iter_reaction_updates(updates):
+    if isinstance(updates, UpdateMessageReactions):
+        yield updates
+        return
+
+    update = getattr(updates, "update", None)
+    if isinstance(update, UpdateMessageReactions):
+        yield update
+
+    for update in getattr(updates, "updates", None) or []:
+        if isinstance(update, UpdateMessageReactions):
+            yield update
+
+
+async def _refresh_message_reactions(client, chat_id, messages: List[Message]) -> None:
+    """Populate Message.reactions using Telegram's reaction refresh endpoint.
+
+    Telethon's get_messages()/iter_messages() can return messages with
+    reactions=None even when Telegram has reaction metadata. The refresh endpoint
+    returns UpdateMessageReactions objects keyed by message ID; copy those
+    reactions back onto the already-selected Message objects before history
+    conversion reads them.
+    """
+    if not messages:
+        return
+
+    messages_by_id = {
+        getattr(message, "id", None): message
+        for message in messages
+        if getattr(message, "id", None) is not None
+    }
+    if not messages_by_id:
+        return
+
+    try:
+        input_chat = await client.get_input_entity(chat_id)
+    except Exception:
+        return
+
+    for message_ids in _reaction_refresh_chunks(
+        list(messages_by_id), REACTION_REFRESH_CHUNK_SIZE
+    ):
+        try:
+            updates = await client(
+                GetMessagesReactionsRequest(peer=input_chat, id=message_ids)
+            )
+        except Exception:
+            continue
+
+        for update in _iter_reaction_updates(updates):
+            message = messages_by_id.get(getattr(update, "msg_id", None))
+            if message is not None:
+                message.reactions = getattr(update, "reactions", None)
+
 
 # Import uniborg utilities and storage
 from uniborg import util
@@ -3693,9 +3759,9 @@ async def _build_reactions_suffix(message: Message) -> str:
         [Reactions: ❤️×2 👍×1]
     """
     reactions = getattr(message, "reactions", None)
-    ic(message.id, reactions)
     if not reactions or not getattr(reactions, "results", None):
         return ""
+    ic(message.id, reactions)
 
     ic(
         reactions.results,
@@ -4254,6 +4320,7 @@ async def build_conversation_history(
             expanded_messages = await bot_util.expand_and_sort_messages_with_groups(
                 event, messages_to_process
             )
+            await _refresh_message_reactions(event.client, chat_id, expanded_messages)
             history, warnings = await _process_turns_to_history(
                 event,
                 expanded_messages,
@@ -4387,6 +4454,8 @@ async def build_conversation_history(
     )
     if len(expanded_messages) > HISTORY_MESSAGE_LIMIT:
         expanded_messages = expanded_messages[-HISTORY_MESSAGE_LIMIT:]
+
+    await _refresh_message_reactions(event.client, chat_id, expanded_messages)
 
     history, warnings = await _process_turns_to_history(
         event,

@@ -124,6 +124,11 @@ The core features offered by the custom =TelegramClient= live under the [[https:
 commands skip Telegram bots and the Borg/userbot account itself before batching.
 See [[file:docs/all.md][docs/all.md]].
 
+** reactions in LLM chat
+=llm_chat= refreshes Telegram reaction metadata before building model history so
+reacted messages can include aggregate reaction text. See
+[[file:docs/llm_chat_reactions.md][docs/llm_chat_reactions.md]].
+
 ** history export
 =stdplugins/history_export.py= adds an admin-only =.export [number-of-messages=all]=
 command that silently writes a Telegram Desktop-style, text-only =result.json=
