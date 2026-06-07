@@ -3778,13 +3778,6 @@ async def _build_reactions_suffix(message: Message) -> str:
     reactions = getattr(message, "reactions", None)
     if not reactions or not getattr(reactions, "results", None):
         return ""
-    ic(message.id, reactions)
-
-    ic(
-        reactions.results,
-        getattr(reactions, "can_see_list", None),
-        getattr(reactions, "recent_reactions", None),
-    )
 
     from uniborg import export_util
 
@@ -3792,7 +3785,7 @@ async def _build_reactions_suffix(message: Message) -> str:
     all_entries = list(getattr(reactions, "recent_reactions", None) or [])
 
     # If the full list is accessible, union with _fetch_reaction_entries results
-    if getattr(reactions, "can_see_list", False):
+    if getattr(reactions, "can_see_list", False) and not IS_BOT:
         try:
             input_chat = await message.client.get_input_entity(message.chat_id)
             fetched = await export_util._fetch_reaction_entries(message, input_chat, {})
@@ -3814,10 +3807,8 @@ async def _build_reactions_suffix(message: Message) -> str:
                 if key not in seen:
                     all_entries.append(e)
                     seen.add(key)
-        except Exception as exc:
-            ic(exc)
-
-    ic(all_entries)
+        except Exception:
+            pass
 
     # Build aggregate counts line — always emit this as a safety net
     agg_parts = []
