@@ -962,12 +962,15 @@ async def _guard_model_access(event, model: str) -> bool:
     await send_info_message(event, ADMIN_ONLY_COMMAND_IGNORED)
     return False
 
+
 # Text input patterns for clearing/resetting values
 CANCEL_KEYWORDS = ["cancel"]
 RESET_KEYWORDS = ["not set", "none", "clear", "remove", "reset"]
 
 LAST_N_MESSAGES_LIMIT = 50
 HISTORY_MESSAGE_LIMIT = 1000
+REPLY_QUOTE_MAX_CHARS = 120
+REACTIONS_MAX_SENDERS = 5
 LOG_COUNT_LIMIT = 3
 AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
 DEFAULT_ENABLED_TOOLS = ["googleSearch", "urlContext"]
@@ -1344,6 +1347,7 @@ class UserPrefs(BaseModel):
     tts_global_voice: str = Field(default=tts_util.DEFAULT_VOICE)
     live_model: str = Field(default="gemini-2.5-flash-preview-native-audio-dialog")
     last_n_messages_limit: Optional[int] = Field(default=None)
+    include_reply_chain: bool = Field(default=True)
 
 
 class ChatPrefs(BaseModel):
@@ -1357,6 +1361,7 @@ class ChatPrefs(BaseModel):
     live_mode_enabled: bool = Field(default=False)
     last_n_messages_limit: Optional[int] = Field(default=None)
     auto_delete_info_p: AutoDeleteMode = Field(default=AutoDeleteMode.GROUP_ONLY)
+    include_reply_chain: Optional[bool] = Field(default=None)
 
 
 class UserManager:
@@ -1472,6 +1477,12 @@ class UserManager:
         prefs.last_n_messages_limit = limit
         self._save_prefs(user_id, prefs)
 
+    def toggle_include_reply_chain(self, user_id: int) -> bool:
+        prefs = self.get_prefs(user_id)
+        prefs.include_reply_chain = not prefs.include_reply_chain
+        self._save_prefs(user_id, prefs)
+        return prefs.include_reply_chain
+
 
 class ChatManager:
     """High-level manager for chat-specific settings."""
@@ -1561,6 +1572,17 @@ class ChatManager:
         prefs.last_n_messages_limit = limit
         self._save_prefs(chat_id, prefs)
 
+    def toggle_include_reply_chain(self, chat_id: int) -> bool:
+        prefs = self.get_prefs(chat_id)
+        current = prefs.include_reply_chain
+        # None means "inherit from user prefs"; treat None as True for toggling
+        prefs.include_reply_chain = not (current if current is not None else True)
+        self._save_prefs(chat_id, prefs)
+        return prefs.include_reply_chain
+
+    def get_include_reply_chain(self, chat_id: int) -> Optional[bool]:
+        return self.get_prefs(chat_id).include_reply_chain
+
 
 user_manager = UserManager()
 chat_manager = ChatManager()
@@ -1635,6 +1657,31 @@ def _get_effective_last_n_limit(chat_id: int, user_id: int) -> int:
     return LAST_N_MESSAGES_LIMIT
 
 
+def _build_context_mode_buttons(
+    options: Dict[str, str],
+    *,
+    current_mode: str,
+    mode_callback_prefix: str,
+    include_reply_chain: bool,
+    reply_chain_callback: str,
+) -> list:
+    """Build context mode option buttons plus the Include Reply Chain toggle button."""
+    buttons = [
+        KeyboardButtonCallback(
+            f"✅ {name}" if key == current_mode else name,
+            data=f"{mode_callback_prefix}{bot_util.sanitize_callback_data(key)}",
+        )
+        for key, name in options.items()
+    ]
+    rc_label = (
+        "✅ Include Reply Chain: ON"
+        if include_reply_chain
+        else "❌ Include Reply Chain: OFF"
+    )
+    buttons.append(KeyboardButtonCallback(rc_label, data=reply_chain_callback))
+    return buttons
+
+
 def _build_context_mode_menu_options(chat_id: int, user_id: int) -> Dict[str, str]:
     """Build context mode menu options with appropriate limit displays."""
     effective_last_n_limit = _get_effective_last_n_limit(chat_id, user_id)
@@ -1706,6 +1753,7 @@ def _detect_and_process_message_prefix(
 
     processed_text = add_back_prefixes(processed_text)
     return PrefixProcessResult(processed_text=processed_text)
+
 
 def _validate_url_security(url: str) -> Optional[str]:
     """
@@ -3569,6 +3617,98 @@ async def _get_forward_metadata_prefix(message: Message) -> str:
     return ""
 
 
+async def _build_reply_quote(
+    message: Message, context_messages_by_id: Optional[Dict[int, Message]]
+) -> str:
+    """
+    Returns a Markdown blockquote of the replied-to message, for injecting into context.
+    Falls back to fetching from Telegram if the parent is not in the context window.
+    """
+    if not message.reply_to_msg_id:
+        return ""
+    parent = (context_messages_by_id or {}).get(message.reply_to_msg_id)
+    if parent is None:
+        try:
+            parent = await message.client.get_messages(
+                message.chat_id, ids=message.reply_to_msg_id
+            )
+        except Exception:
+            return ""
+    if not parent:
+        return ""
+    parent_text = (parent.text or "").strip()
+    if not parent_text:
+        return ""
+    snippet = parent_text[:REPLY_QUOTE_MAX_CHARS]
+    if len(parent_text) > REPLY_QUOTE_MAX_CHARS:
+        snippet += "…"
+    sender = await parent.get_sender()
+    sender_name = (
+        getattr(sender, "username", None)
+        or getattr(sender, "first_name", None)
+        or "Unknown"
+    )
+    ts = parent.date.isoformat() if parent.date else ""
+    attribution = f"@{sender_name} ({ts})" if ts else f"@{sender_name}"
+    return f"[Replying to {attribution}]:\n> {snippet}"
+
+
+def _resolve_reaction_peer_name(peer) -> str:
+    return (
+        getattr(peer, "first_name", None)
+        or getattr(peer, "title", None)
+        or str(
+            getattr(peer, "user_id", None) or getattr(peer, "channel_id", None) or "?"
+        )
+    )
+
+
+async def _build_reactions_suffix(message: Message) -> str:
+    """
+    Returns per-reactor reaction lines to append at the end of a message body.
+    Format: 'Name reacted: ❤️ 😁'
+    """
+    reactions = getattr(message, "reactions", None)
+    if not reactions or not getattr(reactions, "results", None):
+        return ""
+
+    from uniborg import export_util
+
+    try:
+        input_chat = await message.client.get_input_entity(message.chat_id)
+        entries = await export_util._fetch_reaction_entries(message, input_chat, {})
+    except Exception:
+        entries = getattr(reactions, "recent_reactions", None) or []
+
+    if not entries:
+        # Fall back to aggregate counts without sender info
+        parts = []
+        for r in reactions.results:
+            emoji = getattr(r.reaction, "emoticon", "?")
+            parts.append(f"{emoji}×{r.count}" if r.count > 1 else emoji)
+        if parts:
+            return "[Reactions: " + " ".join(parts) + "]"
+        return ""
+
+    # Group emoji lists by sender name
+    sender_emojis: Dict[str, list] = {}
+    for entry in entries:
+        peer = entry.peer_id
+        name = _resolve_reaction_peer_name(peer)
+        emoji = getattr(entry.reaction, "emoticon", "?")
+        sender_emojis.setdefault(name, []).append(emoji)
+
+    items = list(sender_emojis.items())
+    lines = [
+        f"{name} reacted: {' '.join(emojis)}"
+        for name, emojis in items[:REACTIONS_MAX_SENDERS]
+    ]
+    overflow = len(items) - REACTIONS_MAX_SENDERS
+    if overflow > 0:
+        lines.append(f"… and {overflow} more")
+    return "\n".join(lines)
+
+
 async def _get_message_role(message: Message) -> str:
     """
     Determines the message role ('assistant' or 'user'), correctly handling
@@ -3659,6 +3799,7 @@ async def _process_message_content(
     sender_id,
     *,
     metadata_prefix: str = "",
+    context_messages_by_id: Optional[Dict[int, Message]] = None,
     check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
     is_private: bool,
     export_mode: bool = False,
@@ -3704,12 +3845,16 @@ async def _process_message_content(
                 #: By default, `re.sub` replaces all occurrences of the pattern in the string.
             )
 
+    reply_quote = await _build_reply_quote(message, context_messages_by_id)
+
+    parts = []
     if metadata_prefix:
-        processed_text = (
-            f"{metadata_prefix}\n{processed_text}"
-            if processed_text
-            else metadata_prefix
-        )
+        parts.append(metadata_prefix)
+    if reply_quote:
+        parts.append(reply_quote)
+    if processed_text:
+        parts.append(processed_text)
+    processed_text = "\n".join(parts)
 
     if processed_text:
         text_buffer.append(processed_text)
@@ -3736,6 +3881,10 @@ async def _process_message_content(
         warnings.extend(media_result.warnings)
         if media_result.media_part:
             media_parts.append(media_result.media_part)
+
+    reactions_suffix = await _build_reactions_suffix(message)
+    if reactions_suffix:
+        text_buffer.append(reactions_suffix)
 
     return ProcessContentResult(
         text_parts=text_buffer, media_parts=media_parts, warnings=warnings
@@ -3838,6 +3987,9 @@ async def _process_turns_to_history(
         else user_prefs.metadata_mode
     )
 
+    # Build a lookup dict so reply-quote helpers can find parents without extra API calls.
+    context_messages_by_id: Dict[int, Message] = {m.id: m for m in message_list}
+
     # Pre-calculate roles for all messages to use in grouping and processing.
     message_roles = [(await _get_message_role(m), m) for m in message_list]
 
@@ -3862,6 +4014,7 @@ async def _process_turns_to_history(
                     model_in_use,
                     sender_id,
                     metadata_prefix="",
+                    context_messages_by_id=context_messages_by_id,
                     check_gemini_cached_files_p=check_gemini_cached_files_p,
                     is_private=is_private,
                     export_mode=export_mode,
@@ -3899,7 +4052,6 @@ async def _process_turns_to_history(
                 prefix_parts.append(await _get_forward_metadata_prefix(message))
 
             metadata_prefix = " ".join(filter(None, prefix_parts))
-            #: Return an iterator yielding those items of iterable for which function(item) is true. If function is None, return the items that are true.
             content_result = await _process_message_content(
                 message,
                 role,
@@ -3910,6 +4062,7 @@ async def _process_turns_to_history(
                 model_in_use,
                 sender_id,
                 metadata_prefix=metadata_prefix,
+                context_messages_by_id=context_messages_by_id,
                 check_gemini_cached_files_p=check_gemini_cached_files_p,
                 is_private=is_private,
                 export_mode=export_mode,
@@ -4150,6 +4303,24 @@ async def build_conversation_history(
             ]
 
     # --- Universal Post-Processing ---
+
+    # If include_reply_chain is enabled and we're not already in reply_chain mode,
+    # merge the reply chain of the triggering message into the message set.
+    if context_mode != "reply_chain":
+        user_prefs = user_manager.get_prefs(user_id)
+        chat_include_reply_chain = chat_manager.get_include_reply_chain(chat_id)
+        effective_include_reply_chain = (
+            chat_include_reply_chain
+            if chat_include_reply_chain is not None
+            else user_prefs.include_reply_chain
+        )
+        if effective_include_reply_chain:
+            chain_messages = await _get_initial_messages_for_reply_chain(event)
+            if chain_messages:
+                existing_ids = {m.id for m in messages_to_process}
+                new_chain = [m for m in chain_messages if m.id not in existing_ids]
+                messages_to_process = new_chain + messages_to_process
+
     expanded_messages = await bot_util.expand_and_sort_messages_with_groups(
         event, messages_to_process
     )
@@ -5178,14 +5349,20 @@ async def context_mode_here_handler(event):
     options_for_menu = _build_context_mode_menu_options(event.chat_id, event.sender_id)
     options_for_menu["not_set"] = NOT_SET_HERE_DISPLAY_NAME
 
-    await bot_util.present_options(
-        event,
-        title=f"**Current Status:**\n{status_text}\n\n**Set Context Mode for This Chat**",
-        options=options_for_menu,
-        current_value=current_mode if current_mode is not None else "not_set",
-        callback_prefix="contexthere_",
-        awaiting_key="context_mode_here_selection",
-        n_cols=1,
+    chat_include_rc = chat_prefs.include_reply_chain
+    # None means "inherit from user", treat as enabled for button display
+    display_include_rc = chat_include_rc if chat_include_rc is not None else True
+    buttons = _build_context_mode_buttons(
+        options_for_menu,
+        current_mode=current_mode if current_mode is not None else "not_set",
+        mode_callback_prefix="contexthere_",
+        include_reply_chain=display_include_rc,
+        reply_chain_callback="replychainhere_toggle",
+    )
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}**Current Status:**\n{status_text}\n\n**Set Context Mode for This Chat**",
+        buttons=util.build_menu(buttons, n_cols=1),
+        parse_mode="md",
     )
 
 
@@ -5335,33 +5512,35 @@ async def get_last_n_here_handler(event):
 
 async def context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
-
     options = _build_context_mode_menu_options(event.chat_id, event.sender_id)
-
-    await bot_util.present_options(
-        event,
-        title="Set Private Chat Context Mode",
-        options=options,
-        current_value=prefs.context_mode,
-        callback_prefix="context_",
-        awaiting_key="context_mode_selection",
-        n_cols=1,
+    buttons = _build_context_mode_buttons(
+        options,
+        current_mode=prefs.context_mode,
+        mode_callback_prefix="context_",
+        include_reply_chain=prefs.include_reply_chain,
+        reply_chain_callback="replychain_user",
+    )
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}**Set Private Chat Context Mode**",
+        buttons=util.build_menu(buttons, n_cols=1),
+        parse_mode="md",
     )
 
 
 async def group_context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
-
     options = _build_context_mode_menu_options(event.chat_id, event.sender_id)
-
-    await bot_util.present_options(
-        event,
-        title="Set Group Chat Context Mode",
-        options=options,
-        current_value=prefs.group_context_mode,
-        callback_prefix="groupcontext_",
-        awaiting_key="group_context_mode_selection",
-        n_cols=1,
+    buttons = _build_context_mode_buttons(
+        options,
+        current_mode=prefs.group_context_mode,
+        mode_callback_prefix="groupcontext_",
+        include_reply_chain=prefs.include_reply_chain,
+        reply_chain_callback="replychain_user",
+    )
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}**Set Group Chat Context Mode**",
+        buttons=util.build_menu(buttons, n_cols=1),
+        parse_mode="md",
     )
 
 
@@ -5644,19 +5823,74 @@ async def callback_handler(event):
         ]
         await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer(f"{tool_name} {'enabled' if is_enabled else 'disabled'}.")
+    elif data_str == "replychain_user":
+        new_val = user_manager.toggle_include_reply_chain(user_id)
+        prefs = user_manager.get_prefs(user_id)
+        options = _build_context_mode_menu_options(event.chat_id, event.sender_id)
+        buttons = _build_context_mode_buttons(
+            options,
+            current_mode=prefs.context_mode,
+            mode_callback_prefix="context_",
+            include_reply_chain=prefs.include_reply_chain,
+            reply_chain_callback="replychain_user",
+        )
+        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
+        await event.answer(
+            f"Include Reply Chain {'enabled' if new_val else 'disabled'}."
+        )
+    elif data_str == "replychainhere_toggle":
+        is_bot_admin = await util.isAdmin(event)
+        is_group_admin = await util.is_group_admin(event)
+        if not event.is_private and not (is_bot_admin or is_group_admin):
+            await event.answer(
+                "You must be a group admin or bot admin to change chat settings."
+            )
+            return
+        new_val = chat_manager.toggle_include_reply_chain(event.chat_id)
+        chat_prefs = chat_manager.get_prefs(event.chat_id)
+        current_mode = chat_prefs.context_mode
+        options_for_menu = _build_context_mode_menu_options(
+            event.chat_id, event.sender_id
+        )
+        options_for_menu["not_set"] = NOT_SET_HERE_DISPLAY_NAME
+        display_include_rc = (
+            chat_prefs.include_reply_chain
+            if chat_prefs.include_reply_chain is not None
+            else True
+        )
+        buttons = _build_context_mode_buttons(
+            options_for_menu,
+            current_mode=current_mode if current_mode is not None else "not_set",
+            mode_callback_prefix="contexthere_",
+            include_reply_chain=display_include_rc,
+            reply_chain_callback="replychainhere_toggle",
+        )
+        new_status_text = await _get_context_mode_status_text(event)
+        new_title = f"**Current Status:**\n{new_status_text}\n\n**Set Context Mode for This Chat**"
+        try:
+            await event.edit(
+                text=f"{BOT_META_INFO_PREFIX}{new_title}",
+                buttons=util.build_menu(buttons, n_cols=1),
+                parse_mode="md",
+            )
+        except errors.rpcerrorlist.MessageNotModifiedError:
+            pass
+        await event.answer(
+            f"Include Reply Chain {'enabled' if new_val else 'disabled'} for this chat."
+        )
     elif data_str.startswith("context_"):
         mode = data_str.split("_", 1)[1]
         user_manager.set_context_mode(user_id, mode)
         prefs = user_manager.get_prefs(user_id)  # update prefs
 
         options = _build_context_mode_menu_options(event.chat_id, event.sender_id)
-        buttons = [
-            KeyboardButtonCallback(
-                f"✅ {name}" if key == prefs.context_mode else name,
-                data=f"context_{key}",
-            )
-            for key, name in options.items()
-        ]
+        buttons = _build_context_mode_buttons(
+            options,
+            current_mode=prefs.context_mode,
+            mode_callback_prefix="context_",
+            include_reply_chain=prefs.include_reply_chain,
+            reply_chain_callback="replychain_user",
+        )
         await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer("Private context mode updated.")
     elif data_str.startswith("contexthere_"):
@@ -5690,13 +5924,18 @@ async def callback_handler(event):
         )
         options_for_menu["not_set"] = NOT_SET_HERE_DISPLAY_NAME
 
-        buttons = [
-            KeyboardButtonCallback(
-                f"✅ {name}" if key == current_mode_for_buttons else name,
-                data=f"contexthere_{key}",
-            )
-            for key, name in options_for_menu.items()
-        ]
+        display_include_rc = (
+            chat_prefs.include_reply_chain
+            if chat_prefs.include_reply_chain is not None
+            else True
+        )
+        buttons = _build_context_mode_buttons(
+            options_for_menu,
+            current_mode=current_mode_for_buttons,
+            mode_callback_prefix="contexthere_",
+            include_reply_chain=display_include_rc,
+            reply_chain_callback="replychainhere_toggle",
+        )
 
         # We also need to update the title text after the change
         new_status_text = await _get_context_mode_status_text(event)
@@ -5716,17 +5955,14 @@ async def callback_handler(event):
         mode = data_str.split("_", 1)[1]
         user_manager.set_group_context_mode(user_id, mode)
         prefs = user_manager.get_prefs(user_id)  # update prefs
-        user_last_n_limit = prefs.last_n_messages_limit or LAST_N_MESSAGES_LIMIT
-        options = CONTEXT_MODE_NAMES.copy()
-        if "last_N" in options:
-            options["last_N"] += f" (Limit: {user_last_n_limit})"
-        buttons = [
-            KeyboardButtonCallback(
-                f"✅ {name}" if key == prefs.group_context_mode else name,
-                data=f"groupcontext_{key}",
-            )
-            for key, name in options.items()
-        ]
+        options = _build_context_mode_menu_options(event.chat_id, event.sender_id)
+        buttons = _build_context_mode_buttons(
+            options,
+            current_mode=prefs.group_context_mode,
+            mode_callback_prefix="groupcontext_",
+            include_reply_chain=prefs.include_reply_chain,
+            reply_chain_callback="replychain_user",
+        )
         await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer("Group context mode updated.")
     elif data_str.startswith("metadata_"):
@@ -6851,7 +7087,6 @@ async def chat_handler(event):
     if llm_db.is_awaiting_key(user_id) or user_id in AWAITING_INPUT_FROM_USERS:
         return
 
-
     # Intercept for live mode if active
     if gemini_live_util.live_session_manager.is_live_mode_active(chat_id):
         await handle_live_mode_message(event)
@@ -6884,12 +7119,7 @@ async def chat_handler(event):
     )
 
     # Audio URL Magic: Check if message contains only a URL pointing to audio
-    if (
-        AUDIO_URL_MAGIC_P
-        and user_is_admin
-        and not event.file
-        and not group_id
-    ):
+    if AUDIO_URL_MAGIC_P and user_is_admin and not event.file and not group_id:
 
         # Use processed text from prefix detection (in case prefixes were stripped)
         text_to_check = prefix_result.processed_text or event.text
