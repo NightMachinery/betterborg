@@ -135,6 +135,15 @@ delivery. See [[file:docs/llm_chat_reactions.md][docs/llm_chat_reactions.md]].
 =llm_chat= appends a short instruction telling models to use injected metadata as
 context, not as reply wording. See [[file:docs/llm_chat_prompting.md][docs/llm_chat_prompting.md]].
 
+** LLM Chat Last-N Context
+
+=llm_chat= defaults =Last N Messages= context to 100 messages. The effective
+limit is resolved as chat override, then personal default, then the global
+default. Use =/contextMode=, =/groupContextMode=, or =/contextModeHere= for
+inline quick picks (=50=, =100=, =200=, =400=, =800=), or use =/setLastN= and
+=/setLastNHere= for arbitrary valid values. See
+[[file:docs/llm_chat_last_n_context.md][docs/llm_chat_last_n_context.md]].
+
 ** history export
 =stdplugins/history_export.py= adds an admin-only =.export [number-of-messages=all]=
 command that silently writes a Telegram Desktop-style, text-only =result.json=
