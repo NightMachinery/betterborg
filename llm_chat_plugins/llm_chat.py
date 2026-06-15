@@ -1050,7 +1050,8 @@ async def _guard_model_access(event, model: str) -> bool:
 CANCEL_KEYWORDS = ["cancel"]
 RESET_KEYWORDS = ["not set", "none", "clear", "remove", "reset"]
 
-LAST_N_MESSAGES_LIMIT = 50
+LAST_N_MESSAGES_LIMIT = 100
+LAST_N_QUICK_PICK_LIMITS = (50, 100, 200, 400, 800)
 HISTORY_MESSAGE_LIMIT = 1000
 REPLY_QUOTE_MAX_CHARS = 120
 REACTIONS_MAX_SENDERS = 20
@@ -1740,6 +1741,59 @@ def _get_effective_last_n_limit(chat_id: int, user_id: int) -> int:
     return LAST_N_MESSAGES_LIMIT
 
 
+def _get_last_n_limit_status(chat_id: int, user_id: int) -> dict:
+    """Return Last-N chat/user/effective values plus a human-readable source."""
+    chat_limit = chat_manager.get_last_n_messages_limit(chat_id)
+    user_limit = user_manager.get_last_n_messages_limit(user_id)
+
+    if chat_limit is not None:
+        effective_limit = chat_limit
+        source = "this chat override"
+    elif user_limit is not None:
+        effective_limit = user_limit
+        source = "your personal default"
+    else:
+        effective_limit = LAST_N_MESSAGES_LIMIT
+        source = "global default"
+
+    return {
+        "chat_limit": chat_limit,
+        "user_limit": user_limit,
+        "effective_limit": effective_limit,
+        "source": source,
+    }
+
+
+def _format_last_n_optional_limit(limit: Optional[int], *, default_label: str) -> str:
+    if limit is None:
+        return default_label
+    return f"`{limit}`"
+
+
+def _format_personal_last_n_menu_text(chat_id: int, user_id: int) -> str:
+    status = _get_last_n_limit_status(chat_id, user_id)
+    personal = _format_last_n_optional_limit(
+        status["user_limit"], default_label=f"Default (`{LAST_N_MESSAGES_LIMIT}`)"
+    )
+    return (
+        "**Last N Limit**\n"
+        f"• **Personal default:** {personal}\n"
+        f"• **Effective here:** `{status['effective_limit']}` ({status['source']})"
+    )
+
+
+def _format_chat_last_n_menu_text(chat_id: int, user_id: int) -> str:
+    status = _get_last_n_limit_status(chat_id, user_id)
+    chat_value = _format_last_n_optional_limit(
+        status["chat_limit"], default_label="Not set"
+    )
+    return (
+        "**Last N Limit for This Chat**\n"
+        f"• **Chat override:** {chat_value}\n"
+        f"• **Effective here:** `{status['effective_limit']}` ({status['source']})"
+    )
+
+
 def _build_context_mode_buttons(
     options: Dict[str, str],
     *,
@@ -1763,6 +1817,148 @@ def _build_context_mode_buttons(
     )
     buttons.append(KeyboardButtonCallback(rc_label, data=reply_chain_callback))
     return buttons
+
+
+def _build_last_n_limit_buttons(
+    *,
+    current_limit: int,
+    callback_prefix: str,
+    reset_callback: Optional[str] = None,
+    reset_label: str = "Reset Last N",
+) -> list:
+    """Build quick-pick buttons for Last-N message limits."""
+    buttons = [
+        KeyboardButtonCallback(
+            f"{'✅ ' if limit == current_limit else ''}Last N: {limit}",
+            data=f"{callback_prefix}{limit}",
+        )
+        for limit in LAST_N_QUICK_PICK_LIMITS
+    ]
+    if reset_callback:
+        buttons.append(KeyboardButtonCallback(reset_label, data=reset_callback))
+    return buttons
+
+
+def _build_personal_context_mode_menu(
+    chat_id: int,
+    user_id: int,
+    *,
+    current_mode: str,
+    mode_callback_prefix: str,
+    include_reply_chain: bool,
+    reply_chain_callback: str,
+    last_n_callback_prefix: str,
+) -> list:
+    context_buttons = _build_context_mode_buttons(
+        _build_context_mode_menu_options(chat_id, user_id),
+        current_mode=current_mode,
+        mode_callback_prefix=mode_callback_prefix,
+        include_reply_chain=include_reply_chain,
+        reply_chain_callback=reply_chain_callback,
+    )
+    user_limit = user_manager.get_last_n_messages_limit(user_id)
+    last_n_buttons = _build_last_n_limit_buttons(
+        current_limit=user_limit if user_limit is not None else LAST_N_MESSAGES_LIMIT,
+        callback_prefix=last_n_callback_prefix,
+        reset_callback=(
+            f"{last_n_callback_prefix}reset" if user_limit is not None else None
+        ),
+        reset_label=f"Reset Last N (Default {LAST_N_MESSAGES_LIMIT})",
+    )
+    return [[button] for button in context_buttons] + util.build_menu(
+        last_n_buttons, n_cols=3
+    )
+
+
+def _build_chat_context_mode_menu(
+    chat_id: int,
+    user_id: int,
+    *,
+    current_mode: Optional[str],
+    include_reply_chain: bool,
+) -> list:
+    options_for_menu = _build_context_mode_menu_options(chat_id, user_id)
+    options_for_menu["not_set"] = NOT_SET_HERE_DISPLAY_NAME
+    context_buttons = _build_context_mode_buttons(
+        options_for_menu,
+        current_mode=current_mode if current_mode is not None else "not_set",
+        mode_callback_prefix="contexthere_",
+        include_reply_chain=include_reply_chain,
+        reply_chain_callback="replychainhere_toggle",
+    )
+    status = _get_last_n_limit_status(chat_id, user_id)
+    chat_limit = status["chat_limit"]
+    last_n_buttons = _build_last_n_limit_buttons(
+        current_limit=(
+            chat_limit if chat_limit is not None else status["effective_limit"]
+        ),
+        callback_prefix="lastnhere_",
+        reset_callback=("lastnhere_reset" if chat_limit is not None else None),
+        reset_label="Reset chat Last N",
+    )
+    return [[button] for button in context_buttons] + util.build_menu(
+        last_n_buttons, n_cols=3
+    )
+
+
+async def _edit_personal_context_mode_menu(event, kind: str):
+    prefs = user_manager.get_prefs(event.sender_id)
+    if kind == "group":
+        title = "Set Group Chat Context Mode"
+        current_mode = prefs.group_context_mode
+        mode_callback_prefix = "groupcontext_"
+        reply_chain_callback = "replychain_group"
+        last_n_callback_prefix = "lastn_user_group_"
+    else:
+        title = "Set Private Chat Context Mode"
+        current_mode = prefs.context_mode
+        mode_callback_prefix = "context_"
+        reply_chain_callback = "replychain_private"
+        last_n_callback_prefix = "lastn_user_private_"
+
+    buttons = _build_personal_context_mode_menu(
+        event.chat_id,
+        event.sender_id,
+        current_mode=current_mode,
+        mode_callback_prefix=mode_callback_prefix,
+        include_reply_chain=prefs.include_reply_chain,
+        reply_chain_callback=reply_chain_callback,
+        last_n_callback_prefix=last_n_callback_prefix,
+    )
+    await event.edit(
+        text=(
+            f"{BOT_META_INFO_PREFIX}**{title}**\n\n"
+            f"{_format_personal_last_n_menu_text(event.chat_id, event.sender_id)}"
+        ),
+        buttons=buttons,
+        parse_mode="md",
+    )
+
+
+async def _edit_chat_context_mode_menu(event):
+    chat_prefs = chat_manager.get_prefs(event.chat_id)
+    display_include_rc = (
+        chat_prefs.include_reply_chain
+        if chat_prefs.include_reply_chain is not None
+        else True
+    )
+    buttons = _build_chat_context_mode_menu(
+        event.chat_id,
+        event.sender_id,
+        current_mode=chat_prefs.context_mode,
+        include_reply_chain=display_include_rc,
+    )
+    new_status_text = await _get_context_mode_status_text(event)
+    new_title = (
+        f"**Current Status:**\n{new_status_text}\n\n"
+        f"{_format_chat_last_n_menu_text(event.chat_id, event.sender_id)}\n\n"
+        "**Set Context Mode for This Chat**"
+    )
+    await event.edit(
+        text=f"{BOT_META_INFO_PREFIX}{new_title}",
+        buttons=buttons,
+        parse_mode="md",
+    )
 
 
 def _build_context_mode_menu_options(chat_id: int, user_id: int) -> Dict[str, str]:
@@ -4878,7 +5074,7 @@ I remember our conversations based on your chosen settings. You can configure th
 - **Context Mode:** This controls *which* messages are included.
   - `Reply Chain (Default)`: Only messages in the current reply thread.
   - `Until Separator`: The reply chain up to a message containing only `{CONTEXT_SEPARATOR}`.
-  - `Last N Messages`: The most recent messages in the chat.
+  - `Last N Messages`: The most recent messages in the chat. The default limit is `{LAST_N_MESSAGES_LIMIT}`, and `/contextMode`, `/groupContextMode`, and `/contextModeHere` include quick buttons for `{", ".join(map(str, LAST_N_QUICK_PICK_LIMITS))}`.
 
 - **Metadata Mode:** This controls *how* messages are formatted for the AI.
   - `No Metadata`: Merges consecutive messages and adds no extra info.
@@ -4900,10 +5096,10 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setSystemPrompt: Change my core instructions or reset to default.
 - /setModelHere: Set the AI model for the current chat only.
 - /getModelHere: View the effective AI model for the current chat.
-- /setLastN: Set your default 'Last N' message limit.
+- /setLastN: Set your default 'Last N' message limit (global default: `{LAST_N_MESSAGES_LIMIT}`).
 - /getLastN: View your default 'Last N' message limit.
-- /setLastNHere: Set 'Last N' message limit for this chat.
-- /getLastNHere: View 'Last N' message limit for this chat.
+- /setLastNHere: Set 'Last N' message limit for this chat (overrides personal/default).
+- /getLastNHere: View this chat's effective 'Last N' limit.
 - /contextMode: Change how **private** chat history is gathered.
 - /groupContextMode: Change how **group** chat history is gathered.
 - /metadataMode: Change how **private** chat metadata is handled.
@@ -5068,18 +5264,19 @@ async def status_handler(event):
         model_status += f" (overridden in this chat)"
 
     # 'Last N' limit status
+    last_n_status = _get_last_n_limit_status(chat_id, user_id)
     user_last_n_limit = (
-        f"`{prefs.last_n_messages_limit}`"
-        if prefs.last_n_messages_limit is not None
+        f"`{last_n_status['user_limit']}`"
+        if last_n_status["user_limit"] is not None
         else f"Default (`{LAST_N_MESSAGES_LIMIT}`)"
     )
-    effective_last_n_limit = _get_effective_last_n_limit(
-        chat_id,
-        user_id,
-    )
-    chat_last_n_limit = chat_manager.get_last_n_messages_limit(chat_id)
+    effective_last_n_limit = last_n_status["effective_limit"]
+    chat_last_n_limit = last_n_status["chat_limit"]
     chat_last_n_status = (
         f"`{chat_last_n_limit}`" if chat_last_n_limit is not None else "Not set"
+    )
+    effective_last_n_status = (
+        f"`{effective_last_n_limit}` ({last_n_status['source']})"
     )
 
     # Get context mode names and handle smart/last_N modes
@@ -5151,7 +5348,8 @@ async def status_handler(event):
         f"**This Chat's Settings**\n"
         f"• **Chat Model:** `{chat_model or 'Not set'}`\n"
         f"• **Chat System Prompt:** `{chat_system_prompt_status}`\n"
-        f"• **Chat 'Last N' Limit:** {chat_last_n_status}\n\n"
+        f"• **Chat 'Last N' Limit:** {chat_last_n_status}\n"
+        f"• **Effective 'Last N' Limit:** {effective_last_n_status}\n\n"
         f"**TTS Settings (This Chat)**\n"
         f"• **TTS Model:** `{tts_model_display}`\n"
         f"• **Voice:** {effective_voice_display}\n\n"
@@ -5466,7 +5664,7 @@ async def get_model_here_handler(event):
 
 
 async def context_mode_here_handler(event):
-    """Sets the context mode for the current chat, including status and a reset option."""
+    """Sets the context mode and Last-N limit for the current chat."""
     is_bot_admin = await util.isAdmin(event)
     is_group_admin = await util.is_group_admin(event)
 
@@ -5476,30 +5674,24 @@ async def context_mode_here_handler(event):
         )
         return
 
-    # Get the current status text to display to the user
     status_text = await _get_context_mode_status_text(event)
-
-    # Get the currently set chat-specific preference
     chat_prefs = chat_manager.get_prefs(event.chat_id)
-    current_mode = chat_prefs.context_mode  # This will be None if not set
-
-    # Prepare options for the menu, including a "Not Set" option for resetting
-    options_for_menu = _build_context_mode_menu_options(event.chat_id, event.sender_id)
-    options_for_menu["not_set"] = NOT_SET_HERE_DISPLAY_NAME
-
-    chat_include_rc = chat_prefs.include_reply_chain
-    # None means "inherit from user", treat as enabled for button display
-    display_include_rc = chat_include_rc if chat_include_rc is not None else True
-    buttons = _build_context_mode_buttons(
-        options_for_menu,
-        current_mode=current_mode if current_mode is not None else "not_set",
-        mode_callback_prefix="contexthere_",
+    display_include_rc = (
+        chat_prefs.include_reply_chain
+        if chat_prefs.include_reply_chain is not None
+        else True
+    )
+    buttons = _build_chat_context_mode_menu(
+        event.chat_id,
+        event.sender_id,
+        current_mode=chat_prefs.context_mode,
         include_reply_chain=display_include_rc,
-        reply_chain_callback="replychainhere_toggle",
     )
     await event.reply(
-        f"{BOT_META_INFO_PREFIX}**Current Status:**\n{status_text}\n\n**Set Context Mode for This Chat**",
-        buttons=util.build_menu(buttons, n_cols=1),
+        f"{BOT_META_INFO_PREFIX}**Current Status:**\n{status_text}\n\n"
+        f"{_format_chat_last_n_menu_text(event.chat_id, event.sender_id)}\n\n"
+        "**Set Context Mode for This Chat**",
+        buttons=buttons,
         parse_mode="md",
     )
 
@@ -5650,34 +5842,38 @@ async def get_last_n_here_handler(event):
 
 async def context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
-    options = _build_context_mode_menu_options(event.chat_id, event.sender_id)
-    buttons = _build_context_mode_buttons(
-        options,
+    buttons = _build_personal_context_mode_menu(
+        event.chat_id,
+        event.sender_id,
         current_mode=prefs.context_mode,
         mode_callback_prefix="context_",
         include_reply_chain=prefs.include_reply_chain,
-        reply_chain_callback="replychain_user",
+        reply_chain_callback="replychain_private",
+        last_n_callback_prefix="lastn_user_private_",
     )
     await event.reply(
-        f"{BOT_META_INFO_PREFIX}**Set Private Chat Context Mode**",
-        buttons=util.build_menu(buttons, n_cols=1),
+        f"{BOT_META_INFO_PREFIX}**Set Private Chat Context Mode**\n\n"
+        f"{_format_personal_last_n_menu_text(event.chat_id, event.sender_id)}",
+        buttons=buttons,
         parse_mode="md",
     )
 
 
 async def group_context_mode_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
-    options = _build_context_mode_menu_options(event.chat_id, event.sender_id)
-    buttons = _build_context_mode_buttons(
-        options,
+    buttons = _build_personal_context_mode_menu(
+        event.chat_id,
+        event.sender_id,
         current_mode=prefs.group_context_mode,
         mode_callback_prefix="groupcontext_",
         include_reply_chain=prefs.include_reply_chain,
-        reply_chain_callback="replychain_user",
+        reply_chain_callback="replychain_group",
+        last_n_callback_prefix="lastn_user_group_",
     )
     await event.reply(
-        f"{BOT_META_INFO_PREFIX}**Set Group Chat Context Mode**",
-        buttons=util.build_menu(buttons, n_cols=1),
+        f"{BOT_META_INFO_PREFIX}**Set Group Chat Context Mode**\n\n"
+        f"{_format_personal_last_n_menu_text(event.chat_id, event.sender_id)}",
+        buttons=buttons,
         parse_mode="md",
     )
 
@@ -5961,18 +6157,13 @@ async def callback_handler(event):
         ]
         await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer(f"{tool_name} {'enabled' if is_enabled else 'disabled'}.")
-    elif data_str == "replychain_user":
+    elif data_str in ("replychain_private", "replychain_group", "replychain_user"):
         new_val = user_manager.toggle_include_reply_chain(user_id)
-        prefs = user_manager.get_prefs(user_id)
-        options = _build_context_mode_menu_options(event.chat_id, event.sender_id)
-        buttons = _build_context_mode_buttons(
-            options,
-            current_mode=prefs.context_mode,
-            mode_callback_prefix="context_",
-            include_reply_chain=prefs.include_reply_chain,
-            reply_chain_callback="replychain_user",
-        )
-        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
+        kind = "group" if data_str == "replychain_group" else "private"
+        try:
+            await _edit_personal_context_mode_menu(event, kind)
+        except errors.rpcerrorlist.MessageNotModifiedError:
+            pass
         await event.answer(
             f"Include Reply Chain {'enabled' if new_val else 'disabled'}."
         )
@@ -5985,51 +6176,64 @@ async def callback_handler(event):
             )
             return
         new_val = chat_manager.toggle_include_reply_chain(event.chat_id)
-        chat_prefs = chat_manager.get_prefs(event.chat_id)
-        current_mode = chat_prefs.context_mode
-        options_for_menu = _build_context_mode_menu_options(
-            event.chat_id, event.sender_id
-        )
-        options_for_menu["not_set"] = NOT_SET_HERE_DISPLAY_NAME
-        display_include_rc = (
-            chat_prefs.include_reply_chain
-            if chat_prefs.include_reply_chain is not None
-            else True
-        )
-        buttons = _build_context_mode_buttons(
-            options_for_menu,
-            current_mode=current_mode if current_mode is not None else "not_set",
-            mode_callback_prefix="contexthere_",
-            include_reply_chain=display_include_rc,
-            reply_chain_callback="replychainhere_toggle",
-        )
-        new_status_text = await _get_context_mode_status_text(event)
-        new_title = f"**Current Status:**\n{new_status_text}\n\n**Set Context Mode for This Chat**"
         try:
-            await event.edit(
-                text=f"{BOT_META_INFO_PREFIX}{new_title}",
-                buttons=util.build_menu(buttons, n_cols=1),
-                parse_mode="md",
-            )
+            await _edit_chat_context_mode_menu(event)
         except errors.rpcerrorlist.MessageNotModifiedError:
             pass
         await event.answer(
             f"Include Reply Chain {'enabled' if new_val else 'disabled'} for this chat."
         )
+    elif data_str.startswith("lastn_user_private_") or data_str.startswith(
+        "lastn_user_group_"
+    ):
+        kind = "group" if data_str.startswith("lastn_user_group_") else "private"
+        value = data_str.rsplit("_", 1)[1]
+        if value == "reset":
+            user_manager.set_last_n_messages_limit(user_id, None)
+            feedback = (
+                f"Personal Last N reset to global default {LAST_N_MESSAGES_LIMIT}."
+            )
+        else:
+            limit = int(value)
+            user_manager.set_last_n_messages_limit(user_id, limit)
+            feedback = f"Personal Last N set to {limit}."
+        try:
+            await _edit_personal_context_mode_menu(event, kind)
+        except errors.rpcerrorlist.MessageNotModifiedError:
+            pass
+        await event.answer(feedback)
+    elif data_str.startswith("lastnhere_"):
+        is_bot_admin = await util.isAdmin(event)
+        is_group_admin = await util.is_group_admin(event)
+
+        if not event.is_private and not (is_bot_admin or is_group_admin):
+            await event.answer(
+                "You must be a group admin or bot admin to change chat Last N limit."
+            )
+            return
+
+        value = data_str.rsplit("_", 1)[1]
+        if value == "reset":
+            chat_manager.set_last_n_messages_limit(event.chat_id, None)
+            feedback = "Chat Last N reset; using personal/global default."
+        else:
+            limit = int(value)
+            chat_manager.set_last_n_messages_limit(event.chat_id, limit)
+            feedback = f"Chat Last N set to {limit}."
+        try:
+            await _edit_chat_context_mode_menu(event)
+        except errors.rpcerrorlist.MessageNotModifiedError:
+            pass
+        await event.answer(feedback)
     elif data_str.startswith("context_"):
         mode = data_str.split("_", 1)[1]
         user_manager.set_context_mode(user_id, mode)
         prefs = user_manager.get_prefs(user_id)  # update prefs
 
-        options = _build_context_mode_menu_options(event.chat_id, event.sender_id)
-        buttons = _build_context_mode_buttons(
-            options,
-            current_mode=prefs.context_mode,
-            mode_callback_prefix="context_",
-            include_reply_chain=prefs.include_reply_chain,
-            reply_chain_callback="replychain_user",
-        )
-        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
+        try:
+            await _edit_personal_context_mode_menu(event, "private")
+        except errors.rpcerrorlist.MessageNotModifiedError:
+            pass
         await event.answer("Private context mode updated.")
     elif data_str.startswith("contexthere_"):
         # Check admin permissions for chat context mode changes
@@ -6048,43 +6252,8 @@ async def callback_handler(event):
         mode_to_set = None if mode == "not_set" else mode
         chat_manager.set_context_mode(event.chat_id, mode_to_set)
 
-        # Re-fetch prefs to update the button display correctly
-        chat_prefs = chat_manager.get_prefs(event.chat_id)
-        current_mode_for_buttons = (
-            chat_prefs.context_mode
-            if chat_prefs.context_mode is not None
-            else "not_set"
-        )
-
-        # Prepare options for the menu, including a "Not Set" option for resetting
-        options_for_menu = _build_context_mode_menu_options(
-            event.chat_id, event.sender_id
-        )
-        options_for_menu["not_set"] = NOT_SET_HERE_DISPLAY_NAME
-
-        display_include_rc = (
-            chat_prefs.include_reply_chain
-            if chat_prefs.include_reply_chain is not None
-            else True
-        )
-        buttons = _build_context_mode_buttons(
-            options_for_menu,
-            current_mode=current_mode_for_buttons,
-            mode_callback_prefix="contexthere_",
-            include_reply_chain=display_include_rc,
-            reply_chain_callback="replychainhere_toggle",
-        )
-
-        # We also need to update the title text after the change
-        new_status_text = await _get_context_mode_status_text(event)
-        new_title = f"**Current Status:**\n{new_status_text}\n\n**Set Context Mode for This Chat**"
-
         try:
-            await event.edit(
-                text=f"{BOT_META_INFO_PREFIX}{new_title}",
-                buttons=util.build_menu(buttons, n_cols=1),
-                parse_mode="md",
-            )
+            await _edit_chat_context_mode_menu(event)
         except errors.rpcerrorlist.MessageNotModifiedError:
             pass  # Ignore if nothing changed
 
@@ -6093,15 +6262,10 @@ async def callback_handler(event):
         mode = data_str.split("_", 1)[1]
         user_manager.set_group_context_mode(user_id, mode)
         prefs = user_manager.get_prefs(user_id)  # update prefs
-        options = _build_context_mode_menu_options(event.chat_id, event.sender_id)
-        buttons = _build_context_mode_buttons(
-            options,
-            current_mode=prefs.group_context_mode,
-            mode_callback_prefix="groupcontext_",
-            include_reply_chain=prefs.include_reply_chain,
-            reply_chain_callback="replychain_user",
-        )
-        await event.edit(buttons=util.build_menu(buttons, n_cols=1))
+        try:
+            await _edit_personal_context_mode_menu(event, "group")
+        except errors.rpcerrorlist.MessageNotModifiedError:
+            pass
         await event.answer("Group context mode updated.")
     elif data_str.startswith("metadata_"):
         mode = data_str.split("_", 1)[1]

@@ -217,5 +217,67 @@ class CodexPromptCacheHintTests(unittest.TestCase):
         self.assertNotEqual(key1, key3)
 
 
+
+class LastNContextLimitTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.llm_chat = _load_llm_chat()
+
+    def test_last_n_global_default_is_100(self):
+        self.assertEqual(self.llm_chat.LAST_N_MESSAGES_LIMIT, 100)
+
+    def test_effective_last_n_limit_precedence(self):
+        with patch.object(
+            self.llm_chat.chat_manager, "get_last_n_messages_limit", return_value=None
+        ), patch.object(
+            self.llm_chat.user_manager, "get_last_n_messages_limit", return_value=None
+        ):
+            self.assertEqual(self.llm_chat._get_effective_last_n_limit(10, 20), 100)
+
+        with patch.object(
+            self.llm_chat.chat_manager, "get_last_n_messages_limit", return_value=None
+        ), patch.object(
+            self.llm_chat.user_manager, "get_last_n_messages_limit", return_value=200
+        ):
+            self.assertEqual(self.llm_chat._get_effective_last_n_limit(10, 20), 200)
+
+        with patch.object(
+            self.llm_chat.chat_manager, "get_last_n_messages_limit", return_value=400
+        ), patch.object(
+            self.llm_chat.user_manager, "get_last_n_messages_limit", return_value=200
+        ):
+            self.assertEqual(self.llm_chat._get_effective_last_n_limit(10, 20), 400)
+
+    def test_last_n_quick_pick_buttons_mark_current_limit(self):
+        buttons = self.llm_chat._build_last_n_limit_buttons(
+            current_limit=200,
+            callback_prefix="lastnhere_",
+            reset_callback="lastnhere_reset",
+        )
+        labels = [button.text for button in buttons]
+        data = [
+            button.data.decode("utf-8")
+            if isinstance(button.data, bytes)
+            else button.data
+            for button in buttons
+        ]
+
+        self.assertIn("✅ Last N: 200", labels)
+        self.assertIn("Last N: 800", labels)
+        self.assertIn("lastnhere_800", data)
+        self.assertIn("lastnhere_reset", data)
+
+    def test_last_n_status_reports_source(self):
+        with patch.object(
+            self.llm_chat.chat_manager, "get_last_n_messages_limit", return_value=None
+        ), patch.object(
+            self.llm_chat.user_manager, "get_last_n_messages_limit", return_value=800
+        ):
+            status = self.llm_chat._get_last_n_limit_status(10, 20)
+
+        self.assertEqual(status["effective_limit"], 800)
+        self.assertEqual(status["source"], "your personal default")
+
+
 if __name__ == "__main__":
     unittest.main()
