@@ -273,10 +273,10 @@ subs = {
     "irui": "study_cs_ai_nlp_information retrieval_output ui",
     ##
     "thesis": "study_cs_ai_thesis",
-    "th": "study_cs_ai_thesis",
+    "t": "study_cs_ai_thesis",
     "thp": "study_cs_ai_thesis_practical",
     "thesisw": "study_cs_ai_thesis_writing",
-    "t": "study_cs_ai_thesis_writing",
+    # "t": "study_cs_ai_thesis_writing",
     "seminar": "study_cs_ai_thesis_writing_seminar",
     "sem": "study_cs_ai_thesis_writing_seminar",
     "attr": "study_cs_ai_thesis_attribution",
