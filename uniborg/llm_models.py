@@ -24,9 +24,6 @@ from uniborg.constants import (
     OPENAI_CODEX_GPT_5_6_SOL,
     OPENAI_CODEX_GPT_5_6_TERRA,
     OR_OPENAI_5_6_SOL,
-    PIONEER_GPT_5_5,
-    PIONEER_OPUS_4_8,
-    PIONEER_SONNET_4_6,
 )
 
 #: The single operator-level default. Every model spec falls back to this.
@@ -47,7 +44,6 @@ OPENROUTER_REASONING_LEVELS = ("low", "medium", "high")
 #: Pioneer's OpenAI-compatible Responses endpoint. Not probed directly; these
 #: match what Pioneer's own model list advertises for its Claude models.
 PIONEER_REASONING_LEVELS = ("low", "medium", "high")
-PIONEER_GPT_REASONING_LEVELS = PIONEER_REASONING_LEVELS + ("xhigh",)
 
 
 @dataclass(frozen=True)
@@ -133,25 +129,12 @@ MODEL_SPECS = [
         ASTRA_REASONING_LEVELS,
         admin_only=True,
     ),
-    ## Pioneer (admin-only)
-    ModelSpec(
-        PIONEER_OPUS_4_8,
-        "Pioneer Opus 4.8 (Admin)",
-        PIONEER_REASONING_LEVELS,
-        admin_only=True,
-    ),
-    ModelSpec(
-        PIONEER_GPT_5_5,
-        "Pioneer GPT-5.5 (Admin)",
-        PIONEER_GPT_REASONING_LEVELS,
-        admin_only=True,
-    ),
-    ModelSpec(
-        PIONEER_SONNET_4_6,
-        "Pioneer Sonnet 4.6 (Admin)",
-        PIONEER_REASONING_LEVELS,
-        admin_only=True,
-    ),
+    ## Pioneer (admin-only) - no longer used, kept for easy re-enabling.
+    #: Uncomment these and the `.sn`/`.o` prefixes in llm_chat.py to bring it
+    #: back; the Pioneer backend itself is still wired up.
+    # ModelSpec(PIONEER_OPUS_4_8, "Pioneer Opus 4.8 (Admin)", PIONEER_REASONING_LEVELS, admin_only=True),
+    # ModelSpec(PIONEER_GPT_5_5, "Pioneer GPT-5.5 (Admin)", PIONEER_GPT_REASONING_LEVELS, admin_only=True),
+    # ModelSpec(PIONEER_SONNET_4_6, "Pioneer Sonnet 4.6 (Admin)", PIONEER_REASONING_LEVELS, admin_only=True),
     ## Codex models known to the registry but kept out of the pickers.
     ModelSpec(
         OPENAI_CODEX_GPT_5_6_TERRA,

@@ -1,5 +1,12 @@
 # Pioneer Backend
 
+> **Not in use.** Pioneer is commented out of the model registry
+> (`uniborg/llm_models.py`) and of the admin prefix table in
+> `llm_chat_plugins/llm_chat.py`, so its models no longer appear in `/setModel`
+> or `/setModelHere` and `.sn` / `.o` are plain text again. The backend below
+> is still wired up: uncomment those entries to bring it back.
+
+
 Betterborg supports Pioneer through Pioneer's OpenAI-compatible endpoint:
 `https://api.pioneer.ai/v1`.
 

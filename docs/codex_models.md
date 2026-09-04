@@ -55,7 +55,7 @@ so it is deliberately absent from the level sets.
 - `.as`, `.asm`, `.asl`, `.ash`, `.asx`, `.asxx`: the same ladder for GPT-6
   Astra.
 
-`.a` belongs to `advanced_get` and `.o` to Pioneer Opus, so Astra uses `.as`.
+`.a` belongs to `advanced_get` and `.o` was Pioneer's, so Astra uses `.as`.
 
 ## Tools
 

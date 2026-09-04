@@ -51,9 +51,11 @@ class PioneerBackendTests(unittest.TestCase):
     def setUpClass(cls):
         cls.llm_chat = _load_llm_chat()
 
-    def test_pioneer_models_are_admin_choices_only(self):
+    def test_pioneer_models_are_not_offered_in_the_menus(self):
+        #: Pioneer is no longer used, so it is commented out of the registry.
+        #: The backend below stays wired up so it can be re-enabled.
         for model in (PIONEER_OPUS_4_8, PIONEER_GPT_5_5, PIONEER_SONNET_4_6):
-            self.assertIn(model, self.llm_chat.ADMIN_MODEL_CHOICES)
+            self.assertNotIn(model, self.llm_chat.ADMIN_MODEL_CHOICES)
             self.assertNotIn(model, self.llm_chat.MODEL_CHOICES)
 
     def test_pioneer_models_are_admin_only(self):
@@ -102,33 +104,17 @@ class PioneerBackendTests(unittest.TestCase):
             [{"type": "web_search"}],
         )
 
-    def test_pioneer_admin_prefixes_select_pioneer_models(self):
-        sonnet = self.llm_chat._detect_and_process_message_prefix(
-            ".sn hello", admin_p=True
-        )
-        opus = self.llm_chat._detect_and_process_message_prefix(
-            ".o hello", admin_p=True
-        )
-
-        self.assertEqual(sonnet.model, PIONEER_SONNET_4_6)
-        self.assertIsNone(sonnet.reasoning_effort)
-        self.assertEqual(sonnet.processed_text, "hello")
-        self.assertEqual(opus.model, PIONEER_OPUS_4_8)
-        self.assertIsNone(opus.reasoning_effort)
-        self.assertEqual(opus.processed_text, "hello")
-
-    def test_pioneer_admin_prefixes_are_admin_only(self):
-        sonnet = self.llm_chat._detect_and_process_message_prefix(
-            ".sn hello", admin_p=False
-        )
-        opus = self.llm_chat._detect_and_process_message_prefix(
-            ".o hello", admin_p=False
-        )
-
-        self.assertIsNone(sonnet.model)
-        self.assertEqual(sonnet.processed_text, ".sn hello")
-        self.assertIsNone(opus.model)
-        self.assertEqual(opus.processed_text, ".o hello")
+    def test_pioneer_prefixes_are_disabled(self):
+        #: `.sn` and `.o` are commented out along with the models, so they are
+        #: plain text again for admins and non-admins alike.
+        for admin_p in (True, False):
+            for text in (".sn hello", ".o hello"):
+                result = self.llm_chat._detect_and_process_message_prefix(
+                    text, admin_p=admin_p
+                )
+                self.assertIsNone(result.model)
+                self.assertIsNone(result.reasoning_effort)
+                self.assertEqual(result.processed_text, text)
 
     def test_recent_context_prefix_still_combines_with_model_prefix(self):
         result = self.llm_chat._detect_and_process_message_prefix(
@@ -150,8 +136,8 @@ class PioneerBackendTests(unittest.TestCase):
             self.assertEqual(resolution.source, "model_default")
 
     def test_pioneer_reasoning_respects_prefix_and_preference(self):
-        resolution = self._resolve(PIONEER_GPT_5_5, prefix_effort="xhigh")
-        self.assertEqual(resolution.level, "xhigh")
+        resolution = self._resolve(PIONEER_GPT_5_5, prefix_effort="high")
+        self.assertEqual(resolution.level, "high")
         self.assertEqual(resolution.source, "prefix")
 
         with mock.patch.object(
@@ -165,6 +151,9 @@ class PioneerBackendTests(unittest.TestCase):
             resolution = self._resolve(PIONEER_GPT_5_5, prefix_effort="high")
             self.assertEqual(resolution.level, "high")
             self.assertEqual(resolution.source, "prefix")
+
+    def test_pioneer_models_remain_admin_gated_if_typed_directly(self):
+        self.assertTrue(self.llm_chat._is_admin_only_model(PIONEER_GPT_5_5))
 
     def test_pioneer_reasoning_ignores_levels_the_model_rejects(self):
         #: `max` is not offered by Pioneer, so a preference carried over from

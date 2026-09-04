@@ -209,15 +209,16 @@ PREFIX_MODEL_MAPPING = {
 }
 
 ADMIN_PREFIX_MODEL_MAPPING = {
-    ".sn": (PIONEER_SONNET_4_6, None),
-    ".o": (PIONEER_OPUS_4_8, None),
+    #: Pioneer is no longer used; uncomment to bring the prefixes back.
+    # ".sn": (PIONEER_SONNET_4_6, None),
+    # ".o": (PIONEER_OPUS_4_8, None),
     ".cl": (OPENAI_CODEX_GPT_5_6_SOL, "low"),
     ".cm": (OPENAI_CODEX_GPT_5_6_SOL, "medium"),
     ".ch": (OPENAI_CODEX_GPT_5_6_SOL, "high"),
     ".cx": (OPENAI_CODEX_GPT_5_6_SOL, "xhigh"),
     ".cxx": (OPENAI_CODEX_GPT_5_6_SOL, "max"),
     (".c", ".چ"): (OPENAI_CODEX_GPT_5_6_SOL, "medium"),
-    #: `.a` belongs to advanced_get and `.o` to Pioneer Opus, so Astra uses `.as`.
+    #: `.a` belongs to advanced_get and `.o` was Pioneer's, so Astra uses `.as`.
     ".asl": (OPENAI_CODEX_ASTRA, "low"),
     ".asm": (OPENAI_CODEX_ASTRA, "medium"),
     ".ash": (OPENAI_CODEX_ASTRA, "high"),
@@ -5312,9 +5313,7 @@ async def help_handler(event):
         "(low / high / extra high / max, admin-only)\n"
         "- `.as` / `.asm` → Codex GPT-6 Astra (medium, admin-only)\n"
         "- `.asl` / `.ash` / `.asx` / `.asxx` → Codex GPT-6 Astra "
-        "(low / high / extra high / max, admin-only)\n"
-        "- `.sn` → Pioneer Sonnet 4.6 (admin-only)\n"
-        "- `.o` → Pioneer Opus 4.8 (admin-only)"
+        "(low / high / extra high / max, admin-only)"
         if is_admin
         else "- `.c` → GPT-5.6 Sol (OpenRouter): Latest OpenAI model on OpenRouter"
     )
