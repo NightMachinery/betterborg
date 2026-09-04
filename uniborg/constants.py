@@ -15,9 +15,17 @@ GEMINI_PRO_LATEST = "gemini/gemini-3-pro-preview"
 # GEMINI_FLASH_2_5 = "gemini/gemini-2.5-flash"
 # GEMINI_FLASH_LITE_2_5 = "gemini/gemini-2.5-flash-lite"
 
-OR_OPENAI_5_2 = "openrouter/openai/gpt-5.2"
-OR_OPENAI_LATEST = OR_OPENAI_5_2
+OR_OPENAI_5_6_SOL = "openrouter/openai/gpt-5.6-sol"
+OR_OPENAI_LATEST = OR_OPENAI_5_6_SOL
+
+#: Codex models are reached through the ChatGPT OAuth backend, not the public API.
 OPENAI_CODEX_GPT_5_5 = "openai-codex/gpt-5.5"
+OPENAI_CODEX_GPT_5_6_SOL = "openai-codex/gpt-5.6-sol"
+OPENAI_CODEX_GPT_5_6_TERRA = "openai-codex/gpt-5.6-terra"
+OPENAI_CODEX_GPT_5_6_LUNA = "openai-codex/gpt-5.6-luna"
+OPENAI_CODEX_ASTRA = "openai-codex/gpt-6-astra"
+#: Astra is still rolling out to ChatGPT accounts; flip this once it is live.
+OPENAI_CODEX_LATEST = OPENAI_CODEX_GPT_5_6_SOL
 
 PIONEER_BASE_URL = "https://api.pioneer.ai/v1"
 PIONEER_OPUS_4_8 = "pioneer/claude-opus-4-8"

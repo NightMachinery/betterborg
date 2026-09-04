@@ -155,9 +155,11 @@ from uniborg.constants import (
     GEMINI_FLASH_3,
     GEMINI_CHAT_ROTATE_KEYS_P,
     ADMIN_ONLY_COMMAND_IGNORED,
-    OR_OPENAI_5_2,
+    OR_OPENAI_5_6_SOL,
     OR_OPENAI_LATEST,
-    OPENAI_CODEX_GPT_5_5,
+    OPENAI_CODEX_GPT_5_6_SOL,
+    OPENAI_CODEX_ASTRA,
+    OPENAI_CODEX_LATEST,
     PIONEER_OPUS_4_8,
     PIONEER_GPT_5_5,
     PIONEER_SONNET_4_6,
@@ -167,6 +169,8 @@ from uniborg.constants import (
 from uniborg import gemini_live_util
 from uniborg import codex_util
 from uniborg import pioneer_util
+from uniborg import llm_models
+from uniborg.llm_models import DEFAULT_REASONING_EFFORT, ModelSpec
 
 # Redis utilities for smart context state persistence
 from uniborg import redis_util
@@ -207,11 +211,11 @@ PREFIX_MODEL_MAPPING = {
 ADMIN_PREFIX_MODEL_MAPPING = {
     ".sn": (PIONEER_SONNET_4_6, None),
     ".o": (PIONEER_OPUS_4_8, None),
-    ".cl": (OPENAI_CODEX_GPT_5_5, "low"),
-    ".cm": (OPENAI_CODEX_GPT_5_5, "medium"),
-    ".ch": (OPENAI_CODEX_GPT_5_5, "high"),
-    ".cx": (OPENAI_CODEX_GPT_5_5, "xhigh"),
-    (".c", ".چ"): (OPENAI_CODEX_GPT_5_5, "medium"),
+    ".cl": (OPENAI_CODEX_GPT_5_6_SOL, "low"),
+    ".cm": (OPENAI_CODEX_GPT_5_6_SOL, "medium"),
+    ".ch": (OPENAI_CODEX_GPT_5_6_SOL, "high"),
+    ".cx": (OPENAI_CODEX_GPT_5_6_SOL, "xhigh"),
+    (".c", ".چ"): (OPENAI_CODEX_GPT_5_6_SOL, "medium"),
 }
 
 # Audio summarization prompt
@@ -926,66 +930,10 @@ IMAGE_PATTERN = re.compile(r"data:image/([^;]{1,20});base64,([A-Za-z0-9+/=]+)")
 MAGIC_STR_AS_USER = "MAGIC_AS_USER"
 MAGIC_PATTERN_AS_USER = re.compile(rf"\b{MAGIC_STR_AS_USER}\b")
 
-MODEL_CHOICES = {
-    ## Gemini
-    GEMINI_FLASH_LATEST: "Gemini Flash (Latest)",
-    GEMINI_FLASH_LITE_LATEST: "Gemini Flash Lite (Latest)",
-    # "gemini/gemini-2.5-flash": "Gemini 2.5 Flash",
-    # "gemini/gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
-    GEMINI_PRO_LATEST: "Gemini 3 Pro",
-    "gemini/gemini-2.5-pro": "Gemini 2.5 Pro",
-    "openrouter/google/gemini-2.5-pro": "Gemini 2.5 Pro (OpenRouter)",
-    GEMINI_FLASH_3: "Gemini 3 Flash",
-    "gemini/gemini-2.0-flash": "Gemini 2 Flash",
-    "gemini/gemini-2.0-flash-preview-image-generation": "Gemini 2 Flash Image",
-    "gemini/gemini-2.5-flash-image-preview": "Gemini 2.5 Flash Image",
-    ## Anthropic Claude
-    "openrouter/anthropic/claude-sonnet-4.5": "Claude Sonnet 4.5 (OpenRouter)",
-    "openrouter/anthropic/claude-opus-4.5": "Claude Opus 4.5 (OpenRouter)",
-    # "openrouter/anthropic/claude-opus-4.1": "Claude Opus 4.1 (OpenRouter)",
-    ## Grok
-    "openrouter/x-ai/grok-4": "Grok 4 (OpenRouter)",
-    ## OpenAI
-    OR_OPENAI_5_2: "GPT-5.2 (OpenRouter)",
-    # "openrouter/openai/gpt-5.2-chat": "GPT-5.2 Chat (OpenRouter)",
-    # "openrouter/openai/gpt-5-chat": "GPT-5 Chat (OpenRouter)",
-    "openrouter/openai/chatgpt-4o-latest": "ChatGPT 4o (OpenRouter)",
-    # openai/chatgpt-4o-latest: OpenAI ChatGPT 4o is continually updated by OpenAI to point to the current version of GPT-4o used by ChatGPT. It therefore differs slightly from the API version of GPT-4o in that it has additional RLHF. It is intended for research and evaluation.  OpenAI notes that this model is not suited for production use-cases as it may be removed or redirected to another model in the future.
-    # "openrouter/openai/gpt-4o-mini": "GPT-4o Mini (OpenRouter)",
-    # "openrouter/openai/gpt-4.1-mini": "GPT-4.1 Mini (OpenRouter)",
-    # "openrouter/openai/gpt-4.1": "GPT-4.1 (OpenRouter)",
-    # "openrouter/openai/o4-mini-high": "o4-mini-high (OpenRouter)",
-    ## Kimi
-    # moonshotai/kimi-k2:free
-    "openrouter/moonshotai/kimi-k2:free": "🎁 Kimi K2 (Free, OpenRouter)",
-    ## Qwen
-    # qwen/qwen3-coder:free
-    "openrouter/qwen/qwen3-coder:free": "🎁 Qwen3 Coder (Free, OpenRouter)",
-    ## Z.AI
-    # z-ai/glm-4.5-air:free
-    "openrouter/z-ai/glm-4.5-air:free": "🎁 GLM-4.5 Air (Free, OpenRouter)",
-    ## Various
-    # "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "🎁 Venice Uncensored 24B (Free, OpenRouter)",
-    #: model name is too long for Telegram API's `data` field in callback buttons
-    ## Cloaked Models
-    ## DeepSeek
-    "deepseek/deepseek-chat": "DeepSeek Chat",
-    "deepseek/deepseek-reasoner": "DeepSeek Reasoner",
-    ## Mistral
-    "mistral/mistral-medium-latest": "Mistral Medium (Latest)",
-    "mistral/magistral-medium-latest": "Magistral Medium (Latest)",
-    # "mistral/mistral-large-latest": "Mistral Large (Latest)",
-    # "mistral/mistral-small-latest": "Mistral Small (Latest)",
-    "mistral/pixtral-large-latest": "Pixtral Large (Latest)",
-    ##
-}
+#: Model catalogue and per-model reasoning levels live in `uniborg/llm_models.py`.
+MODEL_CHOICES = llm_models.public_model_choices()
 
-ADMIN_MODEL_CHOICES = {
-    OPENAI_CODEX_GPT_5_5: "GPT-5.5 (Codex, Admin)",
-    PIONEER_OPUS_4_8: "Pioneer Opus 4.8 (Admin)",
-    PIONEER_GPT_5_5: "Pioneer GPT-5.5 (Admin)",
-    PIONEER_SONNET_4_6: "Pioneer Sonnet 4.6 (Admin)",
-}
+ADMIN_MODEL_CHOICES = llm_models.admin_model_choices()
 
 # Chat model options including "Not Set" option for removing chat-specific model
 CHAT_MODEL_OPTIONS = {"": "Not Set (Use Personal Default)"}
@@ -2700,7 +2648,7 @@ def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
 def is_gemini_model(model_name):
     """Check if model is a Gemini model."""
 
-    return re.search(r"\bgemini\b", model_name, re.IGNORECASE)
+    return llm_models.is_gemini_model_p(model_name)
 
 
 def is_native_gemini(model: str) -> bool:
@@ -5045,14 +4993,14 @@ async def help_handler(event):
     group_trigger_text = " or ".join(activation_instructions)
 
     codex_shortcuts_text = (
-        "- `.c` / `.cm` → Codex GPT-5.5 (medium, admin-only)\n"
-        "- `.cl` → Codex GPT-5.5 (low, admin-only)\n"
-        "- `.ch` → Codex GPT-5.5 (high, admin-only)\n"
-        "- `.cx` → Codex GPT-5.5 (xhigh, admin-only)\n"
+        "- `.c` / `.cm` → Codex GPT-5.6 Sol (medium, admin-only)\n"
+        "- `.cl` → Codex GPT-5.6 Sol (low, admin-only)\n"
+        "- `.ch` → Codex GPT-5.6 Sol (high, admin-only)\n"
+        "- `.cx` → Codex GPT-5.6 Sol (xhigh, admin-only)\n"
         "- `.sn` → Pioneer Sonnet 4.6 (admin-only)\n"
         "- `.o` → Pioneer Opus 4.8 (admin-only)"
         if is_admin
-        else "- `.c` → GPT-5.2 (OpenRouter): Latest OpenAI model on OpenRouter"
+        else "- `.c` → GPT-5.6 Sol (OpenRouter): Latest OpenAI model on OpenRouter"
     )
 
     help_text = f"""
@@ -5275,9 +5223,7 @@ async def status_handler(event):
     chat_last_n_status = (
         f"`{chat_last_n_limit}`" if chat_last_n_limit is not None else "Not set"
     )
-    effective_last_n_status = (
-        f"`{effective_last_n_limit}` ({last_n_status['source']})"
-    )
+    effective_last_n_status = f"`{effective_last_n_limit}` ({last_n_status['source']})"
 
     # Get context mode names and handle smart/last_N modes
     context_mode_name = CONTEXT_MODE_NAMES.get(

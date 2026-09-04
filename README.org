@@ -170,10 +170,10 @@ bulk self-delete command clears all of the account's reactions before deleting
 all of its messages; the reaction-only bulk command is available separately. See
 [[file:docs/deleter.md][docs/deleter.md]].
 
-** Codex GPT-5.5
-=llm_chat= can expose =openai-codex/gpt-5.5= as an admin-only chat model using
-the published =llm-openai-via-codex= package and local Codex OAuth credentials.
-See [[file:docs/codex_gpt55.md][docs/codex_gpt55.md]] and
+** Codex models
+=llm_chat= can expose =openai-codex/gpt-5.6-sol= and =openai-codex/gpt-6-astra=
+as admin-only chat models using the published =llm-openai-via-codex= package and
+local Codex OAuth credentials. See [[file:docs/codex_models.md][docs/codex_models.md]] and
 [[file:docs/codex_caching.md][docs/codex_caching.md]].
 
 ** Pioneer
