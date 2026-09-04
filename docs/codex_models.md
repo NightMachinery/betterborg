@@ -52,9 +52,10 @@ so it is deliberately absent from the level sets.
 - `.ch`: GPT-5.6 Sol with `high` reasoning.
 - `.cx`: GPT-5.6 Sol with `xhigh` reasoning.
 - `.cxx`: GPT-5.6 Sol with `max` reasoning.
-- `.o`, `.om`, `.ol`, `.oh`, `.ox`, `.oxx`: the same ladder for GPT-6 Astra.
+- `.as`, `.asm`, `.asl`, `.ash`, `.asx`, `.asxx`: the same ladder for GPT-6
+  Astra.
 
-`.a` and `.s` are taken by other plugins, hence `.o` for Astra.
+`.a` belongs to `advanced_get` and `.o` to Pioneer Opus, so Astra uses `.as`.
 
 ## Tools
 

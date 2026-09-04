@@ -215,7 +215,27 @@ ADMIN_PREFIX_MODEL_MAPPING = {
     ".cm": (OPENAI_CODEX_GPT_5_6_SOL, "medium"),
     ".ch": (OPENAI_CODEX_GPT_5_6_SOL, "high"),
     ".cx": (OPENAI_CODEX_GPT_5_6_SOL, "xhigh"),
+    ".cxx": (OPENAI_CODEX_GPT_5_6_SOL, "max"),
     (".c", ".چ"): (OPENAI_CODEX_GPT_5_6_SOL, "medium"),
+    #: `.a` belongs to advanced_get and `.o` to Pioneer Opus, so Astra uses `.as`.
+    ".asl": (OPENAI_CODEX_ASTRA, "low"),
+    ".asm": (OPENAI_CODEX_ASTRA, "medium"),
+    ".ash": (OPENAI_CODEX_ASTRA, "high"),
+    ".asx": (OPENAI_CODEX_ASTRA, "xhigh"),
+    ".asxx": (OPENAI_CODEX_ASTRA, "max"),
+    ".as": (OPENAI_CODEX_ASTRA, "medium"),
+}
+
+#: Sets reasoning effort for one message without changing the model. Available
+#: to everyone; a level the model does not accept is ignored by the resolver.
+#: @hiddenDep Update `Quick Model Selection Shortcuts` in `/help` to match.
+EFFORT_PREFIX_MAPPING = {
+    ".tn": "none",
+    ".tl": "low",
+    ".tm": "medium",
+    ".th": "high",
+    ".tx": "xhigh",
+    ".txx": "max",
 }
 
 # Audio summarization prompt
@@ -2177,6 +2197,30 @@ def _coerce_prefix_model_config(config) -> tuple[str, Optional[str]]:
     return config, None
 
 
+def _match_message_prefix(text: str, mapping: dict):
+    """Longest prefix of `text` found in `mapping`.
+
+    Returns `(config, remaining_text)`, or None. A prefix only matches when it
+    is followed by whitespace or ends the message, so `.tl` never swallows the
+    start of another plugin's `.tlg` command.
+    """
+    best_length = 0
+    best_config = None
+    for prefix_key, config in mapping.items():
+        for prefix in to_iterable(prefix_key):
+            if not text.startswith(prefix):
+                continue
+            if len(text) != len(prefix) and not text[len(prefix)].isspace():
+                continue
+            if len(prefix) > best_length:
+                best_length = len(prefix)
+                best_config = config
+
+    if best_config is None:
+        return None
+    return best_config, text[best_length:].lstrip()
+
+
 def _detect_and_process_message_prefix(
     text: str, *, admin_p: bool = False
 ) -> PrefixProcessResult:
@@ -2213,24 +2257,41 @@ def _detect_and_process_message_prefix(
         prefix_mappings.append(ADMIN_PREFIX_MODEL_MAPPING)
     prefix_mappings.append(PREFIX_MODEL_MAPPING)
 
-    for prefix_mapping in prefix_mappings:
-        for prefix, config in prefix_mapping.items():
-            prefixes = to_iterable(prefix)
-            for prefix in prefixes:
-                if processed_text.startswith(prefix):
-                    # Check if the prefix is followed by a space or the end of the message
-                    if len(text) == len(prefix) or text[len(prefix)].isspace():
-                        model, reasoning_effort = _coerce_prefix_model_config(config)
-                        processed_text = text[len(prefix) :].lstrip()
-                        processed_text = add_back_prefixes(processed_text)
-                        return PrefixProcessResult(
-                            model=model,
-                            reasoning_effort=reasoning_effort,
-                            processed_text=processed_text,
-                        )
+    model = None
+    reasoning_effort = None
+    explicit_effort_p = False
+
+    #: A model prefix and an effort prefix may be combined, in either order:
+    #: `.c .th ask`, `.th .c ask`.
+    while True:
+        if model is None:
+            matched = None
+            for prefix_mapping in prefix_mappings:
+                matched = _match_message_prefix(processed_text, prefix_mapping)
+                if matched is not None:
+                    break
+            if matched is not None:
+                config, processed_text = matched
+                model, model_effort = _coerce_prefix_model_config(config)
+                if model_effort is not None and not explicit_effort_p:
+                    reasoning_effort = model_effort
+                continue
+
+        if not explicit_effort_p:
+            matched = _match_message_prefix(processed_text, EFFORT_PREFIX_MAPPING)
+            if matched is not None:
+                reasoning_effort, processed_text = matched
+                explicit_effort_p = True
+                continue
+
+        break
 
     processed_text = add_back_prefixes(processed_text)
-    return PrefixProcessResult(processed_text=processed_text)
+    return PrefixProcessResult(
+        model=model,
+        reasoning_effort=reasoning_effort,
+        processed_text=processed_text,
+    )
 
 
 def _validate_url_security(url: str) -> Optional[str]:
@@ -4349,7 +4410,11 @@ async def _process_message_content(
             processed_text = processed_text[2:].strip()
 
         # Strip model selection prefixes from all user messages in history
-        prefix_detection = _detect_and_process_message_prefix(processed_text)
+        #: admin_p=True so admin-only prefixes are stripped from history too.
+        #: This only removes text; model access is gated at send time.
+        prefix_detection = _detect_and_process_message_prefix(
+            processed_text, admin_p=True
+        )
         processed_text = prefix_detection.processed_text
 
         # Remove magic pattern to force user role
@@ -5243,9 +5308,11 @@ async def help_handler(event):
 
     codex_shortcuts_text = (
         "- `.c` / `.cm` → Codex GPT-5.6 Sol (medium, admin-only)\n"
-        "- `.cl` → Codex GPT-5.6 Sol (low, admin-only)\n"
-        "- `.ch` → Codex GPT-5.6 Sol (high, admin-only)\n"
-        "- `.cx` → Codex GPT-5.6 Sol (xhigh, admin-only)\n"
+        "- `.cl` / `.ch` / `.cx` / `.cxx` → Codex GPT-5.6 Sol "
+        "(low / high / extra high / max, admin-only)\n"
+        "- `.as` / `.asm` → Codex GPT-6 Astra (medium, admin-only)\n"
+        "- `.asl` / `.ash` / `.asx` / `.asxx` → Codex GPT-6 Astra "
+        "(low / high / extra high / max, admin-only)\n"
         "- `.sn` → Pioneer Sonnet 4.6 (admin-only)\n"
         "- `.o` → Pioneer Opus 4.8 (admin-only)"
         if is_admin
@@ -5317,6 +5384,15 @@ Start your messages with these shortcuts to use specific models:
 - `.g` / `.g2` → Gemini 2.5 Pro
 - `.g3` → Gemini 3 Pro (preview)
 - `.d` → DeepSeek Reasoner
+
+**Quick Reasoning Effort Shortcuts**
+Set the effort for one message, without changing the model. Combine with a
+model shortcut in either order, e.g. `.f .th your question`.
+- `.tn` / `.tl` / `.tm` → none / low / medium
+- `.th` / `.tx` / `.txx` → high / extra high / max
+
+Levels a model does not support are ignored. Use /setThink or /setThinkHere to
+make a level stick.
 """
     await event.reply(
         f"{BOT_META_INFO_PREFIX}{help_text}", link_preview=False, parse_mode="md"

@@ -60,8 +60,16 @@ parameter is sent at all.
   buttons for the selected model's levels, so switching model and effort
   happens in one place. Picking a different model re-renders the row with that
   model's levels.
-- Per-message prefixes set the effort for a single message. See the
-  "Quick Model Selection Shortcuts" section of `/help`.
+- Per-message prefixes set the effort for a single message, without changing
+  the model: `.tn`, `.tl`, `.tm`, `.th`, `.tx`, `.txx` for none, low, medium,
+  high, extra high and max. They combine with a model prefix in either order,
+  so `.f .th question` and `.th .f question` both work, and an explicit effort
+  prefix beats the effort baked into a model prefix.
+
+A prefix only matches when followed by whitespace or the end of the message,
+so another plugin's `.tlg` or `.tex` command is never swallowed. Prefixes are
+also stripped from earlier messages when history is rebuilt, admin-only ones
+included.
 
 `/status` shows the resolved level for the effective model and where it came
 from, plus any level stored for the current chat.
