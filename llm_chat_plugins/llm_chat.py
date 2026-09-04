@@ -1979,11 +1979,30 @@ def _get_effective_reasoning(
     )
 
 
+#: Levels are stored as the API sends them; these are only for display.
+REASONING_LEVEL_DISPLAY_NAMES = {
+    "disable": "Disable",
+    "none": "None",
+    "minimal": "Minimal",
+    "low": "Low",
+    "medium": "Medium",
+    "high": "High",
+    "xhigh": "Extra High",
+    "max": "Max",
+}
+
+
+def _reasoning_level_display(level: str) -> str:
+    return REASONING_LEVEL_DISPLAY_NAMES.get(level, level.capitalize())
+
+
 def _build_think_options(
     spec: ModelSpec, *, include_not_set_here: bool = False
 ) -> Dict[str, str]:
     """Menu entries for a model's reasoning levels, plus a reset entry."""
-    options = {level: level.capitalize() for level in spec.reasoning_levels}
+    options = {
+        level: _reasoning_level_display(level) for level in spec.reasoning_levels
+    }
     if include_not_set_here:
         options[REASONING_CLEAR_KEY] = NOT_SET_HERE_DISPLAY_NAME
     else:
@@ -2014,8 +2033,24 @@ class ThinkMenuState:
     current_value: str
 
 
-def _think_menu_state(chat_id: int, user_id: int, *, scope: str) -> ThinkMenuState:
-    model, _ = _get_effective_model_and_service(chat_id, user_id)
+def _scope_selected_model(chat_id: int, user_id: int, *, scope: str) -> str:
+    """The model a scope's picker currently has selected."""
+    if scope == REASONING_SCOPE_CHAT:
+        return (
+            chat_manager.get_model(chat_id)
+            or _get_effective_model_and_service(chat_id, user_id)[0]
+        )
+    if scope == REASONING_SCOPE_PERSONAL:
+        return user_manager.get_prefs(user_id).model
+    raise ValueError(f"Unknown reasoning scope: {scope}")
+
+
+def _think_menu_state(
+    chat_id: int, user_id: int, *, scope: str, model: Optional[str] = None
+) -> ThinkMenuState:
+    """State for a reasoning menu. `model` defaults to the effective model."""
+    if model is None:
+        model, _ = _get_effective_model_and_service(chat_id, user_id)
     spec = llm_models.spec_for_model(model)
 
     if scope == REASONING_SCOPE_CHAT:
@@ -2046,6 +2081,78 @@ def _set_reasoning_level(
         user_manager.set_thinking(user_id, model=model, level=level)
     else:
         raise ValueError(f"Unknown reasoning scope: {scope}")
+
+
+REASONING_MENU_KEY_PREFIX = "think:"
+
+
+def _reasoning_menu_key_level(key: str) -> Optional[str]:
+    """The level encoded in a `think:<level>` menu key, else None."""
+    if key.startswith(REASONING_MENU_KEY_PREFIX):
+        return key[len(REASONING_MENU_KEY_PREFIX) :]
+    return None
+
+
+@dataclass
+class ModelMenu:
+    """A model picker with the selected model's reasoning levels appended."""
+
+    options: Dict[str, str]
+    current_value: str
+    think_state: ThinkMenuState
+
+
+def _build_model_menu(
+    chat_id: int, user_id: int, *, scope: str, admin_p: bool
+) -> ModelMenu:
+    """Model choices for `scope`, followed by reasoning levels for its model."""
+    if scope == REASONING_SCOPE_CHAT:
+        options = _chat_model_options_for_admin_p(admin_p)
+        current_value = chat_manager.get_model(chat_id) or ""
+    elif scope == REASONING_SCOPE_PERSONAL:
+        options = _model_choices_for_admin_p(admin_p)
+        current_value = user_manager.get_prefs(user_id).model
+    else:
+        raise ValueError(f"Unknown reasoning scope: {scope}")
+
+    state = _think_menu_state(
+        chat_id,
+        user_id,
+        scope=scope,
+        model=_scope_selected_model(chat_id, user_id, scope=scope),
+    )
+
+    options = dict(options)
+    if state.spec.supports_reasoning_p():
+        for key, display in state.options.items():
+            #: present_options only ticks `current_value`, so tick these here.
+            tick = "✅ " if key == state.current_value else ""
+            options[f"{REASONING_MENU_KEY_PREFIX}{key}"] = f"{tick}🧠 {display}"
+
+    return ModelMenu(options=options, current_value=current_value, think_state=state)
+
+
+async def _apply_reasoning_menu_choice(
+    event, *, scope: str, level_key: str
+) -> Optional[str]:
+    """Store a `think:` picker choice. Returns feedback text, or None if invalid."""
+    chat_id = event.chat_id
+    user_id = event.sender_id
+    state = _think_menu_state(
+        chat_id,
+        user_id,
+        scope=scope,
+        model=_scope_selected_model(chat_id, user_id, scope=scope),
+    )
+    if level_key != REASONING_CLEAR_KEY and not state.spec.supports_level_p(level_key):
+        return None
+
+    level = None if level_key == REASONING_CLEAR_KEY else level_key
+    _set_reasoning_level(chat_id, user_id, scope=scope, model=state.model, level=level)
+    display = (
+        _reasoning_level_display(level) if level else state.options[REASONING_CLEAR_KEY]
+    )
+    return f"Reasoning for {_model_display_name(state.model)}: {display}"
 
 
 def _think_menu_title(state: ThinkMenuState, *, scope: str) -> str:
@@ -5421,7 +5528,7 @@ async def status_handler(event):
     reasoning = _get_effective_reasoning(chat_id, user_id, model=effective_model)
     if reasoning.level:
         thinking_status = (
-            f"`{reasoning.level.capitalize()}` "
+            f"`{_reasoning_level_display(reasoning.level)}` "
             f"(from {REASONING_SOURCE_NAMES[reasoning.source]})"
         )
     else:
@@ -5429,7 +5536,9 @@ async def status_handler(event):
 
     chat_reasoning = chat_manager.get_thinking(chat_id, model=effective_model)
     chat_reasoning_status = (
-        f"`{chat_reasoning.capitalize()}`" if chat_reasoning else "`Not set`"
+        f"`{_reasoning_level_display(chat_reasoning)}`"
+        if chat_reasoning
+        else "`Not set`"
     )
 
     # TTS Settings
@@ -5586,12 +5695,17 @@ async def set_model_handler(event):
             f"{BOT_META_INFO_PREFIX}Your chat model has been set to: `{model_name}`"
         )
     else:
-        model_choices = _model_choices_for_admin_p(await util.isAdmin(event))
+        menu = _build_model_menu(
+            event.chat_id,
+            user_id,
+            scope=REASONING_SCOPE_PERSONAL,
+            admin_p=await util.isAdmin(event),
+        )
         await bot_util.present_options(
             event,
             title="Set Chat Model",
-            options=model_choices,
-            current_value=prefs.model,
+            options=menu.options,
+            current_value=menu.current_value,
             callback_prefix="model_",
             awaiting_key="model_selection",
             n_cols=2,
@@ -5724,12 +5838,17 @@ async def set_model_here_handler(event):
             f"{BOT_META_INFO_PREFIX}✅ This chat's model has been set to: `{model}`"
         )
     else:
-        chat_model_options = _chat_model_options_for_admin_p(await util.isAdmin(event))
+        menu = _build_model_menu(
+            chat_id,
+            user_id,
+            scope=REASONING_SCOPE_CHAT,
+            admin_p=await util.isAdmin(event),
+        )
         await bot_util.present_options(
             event,
             title="Set Chat Model",
-            options=chat_model_options,
-            current_value=current_chat_model or "",
+            options=menu.options,
+            current_value=menu.current_value,
             callback_prefix="chatmodel_",
             awaiting_key="chatmodel_selection",
             n_cols=2,
@@ -6067,7 +6186,11 @@ async def _set_think_common(event, *, scope: str):
             chat_id, user_id, scope=scope, model=state.model, level=level
         )
         cancel_input_flow(user_id)
-        display = level.capitalize() if level else state.options[REASONING_CLEAR_KEY]
+        display = (
+            _reasoning_level_display(level)
+            if level
+            else state.options[REASONING_CLEAR_KEY]
+        )
         await event.reply(
             f"{BOT_META_INFO_PREFIX}✅ Reasoning effort for "
             f"`{state.model}` set to: **{display}**",
@@ -6228,53 +6351,87 @@ async def callback_handler(event):
     prefs = user_manager.get_prefs(user_id)
 
     if data_str.startswith("model_"):
+        admin_p = await util.isAdmin(event)
         model_id = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
-        model_choices = _model_choices_for_admin_p(await util.isAdmin(event))
-        if model_id not in model_choices or not await _can_user_access_model(
-            event, model_id
-        ):
-            await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
-            return
-        user_manager.set_model(user_id, model_id)
-        cancel_input_flow(user_id)  # Cancel the custom input flow
-        prefs = user_manager.get_prefs(user_id)  # update prefs
+        level_key = _reasoning_menu_key_level(model_id)
+
+        if level_key is not None:
+            feedback = await _apply_reasoning_menu_choice(
+                event, scope=REASONING_SCOPE_PERSONAL, level_key=level_key
+            )
+            if feedback is None:
+                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                return
+        else:
+            model_choices = _model_choices_for_admin_p(admin_p)
+            if model_id not in model_choices or not await _can_user_access_model(
+                event, model_id
+            ):
+                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                return
+            user_manager.set_model(user_id, model_id)
+            cancel_input_flow(user_id)  # Cancel the custom input flow
+            feedback = f"Model set to {model_choices[model_id]}"
+
+        menu = _build_model_menu(
+            event.chat_id, user_id, scope=REASONING_SCOPE_PERSONAL, admin_p=admin_p
+        )
         buttons = [
             KeyboardButtonCallback(
-                f"✅ {name}" if key == prefs.model else name,
+                f"✅ {name}" if key == menu.current_value else name,
                 data=f"model_{bot_util.sanitize_callback_data(key)}",
             )
-            for key, name in model_choices.items()
+            for key, name in menu.options.items()
         ]
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
-        await event.answer(f"Model set to {model_choices[model_id]}")
+        await event.answer(feedback)
 
     elif data_str.startswith("chatmodel_"):
-        model_id = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
-        chat_model_options = _chat_model_options_for_admin_p(await util.isAdmin(event))
-        if model_id not in chat_model_options or not await _can_user_access_model(
-            event, model_id
-        ):
-            await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
-            return
+        admin_p = await util.isAdmin(event)
         chat_id = event.chat_id
-        # Handle "Not Set" option (empty string means remove chat-specific model)
-        if model_id == "":
-            chat_manager.set_model(chat_id, None)
-            feedback_msg = "Chat model cleared (using personal default)"
+        model_id = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
+        level_key = _reasoning_menu_key_level(model_id)
+
+        if not event.is_private and not (admin_p or await util.is_group_admin(event)):
+            await event.answer(
+                "You must be a group admin or bot admin to change this chat's"
+                " settings.",
+                show_alert=True,
+            )
+            return
+
+        if level_key is not None:
+            feedback_msg = await _apply_reasoning_menu_choice(
+                event, scope=REASONING_SCOPE_CHAT, level_key=level_key
+            )
+            if feedback_msg is None:
+                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                return
         else:
-            chat_manager.set_model(chat_id, model_id)
-            feedback_msg = f"Chat model set to {_model_display_name(model_id)}"
-        cancel_input_flow(user_id)  # Cancel the custom input flow
+            chat_model_options = _chat_model_options_for_admin_p(admin_p)
+            if model_id not in chat_model_options or not await _can_user_access_model(
+                event, model_id
+            ):
+                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                return
+            # Handle "Not Set" option (empty string means remove chat-specific model)
+            if model_id == "":
+                chat_manager.set_model(chat_id, None)
+                feedback_msg = "Chat model cleared (using personal default)"
+            else:
+                chat_manager.set_model(chat_id, model_id)
+                feedback_msg = f"Chat model set to {_model_display_name(model_id)}"
+            cancel_input_flow(user_id)  # Cancel the custom input flow
 
-        # Update the menu to show the new selection
-        current_chat_model = chat_manager.get_model(chat_id)
-
+        menu = _build_model_menu(
+            chat_id, user_id, scope=REASONING_SCOPE_CHAT, admin_p=admin_p
+        )
         buttons = [
             KeyboardButtonCallback(
-                f"✅ {name}" if key == (current_chat_model or "") else name,
+                f"✅ {name}" if key == menu.current_value else name,
                 data=f"chatmodel_{bot_util.sanitize_callback_data(key)}",
             )
-            for key, name in chat_model_options.items()
+            for key, name in menu.options.items()
         ]
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
         await event.answer(feedback_msg)
@@ -6575,6 +6732,28 @@ async def generic_input_handler(event):
         cancel_input_flow(user_id)
         await send_info_message(event, "Process cancelled.")
         return
+
+    #: The model menus end with `think:<level>` entries; treat those as an
+    #: effort change rather than a custom model ID.
+    if input_type in ("model", "chatmodel"):
+        level_key = _reasoning_menu_key_level(text)
+        if level_key is not None:
+            scope = (
+                REASONING_SCOPE_CHAT
+                if input_type == "chatmodel"
+                else REASONING_SCOPE_PERSONAL
+            )
+            feedback = await _apply_reasoning_menu_choice(
+                event, scope=scope, level_key=level_key
+            )
+            if feedback is None:
+                await send_info_message(
+                    event, f"`{level_key}` is not supported by this model."
+                )
+            else:
+                await send_info_message(event, f"✅ {feedback}")
+            cancel_input_flow(user_id)
+            return
 
     # Handle simple text inputs
     if input_type == "model":
