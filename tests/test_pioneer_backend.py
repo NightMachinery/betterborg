@@ -2,6 +2,7 @@ import asyncio
 import builtins
 import importlib
 import unittest
+from unittest import mock
 
 from uniborg import llm_util
 from uniborg import pioneer_util
@@ -11,6 +12,11 @@ from uniborg.constants import (
     PIONEER_OPUS_4_8,
     PIONEER_SONNET_4_6,
 )
+
+
+#: IDs with no stored preferences, so the resolver falls through to defaults.
+_UNUSED_CHAT_ID = -100999000555
+_UNUSED_USER_ID = 999000555
 
 
 class _FakeLoop:
@@ -86,9 +92,7 @@ class PioneerBackendTests(unittest.TestCase):
             [{"type": "web_search"}],
         )
         self.assertEqual(
-            self.llm_chat.pioneer_tools_from_enabled(
-                ["urlContext", "codeExecution"]
-            ),
+            self.llm_chat.pioneer_tools_from_enabled(["urlContext", "codeExecution"]),
             [],
         )
         self.assertEqual(
@@ -134,17 +138,43 @@ class PioneerBackendTests(unittest.TestCase):
         self.assertEqual(result.model, GEMINI_FLASH_LATEST)
         self.assertEqual(result.processed_text, ".s hello")
 
-    def test_pioneer_reasoning_defaults_to_medium(self):
-        self.assertEqual(self.llm_chat._pioneer_reasoning_effort(None, None), "medium")
-        self.assertEqual(
-            self.llm_chat._pioneer_reasoning_effort(None, "disable"), "medium"
+    def _resolve(self, model, **kwargs):
+        return self.llm_chat._get_effective_reasoning(
+            _UNUSED_CHAT_ID, _UNUSED_USER_ID, model=model, **kwargs
         )
 
+    def test_pioneer_reasoning_defaults_to_medium(self):
+        for model in (PIONEER_OPUS_4_8, PIONEER_GPT_5_5, PIONEER_SONNET_4_6):
+            resolution = self._resolve(model)
+            self.assertEqual(resolution.level, "medium")
+            self.assertEqual(resolution.source, "model_default")
+
     def test_pioneer_reasoning_respects_prefix_and_preference(self):
-        self.assertEqual(self.llm_chat._pioneer_reasoning_effort(None, "low"), "low")
-        self.assertEqual(
-            self.llm_chat._pioneer_reasoning_effort("xhigh", "low"), "xhigh"
-        )
+        resolution = self._resolve(PIONEER_GPT_5_5, prefix_effort="xhigh")
+        self.assertEqual(resolution.level, "xhigh")
+        self.assertEqual(resolution.source, "prefix")
+
+        with mock.patch.object(
+            self.llm_chat.user_manager, "get_thinking", return_value="low"
+        ):
+            resolution = self._resolve(PIONEER_GPT_5_5)
+            self.assertEqual(resolution.level, "low")
+            self.assertEqual(resolution.source, "personal")
+
+            #: a per-message prefix still wins over the stored preference
+            resolution = self._resolve(PIONEER_GPT_5_5, prefix_effort="high")
+            self.assertEqual(resolution.level, "high")
+            self.assertEqual(resolution.source, "prefix")
+
+    def test_pioneer_reasoning_ignores_levels_the_model_rejects(self):
+        #: `max` is not offered by Pioneer, so a preference carried over from
+        #: another model must not reach the API.
+        with mock.patch.object(
+            self.llm_chat.user_manager, "get_thinking", return_value="max"
+        ):
+            resolution = self._resolve(PIONEER_OPUS_4_8)
+            self.assertEqual(resolution.level, "medium")
+            self.assertEqual(resolution.source, "model_default")
 
 
 if __name__ == "__main__":

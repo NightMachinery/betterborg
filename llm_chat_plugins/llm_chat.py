@@ -961,10 +961,6 @@ def _chat_model_options_for_admin_p(admin_p: bool) -> dict:
     return choices
 
 
-def _reasoning_levels_for_admin_p(admin_p: bool) -> list[str]:
-    return ADMIN_REASONING_LEVELS if admin_p else REASONING_LEVELS
-
-
 def is_pioneer_model(model: str) -> bool:
     return pioneer_util.is_pioneer_model(model)
 
@@ -1013,9 +1009,8 @@ override_chat_context_mode: Dict[int, Optional[str]] = {}
 # "always": Show in all chats. "private_only": Show only in private chats. "never": Never show.
 WARN_UNSUPPORTED_TO_USER_P = os.getenv("WARN_UNSUPPORTED_TO_USER_P", "private_only")
 WARN_UNAVAILABLE_TOOLS_P = False
-WARN_UNAVAILABLE_THINKING_P = False
-REASONING_LEVELS = ["disable", "low", "medium", "high"]
-ADMIN_REASONING_LEVELS = REASONING_LEVELS + ["xhigh"]
+#: Sentinel used by the menus to mean "fall back to this model's default".
+REASONING_CLEAR_KEY = "clear"
 CONTEXT_SEPARATOR = "---"
 CONTEXT_MODE_NAMES = {
     "reply_chain": "Reply Chain",
@@ -1077,7 +1072,14 @@ BOT_COMMANDS = [
         "command": "getsystemprompthere",
         "description": "View the effective system prompt for the current chat",
     },
-    {"command": "setthink", "description": "Adjust model's reasoning effort"},
+    {
+        "command": "setthink",
+        "description": "Adjust the current model's reasoning effort",
+    },
+    {
+        "command": "setthinkhere",
+        "description": "Adjust the current model's reasoning effort for this chat",
+    },
     {
         "command": "contextmode",
         "description": "Change how PRIVATE chat history is read",
@@ -1368,7 +1370,8 @@ class UserPrefs(BaseModel):
 
     model: str = Field(default=DEFAULT_MODEL)
     system_prompt: Optional[str] = Field(default=None)
-    thinking: Optional[str] = Field(default=None)
+    #: Reasoning effort is per-model: {model_id: level}.
+    thinking_by_model: Dict[str, str] = Field(default_factory=dict)
     enabled_tools: list[str] = Field(default_factory=lambda: DEFAULT_ENABLED_TOOLS)
     json_mode: bool = Field(default=False)
     context_mode: str = Field(default="reply_chain")
@@ -1388,6 +1391,8 @@ class ChatPrefs(BaseModel):
     system_prompt: Optional[str] = Field(default=None)
     context_mode: Optional[str] = Field(default=None)
     model: Optional[str] = Field(default=None)
+    #: Reasoning effort is per-model: {model_id: level}.
+    thinking_by_model: Dict[str, str] = Field(default_factory=dict)
     tts_model: str = Field(default="Disabled")
     tts_voice_override: Optional[str] = Field(default=None)
     live_mode_enabled: bool = Field(default=False)
@@ -1419,9 +1424,15 @@ class UserManager:
         prefs.system_prompt = prompt
         self._save_prefs(user_id, prefs)
 
-    def set_thinking(self, user_id: int, level: Optional[str]):
+    def get_thinking(self, user_id: int, *, model: str) -> Optional[str]:
+        return self.get_prefs(user_id).thinking_by_model.get(model)
+
+    def set_thinking(self, user_id: int, *, model: str, level: Optional[str]):
         prefs = self.get_prefs(user_id)
-        prefs.thinking = level
+        if level is None:
+            prefs.thinking_by_model.pop(model, None)
+        else:
+            prefs.thinking_by_model[model] = level
         self._save_prefs(user_id, prefs)
 
     def set_tool_state(self, user_id: int, tool_name: str, enabled: bool):
@@ -1529,6 +1540,17 @@ class ChatManager:
 
     def _save_prefs(self, chat_id: int, prefs: ChatPrefs):
         self.storage.set(chat_id, prefs.model_dump(exclude_defaults=True))
+
+    def get_thinking(self, chat_id: int, *, model: str) -> Optional[str]:
+        return self.get_prefs(chat_id).thinking_by_model.get(model)
+
+    def set_thinking(self, chat_id: int, *, model: str, level: Optional[str]):
+        prefs = self.get_prefs(chat_id)
+        if level is None:
+            prefs.thinking_by_model.pop(model, None)
+        else:
+            prefs.thinking_by_model[model] = level
+        self._save_prefs(chat_id, prefs)
 
     def get_system_prompt(self, chat_id: int) -> Optional[str]:
         return self.get_prefs(chat_id).system_prompt
@@ -1907,6 +1929,128 @@ async def _edit_chat_context_mode_menu(event):
         buttons=buttons,
         parse_mode="md",
     )
+
+
+@dataclass
+class ReasoningResolution:
+    """The reasoning effort in force for a model, and where it came from."""
+
+    level: Optional[str]
+    source: str  #: "prefix" | "chat" | "personal" | "model_default" | "unsupported"
+    spec: ModelSpec
+
+
+REASONING_SOURCE_NAMES = {
+    "prefix": "message prefix",
+    "chat": "this chat",
+    "personal": "personal",
+    "model_default": "model default",
+    "unsupported": "not supported by this model",
+}
+
+
+def _get_effective_reasoning(
+    chat_id: int,
+    user_id: int,
+    *,
+    model: str,
+    prefix_effort: Optional[str] = None,
+) -> ReasoningResolution:
+    """Resolve reasoning effort for `model`: prefix > chat > personal > default.
+
+    Stored levels that the model does not accept are skipped, so a preference
+    kept from another model never produces an invalid API request.
+    """
+    spec = llm_models.spec_for_model(model)
+    if not spec.supports_reasoning_p():
+        return ReasoningResolution(level=None, source="unsupported", spec=spec)
+
+    candidates = (
+        ("prefix", prefix_effort),
+        ("chat", chat_manager.get_thinking(chat_id, model=model)),
+        ("personal", user_manager.get_thinking(user_id, model=model)),
+    )
+    for source, level in candidates:
+        if spec.supports_level_p(level):
+            return ReasoningResolution(level=level, source=source, spec=spec)
+
+    return ReasoningResolution(
+        level=spec.effective_default_reasoning(), source="model_default", spec=spec
+    )
+
+
+def _build_think_options(
+    spec: ModelSpec, *, include_not_set_here: bool = False
+) -> Dict[str, str]:
+    """Menu entries for a model's reasoning levels, plus a reset entry."""
+    options = {level: level.capitalize() for level in spec.reasoning_levels}
+    if include_not_set_here:
+        options[REASONING_CLEAR_KEY] = NOT_SET_HERE_DISPLAY_NAME
+    else:
+        default_level = spec.effective_default_reasoning() or "provider default"
+        options[REASONING_CLEAR_KEY] = f"Default ({default_level})"
+    return options
+
+
+REASONING_SCOPE_PERSONAL = "personal"
+REASONING_SCOPE_CHAT = "chat"
+REASONING_SCOPE_CALLBACK_PREFIXES = {
+    REASONING_SCOPE_PERSONAL: "think_",
+    REASONING_SCOPE_CHAT: "thinkhere_",
+}
+REASONING_SCOPE_AWAITING_KEYS = {
+    REASONING_SCOPE_PERSONAL: "think_selection",
+    REASONING_SCOPE_CHAT: "think_here_selection",
+}
+
+
+@dataclass
+class ThinkMenuState:
+    """Everything needed to render a reasoning menu for one scope."""
+
+    model: str
+    spec: ModelSpec
+    options: Dict[str, str]
+    current_value: str
+
+
+def _think_menu_state(chat_id: int, user_id: int, *, scope: str) -> ThinkMenuState:
+    model, _ = _get_effective_model_and_service(chat_id, user_id)
+    spec = llm_models.spec_for_model(model)
+
+    if scope == REASONING_SCOPE_CHAT:
+        stored = chat_manager.get_thinking(chat_id, model=model)
+    elif scope == REASONING_SCOPE_PERSONAL:
+        stored = user_manager.get_thinking(user_id, model=model)
+    else:
+        raise ValueError(f"Unknown reasoning scope: {scope}")
+
+    return ThinkMenuState(
+        model=model,
+        spec=spec,
+        options=_build_think_options(
+            spec, include_not_set_here=(scope == REASONING_SCOPE_CHAT)
+        ),
+        current_value=(
+            stored if spec.supports_level_p(stored) else REASONING_CLEAR_KEY
+        ),
+    )
+
+
+def _set_reasoning_level(
+    chat_id: int, user_id: int, *, scope: str, model: str, level: Optional[str]
+) -> None:
+    if scope == REASONING_SCOPE_CHAT:
+        chat_manager.set_thinking(chat_id, model=model, level=level)
+    elif scope == REASONING_SCOPE_PERSONAL:
+        user_manager.set_thinking(user_id, model=model, level=level)
+    else:
+        raise ValueError(f"Unknown reasoning scope: {scope}")
+
+
+def _think_menu_title(state: ThinkMenuState, *, scope: str) -> str:
+    where = "This Chat" if scope == REASONING_SCOPE_CHAT else "You"
+    return f"Reasoning Effort for {_model_display_name(state.model)} ({where})"
 
 
 def _build_context_mode_menu_options(chat_id: int, user_id: int) -> Dict[str, str]:
@@ -2666,13 +2810,6 @@ def _strip_cache_control(messages: list) -> None:
     """Remove cache_control from all messages (used when caching is disabled for a key/model)."""
     for message in messages:
         message.pop("cache_control", None)
-
-
-def _pioneer_reasoning_effort(prefix_reasoning_effort, prefs_thinking) -> str:
-    reasoning_effort = prefix_reasoning_effort
-    if reasoning_effort is None and prefs_thinking != "disable":
-        reasoning_effort = prefs_thinking
-    return reasoning_effort or "medium"
 
 
 def pioneer_tools_from_enabled(enabled_tools: list[str]) -> list[dict]:
@@ -4802,10 +4939,15 @@ def register_handlers():
     )(group_activation_mode_handler)
     borg.on(
         events.NewMessage(
-            pattern=rf"(?i)^/setthink{bot_username_suffix_re}\s*$",
+            pattern=rf"(?i)^/setthink{bot_username_suffix_re}(?:\s+(.*))?$",
             func=lambda e: e.is_private,
         )
     )(set_think_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/setthinkhere{bot_username_suffix_re}(?:\s+(.*))?$"
+        )
+    )(set_think_here_handler)
     borg.on(
         events.NewMessage(
             pattern=rf"(?i)^/tools{bot_username_suffix_re}\s*$",
@@ -5053,7 +5195,8 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /metadataMode: Change how **private** chat metadata is handled.
 - /groupMetadataMode: Change how **group** chat metadata is handled.
 - /groupActivationMode: Change how I am triggered in groups.
-- /setthink: Adjust the model's reasoning effort for complex tasks.
+- /setthink: Adjust the current model's reasoning effort (per model, personal).
+- /setThinkHere: Same, but for this chat only. Overrides your personal setting.
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
 
@@ -5274,7 +5417,20 @@ async def status_handler(event):
         prefs.group_activation_mode,
         prefs.group_activation_mode.replace("_", " ").title(),
     )
-    thinking_level = prefs.thinking.capitalize() if prefs.thinking else "Default"
+    effective_model, _ = _get_effective_model_and_service(chat_id, user_id)
+    reasoning = _get_effective_reasoning(chat_id, user_id, model=effective_model)
+    if reasoning.level:
+        thinking_status = (
+            f"`{reasoning.level.capitalize()}` "
+            f"(from {REASONING_SOURCE_NAMES[reasoning.source]})"
+        )
+    else:
+        thinking_status = "`Not supported by this model`"
+
+    chat_reasoning = chat_manager.get_thinking(chat_id, model=effective_model)
+    chat_reasoning_status = (
+        f"`{chat_reasoning.capitalize()}`" if chat_reasoning else "`Not set`"
+    )
 
     # TTS Settings
     tts_model_display = tts_util.TTS_MODELS.get(chat_prefs.tts_model, "Unknown")
@@ -5286,7 +5442,7 @@ async def status_handler(event):
     status_message = (
         f"**Your Personal Bot Settings**\n\n"
         f"• **Model:** {model_status}\n"
-        f"• **Reasoning Level:** `{thinking_level}`\n"
+        f"• **Reasoning Effort ({_model_display_name(effective_model)}):** {thinking_status}\n"
         f"• **Enabled Tools:** `{enabled_tools_str}`\n"
         f"• **JSON Mode:** `{'Enabled' if prefs.json_mode else 'Disabled'}`\n"
         f"• **Personal System Prompt:** `{user_system_prompt_status}`\n"
@@ -5294,6 +5450,7 @@ async def status_handler(event):
         f"**This Chat's Settings**\n"
         f"• **Chat Model:** `{chat_model or 'Not set'}`\n"
         f"• **Chat System Prompt:** `{chat_system_prompt_status}`\n"
+        f"• **Chat Reasoning Effort:** {chat_reasoning_status}\n"
         f"• **Chat 'Last N' Limit:** {chat_last_n_status}\n"
         f"• **Effective 'Last N' Limit:** {effective_last_n_status}\n\n"
         f"**TTS Settings (This Chat)**\n"
@@ -5878,20 +6035,72 @@ async def group_activation_mode_handler(event):
     )
 
 
-async def set_think_handler(event):
-    prefs = user_manager.get_prefs(event.sender_id)
-    # Add "clear" option
-    reasoning_levels = _reasoning_levels_for_admin_p(await util.isAdmin(event))
-    think_options = {level: level.capitalize() for level in reasoning_levels}
-    think_options["clear"] = "Clear (Default)"
+async def _set_think_common(event, *, scope: str):
+    """Shared body of /setthink and /setthinkhere."""
+    chat_id = event.chat_id
+    user_id = event.sender_id
+    state = _think_menu_state(chat_id, user_id, scope=scope)
+
+    if not state.spec.supports_reasoning_p():
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}`{state.model}` does not support a reasoning "
+            "effort setting.",
+            parse_mode="md",
+        )
+        return
+
+    level_match = event.pattern_match.group(1)
+    if level_match and level_match.strip():
+        level = level_match.strip().lower()
+        if level in RESET_KEYWORDS or level == REASONING_CLEAR_KEY:
+            level = None
+        elif not state.spec.supports_level_p(level):
+            supported = ", ".join(f"`{lvl}`" for lvl in state.spec.reasoning_levels)
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}`{level}` is not supported by "
+                f"`{state.model}`. Supported levels: {supported}.",
+                parse_mode="md",
+            )
+            return
+
+        _set_reasoning_level(
+            chat_id, user_id, scope=scope, model=state.model, level=level
+        )
+        cancel_input_flow(user_id)
+        display = level.capitalize() if level else state.options[REASONING_CLEAR_KEY]
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}✅ Reasoning effort for "
+            f"`{state.model}` set to: **{display}**",
+            parse_mode="md",
+        )
+        return
+
     await bot_util.present_options(
         event,
-        title="Set Reasoning Effort",
-        options=think_options,
-        current_value=prefs.thinking or "clear",
-        callback_prefix="think_",
-        awaiting_key="think_selection",
+        title=_think_menu_title(state, scope=scope),
+        options=state.options,
+        current_value=state.current_value,
+        callback_prefix=REASONING_SCOPE_CALLBACK_PREFIXES[scope],
+        awaiting_key=REASONING_SCOPE_AWAITING_KEYS[scope],
     )
+
+
+async def set_think_handler(event):
+    await _set_think_common(event, scope=REASONING_SCOPE_PERSONAL)
+
+
+async def set_think_here_handler(event):
+    """Sets reasoning effort for the current chat only."""
+    is_bot_admin = await util.isAdmin(event)
+    is_group_admin = await util.is_group_admin(event)
+
+    if not event.is_private and not (is_bot_admin or is_group_admin):
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}You must be a group admin or bot admin to use this command in a group."
+        )
+        return
+
+    await _set_think_common(event, scope=REASONING_SCOPE_CHAT)
 
 
 async def tools_handler(event):
@@ -6070,25 +6279,47 @@ async def callback_handler(event):
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
         await event.answer(feedback_msg)
 
-    elif data_str.startswith("think_"):
-        level = data_str.split("_")[1]
-        reasoning_levels = _reasoning_levels_for_admin_p(await util.isAdmin(event))
-        if level not in reasoning_levels and level != "clear":
-            await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+    elif data_str.startswith("thinkhere_") or data_str.startswith("think_"):
+        scope = (
+            REASONING_SCOPE_CHAT
+            if data_str.startswith("thinkhere_")
+            else REASONING_SCOPE_PERSONAL
+        )
+        if scope == REASONING_SCOPE_CHAT and not event.is_private:
+            if not (await util.isAdmin(event) or await util.is_group_admin(event)):
+                await event.answer(
+                    "You must be a group admin or bot admin to change this chat's"
+                    " reasoning effort.",
+                    show_alert=True,
+                )
+                return
+
+        level = data_str.split("_", 1)[1]
+        state = _think_menu_state(event.chat_id, user_id, scope=scope)
+        if level != REASONING_CLEAR_KEY and not state.spec.supports_level_p(level):
+            await event.answer(
+                f"{level} is not supported by {_model_display_name(state.model)}.",
+                show_alert=True,
+            )
             return
-        user_manager.set_thinking(user_id, None if level == "clear" else level)
-        prefs = user_manager.get_prefs(user_id)  # update prefs
-        think_options = {level: level.capitalize() for level in reasoning_levels}
-        think_options["clear"] = "Clear (Default)"
+
+        _set_reasoning_level(
+            event.chat_id,
+            user_id,
+            scope=scope,
+            model=state.model,
+            level=None if level == REASONING_CLEAR_KEY else level,
+        )
+        state = _think_menu_state(event.chat_id, user_id, scope=scope)
         buttons = [
             KeyboardButtonCallback(
-                f"✅ {display}" if (prefs.thinking or "clear") == key else display,
-                data=f"think_{key}",
+                f"✅ {display}" if state.current_value == key else display,
+                data=f"{REASONING_SCOPE_CALLBACK_PREFIXES[scope]}{key}",
             )
-            for key, display in think_options.items()
+            for key, display in state.options.items()
         ]
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
-        await event.answer("Thinking preference updated.")
+        await event.answer("Reasoning effort updated.")
     elif data_str.startswith("tool_"):
         tool_name = data_str.split("_")[1]
         is_enabled = tool_name not in prefs.enabled_tools
@@ -6420,14 +6651,37 @@ async def generic_input_handler(event):
                     await event.reply(
                         f"{BOT_META_INFO_PREFIX}✅ Group activation mode set to: **{GROUP_ACTIVATION_MODES[selected_key]}**"
                     )
-                elif input_type == "think_selection":
-                    level = None if selected_key == "clear" else selected_key
-                    if level == "xhigh" and not await util.isAdmin(event):
-                        await event.reply(ADMIN_ONLY_COMMAND_IGNORED)
+                elif input_type in (
+                    "think_selection",
+                    "think_here_selection",
+                ):
+                    scope = (
+                        REASONING_SCOPE_CHAT
+                        if input_type == "think_here_selection"
+                        else REASONING_SCOPE_PERSONAL
+                    )
+                    state = _think_menu_state(event.chat_id, user_id, scope=scope)
+                    level = (
+                        None if selected_key == REASONING_CLEAR_KEY else selected_key
+                    )
+                    if level is not None and not state.spec.supports_level_p(level):
+                        await event.reply(
+                            f"{BOT_META_INFO_PREFIX}`{level}` is not supported by "
+                            f"`{state.model}`.",
+                            parse_mode="md",
+                        )
                         return
-                    user_manager.set_thinking(user_id, level)
+                    _set_reasoning_level(
+                        event.chat_id,
+                        user_id,
+                        scope=scope,
+                        model=state.model,
+                        level=level,
+                    )
                     await event.reply(
-                        f"{BOT_META_INFO_PREFIX}✅ Reasoning level updated."
+                        f"{BOT_META_INFO_PREFIX}✅ Reasoning effort for "
+                        f"`{state.model}` updated.",
+                        parse_mode="md",
                     )
                 elif input_type == "tool_selection":
                     prefs = user_manager.get_prefs(user_id)
@@ -7474,6 +7728,16 @@ async def chat_handler(event):
             "stream": use_streaming,
         }
 
+        #: Reasoning effort is per-model: prefix > this chat > personal > default.
+        reasoning = _get_effective_reasoning(
+            chat_id,
+            user_id,
+            model=model_in_use,
+            prefix_effort=prefix_result.reasoning_effort,
+        )
+        if reasoning.level:
+            api_kwargs["reasoning_effort"] = reasoning.level
+
         if prefs.json_mode and not is_codex_model_p:
             api_kwargs["response_format"] = {"type": "json_object"}
             if prefs.enabled_tools:
@@ -7513,10 +7777,6 @@ async def chat_handler(event):
                 api_kwargs["tools"] = [{t: {}} for t in tools_to_use]
                 # ic(api_kwargs["tools"])
 
-            if prefs.thinking and "2.5-pro" not in model_in_use:
-                #: Note: Gemini 2.5 Pro and 2.5 Flash come with thinking on by default.
-                #: [[https://ai.google.dev/gemini-api/docs/models][Gemini models  |  Gemini API  |  Google AI for Developers]]
-                api_kwargs["reasoning_effort"] = prefs.thinking
             # Add modalities for image generation models
             if model_capabilities.get("image_generation", False):
                 api_kwargs["modalities"] = ["image", "text"]
@@ -7524,11 +7784,6 @@ async def chat_handler(event):
             pioneer_tools = pioneer_tools_from_enabled(prefs.enabled_tools)
             if pioneer_tools:
                 api_kwargs["tools"] = pioneer_tools
-            pioneer_reasoning_effort = _pioneer_reasoning_effort(
-                prefix_result.reasoning_effort, prefs.thinking
-            )
-            if pioneer_reasoning_effort:
-                api_kwargs["reasoning_effort"] = pioneer_reasoning_effort
             unsupported_pioneer_tools = set(prefs.enabled_tools) - {"googleSearch"}
             if unsupported_pioneer_tools and WARN_UNAVAILABLE_TOOLS_P:
                 warnings.append("Only Google Search is supported for Pioneer models.")
@@ -7538,21 +7793,10 @@ async def chat_handler(event):
                 codex_tools.append({"type": "web_search"})
             if codex_tools:
                 api_kwargs["tools"] = codex_tools
-            codex_reasoning_effort = prefix_result.reasoning_effort
-            if codex_reasoning_effort is None:
-                codex_reasoning_effort = (
-                    None if prefs.thinking == "disable" else prefs.thinking
-                )
-            if codex_reasoning_effort is None:
-                codex_reasoning_effort = "medium"
-            if codex_reasoning_effort:
-                api_kwargs["reasoning_effort"] = codex_reasoning_effort
         else:
             # Add warnings if user has Gemini-specific settings enabled
             if prefs.enabled_tools and WARN_UNAVAILABLE_TOOLS_P:
                 warnings.append("Tools are disabled (Gemini-only feature).")
-            if prefs.thinking and WARN_UNAVAILABLE_THINKING_P:
-                warnings.append("Reasoning effort is disabled (Gemini-only feature).")
 
         # Make the API call
         response_text = ""
