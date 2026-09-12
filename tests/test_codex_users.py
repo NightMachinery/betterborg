@@ -41,8 +41,8 @@ class Event:
         self.edit = AsyncMock()
 
 
-def config(*ids, valid=True):
-    return llm_chat_config.LLMChatConfig(tuple(ids), (), valid=valid)
+def config(*ids, valid=True, users=()):
+    return llm_chat_config.LLMChatConfig(tuple(ids), (), valid=valid, codex_users=tuple(users))
 
 
 class CodexUsersTests(unittest.TestCase):
@@ -86,14 +86,56 @@ class CodexUsersTests(unittest.TestCase):
                     config(llm_chat.llm_chat_config.MAGIC_ADMINS, 123, 123, 124, 125, 126)
                 )
             )
-        self.assertEqual(users, [(123, "Ada Lovelace", "model")])
+        self.assertEqual(users[0][0].id, 123)
+        self.assertEqual(users[0][1:], ("Ada Lovelace", "model"))
 
     def test_entity_failure_falls_back_to_id(self):
         with patch.object(builtins.borg, "get_entity", new=AsyncMock(side_effect=ValueError), create=True), patch.object(
             llm_chat.util, "is_admin_by_id", return_value=False
         ), patch.object(llm_chat.user_manager, "get_prefs", return_value=SimpleNamespace(model="model")):
             users = asyncio.run(llm_chat._eligible_codex_users(config(123)))
-        self.assertEqual(users, [(123, "123", "model")])
+        self.assertEqual(users[0][0].id, 123)
+        self.assertEqual(users[0][1:], ("123", "model"))
+
+    def test_disabled_roster_user_is_listed_and_configured_name_wins(self):
+        roster_user = llm_chat_config.CodexUser(123, "Configured Name", False, True)
+        cfg = config(users=(roster_user,))
+        with patch.object(
+            builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True
+        ), patch.object(llm_chat.user_manager, "get_prefs", return_value=SimpleNamespace(model="saved")):
+            users = asyncio.run(llm_chat._eligible_codex_users(cfg))
+        self.assertEqual(users, [(roster_user, "Configured Name", "saved")])
+
+        event = Event()
+        with patch.object(llm_chat.llm_chat_config, "load_config", return_value=cfg), patch.object(
+            builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True
+        ), patch.object(llm_chat.user_manager, "get_prefs", return_value=SimpleNamespace(model="saved")), patch.object(
+            llm_chat, "send_info_message", new=AsyncMock()
+        ) as send:
+            asyncio.run(llm_chat._show_codex_users(event))
+        self.assertIn(
+            "Personal grants shown; admin/trusted-chat policies may still allow access.",
+            send.await_args.args[1],
+        )
+
+    def test_detail_shows_independent_grants_paused_images_and_fallback(self):
+        roster_user = llm_chat_config.CodexUser(123, "Configured Name", False, True)
+        cfg = config(users=(roster_user,))
+        event = Event()
+        prefs = SimpleNamespace(model=OPENAI_CODEX_GPT_5_6_SOL)
+        with patch.object(llm_chat.llm_chat_config, "load_config", return_value=cfg), patch.object(
+            builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True
+        ), patch.object(llm_chat.user_manager, "get_prefs", return_value=prefs), patch.object(
+            llm_chat, "send_info_message", new=AsyncMock()
+        ) as send:
+            asyncio.run(llm_chat._show_codex_user_detail(event, 123))
+        text = send.await_args.args[1]
+        self.assertIn("Configured Name", text)
+        self.assertIn("Personal Codex grant: off", text)
+        self.assertIn("paused", text)
+        self.assertIn(llm_chat.DEFAULT_MODEL, text)
+        self.assertIn("trusted-chat policies", text)
+        self.assertIn("Chat-specific model overrides", text)
 
     def test_detail_shows_exact_unknown_current_default(self):
         event = Event("123")
@@ -204,8 +246,112 @@ class CodexUsersTests(unittest.TestCase):
             asyncio.run(llm_chat.callback_handler(event))
         set_model.assert_not_called()
 
+    def test_access_callbacks_write_explicit_desired_state_without_touching_prefs(self):
+        for capability_token, capability in (("c", "codex_enabled"), ("i", "imagegen_enabled")):
+            with self.subTest(capability=capability):
+                roster_user = llm_chat_config.CodexUser(123, None, False, False)
+                cfg = config(users=(roster_user,))
+                event = Event()
+                event.data = f"cu:a:123:{capability_token}:1".encode()
+                with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)), patch.object(
+                    llm_chat.llm_chat_config, "load_config", return_value=cfg
+                ), patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True), patch.object(
+                    llm_chat.llm_chat_config, "update_user_access", return_value=cfg
+                ) as update, patch.object(llm_chat, "_show_codex_user_detail", new=AsyncMock(return_value=True)), patch.object(
+                    llm_chat.user_manager, "set_model"
+                ) as set_model:
+                    asyncio.run(llm_chat.callback_handler(event))
+                update.assert_called_once_with(123, capability=capability, enabled=True)
+                set_model.assert_not_called()
+
+    def test_repeated_desired_state_click_answers_success_when_detail_is_unchanged(self):
+        roster_user = llm_chat_config.CodexUser(123, None, True, False)
+        cfg = config(users=(roster_user,))
+        event = Event()
+        event.data = b"cu:a:123:c:1"
+        event.edit.side_effect = llm_chat.errors.rpcerrorlist.MessageNotModifiedError(
+            request=None
+        )
+        with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)), patch.object(
+            llm_chat.llm_chat_config, "load_config", return_value=cfg
+        ), patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True), patch.object(
+            llm_chat.llm_chat_config, "update_user_access", return_value=cfg
+        ) as update, patch.object(
+            llm_chat.user_manager, "get_prefs", return_value=SimpleNamespace(model="saved")
+        ):
+            asyncio.run(llm_chat.callback_handler(event))
+        update.assert_called_once_with(123, capability="codex_enabled", enabled=True)
+        event.answer.assert_awaited_once_with("Codex personal grant enabled")
+
+    def test_nonadmin_access_toggle_does_not_update(self):
+        event = Event()
+        event.data = b"cu:a:123:c:1"
+        with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=False)), patch.object(
+            llm_chat.llm_chat_config, "update_user_access"
+        ) as update:
+            asyncio.run(llm_chat.callback_handler(event))
+        update.assert_not_called()
+        event.answer.assert_awaited_with(llm_chat.ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+
+    def test_enabling_images_does_not_enable_codex(self):
+        roster_user = llm_chat_config.CodexUser(123, None, False, False)
+        cfg = config(users=(roster_user,))
+        event = Event()
+        event.data = b"cu:a:123:i:1"
+        with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)), patch.object(
+            llm_chat.llm_chat_config, "load_config", return_value=cfg
+        ), patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True), patch.object(
+            llm_chat.llm_chat_config, "update_user_access", return_value=cfg
+        ) as update, patch.object(llm_chat, "_show_codex_user_detail", new=AsyncMock(return_value=True)):
+            asyncio.run(llm_chat.callback_handler(event))
+        update.assert_called_once_with(123, capability="imagegen_enabled", enabled=True)
+
+    def test_access_callback_rechecks_target_and_handles_update_error(self):
+        cases = (
+            (config(), self.entity, None),
+            (config(123, valid=False), self.entity, None),
+            (config(users=(llm_chat_config.CodexUser(123, None, True, False),)), SimpleNamespace(id=123, username=None, is_self=True), None),
+            (config(users=(llm_chat_config.CodexUser(123, None, True, False),)), self.entity, llm_chat_config.ConfigUpdateError("write failed")),
+        )
+        for cfg, entity, error in cases:
+            with self.subTest(cfg=cfg, error=error):
+                event = Event()
+                event.data = b"cu:a:123:c:0"
+                update = Mock(side_effect=error)
+                with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)), patch.object(
+                    llm_chat.llm_chat_config, "load_config", return_value=cfg
+                ), patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=entity), create=True), patch.object(
+                    llm_chat.llm_chat_config, "update_user_access", update
+                ):
+                    asyncio.run(llm_chat.callback_handler(event))
+                if error is None and cfg.codex_users and not entity.is_self:
+                    self.fail("case should be rejected or raise an update error")
+                if error is not None:
+                    event.answer.assert_awaited_with("write failed", show_alert=True)
+                else:
+                    update.assert_not_called()
+
+    def test_update_error_alert_is_bounded(self):
+        roster_user = llm_chat_config.CodexUser(123, None, True, False)
+        cfg = config(users=(roster_user,))
+        event = Event()
+        event.data = b"cu:a:123:c:0"
+        with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)), patch.object(
+            llm_chat.llm_chat_config, "load_config", return_value=cfg
+        ), patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True), patch.object(
+            llm_chat.llm_chat_config,
+            "update_user_access",
+            side_effect=llm_chat_config.ConfigUpdateError("x" * 500),
+        ):
+            asyncio.run(llm_chat.callback_handler(event))
+        self.assertEqual(len(event.answer.await_args.args[0]), 200)
+        self.assertTrue(event.answer.await_args.kwargs["show_alert"])
+
     def test_pagination_and_callback_lengths(self):
-        users = [(uid, f"User {uid}", "model") for uid in range(100, 119)]
+        users = [
+            (llm_chat_config.CodexUser(uid, None, True, False), f"User {uid}", "model")
+            for uid in range(100, 119)
+        ]
         buttons, page, page_count = llm_chat._codex_users_user_buttons(users, 1)
         flat = [button for row in buttons for button in row]
         self.assertEqual((page, page_count), (1, 3))

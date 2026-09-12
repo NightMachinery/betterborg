@@ -5387,7 +5387,7 @@ async def help_handler(event):
         event, config
     )
     admin_help = (
-        "\n- `.codex-users`: Inspect and set explicit Codex users' personal defaults."
+        "\n- `.codex-users`: Manage configured users' Codex/image access and personal defaults."
         if await util.isAdmin(event)
         else ""
     )
@@ -5858,14 +5858,10 @@ CODEX_USERS_CALLBACK_PREFIX = "cu:"
 
 
 def _codex_user_ids(config) -> list[int]:
-    """Return unique, explicit Codex user IDs (the admin sentinel is omitted)."""
+    """Return all configured roster IDs, including disabled personal grants."""
     if not config.valid:
         return []
-    return list(dict.fromkeys(
-        entry
-        for entry in config.codex_allowed_users
-        if isinstance(entry, int) and not isinstance(entry, bool)
-    ))
+    return [user.id for user in llm_chat_config.configured_users(config)]
 
 
 async def _codex_user_entity(user_id: int):
@@ -5900,26 +5896,34 @@ def _codex_user_name(user_id: int, entity) -> str:
     return name or str(user_id)
 
 
-async def _eligible_codex_users(config) -> list[tuple[int, str, str]]:
+async def _eligible_codex_users(config):
+    if not config.valid:
+        return []
     users = []
-    for user_id in _codex_user_ids(config):
-        entity = await _codex_user_entity(user_id)
-        if not _entity_is_bot_admin(user_id, entity):
+    for configured_user in llm_chat_config.configured_users(config):
+        entity = await _codex_user_entity(configured_user.id)
+        if not _entity_is_bot_admin(configured_user.id, entity):
             users.append((
-                user_id,
-                _codex_user_name(user_id, entity),
-                user_manager.get_prefs(user_id).model,
+                configured_user,
+                configured_user.name or _codex_user_name(configured_user.id, entity),
+                user_manager.get_prefs(configured_user.id).model,
             ))
     return users
 
 
 async def _eligible_codex_target(target_id: int, config):
-    if target_id not in _codex_user_ids(config):
+    if not config.valid:
+        return False, None
+    configured_user = next(
+        (user for user in llm_chat_config.configured_users(config) if user.id == target_id),
+        None,
+    )
+    if configured_user is None:
         return False, None
     entity = await _codex_user_entity(target_id)
     if _entity_is_bot_admin(target_id, entity):
         return False, entity
-    return True, entity
+    return True, (configured_user, entity)
 
 
 def _codex_users_model_choices() -> dict[str, str]:
@@ -5945,8 +5949,10 @@ def _codex_users_user_buttons(users, page: int):
     page = min(max(page, 0), page_count - 1)
     start = page * CODEX_USERS_PAGE_SIZE
     buttons = [
-        KeyboardButtonCallback(f"{name[:60]} ({user_id})", data=f"cu:u:{user_id}")
-        for user_id, name, _ in users[start : start + CODEX_USERS_PAGE_SIZE]
+        KeyboardButtonCallback(
+            f"{name[:60]} ({configured_user.id})", data=f"cu:u:{configured_user.id}"
+        )
+        for configured_user, name, _ in users[start : start + CODEX_USERS_PAGE_SIZE]
     ]
     if page_count > 1:
         if page:
@@ -5972,19 +5978,85 @@ async def _show_codex_users(event, *, page: int = 0, edit: bool = False):
     if page_count > 1:
         text += f" Page {page + 1}/{page_count}."
     start = page * CODEX_USERS_PAGE_SIZE
-    for user_id, name, model in users[start : start + CODEX_USERS_PAGE_SIZE]:
-        text += f"\n{name[:80]} ({user_id}): {model[:160]}"
+    for configured_user, name, model in users[start : start + CODEX_USERS_PAGE_SIZE]:
+        codex_state = "on" if configured_user.codex_enabled else "off"
+        if configured_user.imagegen_enabled and not configured_user.codex_enabled:
+            image_state = "paused"
+        else:
+            image_state = "on" if configured_user.imagegen_enabled else "off"
+        text += (
+            f"\n{name[:80]} ({configured_user.id}): {model[:160]}"
+            f" | Codex {codex_state} | Images {image_state}"
+        )
+    text += "\nPersonal grants shown; admin/trusted-chat policies may still allow access."
     if edit:
         await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=buttons, parse_mode=None)
     else:
         await send_info_message(event, text, buttons=buttons, parse_mode=None)
 
 
-async def _show_codex_user_models(event, target_id: int, *, edit: bool = False):
+def _codex_user_access_text(configured_user) -> str:
+    codex_state = "on" if configured_user.codex_enabled else "off"
+    if configured_user.imagegen_enabled and not configured_user.codex_enabled:
+        image_state = "paused outside admin/trusted contexts while Codex grant is off"
+    else:
+        image_state = "on" if configured_user.imagegen_enabled else "off"
+    return f"Personal Codex grant: {codex_state}\nPersonal image grant: {image_state}"
+
+
+async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False):
     config = llm_chat_config.load_config()
-    eligible, entity = await _eligible_codex_target(target_id, config)
+    eligible, target = await _eligible_codex_target(target_id, config)
     if not eligible:
         return False
+    configured_user, entity = target
+    current = user_manager.get_prefs(target_id).model
+    name = configured_user.name or _codex_user_name(target_id, entity)
+    codex_action = "Disable" if configured_user.codex_enabled else "Enable"
+    image_action = "Disable" if configured_user.imagegen_enabled else "Enable"
+    buttons = util.build_menu(
+        [
+            KeyboardButtonCallback(
+                f"{codex_action} Codex",
+                data=f"cu:a:{target_id}:c:{int(not configured_user.codex_enabled)}",
+            ),
+            KeyboardButtonCallback(
+                f"{image_action} images",
+                data=f"cu:a:{target_id}:i:{int(not configured_user.imagegen_enabled)}",
+            ),
+            KeyboardButtonCallback("Change default model", data=f"cu:models:{target_id}"),
+            KeyboardButtonCallback("⬅️ Back to users", data="cu:p:0"),
+        ],
+        n_cols=2,
+    )
+    text = (
+        f"{name} ({target_id})\nPersonal default: {current}\n"
+        f"{_codex_user_access_text(configured_user)}"
+    )
+    if not configured_user.codex_enabled and codex_util.is_codex_model(current):
+        text += f"\nOutside admin/trusted contexts, fallback model: {DEFAULT_MODEL}"
+    text += (
+        "\nAdmin and trusted-chat policies may still grant access."
+        "\nChat-specific model overrides retain precedence."
+    )
+    if edit:
+        try:
+            await event.edit(
+                f"{BOT_META_INFO_PREFIX}{text}", buttons=buttons, parse_mode=None
+            )
+        except errors.rpcerrorlist.MessageNotModifiedError:
+            pass
+    else:
+        await send_info_message(event, text, buttons=buttons, parse_mode=None)
+    return True
+
+
+async def _show_codex_user_models(event, target_id: int, *, edit: bool = False):
+    config = llm_chat_config.load_config()
+    eligible, target = await _eligible_codex_target(target_id, config)
+    if not eligible:
+        return False
+    configured_user, entity = target
     current = user_manager.get_prefs(target_id).model
     choices = _codex_users_model_choices()
     buttons = [
@@ -5994,8 +6066,9 @@ async def _show_codex_user_models(event, target_id: int, *, edit: bool = False):
         )
         for model_id, name in choices.items()
     ]
-    buttons.append(KeyboardButtonCallback("⬅️ Back to users", data="cu:p:0"))
-    text = f"{_codex_user_name(target_id, entity)} ({target_id})\nPersonal default: {current}"
+    buttons.append(KeyboardButtonCallback("⬅️ Back to user", data=f"cu:u:{target_id}"))
+    name = configured_user.name or _codex_user_name(target_id, entity)
+    text = f"{name} ({target_id})\nPersonal default: {current}\nChoose a new personal default."
     if edit:
         await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=util.build_menu(buttons, n_cols=2), parse_mode=None)
     else:
@@ -6024,7 +6097,7 @@ async def codex_users_handler(event):
         await send_info_message(event, "That user is not an eligible explicit Codex user.", parse_mode=None)
         return
     if len(parts) == 1:
-        await _show_codex_user_models(event, target_id)
+        await _show_codex_user_detail(event, target_id)
         return
     model_id = parts[1].strip()
     if not model_id or _is_admin_only_model(model_id):
@@ -6735,9 +6808,46 @@ async def callback_handler(event):
                 return
             if len(parts) == 3 and parts[1] == "u":
                 target_id = int(parts[2])
+                if not await _show_codex_user_detail(event, target_id, edit=True):
+                    raise ValueError
+                await event.answer()
+                return
+            if len(parts) == 3 and parts[1] == "models":
+                target_id = int(parts[2])
                 if not await _show_codex_user_models(event, target_id, edit=True):
                     raise ValueError
                 await event.answer()
+                return
+            if len(parts) == 5 and parts[1] == "a":
+                target_id = int(parts[2])
+                capability = {
+                    "c": "codex_enabled",
+                    "i": "imagegen_enabled",
+                }.get(parts[3])
+                if capability is None or parts[4] not in ("0", "1"):
+                    raise ValueError
+                config = llm_chat_config.load_config()
+                eligible, _ = await _eligible_codex_target(target_id, config)
+                if not eligible:
+                    raise ValueError
+                enabled = parts[4] == "1"
+                try:
+                    await asyncio.to_thread(
+                        llm_chat_config.update_user_access,
+                        target_id, capability=capability, enabled=enabled,
+                    )
+                except llm_chat_config.ConfigUpdateError as exc:
+                    error_text = str(exc) or "Could not update the Codex user roster."
+                    await event.answer(
+                        error_text[:200],
+                        show_alert=True,
+                    )
+                    return
+                if not await _show_codex_user_detail(event, target_id, edit=True):
+                    raise ValueError
+                state = "enabled" if enabled else "disabled"
+                label = "Codex" if capability == "codex_enabled" else "Image generation"
+                await event.answer(f"{label} personal grant {state}")
                 return
             if len(parts) == 4 and parts[1] == "m":
                 target_id = int(parts[2])
@@ -8295,6 +8405,14 @@ async def chat_handler(event):
         if prefix_result.model and codex_util.is_codex_model(prefix_result.model):
             await send_info_message(event, CODEX_ACCESS_DENIED)
             return
+        if codex_util.is_codex_model(model_in_use):
+            await send_info_message(
+                event,
+                "Codex access is unavailable for this request. "
+                f"Falling back to {_model_display_name(DEFAULT_MODEL)}. "
+                "Your saved model settings are unchanged.",
+                parse_mode=None,
+            )
         model_in_use = DEFAULT_MODEL
         service_needed = llm_util.get_service_from_model(model_in_use)
     model_capabilities = get_model_capabilities(model_in_use)

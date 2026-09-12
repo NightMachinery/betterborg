@@ -17,44 +17,93 @@ exist. Set `LLM_CHAT_CONFIG_PATH` to use another path. The default is:
 {
   codex_allowed_users: ["MAGIC_ADMINS"],
   codex_imagegen_allowed_users: ["MAGIC_ADMINS"],
+  codex_users: [],
 }
 ```
 
-Each array is a complete policy. Entries may be numeric Telegram user IDs or
-the exact string `"MAGIC_ADMINS"`. The sentinel delegates to Betterborg's
-existing `util.isAdmin(event)` check, including trusted-chat access. A numeric
-ID grants only the named Codex capability; it does not make that user a bot
-admin or permit changing group settings. Remove the sentinel to remove
-automatic admin access. An empty array grants nobody access.
+The two policy arrays accept numeric Telegram user IDs and the exact string
+`"MAGIC_ADMINS"`. The sentinel delegates to Betterborg's existing
+`util.isAdmin(event)` check, including trusted-chat access. Remove it to remove
+that automatic grant. Numeric IDs remain supported for older configurations.
 
-Both keys are required. Betterborg reloads the file when it changes. If the
-file is invalid or unreadable, all Codex access is disabled until it is fixed;
-the invalid file is logged and left untouched. Other model providers continue
-working. Image generation requires a user to pass both policies.
+Use `codex_users` for a permanent roster with names and independently enabled
+personal grants. For example:
 
-### Managing users' defaults
+```json5
+codex_users: [
+  {
+    id: 123456789,
+    name: "Example User",
+    codex_enabled: true,
+    imagegen_enabled: false,
+  },
+],
+```
 
-Bot admins can use `.codex-users` to list the non-admin users explicitly named
-by numeric ID in `codex_allowed_users`. The list shows their Telegram names,
-IDs, and saved personal default models. If Telegram cannot resolve a name,
-the ID remains available. `MAGIC_ADMINS` does not add users to this list.
+Each roster entry requires an integer `id` and both boolean fields; `name` is
+optional. IDs must be unique within the roster. A roster entry replaces any
+numeric grant for the same ID in the older arrays. **A disabled personal grant
+does not override `MAGIC_ADMINS` or trusted-chat access.** Image generation
+requires both effective Codex access and effective image access.
+
+Both policy-array keys are required; the roster is optional for compatibility.
+Empty policy arrays and no enabled roster grants allow nobody. Betterborg
+reloads the file when it changes. Invalid or unreadable config disables all
+Codex access until corrected, logs a diagnostic, and leaves the file untouched.
+Other providers continue working. These grants do not confer bot-admin or
+group-settings privileges.
+
+### Managing access and defaults
+
+Bot admins can use `.codex-users` to browse configured non-admin users. Disabled
+users stay in the menu. Legacy numeric IDs from either policy array are also
+included, but `MAGIC_ADMINS` itself does not add users. The list shows names,
+IDs, personal access flags, and saved default models. Configured names take
+precedence over Telegram names; the ID is the fallback if neither is available.
 
 - `.codex-users`: browse the list and select a user.
-- `.codex-users <user-id>`: inspect that user's default and choose a model.
+- `.codex-users <user-id>`: inspect access and the saved default, toggle the
+  personal Codex or image grant, or open the model picker.
 - `.codex-users <user-id> <model-id>`: immediately save a specific model as
   that user's personal default, including custom model IDs.
 
-Changes do not require the user's confirmation. They replace the saved
-personal default; the user can subsequently change it again. Chat-specific
-models and per-message prefixes retain their usual precedence. The command
-does not grant image access or change other preferences.
+Access buttons save an explicit enabled/disabled value to the JSON5 file and
+refresh the menu. Repeated clicks do not invert the state unexpectedly.
+Disabling Codex preserves the image flag: images are paused outside contexts
+that still grant Codex access. Enabling images never implicitly enables Codex.
+Turning either personal grant off leaves the configured admin/trusted-chat
+policies in effect. The menu states this distinction.
+
+Config writes use a lock and atomic replacement, preserving file permissions
+and unrelated settings. Existing comments and formatting are retained when
+updating a flag. Invalid config, removed users, or detected concurrent manual
+edits prevent an update rather than replacing the config with defaults.
+
+Model changes do not require the user's confirmation. They replace only the
+saved personal default; the user can subsequently change it again. An admin
+can save a Codex default while personal access is off, ready for re-enabling.
+Chat-specific models and per-message prefixes retain their usual precedence.
 
 The command and every button check the caller's bot-admin access and the
-target's current allowlist membership. Bot admins are excluded as targets,
-and admin-only models cannot be assigned to non-admin users. Invalid config
-and revoked membership prevent changes, including from previously opened
-menus. As with other bot-admin commands, the existing trusted-chat rules
-apply to the caller.
+target's current roster membership. Bot admins are excluded as targets, and
+admin-only models cannot be assigned to non-admin users. Invalid config and
+removed membership prevent changes from previously opened menus. The existing
+trusted-chat rules apply to the caller.
+
+### When access is disabled
+
+If a saved personal or chat model is Codex but the current request has no
+Codex access, ordinary messages fall back to the default Gemini Flash model.
+The bot sends a short notice identifying the fallback and explaining that
+saved model settings are unchanged. If the fallback needs an API key, its
+usual setup prompt follows. Re-enabling access restores use of the saved
+Codex model without rewriting preferences.
+
+There is no fallback notice when trusted-chat or admin rules still grant
+Codex access. Explicit Codex requests and `.i` receive an access denial rather
+than falling back. The existing `.c` exception remains: without Codex access,
+it uses its OpenRouter meaning. Requests already in flight retain their
+authorization snapshot; toggles affect subsequent requests.
 
 ## Runtime requirements
 

@@ -178,9 +178,12 @@ package and local Codex OAuth credentials. Access is configured in
 Telegram user IDs and the optional =MAGIC_ADMINS= sentinel. See
 [[file:docs/codex_models.md][docs/codex_models.md]] and
 [[file:docs/codex_caching.md][docs/codex_caching.md]].
-Bot admins can use =.codex-users= to see explicitly allowlisted non-admin users
-and their personal default models. Select a user to change their default, or
-use =.codex-users <user-id> <model-id>= to set it immediately.
+The =codex_users= roster stores names and separate Codex/image access flags.
+Bot admins can use =.codex-users= to toggle those grants and manage personal
+default models. Disabled users remain listed; configured trusted-chat access
+still applies. Use =.codex-users <user-id> <model-id>= to set a default
+immediately. If Codex is unavailable, ordinary messages fall back to Gemini
+Flash with a notice, preserving the saved default.
 Use =.i= on the current message to enable Codex image generation, for example
 =.i .cl draw a fox=. Both access policies must allow the sender. Previews and
 final images are sent separately, alongside any text response; the switch does

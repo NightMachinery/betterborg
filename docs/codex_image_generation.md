@@ -21,10 +21,13 @@ An explicit non-Codex model prefix conflicts with `.i`; the request is rejected
 instead of silently changing providers. Merely mentioning `.i` later in natural
 language does not enable image generation.
 
-Image generation requires the sender to pass both `codex_allowed_users` and
-`codex_imagegen_allowed_users` from `~/.borg/llm_chat_config.json5`. These checks
-use the same configuration snapshot for the request. Failing either policy
-stops the request before the Codex backend is called.
+Image generation requires both effective Codex and image access from
+`~/.borg/llm_chat_config.json5`. Personal grants can come from the `codex_users`
+roster or legacy numeric policy entries; configured `MAGIC_ADMINS` grants also
+apply, including in trusted chats. Disabling a personal grant does not override
+those trusted-chat rules. See [access configuration](codex_models.md).
+Both checks use the same snapshot for the request. Failing either check stops
+the request before the Codex backend is called.
 
 ## Prompt and tool behavior
 
