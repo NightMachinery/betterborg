@@ -61,8 +61,8 @@ included, but `MAGIC_ADMINS` itself does not add users. The paginated list uses
 separate bullet groups for each user, showing configured labels, Telegram display
 names and usernames when known, numeric IDs, personal access flags, friendly
 default-model names, and the names of personally configured API-key providers.
-Unknown identity and contact fields are omitted from this overview. Each page
-contains at most eight users and splits earlier if its text would approach
+Unknown Telegram profile and contact fields are omitted from this overview.
+Each page contains at most eight users and splits earlier if its text would approach
 Telegram's message limit. The model picker shows full model IDs.
 Successful Telegram refreshes update persisted identity, including removed
 usernames; when refresh is unavailable, the last recorded identity is used.

@@ -6210,7 +6210,7 @@ def _codex_user_overview_entry(user, *, fallback: bool = False) -> str:
         and telegram_name != numeric_identity
         and configured_user.name != telegram_name
     ):
-        identity_parts.append(f"Telegram: {_bold_dynamic(telegram_name, dynamic_limit)}")
+        identity_parts.append(f"TG: {_bold_dynamic(telegram_name, dynamic_limit)}")
     if username and f"@{username}" != telegram_name:
         identity_parts.append(_bold_dynamic("@" + username, 24 if fallback else 40))
     if identity_parts:

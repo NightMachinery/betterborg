@@ -180,8 +180,8 @@ Telegram user IDs and the optional =MAGIC_ADMINS= sentinel. See
 [[file:docs/codex_caching.md][docs/codex_caching.md]].
 The =codex_users= roster stores names and separate Codex/image access flags.
 Bot admins can use =.codex-users= to toggle those grants and manage personal
-default models. Its compact overview omits unknown identity/contact fields and
-shows configured personal API-key provider names without exposing key values.
+default models. Its compact overview omits unknown Telegram profile/contact
+fields and shows configured personal API-key provider names without exposing key values.
 Known private contact appears as *Started*. Pages contain at most eight users
 and split earlier when needed to stay within Telegram's message limit.
 The detail panel separates configured labels from Telegram identity and lists

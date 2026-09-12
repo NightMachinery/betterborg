@@ -468,7 +468,7 @@ class CodexUsersTests(unittest.TestCase):
         with patch.object(llm_chat.llm_db, "get_api_key_metadata", return_value=[]):
             configured_text = llm_chat._codex_user_overview_entry(configured[0])
         self.assertIn("<b>Configured name</b> · <code>123</code>", configured_text)
-        self.assertNotIn("Telegram:", configured_text)
+        self.assertNotIn("TG:", configured_text)
 
         unknown = [(llm_chat_config.CodexUser(456, None, False, False),
                     "456", "model", "456", None, None)]
@@ -494,7 +494,7 @@ class CodexUsersTests(unittest.TestCase):
             asyncio.run(llm_chat._show_codex_users(event))
         text = send.await_args.args[1]
         self.assertIn("<b>Configured &lt;label&gt;</b> · <code>123</code>", text)
-        self.assertIn("Telegram: <b>Telegram &amp; Name</b> · <b>@ada&lt;admin</b>", text)
+        self.assertIn("TG: <b>Telegram &amp; Name</b> · <b>@ada&lt;admin</b>", text)
         self.assertIn("Contact: Started", text)
         self.assertIn("Keys: Gemini, OpenRouter", text)
         self.assertNotIn("2026", text)
