@@ -183,7 +183,8 @@ Bot admins can use =.codex-users= to toggle those grants and manage personal
 default models. The panel separates configured labels from Telegram identity,
 shows recorded private contact, and lists personal API-key providers with their
 last-set UTC times, without exposing keys. Historical keys show an unknown date.
-Use *Add user* to enter a numeric ID or =@username= and confirm the identity.
+Use *Add user*, then *Choose user* in a private chat to select someone in
+Telegram and confirm their identity. Numeric ID and =@username= entry also work.
 Phone-number lookup requires a Telegram user account and is not supported by
 the bot. New users start with Codex and images off; their saved model is preserved.
 In groups, reply to the add-user prompt. Roster controls require the caller to

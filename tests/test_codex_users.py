@@ -8,6 +8,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
+from telethon.tl.types import (
+    KeyboardButtonRequestPeer, MessageActionRequestedPeerSentMe, MessageReplyHeader,
+    MessageService, PeerUser, ReplyKeyboardHide, ReplyKeyboardMarkup,
+    RequestPeerTypeUser, RequestedPeerUser, UpdateNewMessage,
+)
 
 _TEST_HOME = tempfile.TemporaryDirectory()
 _REAL_EXPANDUSER = os.path.expanduser
@@ -517,6 +522,252 @@ class CodexUsersTests(unittest.TestCase):
         rows, _, _ = llm_chat._codex_users_user_buttons(users, 0)
         self.assertTrue(any(button.data in (b"cu:add", "cu:add") for row in rows for button in row))
 
+    def test_private_picker_markup_requests_one_nonbot_user_and_serializes(self):
+        markup = llm_chat._codex_user_picker_markup(-123)
+        self.assertIsInstance(markup, ReplyKeyboardMarkup)
+        self.assertTrue(markup.resize)
+        self.assertTrue(markup.single_use)
+        choose = markup.rows[0].buttons[0]
+        self.assertIsInstance(choose, KeyboardButtonRequestPeer)
+        self.assertEqual(choose.button_id, -123)
+        self.assertIsInstance(choose.peer_type, RequestPeerTypeUser)
+        self.assertFalse(choose.peer_type.bot)
+        self.assertEqual(choose.max_quantity, 1)
+        self.assertGreater(len(bytes(markup)), 0)
+
+    def test_private_prompt_has_picker_while_group_keeps_inline_cancel(self):
+        for private in (True, False):
+            with self.subTest(private=private):
+                llm_chat.CODEX_USERS_ADD_PENDING.clear()
+                event = AddEvent(private=private)
+                asyncio.run(llm_chat._start_codex_user_add(event))
+                buttons = event.respond.await_args.kwargs["buttons"]
+                self.assertEqual(isinstance(buttons, ReplyKeyboardMarkup), private)
+                pending = llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)]
+                self.assertEqual(pending["request_id"] is not None, private)
+
+    def test_requested_peer_service_builder_initializes_and_previews(self):
+        service = MessageService(
+            id=778, peer_id=PeerUser(900), from_id=PeerUser(900), out=False,
+            reply_to=MessageReplyHeader(reply_to_msg_id=777),
+            action=MessageActionRequestedPeerSentMe(
+                button_id=-55,
+                peers=[RequestedPeerUser(123, first_name="Picker", username="picked")],
+            ),
+        )
+        update = UpdateNewMessage(service, pts=1, pts_count=1)
+        event = llm_chat.CodexUserRequestedPeer.build(update, self_id=42)
+        self.assertIsNotNone(event)
+
+        class Cache:
+            def get(self, *args, **kwargs):
+                return None
+
+        event._set_client(SimpleNamespace(_self_id=42, _mb_entity_cache=Cache()))
+        self.assertIs(event.message, service)
+        self.assertTrue(event.is_private)
+        self.assertEqual(event.sender_id, 900)
+        llm_chat.CODEX_USERS_ADD_PENDING.clear()
+        llm_chat.CODEX_USERS_ADD_PENDING[(900, 900)] = {
+            "token": "safe", "prompt_id": 777, "phase": "input", "request_id": -55,
+        }
+        with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
+            builtins.borg, "get_entity", new=AsyncMock(side_effect=ValueError), create=True
+        ), patch.object(llm_chat.llm_chat_config, "load_config", return_value=config()), patch.object(
+            llm_chat, "send_info_message", new=AsyncMock()
+        ) as send:
+            with self.assertRaises(llm_chat.events.StopPropagation):
+                asyncio.run(llm_chat.codex_user_requested_peer_handler(event))
+        self.assertEqual(llm_chat.CODEX_USERS_ADD_PENDING[(900, 900)]["target_id"], 123)
+        self.assertEqual(send.await_count, 2)
+        self.assertIsInstance(send.await_args_list[0].kwargs["buttons"], ReplyKeyboardHide)
+        self.assertIn("Picker", send.await_args_list[1].args[1])
+
+    def test_requested_peer_ignores_stale_wrong_scope_and_malformed(self):
+        base = {"token": "safe", "prompt_id": 777, "phase": "input", "request_id": 55}
+        cases = [
+            (AddEvent(sender_id=901), MessageActionRequestedPeerSentMe(55, [RequestedPeerUser(123)])),
+            (AddEvent(private=False), MessageActionRequestedPeerSentMe(55, [RequestedPeerUser(123)])),
+            (AddEvent(), MessageActionRequestedPeerSentMe(54, [RequestedPeerUser(123)])),
+            (AddEvent(), MessageActionRequestedPeerSentMe(55, [])),
+            (AddEvent(), MessageActionRequestedPeerSentMe(55, [RequestedPeerUser(123), RequestedPeerUser(124)])),
+        ]
+        for event, action in cases:
+            with self.subTest(event=event, action=action):
+                llm_chat.CODEX_USERS_ADD_PENDING.clear()
+                llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = dict(base)
+                event.message.action = action
+                asyncio.run(llm_chat.codex_user_requested_peer_handler(event))
+                self.assertEqual(llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)]["phase"], "input")
+
+    def test_requested_peer_rejects_shared_admin_identity(self):
+        llm_chat.CODEX_USERS_ADD_PENDING.clear()
+        llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = {
+            "token": "safe", "prompt_id": 777, "phase": "input", "request_id": 55,
+        }
+        event = AddEvent()
+        event.message.action = MessageActionRequestedPeerSentMe(
+            55, [RequestedPeerUser(123, first_name="Admin", username="boss")]
+        )
+        with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
+            builtins.borg, "get_entity", new=AsyncMock(side_effect=ValueError), create=True
+        ), patch.object(llm_chat.util, "admins", ["boss"]), patch.object(
+            llm_chat, "send_info_message", new=AsyncMock()
+        ) as send:
+            with self.assertRaises(llm_chat.events.StopPropagation):
+                asyncio.run(llm_chat.codex_user_requested_peer_handler(event))
+        self.assertEqual(llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)]["phase"], "input")
+        self.assertIn("administrators", send.await_args.args[1])
+
+    def test_preview_hide_does_not_outlive_cancelled_flow(self):
+        async def scenario():
+            llm_chat.CODEX_USERS_ADD_PENDING.clear()
+            pending = {"token": "safe", "prompt_id": 777, "phase": "resolving", "request_id": 55}
+            llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = pending
+            sent = asyncio.Event()
+            release = asyncio.Event()
+
+            async def send(*args, **kwargs):
+                sent.set()
+                await release.wait()
+
+            event = AddEvent()
+            with patch.object(llm_chat.llm_chat_config, "load_config", return_value=config()), patch.object(
+                llm_chat, "send_info_message", side_effect=send
+            ) as mocked:
+                task = asyncio.create_task(llm_chat._finish_codex_add_resolution(
+                    event, (900, 901), pending, 123, None, None
+                ))
+                await sent.wait()
+                llm_chat.CODEX_USERS_ADD_PENDING.pop((900, 901))
+                release.set()
+                with self.assertRaises(llm_chat.events.StopPropagation):
+                    await task
+            self.assertEqual(mocked.await_count, 1)
+
+        asyncio.run(scenario())
+
+    def test_text_cancel_during_slow_picker_resolution_prevents_preview(self):
+        async def scenario():
+            llm_chat.CODEX_USERS_ADD_PENDING.clear()
+            pending = {"token": "safe", "prompt_id": 777, "phase": "input", "request_id": 55}
+            llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = pending
+            started = asyncio.Event()
+            release = asyncio.Event()
+
+            async def resolve(value):
+                started.set()
+                await release.wait()
+                return 123, None, None
+
+            selected = AddEvent()
+            selected.message.action = MessageActionRequestedPeerSentMe(55, [RequestedPeerUser(123)])
+            cancel = AddEvent("Cancel")
+            with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
+                llm_chat, "_resolve_codex_add_target", side_effect=resolve
+            ), patch.object(llm_chat, "send_info_message", new=AsyncMock()) as send:
+                task = asyncio.create_task(llm_chat.codex_user_requested_peer_handler(selected))
+                await started.wait()
+                with self.assertRaises(llm_chat.events.StopPropagation):
+                    await llm_chat.codex_user_add_input_handler(cancel)
+                release.set()
+                with self.assertRaises(llm_chat.events.StopPropagation):
+                    await task
+            self.assertNotIn((900, 901), llm_chat.CODEX_USERS_ADD_PENDING)
+            self.assertEqual(send.await_count, 1)
+            self.assertIn("cancelled", send.await_args.args[1])
+
+        asyncio.run(scenario())
+
+    def test_text_cancel_during_confirmation_authorization_prevents_write(self):
+        async def scenario():
+            llm_chat.CODEX_USERS_ADD_PENDING.clear()
+            llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = {
+                "token": "right", "prompt_id": 777, "phase": "confirm",
+                "target_id": 123, "request_id": 55,
+            }
+            started = asyncio.Event()
+            release = asyncio.Event()
+
+            async def authorize(event):
+                started.set()
+                await release.wait()
+                return True
+
+            confirm = AddEvent()
+            confirm.data = b"cu:add:yes:right"
+            cancel = AddEvent("Cancel")
+            with patch.object(llm_chat, "_codex_users_admin", side_effect=authorize), patch.object(
+                llm_chat.llm_chat_config, "add_user"
+            ) as add, patch.object(llm_chat, "send_info_message", new=AsyncMock()):
+                task = asyncio.create_task(llm_chat.callback_handler(confirm))
+                await started.wait()
+                with self.assertRaises(llm_chat.events.StopPropagation):
+                    await llm_chat.codex_user_add_input_handler(cancel)
+                release.set()
+                await task
+            add.assert_not_called()
+            confirm.answer.assert_awaited_with("This add-user confirmation is stale.", show_alert=True)
+
+        asyncio.run(scenario())
+
+    def test_selection_fills_only_missing_cached_profile_fields(self):
+        llm_chat.CODEX_USERS_ADD_PENDING.clear()
+        llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = {
+            "token": "safe", "prompt_id": 777, "phase": "input", "request_id": 55,
+        }
+        event = AddEvent()
+        event.message.action = MessageActionRequestedPeerSentMe(
+            55, [RequestedPeerUser(123, first_name="Shared", last_name="Surname", username="shared")]
+        )
+        profile = llm_chat.llm_db.UserProfile(
+            bot_id=42, user_id=123, first_name="Stored", last_name=None,
+            username=None, private_contact_at=None,
+        )
+        with patch.object(llm_chat, "BOT_ID", 42), patch.object(
+            llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)
+        ), patch.object(builtins.borg, "get_entity", new=AsyncMock(side_effect=ValueError), create=True), patch.object(
+            llm_chat.llm_db, "get_user_profile", return_value=profile
+        ), patch.object(llm_chat.llm_chat_config, "load_config", return_value=config()), patch.object(
+            llm_chat, "send_info_message", new=AsyncMock()
+        ) as send:
+            with self.assertRaises(llm_chat.events.StopPropagation):
+                asyncio.run(llm_chat.codex_user_requested_peer_handler(event))
+        preview = send.await_args_list[-1].args[1]
+        self.assertIn("Stored Surname", preview)
+        self.assertIn("@shared", preview)
+        self.assertNotIn("Shared Surname", preview)
+
+    def test_cancel_while_private_prompt_is_delivering_hides_late_keyboard(self):
+        async def scenario():
+            llm_chat.CODEX_USERS_ADD_PENDING.clear()
+            delivering = asyncio.Event()
+            release = asyncio.Event()
+
+            async def deliver(*args, **kwargs):
+                delivering.set()
+                await release.wait()
+                return SimpleNamespace(id=777)
+
+            opener = AddEvent()
+            opener.respond = AsyncMock(side_effect=deliver)
+            cancel = AddEvent("Cancel")
+            with patch.object(llm_chat, "send_info_message", new=AsyncMock()) as send:
+                task = asyncio.create_task(llm_chat._start_codex_user_add(opener))
+                await delivering.wait()
+                with self.assertRaises(llm_chat.events.StopPropagation):
+                    await llm_chat.codex_user_add_input_handler(cancel)
+                release.set()
+                await task
+            self.assertNotIn((900, 901), llm_chat.CODEX_USERS_ADD_PENDING)
+            self.assertEqual(send.await_count, 2)
+            self.assertTrue(all(
+                isinstance(call.kwargs["buttons"], ReplyKeyboardHide)
+                for call in send.await_args_list
+            ))
+
+        asyncio.run(scenario())
+
     def test_sender_only_admin_does_not_trust_chat_policy(self):
         event = AddEvent(private=False)
         with patch.object(llm_chat.util, "admins", [901]), patch.object(
@@ -813,6 +1064,16 @@ class CodexUsersTests(unittest.TestCase):
         ), patch.object(llm_chat, "_show_codex_user_detail", new=AsyncMock(return_value=True)):
             asyncio.run(llm_chat.callback_handler(event))
         self.assertIs(llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)], new_pending)
+
+    def test_group_cancel_without_reply_during_prompt_delivery_is_ignored(self):
+        pending = {"token": "group", "prompt_id": None, "phase": "prompting"}
+        event = AddEvent("Cancel", private=False)
+        with patch.dict(llm_chat.CODEX_USERS_ADD_PENDING, {(900, 901): pending}, clear=True), patch.object(
+            llm_chat, "send_info_message", new=AsyncMock()
+        ) as send:
+            asyncio.run(llm_chat.codex_user_add_input_handler(event))
+            self.assertIs(llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)], pending)
+            send.assert_not_awaited()
 
     def test_command_routing(self):
         self.assertTrue(llm_chat._is_known_command(".codex-users"))

@@ -78,7 +78,13 @@ shared history never count as private contact. See [metadata storage](llm_user_m
 - `.codex-users <user-id> <model-id>`: immediately save a specific model as
   that user's personal default, including custom model IDs.
 
-Choose **Add user** to enter a positive numeric Telegram user ID or `@username`.
+Choose **Add user**, then **Choose user** in a private chat. Telegram opens its
+native user picker and shares the selected user ID with the bot, without sharing
+a phone number. Select one person, review the preview, then confirm **Add user**.
+The picker is available only in private chats; group prompts still accept IDs
+and usernames with the existing direct-reply requirement.
+
+You can also enter a positive numeric Telegram user ID or `@username`.
 The bot resolves a username to its stable numeric ID before showing an identity
 preview. Unknown numeric IDs are accepted with “Profile not known yet”; unknown
 usernames, groups, channels, bots, and known bot admins are rejected.
@@ -87,9 +93,9 @@ Phone-number lookup is not supported by the bot: Telegram restricts
 [`contacts.resolvePhone`](https://core.telegram.org/method/contacts.resolvePhone)
 to authenticated user accounts, and resolution also depends on the target's
 privacy settings. A separate user-account resolver would require additional
-account access. Telegram's private-chat
+account access and is not implemented. The
 [user picker](https://core.telegram.org/constructor/keyboardButtonRequestPeer)
-is a possible alternative; neither extension is currently implemented.
+provides a bot-compatible alternative.
 
 The preview starts both personal grants off. **Add user** confirms the insertion;
 **Cancel** clears the pending flow. No message is sent to the target, no contact
@@ -101,7 +107,9 @@ again when confirming.
 Each pending flow belongs to one admin in one chat. In groups, reply to the
 specific prompt; unrelated messages are ignored by the onboarding flow. Pending
 flows are held in memory and disappear on restart. Stale confirmation buttons
-cannot act on a newer flow.
+cannot act on a newer flow. Picker results are also tied to their original
+request, admin, and chat. Old results and results from another chat cannot
+change the current preview.
 
 Access buttons save an explicit enabled/disabled value to the JSON5 file and
 refresh the menu. Repeated clicks do not invert the state unexpectedly.
