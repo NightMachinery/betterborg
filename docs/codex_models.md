@@ -84,7 +84,9 @@ so it is deliberately absent from the level sets.
 ## Tools
 
 The `googleSearch` toggle maps to the OpenAI Responses `web_search` tool for
-Codex models. Other Gemini-specific tools are not mapped.
+Codex models. The current-message `.i` prefix adds `image_generation` with
+`partial_images: 3` when both access policies allow it. There is no persistent
+image-generation toggle. Other Gemini-specific tools are not mapped.
 
 ## Attachment handling
 
@@ -100,61 +102,19 @@ See [docs/codex_caching.md](codex_caching.md) for Codex prompt caching behavior.
 
 ## Image generation
 
-Documentation, code, and a live OAuth request verified on 2026-09-12:
+Use `.i` to enable image generation for a single request. It combines with
+model and reasoning prefixes, such as `.i .cl draw a fox`. Both access policies
+must allow the sender. An explicit Codex prefix takes precedence, otherwise the
+selected Codex model is used, falling back to GPT-5.6 Sol when the selected
+model is from another provider. Explicit non-Codex prefixes conflict with `.i`.
 
-- Codex supports built-in image generation with ChatGPT subscription access.
-  The [official image-generation guide](https://learn.chatgpt.com/docs/image-generation)
-  says it uses `gpt-image-2`, counts toward general Codex usage limits, and
-  consumes included limits about 3–5 times faster than comparable text turns,
-  depending on image quality and size.
-- Betterborg's Codex adapter currently supports image inputs and text outputs.
-  The chat integration only enables `web_search`; it does not request an
-  `image_generation` tool. `stream_codex_response()` consumes text deltas and
-  completion status, without extracting generated images.
-- The separate `image_gen_plugins/image_gen.py` plugin uses Google Imagen;
-  it is not connected to Codex OAuth.
+Every streamed preview and completed image is sent separately to Telegram,
+replying to the request. Previews remain after completion. Text responses and
+clarification questions continue to work, and image attachments remain
+available for editing prompts. Historical `.i` messages and replies to generated
+images do not enable the tool for the next request.
 
-### Live verification
-
-The borrowed-token approach works for image generation on the tested account.
-A standalone probe loaded the actual `_create_async_client()` and
-`prepare_codex_response_kwargs()` functions from `uniborg/codex_util.py`, omitting
-the application startup import. It used the installed `llm-openai-via-codex`
-authentication helper and OpenAI Python SDK 2.37.0, with no API-key fallback or
-additional Codex client headers.
-
-The request went to `https://chatgpt.com/backend-api/codex/responses` with
-`gpt-5.6-sol`, `reasoning.effort="low"`, `store=false`, `stream=true`, and:
-
-```json
-{"tools": [{"type": "image_generation"}]}
-```
-
-The instructions explicitly requested one image using the tool. The prompt was
-an orange circle centered on a white square background. The response:
-
-- Selected `gpt-image-2-codex`, PNG output, and automatic quality and size.
-- Emitted image-generation progress events and a `response.output_item.done`
-  item with `type="image_generation_call"` and base64 image data in `result`.
-- Returned one valid 1254 by 1254 PNG, 724,526 bytes, in about 19.8 seconds.
-  Pillow verified the file, and visual inspection confirmed the requested image.
-- Finished with `response.completed` and status `completed`.
-
-This proves endpoint compatibility for a basic generation, not end-to-end
-Telegram support. Betterborg still needs to enable the tool, collect/decode
-image items, and send them to Telegram. Deduplicate image items by ID if handling
-both `response.output_item.done` and `response.completed`. This request emitted
-`response.output_text.done` without text delta events, so image delivery must not
-depend on the current text accumulator.
-
-The same endpoint and event format are documented by the
-[chatgpt-imagegen project](https://github.com/leeguooooo/chatgpt-imagegen/blob/main/docs/how-it-works.md).
-A [Codex issue](https://github.com/openai/codex/issues/28723) reports that explicit
-size and quality parameters can be overridden. Our test used defaults; edits,
-explicit image model selection, dimensions, quality controls, and other account
-entitlements remain untested.
-
-Reusing OAuth avoids a separate API-key integration and uses the subscription
-path, but the internal endpoint and parameter behavior can change. The
-[OpenAI image-generation API](https://developers.openai.com/api/docs/guides/tools-image-generation)
-offers the documented public API contract with separate API billing.
+See [Codex image generation](codex_image_generation.md) for stream handling,
+failure behavior, and the live OAuth verification with previews enabled.
+The separate `image_gen_plugins/image_gen.py` plugin continues to use Google
+Imagen.

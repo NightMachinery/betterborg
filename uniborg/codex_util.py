@@ -1,10 +1,15 @@
 import asyncio
+import base64
+import binascii
 import hashlib
+import io
 from dataclasses import dataclass
-from typing import Optional
+from typing import Awaitable, Callable, Optional
+
 from urllib.parse import urlparse
 
 import openai
+from PIL import Image
 
 from uniborg import util
 
@@ -16,6 +21,60 @@ CODEX_MODEL_PREFIX = "openai-codex/"
 class CodexResponse:
     text: str
     finish_reason: Optional[str] = None
+    previews_delivered: int = 0
+    images_delivered: int = 0
+
+    @property
+    def has_image(self) -> bool:
+        return bool(self.previews_delivered or self.images_delivered)
+
+
+@dataclass(frozen=True)
+class CodexImage:
+    """One validated output; preview indices are zero-based and local to an item."""
+
+    data: bytes
+    item_id: str
+    preview_index: Optional[int] = None
+    file_extension: str = ".png"
+
+    @property
+    def is_preview(self) -> bool:
+        return self.preview_index is not None
+
+
+class CodexStreamError(RuntimeError):
+    def __init__(self, message: str, response: CodexResponse):
+        self.response = response
+        super().__init__(
+            message
+            + (
+                " Already-delivered images have been kept; no regeneration was attempted."
+                if response.has_image
+                else ""
+            )
+        )
+
+
+def _field(value, name, default=None):
+    return (
+        value.get(name, default)
+        if isinstance(value, dict)
+        else getattr(value, name, default)
+    )
+
+
+def _decode_image(encoded: str) -> tuple[bytes, str]:
+    try:
+        data = base64.b64decode(encoded, validate=True)
+        with Image.open(io.BytesIO(data)) as img:
+            extension = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp"}.get(img.format)
+            if extension is None:
+                raise ValueError("Unsupported image format")
+            img.verify()
+        return data, extension
+    except (TypeError, ValueError, binascii.Error, OSError, SyntaxError) as exc:
+        raise ValueError("Codex returned malformed image data.") from exc
 
 
 def is_codex_model(model: str) -> bool:
@@ -186,10 +245,14 @@ async def stream_codex_response(
     tools: Optional[list[dict]] = None,
     edit_interval: float = 0.8,
     prompt_cache_key: Optional[str] = None,
+    image_callback: Optional[Callable[[CodexImage], Awaitable[None]]] = None,
 ) -> CodexResponse:
-    client = await _create_async_client()
-    instructions, input_messages = messages_to_codex(messages)
+    """Deliver images serially; callback success means Telegram accepted the image.
 
+    Callback failures stop this request without retrying generation. Cancellation
+    propagates after resource cleanup; already-delivered images remain intact.
+    """
+    instructions, input_messages = messages_to_codex(messages)
     kwargs = prepare_codex_response_kwargs(
         model=model,
         instructions=instructions,
@@ -198,45 +261,152 @@ async def stream_codex_response(
         tools=tools,
         prompt_cache_key=prompt_cache_key,
     )
-
-    response_text = ""
-    finish_reason = None
-    last_edit_time = asyncio.get_event_loop().time()
+    result = CodexResponse(text="")
+    previews_seen = set()
+    images_seen = set()
+    # Track individual text parts so terminal events only fill missing parts.
+    text_parts = {}
+    last_edit_time = asyncio.get_running_loop().time()
     streaming_start_time = last_edit_time
+    client = None
+    stream = None
+    completed = False
 
-    async for stream_event in await client.responses.create(**kwargs):
-        event_type = getattr(stream_event, "type", None)
+    def text_key(item_id, output_index, content_index):
+        return (item_id if item_id is not None else output_index, content_index)
 
-        if event_type == "response.output_text.delta":
-            delta = getattr(stream_event, "delta", None)
-            if not delta:
-                continue
-            response_text += delta
-            current_time = asyncio.get_event_loop().time()
-            current_edit_interval = edit_interval
-            cursor = "▌"
+    def add_text(key, text, *, delta=False):
+        if not text:
+            return
+        if delta:
+            text_parts[key] = text_parts.get(key, "") + text
+        elif key not in text_parts:
+            text_parts[key] = text
+        result.text = "".join(text_parts.values())
 
-            if (current_time - streaming_start_time) > 120:
-                current_edit_interval = 60
-                cursor = "▌💤💤"
-            elif (current_time - streaming_start_time) > 30:
-                current_edit_interval = 15
-                cursor = "▌💤"
+    async def deliver_image(item_id, encoded, preview_index=None):
+        if not isinstance(item_id, str) or not item_id:
+            raise ValueError("Codex image output is missing its item identity.")
+        if preview_index is not None:
+            if type(preview_index) is not int or preview_index < 0:
+                raise ValueError("Codex returned an invalid image preview index.")
+            identity = (item_id, preview_index)
+            seen = previews_seen
+        else:
+            identity = item_id
+            seen = images_seen
+        if identity in seen:
+            return
+        data, extension = _decode_image(encoded)
+        if image_callback is None:
+            raise RuntimeError(
+                "Codex returned an image without an image delivery callback."
+            )
+        try:
+            await image_callback(CodexImage(data, item_id, preview_index, extension))
+        except Exception as exc:
+            raise RuntimeError("Failed to deliver a Codex image to Telegram.") from exc
+        seen.add(identity)
+        if preview_index is None:
+            result.images_delivered += 1
+        else:
+            result.previews_delivered += 1
 
-            if (current_time - last_edit_time) > current_edit_interval:
-                try:
-                    await util.edit_message(
-                        response_message,
-                        f"{response_text}{cursor}",
-                        parse_mode="md",
+    async def consume_item(item, output_index):
+        item_id = _field(item, "id")
+        if _field(item, "type") == "image_generation_call":
+            if _field(item, "status") not in (None, "completed"):
+                raise RuntimeError("Codex image generation did not complete.")
+            await deliver_image(item_id, _field(item, "result"))
+        elif _field(item, "type") == "message":
+            for content_index, part in enumerate(_field(item, "content", []) or []):
+                if _field(part, "type") in ("output_text", "refusal"):
+                    add_text(
+                        text_key(item_id, output_index, content_index),
+                        _field(part, "text") or _field(part, "refusal"),
                     )
-                    last_edit_time = current_time
-                except Exception as e:
-                    print(f"Error during Codex message edit: {e}")
 
-        elif event_type == "response.completed":
-            response = getattr(stream_event, "response", None)
-            if response is not None:
-                finish_reason = getattr(response, "status", None)
-
-    return CodexResponse(text=response_text, finish_reason=finish_reason)
+    try:
+        client = await _create_async_client()
+        stream = await client.responses.create(**kwargs)
+        async for stream_event in stream:
+            event_type = _field(stream_event, "type")
+            if event_type in ("response.output_text.delta", "response.refusal.delta"):
+                key = text_key(
+                    _field(stream_event, "item_id"),
+                    _field(stream_event, "output_index"),
+                    _field(stream_event, "content_index", 0),
+                )
+                add_text(key, _field(stream_event, "delta"), delta=True)
+                current_time = asyncio.get_running_loop().time()
+                elapsed = current_time - streaming_start_time
+                current_edit_interval = (
+                    60 if elapsed > 120 else 15 if elapsed > 30 else edit_interval
+                )
+                cursor = "▌💤💤" if elapsed > 120 else "▌💤" if elapsed > 30 else "▌"
+                if current_time - last_edit_time > current_edit_interval:
+                    try:
+                        await util.edit_message(
+                            response_message, result.text + cursor, parse_mode="md"
+                        )
+                        last_edit_time = current_time
+                    except Exception as exc:
+                        print(f"Error during Codex message edit: {exc}")
+            elif event_type in ("response.output_text.done", "response.refusal.done"):
+                key = text_key(
+                    _field(stream_event, "item_id"),
+                    _field(stream_event, "output_index"),
+                    _field(stream_event, "content_index", 0),
+                )
+                add_text(
+                    key, _field(stream_event, "text") or _field(stream_event, "refusal")
+                )
+            elif event_type == "response.image_generation_call.partial_image":
+                preview_index = _field(stream_event, "partial_image_index")
+                if preview_index is None:
+                    raise ValueError("Codex image preview is missing its index.")
+                await deliver_image(
+                    _field(stream_event, "item_id"),
+                    _field(stream_event, "partial_image_b64"),
+                    preview_index,
+                )
+            elif event_type == "response.output_item.done":
+                await consume_item(
+                    _field(stream_event, "item"), _field(stream_event, "output_index")
+                )
+            elif event_type in (
+                "response.completed",
+                "response.failed",
+                "response.incomplete",
+            ):
+                response = _field(stream_event, "response")
+                result.finish_reason = _field(response, "status")
+                # Preserve any completed outputs even when the response later fails.
+                for index, item in enumerate(_field(response, "output", []) or []):
+                    if _field(item, "status") in (None, "completed"):
+                        await consume_item(item, index)
+                if event_type != "response.completed" or result.finish_reason not in (
+                    None,
+                    "completed",
+                ):
+                    raise RuntimeError(
+                        f"Codex response ended with {result.finish_reason or event_type}."
+                    )
+                completed = True
+            elif event_type == "error":
+                raise RuntimeError("Codex backend reported a streaming error.")
+        if not completed:
+            raise RuntimeError("Codex stream ended before response completion.")
+        if not result.text.strip() and not result.has_image:
+            raise RuntimeError("Codex returned an empty result (no text or images).")
+        return result
+    except Exception as exc:
+        raise CodexStreamError(str(exc), result) from exc
+    finally:
+        # Cleanup errors must not mask generation failures or cancellation.
+        for name, resource in (("stream", stream), ("client", client)):
+            if resource is not None:
+                try:
+                    await resource.close()
+                except Exception as exc:
+                    print(f"Error closing Codex {name}: {exc}")

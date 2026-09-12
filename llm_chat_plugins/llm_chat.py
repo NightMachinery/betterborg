@@ -237,6 +237,8 @@ DENIED_CODEX_PREFIX_MODEL_MAPPING = {
 }
 
 CODEX_ACCESS_DENIED = "Codex access is not enabled for you."
+CODEX_IMAGEGEN_ACCESS_DENIED = "Codex image generation access is not enabled for you."
+CODEX_IMAGEGEN_MODEL_CONFLICT = "`.i` can only be combined with a Codex model."
 
 #: Sets reasoning effort for one message without changing the model. Available
 #: to everyone; a level the model does not accept is ignored by the resolver.
@@ -1040,6 +1042,27 @@ def _model_access_denial(model: str) -> str:
     )
 
 
+def _resolve_image_generation_model(
+    *, prefix_model: Optional[str], selected_model: Optional[str]
+) -> str:
+    if prefix_model:
+        if not codex_util.is_codex_model(prefix_model):
+            raise ValueError(CODEX_IMAGEGEN_MODEL_CONFLICT)
+        return prefix_model
+    if selected_model and codex_util.is_codex_model(selected_model):
+        return selected_model
+    return OPENAI_CODEX_GPT_5_6_SOL
+
+
+def _codex_tools_for_request(enabled_tools, *, image_generation: bool) -> list:
+    tools = []
+    if "googleSearch" in enabled_tools:
+        tools.append({"type": "web_search"})
+    if image_generation:
+        tools.append({"type": "image_generation", "partial_images": 3})
+    return tools
+
+
 # Text input patterns for clearing/resetting values
 CANCEL_KEYWORDS = ["cancel"]
 RESET_KEYWORDS = ["not set", "none", "clear", "remove", "reset"]
@@ -1292,6 +1315,7 @@ class PrefixProcessResult:
 
     model: Optional[str] = None
     reasoning_effort: Optional[str] = None
+    image_generation: bool = False
     processed_text: str = ""
 
 
@@ -2293,10 +2317,17 @@ def _detect_and_process_message_prefix(
     model = None
     reasoning_effort = None
     explicit_effort_p = False
+    image_generation = False
 
     #: A model prefix and an effort prefix may be combined, in either order:
     #: `.c .th ask`, `.th .c ask`.
     while True:
+        if not image_generation:
+            matched_image = _match_message_prefix(processed_text, {".i": True})
+            if matched_image is not None:
+                image_generation, processed_text = matched_image
+                continue
+
         if model is None:
             matched = None
             for prefix_mapping in prefix_mappings:
@@ -2323,6 +2354,7 @@ def _detect_and_process_message_prefix(
     return PrefixProcessResult(
         model=model,
         reasoning_effort=reasoning_effort,
+        image_generation=image_generation,
         processed_text=processed_text,
     )
 
@@ -3047,6 +3079,7 @@ async def _send_image_to_telegram(
     filename_base: str = "generated_image",
     file_extension: str = ".png",
     file_index: Optional[int] = None,
+    caption: Optional[str] = None,
 ) -> bool:
     """
     Send image data to Telegram with proper resource management.
@@ -3075,11 +3108,13 @@ async def _send_image_to_telegram(
         try:
             # Send image to Telegram with uploading photo action
             async with borg.action(event.chat, "photo") as action:
-                await event.client.send_file(
-                    event.chat_id,
-                    file=image_io,
-                    reply_to=event.id,
-                )
+                send_kwargs = {
+                    "file": image_io,
+                    "reply_to": event.id,
+                }
+                if caption is not None:
+                    send_kwargs["caption"] = caption
+                await event.client.send_file(event.chat_id, **send_kwargs)
             return True
         finally:
             image_io.close()
@@ -5327,6 +5362,9 @@ async def help_handler(event):
     prefs = user_manager.get_prefs(event.sender_id)
     config = llm_chat_config.load_config()
     has_codex_access = await llm_chat_config.can_use_codex(event, config)
+    has_codex_imagegen_access = await llm_chat_config.can_use_codex_imagegen(
+        event, config
+    )
 
     # Dynamically build the group trigger instructions based on user settings
     activation_instructions = []
@@ -5352,6 +5390,11 @@ async def help_handler(event):
         if has_codex_access
         else "- `.c` → GPT-5.6 Sol (OpenRouter): Latest OpenAI model on OpenRouter"
     )
+    if has_codex_imagegen_access:
+        codex_shortcuts_text += (
+            "\n- `.i` → enable Codex image generation for this message; combine "
+            "with Codex and reasoning shortcuts in any order"
+        )
 
     help_text = f"""
 **Hello! I am a Telegram chat bot powered by third-party AI providers.** It's like ChatGPT but in Telegram!
@@ -7973,6 +8016,19 @@ async def chat_handler(event):
         prefix_text, admin_p=user_is_admin, codex_p=user_has_codex_access
     )
 
+    if prefix_result.image_generation:
+        if not await llm_chat_config.can_use_codex_imagegen(event, config):
+            await send_info_message(event, CODEX_IMAGEGEN_ACCESS_DENIED)
+            return
+        selected_model, _ = _get_effective_model_and_service(chat_id, user_id)
+        try:
+            prefix_result.model = _resolve_image_generation_model(
+                prefix_model=prefix_result.model, selected_model=selected_model
+            )
+        except ValueError as exc:
+            await send_info_message(event, str(exc))
+            return
+
     # Audio URL Magic: Check if message contains only a URL pointing to audio
     if AUDIO_URL_MAGIC_P and user_is_admin and not event.file and not group_id:
 
@@ -8144,9 +8200,10 @@ async def chat_handler(event):
             if unsupported_pioneer_tools and WARN_UNAVAILABLE_TOOLS_P:
                 warnings.append("Only Google Search is supported for Pioneer models.")
         elif is_codex_model_p:
-            codex_tools = []
-            if "googleSearch" in prefs.enabled_tools:
-                codex_tools.append({"type": "web_search"})
+            codex_tools = _codex_tools_for_request(
+                prefs.enabled_tools,
+                image_generation=prefix_result.image_generation,
+            )
             if codex_tools:
                 api_kwargs["tools"] = codex_tools
         else:
@@ -8204,6 +8261,30 @@ async def chat_handler(event):
                 remove_active_llm_task(user_id, pioneer_task)
         elif is_codex_model_p:
             edit_interval = get_streaming_delay(model_in_use)
+            delivered_image_count = 0
+            image_sequence = 0
+
+            async def deliver_codex_image(image):
+                nonlocal delivered_image_count, image_sequence
+                image_sequence += 1
+                if image.is_preview:
+                    caption = f"Codex preview {image.preview_index + 1}"
+                    filename_base = "codex_preview"
+                else:
+                    caption = "Codex generated image"
+                    filename_base = "codex_generated_image"
+                sent = await _send_image_to_telegram(
+                    event,
+                    image.data,
+                    filename_base=filename_base,
+                    file_extension=image.file_extension,
+                    file_index=image_sequence,
+                    caption=caption,
+                )
+                if not sent:
+                    raise RuntimeError("Telegram could not deliver a generated image.")
+                delivered_image_count += 1
+
             codex_task = asyncio.create_task(
                 codex_util.stream_codex_response(
                     event=event,
@@ -8216,6 +8297,11 @@ async def chat_handler(event):
                     prompt_cache_key=codex_util.codex_prompt_cache_key(
                         model=model_in_use, chat_id=chat_id, user_id=user_id
                     ),
+                    image_callback=(
+                        deliver_codex_image
+                        if prefix_result.image_generation
+                        else None
+                    ),
                 )
             )
             add_active_llm_task(user_id, codex_task)
@@ -8223,11 +8309,28 @@ async def chat_handler(event):
                 codex_response = await codex_task
                 response_text = codex_response.text
                 finish_reason = codex_response.finish_reason
-                has_image = False
-            except asyncio.CancelledError:
+                has_image = codex_response.has_image
+            except codex_util.CodexStreamError as e:
+                error_text = f"{BOT_META_INFO_PREFIX}❌ {e}"
+                if e.response.text.strip():
+                    error_text = (
+                        f"{e.response.text.strip()}\n\n{BOT_META_INFO_LINE}\n{error_text}"
+                    )
                 await util.edit_message(
                     response_message,
-                    f"{BOT_META_INFO_PREFIX}❌ Request was canceled.",
+                    error_text,
+                    parse_mode="md",
+                )
+                return
+            except asyncio.CancelledError:
+                kept = (
+                    " Already-delivered images have been kept."
+                    if delivered_image_count
+                    else ""
+                )
+                await util.edit_message(
+                    response_message,
+                    f"{BOT_META_INFO_PREFIX}❌ Request was canceled.{kept}",
                     append_p=True,
                     parse_mode="md",
                 )
