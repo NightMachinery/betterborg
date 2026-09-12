@@ -22,7 +22,11 @@ os.path.expanduser = lambda path: path.replace("~", _TEST_HOME.name, 1) if path.
 Path.home = classmethod(lambda cls: Path(_TEST_HOME.name))
 
 from uniborg import llm_chat_config
-from uniborg.constants import OPENAI_CODEX_GPT_5_6_SOL, PIONEER_OPUS_4_8
+from uniborg.constants import (
+    OPENAI_CODEX_ASTRA,
+    OPENAI_CODEX_GPT_5_6_SOL,
+    PIONEER_OPUS_4_8,
+)
 
 
 class _FakeLoop:
@@ -155,7 +159,9 @@ class CodexUsersTests(unittest.TestCase):
         roster_user = llm_chat_config.CodexUser(123, "Configured Name", False, True)
         cfg = config(users=(roster_user,))
         event = Event()
-        prefs = SimpleNamespace(model=OPENAI_CODEX_GPT_5_6_SOL)
+        prefs = SimpleNamespace(
+            model=OPENAI_CODEX_GPT_5_6_SOL, thinking_by_model={}
+        )
         with patch.object(llm_chat.llm_chat_config, "load_config", return_value=cfg), patch.object(
             builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True
         ), patch.object(llm_chat.user_manager, "get_prefs", return_value=prefs), patch.object(
@@ -172,7 +178,9 @@ class CodexUsersTests(unittest.TestCase):
 
     def test_detail_shows_exact_unknown_current_default(self):
         event = Event("123")
-        prefs = SimpleNamespace(model="provider/a-very-custom-model")
+        prefs = SimpleNamespace(
+            model="provider/a-very-custom-model", thinking_by_model={}
+        )
         with patch.object(llm_chat.llm_chat_config, "load_config", return_value=config(123)), patch.object(
             builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True
         ), patch.object(llm_chat.user_manager, "get_prefs", return_value=prefs), patch.object(
@@ -312,7 +320,9 @@ class CodexUsersTests(unittest.TestCase):
         ), patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True), patch.object(
             llm_chat.llm_chat_config, "update_user_access", return_value=cfg
         ) as update, patch.object(
-            llm_chat.user_manager, "get_prefs", return_value=SimpleNamespace(model="saved")
+            llm_chat.user_manager,
+            "get_prefs",
+            return_value=SimpleNamespace(model="saved", thinking_by_model={}),
         ):
             asyncio.run(llm_chat.callback_handler(event))
         update.assert_called_once_with(123, capability="codex_enabled", enabled=True)
@@ -395,7 +405,7 @@ class CodexUsersTests(unittest.TestCase):
         self.assertTrue(any(button.data in (b"cu:p:2", "cu:p:2") for button in flat))
 
     def test_picker_model_callback_payloads_fit_telegram_limit(self):
-        prefs = SimpleNamespace(model="unknown/current")
+        prefs = SimpleNamespace(model="unknown/current", thinking_by_model={})
         event = Event()
         with patch.object(llm_chat.llm_chat_config, "load_config", return_value=config(123)), patch.object(
             builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True
@@ -407,6 +417,249 @@ class CodexUsersTests(unittest.TestCase):
         self.assertTrue(all(len(button.data) <= 64 for row in rows for button in row))
         labels = [button.text for row in rows for button in row]
         self.assertTrue(any(OPENAI_CODEX_GPT_5_6_SOL in label for label in labels))
+
+    def test_picker_shows_full_model_ids_and_current_model_effort(self):
+        prefs = SimpleNamespace(
+            model=OPENAI_CODEX_GPT_5_6_SOL,
+            thinking_by_model={OPENAI_CODEX_GPT_5_6_SOL: "high"},
+        )
+        event = Event()
+        with patch.object(
+            llm_chat.llm_chat_config, "load_config", return_value=config(123)
+        ), patch.object(
+            builtins.borg,
+            "get_entity",
+            new=AsyncMock(return_value=self.entity),
+            create=True,
+        ), patch.object(
+            llm_chat.user_manager, "get_prefs", return_value=prefs
+        ), patch.object(llm_chat, "send_info_message", new=AsyncMock()) as send:
+            asyncio.run(llm_chat._show_codex_user_models(event, 123))
+
+        flat = [button for row in send.await_args.kwargs["buttons"] for button in row]
+        labels = [button.text for button in flat]
+        callbacks = [
+            button.data.decode() if isinstance(button.data, bytes) else button.data
+            for button in flat
+        ]
+        self.assertIn("🧠 buttons set personal reasoning", send.await_args.args[1])
+        self.assertIn(f"✅ {OPENAI_CODEX_GPT_5_6_SOL}", labels)
+        self.assertEqual(labels.count("✅ 🧠 High"), 1)
+        expected_levels = set(
+            llm_chat.llm_models.spec_for_model(
+                OPENAI_CODEX_GPT_5_6_SOL
+            ).reasoning_levels
+        ) | {llm_chat.REASONING_CLEAR_KEY}
+        shown_levels = {
+            data.rsplit(":", 1)[1]
+            for data in callbacks
+            if data.startswith("cu:r:123:")
+        }
+        self.assertEqual(shown_levels, expected_levels)
+        self.assertTrue(all(len(data.encode()) <= 64 for data in callbacks))
+
+    def test_picker_checks_model_default_when_no_effort_is_stored(self):
+        prefs = SimpleNamespace(
+            model=OPENAI_CODEX_ASTRA,
+            thinking_by_model={},
+        )
+        event = Event()
+        with patch.object(
+            llm_chat.llm_chat_config, "load_config", return_value=config(123)
+        ), patch.object(
+            builtins.borg,
+            "get_entity",
+            new=AsyncMock(return_value=self.entity),
+            create=True,
+        ), patch.object(
+            llm_chat.user_manager, "get_prefs", return_value=prefs
+        ), patch.object(llm_chat, "send_info_message", new=AsyncMock()) as send:
+            asyncio.run(llm_chat._show_codex_user_models(event, 123))
+
+        labels = [
+            button.text
+            for row in send.await_args.kwargs["buttons"]
+            for button in row
+        ]
+        self.assertEqual(labels.count("✅ 🧠 Default (medium)"), 1)
+
+    def test_switching_model_rerenders_that_models_effort_levels(self):
+        records = {123: {"model": OPENAI_CODEX_GPT_5_6_SOL}}
+        manager = llm_chat.UserManager()
+        manager.storage = Mock()
+        manager.storage.get.side_effect = lambda uid: records.get(uid)
+        manager.storage.set.side_effect = lambda uid, value: records.__setitem__(uid, value)
+        token = llm_chat._codex_users_model_token(OPENAI_CODEX_ASTRA)
+        event = Event()
+        event.data = f"cu:m:123:{token}".encode()
+        with patch.object(llm_chat, "user_manager", manager), patch.object(
+            llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)
+        ), patch.object(
+            llm_chat.llm_chat_config, "load_config", return_value=config(123)
+        ), patch.object(
+            builtins.borg,
+            "get_entity",
+            new=AsyncMock(return_value=self.entity),
+            create=True,
+        ):
+            asyncio.run(llm_chat.callback_handler(event))
+
+        self.assertEqual(records[123]["model"], OPENAI_CODEX_ASTRA)
+        flat = [button for row in event.edit.await_args.kwargs["buttons"] for button in row]
+        labels = [button.text for button in flat]
+        callbacks = [
+            button.data.decode() if isinstance(button.data, bytes) else button.data
+            for button in flat
+        ]
+        self.assertIn(f"✅ {OPENAI_CODEX_ASTRA}", labels)
+        self.assertIn("cu:r:123:max", callbacks)
+        self.assertNotIn("cu:r:123:none", callbacks)
+
+    def test_effort_callback_saves_and_clears_without_changing_model(self):
+        records = {
+            123: {"model": OPENAI_CODEX_GPT_5_6_SOL},
+            900: {"model": "caller-model"},
+        }
+        manager = llm_chat.UserManager()
+        manager.storage = Mock()
+        manager.storage.get.side_effect = lambda uid: records.get(uid)
+        manager.storage.set.side_effect = lambda uid, value: records.__setitem__(uid, value)
+
+        with patch.object(llm_chat, "user_manager", manager), patch.object(
+            llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)
+        ) as admin, patch.object(
+            llm_chat.llm_chat_config, "load_config", return_value=config(123)
+        ), patch.object(
+            builtins.borg,
+            "get_entity",
+            new=AsyncMock(return_value=self.entity),
+            create=True,
+        ), patch.object(
+            llm_chat, "_show_codex_user_models", new=AsyncMock(return_value=True)
+        ):
+            for level, expected in (("high", "high"), ("clear", None)):
+                event = Event()
+                event.data = f"cu:r:123:{level}".encode()
+                asyncio.run(llm_chat.callback_handler(event))
+                self.assertEqual(records[123]["model"], OPENAI_CODEX_GPT_5_6_SOL)
+                self.assertEqual(
+                    records[123].get("thinking_by_model", {}).get(
+                        OPENAI_CODEX_GPT_5_6_SOL
+                    ),
+                    expected,
+                )
+
+        self.assertEqual(records[900], {"model": "caller-model"})
+        self.assertEqual(admin.await_count, 2)
+
+    def test_effort_callback_rejects_revoked_invalid_and_admin_only_state(self):
+        cases = (
+            (config(), OPENAI_CODEX_GPT_5_6_SOL, "high"),
+            (config(123, valid=False), OPENAI_CODEX_GPT_5_6_SOL, "high"),
+            (config(123), OPENAI_CODEX_GPT_5_6_SOL, "ultra"),
+            (config(123), OPENAI_CODEX_ASTRA, "none"),
+            (config(123), PIONEER_OPUS_4_8, "high"),
+            (config(123), "provider/no-reasoning", "clear"),
+        )
+        for cfg, model, level in cases:
+            with self.subTest(cfg=cfg, model=model, level=level):
+                event = Event()
+                event.data = f"cu:r:123:{level}".encode()
+                prefs = SimpleNamespace(model=model, thinking_by_model={})
+                with patch.object(
+                    llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)
+                ), patch.object(
+                    llm_chat.llm_chat_config, "load_config", return_value=cfg
+                ), patch.object(
+                    builtins.borg,
+                    "get_entity",
+                    new=AsyncMock(return_value=self.entity),
+                    create=True,
+                ), patch.object(
+                    llm_chat.user_manager, "get_prefs", return_value=prefs
+                ), patch.object(llm_chat.user_manager, "set_thinking") as set_thinking:
+                    asyncio.run(llm_chat.callback_handler(event))
+                set_thinking.assert_not_called()
+                event.answer.assert_awaited_with(
+                    "This Codex user menu is invalid or stale.", show_alert=True
+                )
+
+    def test_unauthorized_effort_callback_does_not_read_target_preferences(self):
+        event = Event()
+        event.data = b"cu:r:123:high"
+        with patch.object(
+            llm_chat, "_codex_users_admin", new=AsyncMock(return_value=False)
+        ), patch.object(llm_chat.llm_chat_config, "load_config") as load, patch.object(
+            llm_chat.user_manager, "get_prefs"
+        ) as get_prefs, patch.object(llm_chat.user_manager, "set_thinking") as set_thinking:
+            asyncio.run(llm_chat.callback_handler(event))
+        load.assert_not_called()
+        get_prefs.assert_not_called()
+        set_thinking.assert_not_called()
+
+    def test_detail_shows_supported_reasoning_and_discoverable_button(self):
+        roster = llm_chat_config.CodexUser(123, None, True, False)
+        event = Event()
+        prefs = SimpleNamespace(
+            model=OPENAI_CODEX_GPT_5_6_SOL,
+            thinking_by_model={OPENAI_CODEX_GPT_5_6_SOL: "high"},
+        )
+        with patch.object(
+            llm_chat.llm_chat_config,
+            "load_config",
+            return_value=config(users=(roster,)),
+        ), patch.object(
+            builtins.borg,
+            "get_entity",
+            new=AsyncMock(return_value=self.entity),
+            create=True,
+        ), patch.object(
+            llm_chat.user_manager, "get_prefs", return_value=prefs
+        ), patch.object(
+            llm_chat.llm_db, "get_api_key_metadata", return_value=[]
+        ), patch.object(llm_chat, "send_info_message", new=AsyncMock()) as send:
+            asyncio.run(llm_chat._show_codex_user_detail(event, 123))
+
+        self.assertIn("Personal reasoning: High", send.await_args.args[1])
+        labels = [
+            button.text
+            for row in send.await_args.kwargs["buttons"]
+            for button in row
+        ]
+        self.assertIn("Model / effort", labels)
+
+    def test_detail_and_picker_omit_reasoning_for_unsupported_model(self):
+        event = Event()
+        prefs = SimpleNamespace(
+            model="provider/no-reasoning", thinking_by_model={}
+        )
+        with patch.object(
+            llm_chat.llm_chat_config, "load_config", return_value=config(123)
+        ), patch.object(
+            builtins.borg,
+            "get_entity",
+            new=AsyncMock(return_value=self.entity),
+            create=True,
+        ), patch.object(
+            llm_chat.user_manager, "get_prefs", return_value=prefs
+        ), patch.object(
+            llm_chat.llm_db, "get_api_key_metadata", return_value=[]
+        ), patch.object(llm_chat, "send_info_message", new=AsyncMock()) as send:
+            asyncio.run(llm_chat._show_codex_user_detail(event, 123))
+            detail_text = send.await_args.args[1]
+            send.reset_mock()
+            asyncio.run(llm_chat._show_codex_user_models(event, 123))
+
+        self.assertNotIn("Personal reasoning:", detail_text)
+        flat = [button for row in send.await_args.kwargs["buttons"] for button in row]
+        self.assertFalse(any(button.text.startswith("🧠") for button in flat))
+        self.assertFalse(
+            any(
+                (button.data.decode() if isinstance(button.data, bytes) else button.data)
+                .startswith("cu:r:")
+                for button in flat
+            )
+        )
 
     def test_panel_escapes_hostile_names_and_bounds_delivery(self):
         hostile = "<&" + "😀" * 3000

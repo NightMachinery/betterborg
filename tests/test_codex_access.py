@@ -2,10 +2,15 @@ import asyncio
 import builtins
 import importlib
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from uniborg import llm_chat_config
-from uniborg.constants import OPENAI_CODEX_GPT_5_6_SOL, OR_OPENAI_LATEST
+from uniborg.constants import (
+    OPENAI_CODEX_GPT_5_6_SOL,
+    OR_OPENAI_LATEST,
+    PIONEER_OPUS_4_8,
+)
 
 
 class _FakeLoop:
@@ -42,6 +47,61 @@ class CodexAccessIntegrationTests(unittest.TestCase):
     def test_admin_without_policy_does_not_get_codex_picker(self):
         choices = llm_chat._model_choices_for_access(admin_p=True, codex_p=False)
         self.assertNotIn(OPENAI_CODEX_GPT_5_6_SOL, choices)
+
+    def test_combined_menu_hides_reasoning_when_selected_model_access_is_missing(self):
+        prefs = SimpleNamespace(
+            model=PIONEER_OPUS_4_8,
+            thinking_by_model={PIONEER_OPUS_4_8: "high"},
+        )
+        with patch.object(llm_chat.user_manager, "get_prefs", return_value=prefs):
+            denied = llm_chat._build_model_menu(
+                456,
+                123,
+                scope=llm_chat.REASONING_SCOPE_PERSONAL,
+                admin_p=False,
+                codex_p=True,
+            )
+            allowed = llm_chat._build_model_menu(
+                456,
+                123,
+                scope=llm_chat.REASONING_SCOPE_PERSONAL,
+                admin_p=True,
+                codex_p=True,
+            )
+        self.assertFalse(any(key.startswith("think:") for key in denied.options))
+        self.assertTrue(any(key.startswith("think:") for key in allowed.options))
+
+    def test_normal_model_menu_buttons_keep_friendly_labels_and_callbacks(self):
+        prefs = SimpleNamespace(
+            model=OPENAI_CODEX_GPT_5_6_SOL,
+            thinking_by_model={OPENAI_CODEX_GPT_5_6_SOL: "high"},
+        )
+        with patch.object(llm_chat.user_manager, "get_prefs", return_value=prefs):
+            menu = llm_chat._build_model_menu(
+                456,
+                123,
+                scope=llm_chat.REASONING_SCOPE_PERSONAL,
+                admin_p=False,
+                codex_p=True,
+            )
+        buttons = llm_chat._model_menu_buttons(
+            menu,
+            callback_data=lambda key: (
+                f"model_{llm_chat.bot_util.sanitize_callback_data(key)}"
+            ),
+        )
+        labels = [button.text for button in buttons]
+        callbacks = [
+            button.data.decode() if isinstance(button.data, bytes) else button.data
+            for button in buttons
+        ]
+        self.assertIn(
+            f"✅ {llm_chat._model_display_name(OPENAI_CODEX_GPT_5_6_SOL)}",
+            labels,
+        )
+        self.assertEqual(labels.count("✅ 🧠 High"), 1)
+        self.assertTrue(all(data.startswith("model_") for data in callbacks))
+        self.assertTrue(all(len(data.encode()) <= 64 for data in callbacks))
 
     def test_codex_prefix_and_reasoning_work_for_authorized_nonadmin(self):
         result = llm_chat._detect_and_process_message_prefix(

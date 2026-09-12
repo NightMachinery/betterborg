@@ -62,8 +62,10 @@ separate bullet groups for each user, showing configured labels, Telegram displa
 names and usernames when known, numeric IDs, personal access flags, friendly
 default-model names, and the names of personally configured API-key providers.
 Unknown Telegram profile and contact fields are omitted from this overview.
-Each page contains at most eight users and splits earlier if its text would approach
-Telegram's message limit. The model picker shows full model IDs.
+Each page contains at most eight users and splits earlier if its text would
+approach Telegram's message limit. The model picker shows full model IDs and the
+selected model's supported reasoning-effort levels. Model and effort selections
+use the same shared menu state as the user's normal model picker.
 Successful Telegram refreshes update persisted identity, including removed
 usernames; when refresh is unavailable, the last recorded identity is used.
 
@@ -83,7 +85,7 @@ and leaves absent or unavailable results unknown. See
 
 - `.codex-users`: browse the list and select a user.
 - `.codex-users <user-id>`: inspect access and the saved default, toggle the
-  personal Codex or image grant, or open the model picker.
+  personal Codex or image grant, or open the model/effort picker.
 - `.codex-users <user-id> <model-id>`: immediately save a specific model as
   that user's personal default, including custom model IDs.
 

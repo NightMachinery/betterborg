@@ -63,7 +63,7 @@ from telethon.tl.types import (
     UpdateMessageReactions,
 )
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Tuple
+from typing import Callable, Optional, List, Dict, Tuple
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -2214,7 +2214,10 @@ def _build_model_menu(
     )
 
     options = dict(options)
-    can_show_reasoning = not state.spec.codex_access or codex_p
+    can_show_reasoning = (
+        (not state.spec.admin_only or admin_p)
+        and (not state.spec.codex_access or codex_p)
+    )
     if state.spec.supports_reasoning_p() and can_show_reasoning:
         for key, display in state.options.items():
             #: present_options only ticks `current_value`, so tick these here.
@@ -2224,27 +2227,62 @@ def _build_model_menu(
     return ModelMenu(options=options, current_value=current_value, think_state=state)
 
 
+def _model_menu_buttons(
+    menu: ModelMenu,
+    *,
+    callback_data: Callable[[str], str],
+    model_label: Optional[Callable[[str, str], str]] = None,
+) -> list[KeyboardButtonCallback]:
+    """Render a model+reasoning menu with caller-specific labels and callbacks."""
+    buttons = []
+    for key, display in menu.options.items():
+        is_reasoning = _reasoning_menu_key_level(key) is not None
+        label = display if is_reasoning or model_label is None else model_label(key, display)
+        if key == menu.current_value:
+            label = f"✅ {label}"
+        data = callback_data(key)
+        assert len(data.encode("utf-8")) <= TELEGRAM_CALLBACK_BYTES_LIMIT
+        buttons.append(KeyboardButtonCallback(label, data=data))
+    return buttons
+
+
+def _apply_reasoning_choice(
+    chat_id: int,
+    user_id: int,
+    *,
+    scope: str,
+    model: str,
+    level_key: str,
+) -> Optional[str]:
+    """Validate and store one model-specific reasoning choice."""
+    state = _think_menu_state(chat_id, user_id, scope=scope, model=model)
+    if not state.spec.supports_reasoning_p() or (
+        level_key != REASONING_CLEAR_KEY
+        and not state.spec.supports_level_p(level_key)
+    ):
+        return None
+
+    level = None if level_key == REASONING_CLEAR_KEY else level_key
+    _set_reasoning_level(chat_id, user_id, scope=scope, model=model, level=level)
+    display = (
+        _reasoning_level_display(level) if level else state.options[REASONING_CLEAR_KEY]
+    )
+    return f"Reasoning for {_model_display_name(model)}: {display}"
+
+
 async def _apply_reasoning_menu_choice(
     event, *, scope: str, level_key: str
 ) -> Optional[str]:
     """Store a `think:` picker choice. Returns feedback text, or None if invalid."""
     chat_id = event.chat_id
     user_id = event.sender_id
-    state = _think_menu_state(
+    return _apply_reasoning_choice(
         chat_id,
         user_id,
         scope=scope,
         model=_scope_selected_model(chat_id, user_id, scope=scope),
+        level_key=level_key,
     )
-    if level_key != REASONING_CLEAR_KEY and not state.spec.supports_level_p(level_key):
-        return None
-
-    level = None if level_key == REASONING_CLEAR_KEY else level_key
-    _set_reasoning_level(chat_id, user_id, scope=scope, model=state.model, level=level)
-    display = (
-        _reasoning_level_display(level) if level else state.options[REASONING_CLEAR_KEY]
-    )
-    return f"Reasoning for {_model_display_name(state.model)}: {display}"
 
 
 def _think_menu_title(state: ThinkMenuState, *, scope: str) -> str:
@@ -6231,6 +6269,13 @@ def _codex_users_model_from_token(token: str) -> Optional[str]:
     return matches[0] if len(matches) == 1 else None
 
 
+def _codex_users_model_callback_data(target_id: int, key: str) -> str:
+    level = _reasoning_menu_key_level(key)
+    if level is not None:
+        return f"cu:r:{target_id}:{level}"
+    return f"cu:m:{target_id}:{_codex_users_model_token(key)}"
+
+
 def _utf16_units(value: str) -> int:
     return len(value.encode("utf-16-le")) // 2
 
@@ -6452,7 +6497,7 @@ async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False, 
                 f"{image_action} images",
                 data=f"cu:a:{target_id}:i:{int(not configured_user.imagegen_enabled)}",
             ),
-            KeyboardButtonCallback("Model", data=f"cu:models:{target_id}"),
+            KeyboardButtonCallback("Model / effort", data=f"cu:models:{target_id}"),
             KeyboardButtonCallback("⬅ Users", data="cu:p:0"),
         ],
         n_cols=2,
@@ -6484,9 +6529,22 @@ async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False, 
     else:
         keys_text = "API-key metadata unavailable" if metadata is None else "No personal API keys"
 
+    model_text = f"Personal default: {_html_dynamic(_model_display_name(current), 180)}"
+    reasoning = _think_menu_state(
+        event.chat_id,
+        target_id,
+        scope=REASONING_SCOPE_PERSONAL,
+        model=current,
+    )
+    if reasoning.spec.supports_reasoning_p():
+        model_text += (
+            "\nPersonal reasoning: "
+            + _html_dynamic(reasoning.options[reasoning.current_value], 180)
+        )
+
     text = (
         "<b>Identity</b>\n" + "\n".join(identity_lines) + f"\nBot contact: {contact}"
-        f"\n\n<b>Model</b>\nPersonal default: {_html_dynamic(_model_display_name(current), 180)}"
+        f"\n\n<b>Model</b>\n{model_text}"
         f"\n\n<b>Access</b>\n{_codex_user_access_text(configured_user)}"
         f"\n\n<b>API keys</b>\n{keys_text}"
     )
@@ -6514,20 +6572,26 @@ async def _show_codex_user_models(event, target_id: int, *, edit: bool = False):
     if not eligible:
         return False
     configured_user, entity = target
-    current = user_manager.get_prefs(target_id).model
-    choices = _codex_users_model_choices()
-    buttons = [
-        KeyboardButtonCallback(
-            _truncate_utf16(f"✅ {model_id}" if model_id == current else model_id, 80),
-            data=f"cu:m:{target_id}:{_codex_users_model_token(model_id)}",
-        )
-        for model_id, name in choices.items()
-    ]
+    menu = _build_model_menu(
+        event.chat_id,
+        target_id,
+        scope=REASONING_SCOPE_PERSONAL,
+        admin_p=False,
+        codex_p=True,
+    )
+    current = menu.current_value
+    buttons = _model_menu_buttons(
+        menu,
+        callback_data=lambda key: _codex_users_model_callback_data(target_id, key),
+        model_label=lambda model_id, _: _truncate_utf16(model_id, 78),
+    )
     buttons.append(KeyboardButtonCallback("⬅️ Back to user", data=f"cu:u:{target_id}"))
     name = configured_user.name or _codex_user_name(target_id, entity)
     text = (
         f"{_bold_dynamic(name)} ({target_id})\n"
-        f"Personal default: {_html_dynamic(current)}\nChoose a new personal default."
+        f"Personal default: {_html_dynamic(current)}\n"
+        "Choose a new personal default. The 🧠 buttons set personal reasoning "
+        "for the selected model."
     )
     if edit:
         await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=util.build_menu(buttons, n_cols=2), parse_mode="html")
@@ -7659,6 +7723,35 @@ async def callback_handler(event):
                 await _show_codex_user_models(event, target_id, edit=True)
                 await event.answer(f"Set {target_id}'s personal default to {model_id}")
                 return
+            if len(parts) == 4 and parts[1] == "r":
+                target_id = int(parts[2])
+                config = llm_chat_config.load_config()
+                eligible, _ = await _eligible_codex_target(target_id, config)
+                if not eligible:
+                    raise ValueError
+                menu = _build_model_menu(
+                    event.chat_id,
+                    target_id,
+                    scope=REASONING_SCOPE_PERSONAL,
+                    admin_p=False,
+                    codex_p=True,
+                )
+                level_key = parts[3]
+                if f"{REASONING_MENU_KEY_PREFIX}{level_key}" not in menu.options:
+                    raise ValueError
+                feedback = _apply_reasoning_choice(
+                    event.chat_id,
+                    target_id,
+                    scope=REASONING_SCOPE_PERSONAL,
+                    model=menu.current_value,
+                    level_key=level_key,
+                )
+                if feedback is None:
+                    raise ValueError
+                if not await _show_codex_user_models(event, target_id, edit=True):
+                    raise ValueError
+                await event.answer(feedback)
+                return
         except (ValueError, OverflowError):
             pass
         await event.answer("This Codex user menu is invalid or stale.", show_alert=True)
@@ -7705,13 +7798,12 @@ async def callback_handler(event):
             event.chat_id, user_id, scope=REASONING_SCOPE_PERSONAL,
             admin_p=admin_p, codex_p=codex_p
         )
-        buttons = [
-            KeyboardButtonCallback(
-                f"✅ {name}" if key == menu.current_value else name,
-                data=f"model_{bot_util.sanitize_callback_data(key)}",
-            )
-            for key, name in menu.options.items()
-        ]
+        buttons = _model_menu_buttons(
+            menu,
+            callback_data=lambda key: (
+                f"model_{bot_util.sanitize_callback_data(key)}"
+            ),
+        )
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
         await event.answer(feedback)
 
@@ -7768,13 +7860,12 @@ async def callback_handler(event):
             chat_id, user_id, scope=REASONING_SCOPE_CHAT,
             admin_p=admin_p, codex_p=codex_p
         )
-        buttons = [
-            KeyboardButtonCallback(
-                f"✅ {name}" if key == menu.current_value else name,
-                data=f"chatmodel_{bot_util.sanitize_callback_data(key)}",
-            )
-            for key, name in menu.options.items()
-        ]
+        buttons = _model_menu_buttons(
+            menu,
+            callback_data=lambda key: (
+                f"chatmodel_{bot_util.sanitize_callback_data(key)}"
+            ),
+        )
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
         await event.answer(feedback_msg)
 

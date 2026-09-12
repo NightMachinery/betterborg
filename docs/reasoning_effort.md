@@ -60,6 +60,10 @@ parameter is sent at all.
   buttons for the selected model's levels, so switching model and effort
   happens in one place. Picking a different model re-renders the row with that
   model's levels.
+- The bot-admin `.codex-users` model panel uses the same menu state for a target
+  user's personal model. It keeps full model IDs in that panel and appends only
+  the levels supported by the selected model; changes are saved in the target's
+  per-model `thinking_by_model` map.
 - Per-message prefixes set the effort for a single message, without changing
   the model: `.tn`, `.tl`, `.tm`, `.th`, `.tx`, `.txx` for none, low, medium,
   high, extra high and max. They combine with a model prefix in either order,
