@@ -178,6 +178,9 @@ package and local Codex OAuth credentials. Access is configured in
 Telegram user IDs and the optional =MAGIC_ADMINS= sentinel. See
 [[file:docs/codex_models.md][docs/codex_models.md]] and
 [[file:docs/codex_caching.md][docs/codex_caching.md]].
+Bot admins can use =.codex-users= to see explicitly allowlisted non-admin users
+and their personal default models. Select a user to change their default, or
+use =.codex-users <user-id> <model-id>= to set it immediately.
 Use =.i= on the current message to enable Codex image generation, for example
 =.i .cl draw a fox=. Both access policies must allow the sender. Previews and
 final images are sent separately, alongside any text response; the switch does

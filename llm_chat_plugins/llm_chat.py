@@ -22,6 +22,7 @@ import socket
 import ipaddress
 import urllib.parse
 import tempfile
+import hashlib
 from datetime import datetime, timedelta, timezone
 import pytz
 from pathlib import Path
@@ -1229,6 +1230,8 @@ BOT_COMMANDS = [
         "description": "Export conversation history as markdown file",
     },
 ]
+# This command is intentionally omitted from Telegram's public command list.
+CODEX_USERS_COMMAND = ".codex-users"
 # Create a set of command strings (e.g., {"/start", "/help"}) for efficient lookup
 KNOWN_COMMAND_SET = {f"/{cmd['command']}".lower() for cmd in BOT_COMMANDS}
 #: KNOWN_STRICT_COMMANDS will be skipped when constructing the message history only if the whole text of message equals them. KNOWN_COMMAND_SET only checks if the first word of the message is a command.
@@ -1238,6 +1241,7 @@ KNOWN_STRICT_COMMANDS = {
     ##
     "..",
     ".rot",  # Undocumented admin-only command; do not add to help.
+    CODEX_USERS_COMMAND,
 }
 
 
@@ -3019,7 +3023,21 @@ def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
     # Extract first word/command
     command = text.split(None, 1)[0].lower()
 
-    return command in KNOWN_COMMAND_SET
+    codex_users_commands = {CODEX_USERS_COMMAND}
+    if BOT_USERNAME:
+        codex_users_commands.add(f"{CODEX_USERS_COMMAND}{BOT_USERNAME.lower()}")
+    return command in KNOWN_COMMAND_SET or command in codex_users_commands
+
+
+def _is_pending_input_message(event, *, awaiting: bool) -> bool:
+    """Whether private text may be consumed by a pending key/menu input flow."""
+    return bool(
+        event.is_private
+        and awaiting
+        and event.text
+        and not event.text.startswith("/")
+        and not _is_known_command(event.text)
+    )
 
 
 def is_gemini_model(model_name):
@@ -5028,6 +5046,11 @@ def register_handlers():
     )(help_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^\.codex-users{bot_username_suffix_re}(?:\s+([\s\S]+))?\s*$"
+        )
+    )(codex_users_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/helpmagics{bot_username_suffix_re}\s*$",
             func=lambda e: e.is_private,
         )
@@ -5252,18 +5275,16 @@ def register_handlers():
     # Func-based Handlers
     borg.on(
         events.NewMessage(
-            func=lambda e: e.is_private
-            and llm_db.is_awaiting_key(e.sender_id)
-            and e.text
-            and not e.text.startswith("/")
+            func=lambda e: _is_pending_input_message(
+                e, awaiting=llm_db.is_awaiting_key(e.sender_id)
+            )
         )
     )(key_submission_handler)
     borg.on(
         events.NewMessage(
-            func=lambda e: e.is_private
-            and e.sender_id in AWAITING_INPUT_FROM_USERS
-            and e.text
-            and not e.text.startswith("/")
+            func=lambda e: _is_pending_input_message(
+                e, awaiting=e.sender_id in AWAITING_INPUT_FROM_USERS
+            )
         )
     )(generic_input_handler)
     borg.on(events.NewMessage(func=is_valid_chat_message))(chat_handler)
@@ -5365,6 +5386,11 @@ async def help_handler(event):
     has_codex_imagegen_access = await llm_chat_config.can_use_codex_imagegen(
         event, config
     )
+    admin_help = (
+        "\n- `.codex-users`: Inspect and set explicit Codex users' personal defaults."
+        if await util.isAdmin(event)
+        else ""
+    )
 
     # Dynamically build the group trigger instructions based on user settings
     activation_instructions = []
@@ -5450,6 +5476,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setThinkHere: Same, but for this chat only. Overrides your personal setting.
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
+{admin_help}
 
 **Quick Model Selection Shortcuts**
 Start your messages with these shortcuts to use specific models:
@@ -5824,6 +5851,187 @@ async def set_pioneer_key_handler(event):
         await send_info_message(event, ADMIN_ONLY_COMMAND_IGNORED)
         return
     await llm_db.handle_set_key_command(event, "pioneer")
+
+
+CODEX_USERS_PAGE_SIZE = 8
+CODEX_USERS_CALLBACK_PREFIX = "cu:"
+
+
+def _codex_user_ids(config) -> list[int]:
+    """Return unique, explicit Codex user IDs (the admin sentinel is omitted)."""
+    if not config.valid:
+        return []
+    return list(dict.fromkeys(
+        entry
+        for entry in config.codex_allowed_users
+        if isinstance(entry, int) and not isinstance(entry, bool)
+    ))
+
+
+async def _codex_user_entity(user_id: int):
+    try:
+        return await borg.get_entity(user_id)
+    except Exception:
+        return None
+
+
+def _entity_is_bot_admin(user_id: int, entity) -> bool:
+    if util.is_admin_by_id(user_id):
+        return True
+    if entity is None:
+        return False
+    username = getattr(entity, "username", None)
+    return bool(
+        getattr(entity, "is_self", False)
+        or getattr(entity, "id", user_id) in util.admins
+        or username in util.admins
+    )
+
+
+def _codex_user_name(user_id: int, entity) -> str:
+    if entity is None:
+        return str(user_id)
+    name = " ".join(
+        part for part in (getattr(entity, "first_name", None), getattr(entity, "last_name", None))
+        if part
+    ).strip()
+    if not name and getattr(entity, "username", None):
+        name = f"@{entity.username}"
+    return name or str(user_id)
+
+
+async def _eligible_codex_users(config) -> list[tuple[int, str, str]]:
+    users = []
+    for user_id in _codex_user_ids(config):
+        entity = await _codex_user_entity(user_id)
+        if not _entity_is_bot_admin(user_id, entity):
+            users.append((
+                user_id,
+                _codex_user_name(user_id, entity),
+                user_manager.get_prefs(user_id).model,
+            ))
+    return users
+
+
+async def _eligible_codex_target(target_id: int, config):
+    if target_id not in _codex_user_ids(config):
+        return False, None
+    entity = await _codex_user_entity(target_id)
+    if _entity_is_bot_admin(target_id, entity):
+        return False, entity
+    return True, entity
+
+
+def _codex_users_model_choices() -> dict[str, str]:
+    choices = dict(MODEL_CHOICES)
+    choices.update(CODEX_MODEL_CHOICES)
+    return choices
+
+
+def _codex_users_model_token(model_id: str) -> str:
+    return hashlib.sha256(model_id.encode("utf-8")).hexdigest()[:16]
+
+
+def _codex_users_model_from_token(token: str) -> Optional[str]:
+    matches = [
+        model_id for model_id in _codex_users_model_choices()
+        if _codex_users_model_token(model_id) == token
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _codex_users_user_buttons(users, page: int):
+    page_count = max(1, (len(users) + CODEX_USERS_PAGE_SIZE - 1) // CODEX_USERS_PAGE_SIZE)
+    page = min(max(page, 0), page_count - 1)
+    start = page * CODEX_USERS_PAGE_SIZE
+    buttons = [
+        KeyboardButtonCallback(f"{name[:60]} ({user_id})", data=f"cu:u:{user_id}")
+        for user_id, name, _ in users[start : start + CODEX_USERS_PAGE_SIZE]
+    ]
+    if page_count > 1:
+        if page:
+            buttons.append(KeyboardButtonCallback("⬅️", data=f"cu:p:{page - 1}"))
+        buttons.append(KeyboardButtonCallback(f"{page + 1}/{page_count}", data=b"cu:no"))
+        if page + 1 < page_count:
+            buttons.append(KeyboardButtonCallback("➡️", data=f"cu:p:{page + 1}"))
+    return util.build_menu(buttons, n_cols=1), page, page_count
+
+
+async def _show_codex_users(event, *, page: int = 0, edit: bool = False):
+    config = llm_chat_config.load_config()
+    if not config.valid:
+        text = "The LLM chat access configuration is invalid; no users were shown."
+        if edit:
+            await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=None, parse_mode=None)
+        else:
+            await send_info_message(event, text, parse_mode=None)
+        return
+    users = await _eligible_codex_users(config)
+    buttons, page, page_count = _codex_users_user_buttons(users, page)
+    text = "Codex users explicitly configured:" if users else "No eligible explicit Codex users are configured."
+    if page_count > 1:
+        text += f" Page {page + 1}/{page_count}."
+    start = page * CODEX_USERS_PAGE_SIZE
+    for user_id, name, model in users[start : start + CODEX_USERS_PAGE_SIZE]:
+        text += f"\n{name[:80]} ({user_id}): {model[:160]}"
+    if edit:
+        await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=buttons, parse_mode=None)
+    else:
+        await send_info_message(event, text, buttons=buttons, parse_mode=None)
+
+
+async def _show_codex_user_models(event, target_id: int, *, edit: bool = False):
+    config = llm_chat_config.load_config()
+    eligible, entity = await _eligible_codex_target(target_id, config)
+    if not eligible:
+        return False
+    current = user_manager.get_prefs(target_id).model
+    choices = _codex_users_model_choices()
+    buttons = [
+        KeyboardButtonCallback(
+            f"✅ {name}" if model_id == current else name,
+            data=f"cu:m:{target_id}:{_codex_users_model_token(model_id)}",
+        )
+        for model_id, name in choices.items()
+    ]
+    buttons.append(KeyboardButtonCallback("⬅️ Back to users", data="cu:p:0"))
+    text = f"{_codex_user_name(target_id, entity)} ({target_id})\nPersonal default: {current}"
+    if edit:
+        await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=util.build_menu(buttons, n_cols=2), parse_mode=None)
+    else:
+        await send_info_message(event, text, buttons=util.build_menu(buttons, n_cols=2), parse_mode=None)
+    return True
+
+
+async def codex_users_handler(event):
+    """Inspect or force-set explicit non-admin Codex users' personal defaults."""
+    if not await util.isAdmin(event):
+        await send_info_message(event, ADMIN_ONLY_COMMAND_IGNORED, parse_mode=None)
+        return
+    argument = (event.pattern_match.group(1) or "").strip()
+    if not argument:
+        await _show_codex_users(event)
+        return
+    parts = argument.split(None, 1)
+    try:
+        target_id = int(parts[0])
+    except ValueError:
+        await send_info_message(event, "Use .codex-users <numeric-user-id> [model-id].", parse_mode=None)
+        return
+    config = llm_chat_config.load_config()
+    eligible, _ = await _eligible_codex_target(target_id, config)
+    if not eligible:
+        await send_info_message(event, "That user is not an eligible explicit Codex user.", parse_mode=None)
+        return
+    if len(parts) == 1:
+        await _show_codex_user_models(event, target_id)
+        return
+    model_id = parts[1].strip()
+    if not model_id or _is_admin_only_model(model_id):
+        await send_info_message(event, "That model cannot be assigned to this user.", parse_mode=None)
+        return
+    user_manager.set_model(target_id, model_id)
+    await send_info_message(event, f"Set {target_id}'s personal default to: {model_id}", parse_mode=None)
 
 
 async def key_submission_handler(event):
@@ -6511,6 +6719,41 @@ async def callback_handler(event):
     data_str = event.data.decode("utf-8")
     user_id = event.sender_id
     #: @Claude Based on the Telethon documentation, I can now confirm that event.sender_id in a CallbackQuery event is indeed the ID of the person who clicked the button, not the original sender of the menu message.
+
+    if data_str.startswith(CODEX_USERS_CALLBACK_PREFIX):
+        if not await util.isAdmin(event):
+            await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+            return
+        parts = data_str.split(":")
+        try:
+            if parts == ["cu", "no"]:
+                await event.answer()
+                return
+            if len(parts) == 3 and parts[1] == "p":
+                await _show_codex_users(event, page=int(parts[2]), edit=True)
+                await event.answer()
+                return
+            if len(parts) == 3 and parts[1] == "u":
+                target_id = int(parts[2])
+                if not await _show_codex_user_models(event, target_id, edit=True):
+                    raise ValueError
+                await event.answer()
+                return
+            if len(parts) == 4 and parts[1] == "m":
+                target_id = int(parts[2])
+                config = llm_chat_config.load_config()
+                eligible, _ = await _eligible_codex_target(target_id, config)
+                model_id = _codex_users_model_from_token(parts[3])
+                if not eligible or model_id is None or _is_admin_only_model(model_id):
+                    raise ValueError
+                user_manager.set_model(target_id, model_id)
+                await _show_codex_user_models(event, target_id, edit=True)
+                await event.answer(f"Set {target_id}'s personal default to {model_id}")
+                return
+        except (ValueError, OverflowError):
+            pass
+        await event.answer("This Codex user menu is invalid or stale.", show_alert=True)
+        return
 
     prefs = user_manager.get_prefs(user_id)
     config = llm_chat_config.load_config()

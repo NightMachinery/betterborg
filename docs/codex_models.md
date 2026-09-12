@@ -32,7 +32,31 @@ file is invalid or unreadable, all Codex access is disabled until it is fixed;
 the invalid file is logged and left untouched. Other model providers continue
 working. Image generation requires a user to pass both policies.
 
-Runtime requirements:
+### Managing users' defaults
+
+Bot admins can use `.codex-users` to list the non-admin users explicitly named
+by numeric ID in `codex_allowed_users`. The list shows their Telegram names,
+IDs, and saved personal default models. If Telegram cannot resolve a name,
+the ID remains available. `MAGIC_ADMINS` does not add users to this list.
+
+- `.codex-users`: browse the list and select a user.
+- `.codex-users <user-id>`: inspect that user's default and choose a model.
+- `.codex-users <user-id> <model-id>`: immediately save a specific model as
+  that user's personal default, including custom model IDs.
+
+Changes do not require the user's confirmation. They replace the saved
+personal default; the user can subsequently change it again. Chat-specific
+models and per-message prefixes retain their usual precedence. The command
+does not grant image access or change other preferences.
+
+The command and every button check the caller's bot-admin access and the
+target's current allowlist membership. Bot admins are excluded as targets,
+and admin-only models cannot be assigned to non-admin users. Invalid config
+and revoked membership prevent changes, including from previously opened
+menus. As with other bot-admin commands, the existing trusted-chat rules
+apply to the caller.
+
+## Runtime requirements
 
 - Install `requirements.txt` in the same Python environment that runs
   `stdborg.py`.
