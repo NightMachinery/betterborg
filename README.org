@@ -180,9 +180,13 @@ Telegram user IDs and the optional =MAGIC_ADMINS= sentinel. See
 [[file:docs/codex_caching.md][docs/codex_caching.md]].
 The =codex_users= roster stores names and separate Codex/image access flags.
 Bot admins can use =.codex-users= to toggle those grants and manage personal
-default models. The panel separates configured labels from Telegram identity,
-shows recorded private contact, and lists personal API-key providers with their
-last-set UTC times, without exposing keys. Historical keys show an unknown date.
+default models. Its compact overview omits unknown identity/contact fields and
+shows configured personal API-key provider names without exposing key values.
+Known private contact appears as *Started*. Pages contain at most eight users
+and split earlier when needed to stay within Telegram's message limit.
+The detail panel separates configured labels from Telegram identity and lists
+personal API-key providers with their last-set UTC times. Historical keys show
+an unknown date.
 Use *Add user*, then *Choose user* in a private chat to select someone in
 Telegram and confirm their identity. Numeric ID and =@username= entry also work.
 Phone-number lookup requires a Telegram user account and is not supported by

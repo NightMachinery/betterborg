@@ -5923,6 +5923,7 @@ CODEX_USERS_ADD_PENDING = {}
 TELEGRAM_SIGNED_ID_MAX = 2**63 - 1
 TELEGRAM_TEXT_UTF16_LIMIT = 4096
 TELEGRAM_CALLBACK_BYTES_LIMIT = 64
+CODEX_USERS_PAYLOAD_MARGIN = 32
 
 
 class CodexUserRequestedPeer(events.NewMessage):
@@ -6157,16 +6158,147 @@ def _codex_users_model_from_token(token: str) -> Optional[str]:
     return matches[0] if len(matches) == 1 else None
 
 
-def _codex_users_user_buttons(users, page: int):
-    page_count = max(1, (len(users) + CODEX_USERS_PAGE_SIZE - 1) // CODEX_USERS_PAGE_SIZE)
+def _utf16_units(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
+
+
+def _codex_users_key_names(user_id: int) -> tuple[str, ...]:
+    """Return provider labels from the metadata-only query, never key values."""
+    try:
+        metadata = llm_db.get_api_key_metadata(user_id)
+    except Exception:
+        return ()
+    if not metadata:
+        return ()
+
+    provider_names = {
+        "gemini": "Gemini",
+        "openrouter": "OpenRouter",
+        "deepseek": "DeepSeek",
+        "mistral": "Mistral",
+        "pioneer": "Pioneer",
+    }
+    names = []
+    for item in metadata:
+        service = str(item.service)
+        name = provider_names.get(service.lower(), service)
+        if name not in names:
+            names.append(name)
+    return tuple(names)
+
+
+def _codex_user_overview_entry(user, *, fallback: bool = False) -> str:
+    configured_user, name, model, telegram_name, username, contact_at = user
+    dynamic_limit = 32 if fallback else 64
+    model_limit = 48 if fallback else 80
+    codex_state = "on" if configured_user.codex_enabled else "off"
+    if configured_user.imagegen_enabled and not configured_user.codex_enabled:
+        image_state = "paused"
+    else:
+        image_state = "on" if configured_user.imagegen_enabled else "off"
+
+    numeric_identity = str(configured_user.id)
+    if name == numeric_identity:
+        lines = [f"• <code>{configured_user.id}</code>"]
+    else:
+        lines = [
+            f"• {_bold_dynamic(name, dynamic_limit)} · <code>{configured_user.id}</code>"
+        ]
+    identity_parts = []
+    if (
+        configured_user.name
+        and telegram_name != numeric_identity
+        and configured_user.name != telegram_name
+    ):
+        identity_parts.append(f"Telegram: {_bold_dynamic(telegram_name, dynamic_limit)}")
+    if username and f"@{username}" != telegram_name:
+        identity_parts.append(_bold_dynamic("@" + username, 24 if fallback else 40))
+    if identity_parts:
+        lines.append("  " + " · ".join(identity_parts))
+    lines.append(
+        f"  {_html_dynamic(_model_display_name(model), model_limit)}"
+        f" · Codex {codex_state} · Images {image_state}"
+    )
+    if contact_at is not None:
+        lines.append("  Contact: Started")
+    key_names = _codex_users_key_names(configured_user.id)
+    if key_names:
+        lines.append(
+            "  Keys: "
+            + ", ".join(_html_dynamic(provider, 32) for provider in key_names)
+        )
+    return "\n".join(lines)
+
+
+def _codex_users_page_text(entries, page: int, page_count: int) -> str:
+    header = "<b>Codex users</b>"
+    if page_count > 1:
+        header += f" · Page {page + 1}/{page_count}"
+    if not entries:
+        return header + "\n\nNo eligible explicit users are configured."
+    return (
+        header
+        + "\n\n"
+        + "\n\n".join(entry_text for _, entry_text in entries)
+        + "\n\nTrusted chats may grant additional access."
+    )
+
+
+def _codex_users_overview_pages(users):
+    """Build complete pages bounded by both user count and Telegram payload size."""
+    if not users:
+        return [[]]
+
+    # Page count can never exceed user count. Reserving its widest possible
+    # indicator makes the greedy split safe before the actual count is known.
+    widest_page = str(len(users))
+    worst_header = f"<b>Codex users</b> · Page {widest_page}/{widest_page}"
+    footer = "Trusted chats may grant additional access."
+
+    def fits(entries) -> bool:
+        candidate = worst_header + "\n\n" + "\n\n".join(
+            entry_text for _, entry_text in entries
+        ) + "\n\n" + footer
+        return (
+            _utf16_units(BOT_META_INFO_PREFIX + candidate)
+            + CODEX_USERS_PAYLOAD_MARGIN
+            <= TELEGRAM_TEXT_UTF16_LIMIT
+        )
+
+    pages = []
+    current = []
+    for user in users:
+        record = (user, _codex_user_overview_entry(user))
+        if current and (
+            len(current) >= CODEX_USERS_PAGE_SIZE or not fits(current + [record])
+        ):
+            pages.append(current)
+            current = []
+        if not fits([record]):
+            record = (user, _codex_user_overview_entry(user, fallback=True))
+        if not fits([record]):
+            configured_user = user[0]
+            record = (user, f"• <code>{configured_user.id}</code>")
+        current.append(record)
+    if current:
+        pages.append(current)
+    return pages
+
+
+def _codex_users_user_buttons(users, page: int, *, pages=None):
+    if pages is None:
+        pages = [
+            users[start : start + CODEX_USERS_PAGE_SIZE]
+            for start in range(0, len(users), CODEX_USERS_PAGE_SIZE)
+        ] or [[]]
+    page_count = len(pages)
     page = min(max(page, 0), page_count - 1)
-    start = page * CODEX_USERS_PAGE_SIZE
     buttons = [
         KeyboardButtonCallback(
             _truncate_utf16(f"{name} ({configured_user.id})", 48),
             data=f"cu:u:{configured_user.id}",
         )
-        for configured_user, name, *_ in users[start : start + CODEX_USERS_PAGE_SIZE]
+        for configured_user, name, *_ in pages[page]
     ]
     if page_count > 1:
         if page:
@@ -6193,34 +6325,16 @@ async def _show_codex_users(event, *, page: int = 0, edit: bool = False):
             await send_info_message(event, text, parse_mode=None)
         return
     users = await _eligible_codex_users(config)
-    buttons, page, page_count = _codex_users_user_buttons(users, page)
-    text = "<b>Codex users</b>" if users else "<b>Codex users</b>\n\nNo eligible explicit users are configured."
-    if page_count > 1:
-        text += f" Page {page + 1}/{page_count}."
-    start = page * CODEX_USERS_PAGE_SIZE
-    for configured_user, name, model, telegram_name, username, contact_at in users[start : start + CODEX_USERS_PAGE_SIZE]:
-        codex_state = "on" if configured_user.codex_enabled else "off"
-        if configured_user.imagegen_enabled and not configured_user.codex_enabled:
-            image_state = "paused"
-        else:
-            image_state = "on" if configured_user.imagegen_enabled else "off"
-        identity_lines = []
-        if configured_user.name and configured_user.name != telegram_name:
-            identity_lines.append(f"  Telegram: {_bold_dynamic(telegram_name, 64)}")
-        if username and f"@{username}" != telegram_name:
-            identity_lines.append(f"  Username: {_bold_dynamic('@' + username, 40)}")
-        contact = "Unknown — no private contact recorded" if contact_at is None else "Started"
-        text += (
-            f"\n\n• {_bold_dynamic(name, 64)}\n"
-            + ("\n".join(identity_lines) + "\n" if identity_lines else "")
-            +
-            f"  ID: {configured_user.id}\n"
-            f"  Model: {_html_dynamic(_model_display_name(model), 80)}\n"
-            f"  Grants: Codex {codex_state}; images {image_state}\n"
-            f"  Bot contact: {contact}"
-        )
-    text += "\n\nTrusted chats may grant additional access."
-    text = _bounded_panel_text(text)
+    overview_pages = _codex_users_overview_pages(users)
+    button_pages = [[user for user, _ in entries] for entries in overview_pages]
+    buttons, page, page_count = _codex_users_user_buttons(
+        users, page, pages=button_pages
+    )
+    text = _codex_users_page_text(overview_pages[page], page, page_count)
+    assert (
+        _utf16_units(BOT_META_INFO_PREFIX + text) + CODEX_USERS_PAYLOAD_MARGIN
+        <= TELEGRAM_TEXT_UTF16_LIMIT
+    )
     if edit:
         await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=buttons, parse_mode="html")
     else:

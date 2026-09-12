@@ -57,10 +57,14 @@ group-settings privileges.
 
 Bot admins can use `.codex-users` to browse configured non-admin users. Disabled
 users stay in the menu. Legacy numeric IDs from either policy array are also
-included, but `MAGIC_ADMINS` itself does not add users. The paginated list uses separate bullet groups for each user, showing configured
-labels, Telegram display names and usernames when known, numeric IDs, personal
-access flags, and friendly default-model names. The model picker shows full model
-IDs. Successful Telegram refreshes update persisted identity, including removed
+included, but `MAGIC_ADMINS` itself does not add users. The paginated list uses
+separate bullet groups for each user, showing configured labels, Telegram display
+names and usernames when known, numeric IDs, personal access flags, friendly
+default-model names, and the names of personally configured API-key providers.
+Unknown identity and contact fields are omitted from this overview. Each page
+contains at most eight users and splits earlier if its text would approach
+Telegram's message limit. The model picker shows full model IDs.
+Successful Telegram refreshes update persisted identity, including removed
 usernames; when refresh is unavailable, the last recorded identity is used.
 
 The detail panel separates identity, model/access, and personal API-key metadata.
@@ -68,9 +72,10 @@ It lists providers and their last-set UTC times without retrieving key values.
 Older keys display “Set date unknown”; inherited/shared credentials are excluded.
 
 Contact status is scoped to this bot: “Started” means an incoming private message
-was recorded, including commands. Otherwise the panel shows “Unknown — no private
-contact recorded”. Group activity, identity lookup, roster membership, keys, and
-shared history never count as private contact. See [metadata storage](llm_user_metadata.md).
+was recorded, including commands. The overview shows only the known “Started”
+state; the detail panel states when no private contact is recorded. Group activity,
+identity lookup, roster membership, keys, and shared history never count as
+private contact. See [metadata storage](llm_user_metadata.md).
 
 - `.codex-users`: browse the list and select a user.
 - `.codex-users <user-id>`: inspect access and the saved default, toggle the

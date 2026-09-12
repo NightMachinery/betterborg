@@ -2,6 +2,7 @@ import asyncio
 import builtins
 import importlib
 import os
+import re
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -188,8 +189,8 @@ class CodexUsersTests(unittest.TestCase):
             _, send, set_model = self.run_command()
         text = send.await_args.args[1]
         self.assertIn("<b>Ada Lovelace</b>", text)
-        self.assertIn("ID: 123", text)
-        self.assertIn("Model: provider/custom_default", text)
+        self.assertIn("· <code>123</code>", text)
+        self.assertIn("provider/custom_default · Codex on · Images off", text)
         self.assertEqual(send.await_args.kwargs["parse_mode"], "html")
         set_model.assert_not_called()
 
@@ -430,28 +431,124 @@ class CodexUsersTests(unittest.TestCase):
             for button in row:
                 self.assertLessEqual(len(button.data), 64)
 
-    def test_full_page_keeps_all_users_and_markup_with_long_escaped_fields(self):
-        import html
-        from telethon.extensions import html as telegram_html
-        users = [
-            (llm_chat_config.CodexUser(uid, "<&😀" * 100, True, False),
-             "<&😀" * 100, "model" * 100, "Name<&" * 100, "user<&" * 100, None)
-            for uid in range(100, 108)
+    def test_overview_omits_unknown_contact_and_empty_key_metadata(self):
+        roster = llm_chat_config.CodexUser(123, None, False, False)
+        users = [(roster, "Ada Lovelace", llm_chat.GEMINI_FLASH_LATEST,
+                  "Ada Lovelace", "ada", None)]
+        event = Event()
+        with patch.object(llm_chat.llm_chat_config, "load_config", return_value=config(123)), patch.object(
+            llm_chat, "_eligible_codex_users", new=AsyncMock(return_value=users)
+        ), patch.object(
+            llm_chat.llm_db, "get_api_key_metadata", return_value=[]
+        ) as metadata, patch.object(llm_chat, "send_info_message", new=AsyncMock()) as send:
+            asyncio.run(llm_chat._show_codex_users(event))
+        text = send.await_args.args[1]
+        self.assertIn("• <b>Ada Lovelace</b> · <code>123</code>", text)
+        self.assertIn("Gemini Flash (Latest) · Codex off · Images off", text)
+        self.assertNotIn("Unknown", text)
+        self.assertNotIn("Contact:", text)
+        self.assertNotIn("Keys:", text)
+        metadata.assert_called_once_with(123)
+
+    def test_overview_omits_keys_when_metadata_is_unavailable(self):
+        roster = llm_chat_config.CodexUser(123, None, True, False)
+        users = [(roster, "Ada", "model", "Ada", None, None)]
+        event = Event()
+        with patch.object(llm_chat.llm_chat_config, "load_config", return_value=config(123)), patch.object(
+            llm_chat, "_eligible_codex_users", new=AsyncMock(return_value=users)
+        ), patch.object(
+            llm_chat.llm_db, "get_api_key_metadata", side_effect=RuntimeError("unavailable")
+        ), patch.object(llm_chat, "send_info_message", new=AsyncMock()) as send:
+            asyncio.run(llm_chat._show_codex_users(event))
+        self.assertNotIn("Keys:", send.await_args.args[1])
+
+    def test_overview_does_not_repeat_unknown_telegram_identity(self):
+        roster = llm_chat_config.CodexUser(123, "Configured name", False, False)
+        configured = [(roster, "Configured name", "model", "123", None, None)]
+        with patch.object(llm_chat.llm_db, "get_api_key_metadata", return_value=[]):
+            configured_text = llm_chat._codex_user_overview_entry(configured[0])
+        self.assertIn("<b>Configured name</b> · <code>123</code>", configured_text)
+        self.assertNotIn("Telegram:", configured_text)
+
+        unknown = [(llm_chat_config.CodexUser(456, None, False, False),
+                    "456", "model", "456", None, None)]
+        with patch.object(llm_chat.llm_db, "get_api_key_metadata", return_value=[]):
+            unknown_text = llm_chat._codex_user_overview_entry(unknown[0])
+        self.assertEqual(unknown_text.count("456"), 1)
+        self.assertTrue(unknown_text.startswith("• <code>456</code>"))
+
+    def test_overview_shows_known_contact_identity_and_key_provider_names_only(self):
+        roster = llm_chat_config.CodexUser(123, "Configured <label>", True, False)
+        users = [(roster, "Configured <label>", "provider/custom",
+                  "Telegram & Name", "ada<admin", datetime(2026, 1, 2, tzinfo=timezone.utc))]
+        keys = [
+            SimpleNamespace(service="gemini", last_set_at=datetime(2026, 2, 3, tzinfo=timezone.utc), api_key="SECRET-GEMINI"),
+            SimpleNamespace(service="openrouter", last_set_at=None, api_key="SECRET-OPENROUTER"),
         ]
         event = Event()
         with patch.object(llm_chat.llm_chat_config, "load_config", return_value=config(123)), patch.object(
             llm_chat, "_eligible_codex_users", new=AsyncMock(return_value=users)
+        ), patch.object(
+            llm_chat.llm_db, "get_api_key_metadata", return_value=keys
         ), patch.object(llm_chat, "send_info_message", new=AsyncMock()) as send:
             asyncio.run(llm_chat._show_codex_users(event))
         text = send.await_args.args[1]
-        parsed, entities = telegram_html.parse(llm_chat.BOT_META_INFO_PREFIX + text)
-        self.assertLessEqual(len(parsed.encode("utf-16-le")) // 2, 4096)
-        self.assertEqual(text.count("Unknown — no private contact recorded"), 8)
-        self.assertEqual(text.count("\n\n• <b>"), 8)
-        self.assertTrue(text.endswith("Trusted chats may grant additional access."))
-        for uid in range(100, 108):
-            self.assertIn(f"ID: {uid}", html.unescape(text))
-        self.assertTrue(entities)
+        self.assertIn("<b>Configured &lt;label&gt;</b> · <code>123</code>", text)
+        self.assertIn("Telegram: <b>Telegram &amp; Name</b> · <b>@ada&lt;admin</b>", text)
+        self.assertIn("Contact: Started", text)
+        self.assertIn("Keys: Gemini, OpenRouter", text)
+        self.assertNotIn("2026", text)
+        self.assertNotIn("SECRET", text)
+
+    def test_payload_pages_keep_every_user_once_with_matching_buttons(self):
+        from telethon.extensions import html as telegram_html
+        users = [
+            (llm_chat_config.CodexUser(uid, "<&😀" * 100, True, False),
+             "<&😀" * 100, "model" * 100, "Name<&" * 100, "user<&" * 100, None)
+            for uid in range(100, 117)
+        ]
+        with patch.object(llm_chat.llm_db, "get_api_key_metadata", return_value=[]):
+            pages = llm_chat._codex_users_overview_pages(users)
+        self.assertGreater(len(pages), 1)
+        self.assertLess(len(pages[0]), llm_chat.CODEX_USERS_PAGE_SIZE)
+        self.assertTrue(all(1 <= len(entries) <= llm_chat.CODEX_USERS_PAGE_SIZE for entries in pages))
+
+        seen = []
+        for page_index, expected_entries in enumerate(pages):
+            event = Event()
+            with patch.object(llm_chat.llm_chat_config, "load_config", return_value=config(123)), patch.object(
+                llm_chat, "_eligible_codex_users", new=AsyncMock(return_value=users)
+            ), patch.object(
+                llm_chat.llm_db, "get_api_key_metadata", return_value=[]
+            ), patch.object(llm_chat, "send_info_message", new=AsyncMock()) as send:
+                asyncio.run(llm_chat._show_codex_users(event, page=page_index))
+            text = send.await_args.args[1]
+            parsed, entities = telegram_html.parse(llm_chat.BOT_META_INFO_PREFIX + text)
+            self.assertLessEqual(len(parsed.encode("utf-16-le")) // 2, 4096)
+            self.assertLessEqual(
+                len((llm_chat.BOT_META_INFO_PREFIX + text).encode("utf-16-le")) // 2,
+                llm_chat.TELEGRAM_TEXT_UTF16_LIMIT - llm_chat.CODEX_USERS_PAYLOAD_MARGIN,
+            )
+            self.assertTrue(text.endswith("Trusted chats may grant additional access."))
+            self.assertTrue(entities)
+
+            text_ids = [
+                int(match)
+                for match in re.findall(r"<code>(\d+)</code>", text)
+            ]
+            expected_ids = [entry[0][0].id for entry in expected_entries]
+            button_ids = []
+            for row in send.await_args.kwargs["buttons"]:
+                for button in row:
+                    data = button.data.decode() if isinstance(button.data, bytes) else button.data
+                    if data.startswith("cu:u:"):
+                        button_ids.append(int(data.removeprefix("cu:u:")))
+            self.assertEqual(text_ids, expected_ids)
+            self.assertEqual(button_ids, expected_ids)
+            seen.extend(text_ids)
+
+        self.assertEqual(seen, list(range(100, 117)))
+        self.assertEqual(len(seen), len(set(seen)))
 
     def test_detail_separates_configured_and_telegram_identity_and_key_metadata(self):
         roster = llm_chat_config.CodexUser(123, "Configured <label>", True, False)
