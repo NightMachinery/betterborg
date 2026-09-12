@@ -24,6 +24,7 @@ import urllib.parse
 import tempfile
 import hashlib
 import html
+import secrets
 from datetime import datetime, timedelta, timezone
 import pytz
 from pathlib import Path
@@ -48,6 +49,7 @@ from telethon.tl.types import (
     BotCommandScopeDefault,
     KeyboardButtonCallback,
     Message,
+    User,
     UpdateMessageReactions,
 )
 from pydantic import BaseModel, Field
@@ -5338,7 +5340,9 @@ def register_handlers():
     borg.on(events.CallbackQuery())(callback_handler)
 
     # ReverseList dispatches the most recently registered handler first.  Keep
-    # this last so even command messages establish private contact metadata.
+    # these last so contact observation runs first, then consumes only matching
+    # add-user input before ordinary commands and pending-input handlers.
+    borg.on(events.NewMessage())(codex_user_add_input_handler)
     borg.on(events.NewMessage())(observe_incoming_user_profile)
 
     print("LLM_Chat: All event handlers registered.")
@@ -5904,6 +5908,8 @@ async def set_pioneer_key_handler(event):
 
 CODEX_USERS_PAGE_SIZE = 8
 CODEX_USERS_CALLBACK_PREFIX = "cu:"
+CODEX_USERS_ADD_PENDING = {}
+TELEGRAM_SIGNED_ID_MAX = 2**63 - 1
 TELEGRAM_TEXT_UTF16_LIMIT = 4096
 TELEGRAM_CALLBACK_BYTES_LIMIT = 64
 
@@ -6018,6 +6024,23 @@ def _entity_is_bot_admin(user_id: int, entity) -> bool:
         or getattr(entity, "bot", False)
         or getattr(entity, "id", user_id) in util.admins
         or username in util.admins
+    )
+
+
+async def _codex_users_admin(event) -> bool:
+    """Authorize from the callback/message sender, never from a trusted chat."""
+    user_id = getattr(event, "sender_id", None)
+    if not isinstance(user_id, int) or user_id <= 0:
+        return False
+    try:
+        sender = await event.get_sender()
+    except Exception:
+        sender = None
+    username = getattr(sender, "username", None)
+    return bool(
+        getattr(sender, "is_self", False)
+        or user_id in util.admins
+        or (username is not None and username in util.admins)
     )
 
 
@@ -6143,7 +6166,7 @@ async def _show_codex_users(event, *, page: int = 0, edit: bool = False):
             identity_lines.append(f"  Telegram: {_bold_dynamic(telegram_name, 64)}")
         if username and f"@{username}" != telegram_name:
             identity_lines.append(f"  Username: {_bold_dynamic('@' + username, 40)}")
-        contact = "Unknown — no private contact recorded" if contact_at is None else f"Started {_format_utc(contact_at, '%Y-%m-%d')}"
+        contact = "Unknown — no private contact recorded" if contact_at is None else "Started"
         text += (
             f"\n\n• {_bold_dynamic(name, 64)}\n"
             + ("\n".join(identity_lines) + "\n" if identity_lines else "")
@@ -6209,7 +6232,7 @@ async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False):
         identity_lines.append(f"Username: {_bold_dynamic('@' + username)}")
     identity_lines.append(f"Numeric ID: {target_id}")
     contact_at = profile.private_contact_at if profile is not None else None
-    contact = "Unknown — no private contact recorded" if contact_at is None else f"Started {_format_utc(contact_at)}"
+    contact = "Unknown — no private contact recorded" if contact_at is None else "Started"
 
     try:
         metadata = llm_db.get_api_key_metadata(target_id)
@@ -6279,9 +6302,159 @@ async def _show_codex_user_models(event, target_id: int, *, edit: bool = False):
     return True
 
 
+def _codex_add_key(event):
+    return (getattr(event, "sender_id", None), getattr(event, "chat_id", None))
+
+
+async def _start_codex_user_add(event):
+    key = _codex_add_key(event)
+    pending = CODEX_USERS_ADD_PENDING.get(key)
+    if pending is not None:
+        await event.answer("An add-user prompt is already open.", show_alert=True)
+        return
+    token = secrets.token_urlsafe(12)
+    buttons = [[KeyboardButtonCallback("Cancel", data=f"cu:add:cancel:{token}")]]
+    pending = {"token": token, "prompt_id": None, "phase": "prompting"}
+    CODEX_USERS_ADD_PENDING[key] = pending
+    try:
+        message = await event.respond(
+            f"{BOT_META_INFO_PREFIX}Reply with a positive numeric Telegram user ID or @username."
+            " In groups, reply directly to this prompt.",
+            buttons=buttons,
+            parse_mode=None,
+        )
+    except Exception:
+        if CODEX_USERS_ADD_PENDING.get(key) is pending:
+            CODEX_USERS_ADD_PENDING.pop(key, None)
+        raise
+    if CODEX_USERS_ADD_PENDING.get(key) is pending:
+        pending.update(prompt_id=getattr(message, "id", None), phase="input")
+    await event.answer()
+
+
+async def _resolve_codex_add_target(value: str):
+    if value.startswith("@"):
+        try:
+            entity = await borg.get_entity(value)
+        except Exception:
+            return None, None, "That username could not be resolved to a Telegram user."
+        if not isinstance(entity, User):
+            return None, None, "That username belongs to a group or channel, not a user."
+        user_id = entity.id
+    else:
+        try:
+            user_id = int(value)
+        except ValueError:
+            return None, None, "Enter a positive numeric user ID or @username."
+        if user_id <= 0 or user_id > TELEGRAM_SIGNED_ID_MAX:
+            return None, None, "The numeric user ID is outside Telegram's supported range."
+        try:
+            candidate = await borg.get_entity(user_id)
+        except Exception:
+            candidate = None
+        if candidate is not None and not isinstance(candidate, User):
+            return None, None, "That ID belongs to a group or channel, not a user."
+        entity = candidate
+    if not isinstance(user_id, int) or user_id <= 0 or user_id > TELEGRAM_SIGNED_ID_MAX:
+        return None, None, "The numeric user ID is outside Telegram's supported range."
+    if BOT_ID is not None and user_id == BOT_ID:
+        return None, None, "The bot itself cannot be added to the explicit-user roster."
+    if user_id in util.admins:
+        return None, None, "Bot administrators cannot be added to the explicit-user roster."
+    if entity is None and BOT_ID is not None:
+        try:
+            profile = llm_db.get_user_profile(BOT_ID, user_id)
+        except Exception:
+            profile = None
+        if profile is not None and _entity_is_bot_admin(user_id, profile):
+            return None, None, "Bot administrators cannot be added to the explicit-user roster."
+    if entity is not None:
+        if entity.id != user_id or getattr(entity, "bot", False):
+            return None, None, "Bots and mismatched Telegram entities cannot be added."
+        if _entity_is_bot_admin(user_id, entity):
+            return None, None, "Bot administrators cannot be added to the explicit-user roster."
+        if BOT_ID is not None:
+            try:
+                llm_db.record_user_profile(
+                    BOT_ID, user_id, entity.first_name, entity.last_name, entity.username
+                )
+            except Exception:
+                pass
+    return user_id, entity, None
+
+
+async def codex_user_add_input_handler(event):
+    key = _codex_add_key(event)
+    pending = CODEX_USERS_ADD_PENDING.get(key)
+    if pending is None or pending["phase"] != "input" or getattr(event, "out", False):
+        return
+    text = (getattr(event, "raw_text", None) or getattr(event, "text", None) or "").strip()
+    if not event.is_private:
+        reply_id = getattr(getattr(event, "message", None), "reply_to_msg_id", None)
+        if reply_id != pending["prompt_id"]:
+            return
+    if text.lower() in ("cancel", "/cancel"):
+        CODEX_USERS_ADD_PENDING.pop(key, None)
+        await send_info_message(event, "Add-user flow cancelled.", parse_mode=None)
+        raise events.StopPropagation
+    if text.startswith("/"):
+        return
+    valid_input = re.fullmatch(r"(?:[1-9]\d{0,18}|@[A-Za-z0-9_]{5,32})", text)
+    candidate_like = text.startswith("@") or re.fullmatch(r"-?\d+", text)
+    if not valid_input:
+        direct_group_reply = not event.is_private
+        if not candidate_like and not direct_group_reply:
+            return
+        await send_info_message(event, "Enter a positive numeric user ID or a valid @username.", parse_mode=None)
+        raise events.StopPropagation
+    pending["phase"] = "resolving"
+    authorized = await _codex_users_admin(event)
+    if CODEX_USERS_ADD_PENDING.get(key) is not pending:
+        raise events.StopPropagation
+    if not authorized:
+        CODEX_USERS_ADD_PENDING.pop(key, None)
+        await send_info_message(event, ADMIN_ONLY_COMMAND_IGNORED, parse_mode=None)
+        raise events.StopPropagation
+    user_id, entity, error = await _resolve_codex_add_target(text)
+    if CODEX_USERS_ADD_PENDING.get(key) is not pending:
+        raise events.StopPropagation
+    if error:
+        pending["phase"] = "input"
+        await send_info_message(event, error, parse_mode=None)
+        raise events.StopPropagation
+    config = llm_chat_config.load_config()
+    if not config.valid:
+        CODEX_USERS_ADD_PENDING.pop(key, None)
+        await send_info_message(event, "The LLM chat access configuration is invalid.", parse_mode=None)
+        raise events.StopPropagation
+    if user_id in _codex_user_ids(config):
+        CODEX_USERS_ADD_PENDING.pop(key, None)
+        await _show_codex_user_detail(event, user_id)
+        raise events.StopPropagation
+    pending.update(target_id=user_id, phase="confirm", resolved=entity is not None)
+    if entity is None:
+        identity = f"<b>{user_id}</b>\nProfile not known yet."
+    else:
+        identity = f"{_bold_dynamic(_codex_user_name(user_id, entity))}\nNumeric ID: {user_id}"
+        if entity.username:
+            identity += f"\nUsername: {_bold_dynamic('@' + entity.username)}"
+    token = pending["token"]
+    buttons = [[
+        KeyboardButtonCallback("Add user", data=f"cu:add:yes:{token}"),
+        KeyboardButtonCallback("Cancel", data=f"cu:add:cancel:{token}"),
+    ]]
+    await send_info_message(
+        event,
+        f"{identity}\n\nInitial grants: Codex off; images off.",
+        buttons=buttons,
+        parse_mode="html",
+    )
+    raise events.StopPropagation
+
+
 async def codex_users_handler(event):
     """Inspect or force-set explicit non-admin Codex users' personal defaults."""
-    if not await util.isAdmin(event):
+    if not await _codex_users_admin(event):
         await send_info_message(event, ADMIN_ONLY_COMMAND_IGNORED, parse_mode=None)
         return
     argument = (event.pattern_match.group(1) or "").strip()
@@ -6997,10 +7170,93 @@ async def callback_handler(event):
     #: @Claude Based on the Telethon documentation, I can now confirm that event.sender_id in a CallbackQuery event is indeed the ID of the person who clicked the button, not the original sender of the menu message.
 
     if data_str.startswith(CODEX_USERS_CALLBACK_PREFIX):
-        if not await util.isAdmin(event):
+        parts = data_str.split(":")
+        if parts == ["cu", "add"]:
+            if not await _codex_users_admin(event):
+                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                return
+            config = llm_chat_config.load_config()
+            if not config.valid:
+                await event.answer("The LLM chat access configuration is invalid.", show_alert=True)
+                return
+            await _start_codex_user_add(event)
+            return
+        if len(parts) == 4 and parts[:3] == ["cu", "add", "cancel"]:
+            pending = CODEX_USERS_ADD_PENDING.get(_codex_add_key(event))
+            if pending is None or not secrets.compare_digest(pending["token"], parts[3]):
+                await event.answer("This add-user prompt is stale.", show_alert=True)
+                return
+            CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
+            await event.answer("Add-user flow cancelled")
+            try:
+                await event.edit(buttons=None)
+            except Exception:
+                pass
+            return
+        if len(parts) == 4 and parts[:3] == ["cu", "add", "yes"]:
+            pending = CODEX_USERS_ADD_PENDING.get(_codex_add_key(event))
+            if (
+                pending is None
+                or pending.get("phase") != "confirm"
+                or not secrets.compare_digest(pending["token"], parts[3])
+            ):
+                await event.answer("This add-user confirmation is stale.", show_alert=True)
+                return
+            pending["phase"] = "confirming"
+            if not await _codex_users_admin(event):
+                if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is pending:
+                    CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
+                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                return
+            if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is not pending:
+                await event.answer("This add-user confirmation is stale.", show_alert=True)
+                return
+            config = llm_chat_config.load_config()
+            if not config.valid:
+                CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
+                await event.answer("The LLM chat access configuration is invalid.", show_alert=True)
+                return
+            target_id = pending["target_id"]
+            if target_id in _codex_user_ids(config):
+                CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
+                if not await _show_codex_user_detail(event, target_id, edit=True):
+                    await event.answer("That existing user can no longer be opened.", show_alert=True)
+                    return
+                await event.answer(f"User {target_id} already exists; opened existing settings")
+                return
+            else:
+                checked_id, _, error = await _resolve_codex_add_target(str(target_id))
+                if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is not pending:
+                    await event.answer("This add-user confirmation is stale.", show_alert=True)
+                    return
+                if error or checked_id != target_id:
+                    CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
+                    await event.answer(error or "The target identity changed.", show_alert=True)
+                    return
+                if not await _codex_users_admin(event):
+                    if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is pending:
+                        CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
+                    await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                    return
+                if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is not pending:
+                    await event.answer("This add-user confirmation is stale.", show_alert=True)
+                    return
+                # Claim the mutation synchronously. Cancellation and a second
+                # confirmation become stale before the thread can write.
+                CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
+                try:
+                    await asyncio.to_thread(llm_chat_config.add_user, target_id)
+                except llm_chat_config.ConfigUpdateError as exc:
+                    await event.answer(_truncate_utf16(str(exc) or "Could not add user.", 200), show_alert=True)
+                    return
+            if not await _show_codex_user_detail(event, target_id, edit=True):
+                await event.answer("The user was added, but the panel could not be refreshed.", show_alert=True)
+                return
+            await event.answer(f"User {target_id} is in the roster; opened settings")
+            return
+        if not await _codex_users_admin(event):
             await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
             return
-        parts = data_str.split(":")
         try:
             if parts == ["cu", "no"]:
                 await event.answer()

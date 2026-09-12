@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import fcntl
+import json
 import stat as stat_module
 import tempfile
 from dataclasses import dataclass
@@ -394,13 +395,36 @@ def _updated_source(text: str, user_id: int, capability: str, enabled: bool, con
     return text[:position] + insertion + text[position:]
 
 
-def update_user_access(user_id: int, capability: str, enabled: bool) -> LLMChatConfig:
-    if isinstance(user_id, bool) or not isinstance(user_id, int):
-        raise ConfigUpdateError("user_id must be an integer")
-    if capability not in ("codex_enabled", "imagegen_enabled"):
-        raise ConfigUpdateError("capability must be codex_enabled or imagegen_enabled")
-    if type(enabled) is not bool:
-        raise ConfigUpdateError("enabled must be a boolean")
+def _added_user_source(text: str, user_id: int, name: Optional[str]) -> str:
+    tokens = _tokens(text)
+    if not tokens or tokens[0].value != "{":
+        raise ConfigUpdateError("configuration root span could not be located")
+    root_end = _matching(tokens, 0, "{", "}")
+    roster = _key_value_span(text, tokens, 0, root_end, "codex_users")
+    name_source = "" if name is None else f", name: {json.dumps(name, ensure_ascii=False)}"
+    record = (
+        f"{{id: {user_id}{name_source}, codex_enabled: false, "
+        "imagegen_enabled: false}"
+    )
+    if roster is not None:
+        array_start, array_end = roster
+        if tokens[array_start].value != "[":
+            raise ConfigUpdateError("codex_users source is not an array")
+        empty = array_end == array_start + 1
+        has_trailing_comma = not empty and tokens[array_end - 1].value == ","
+        prefix = "" if empty or has_trailing_comma else ","
+        insertion = f"{prefix}\n    {record},"
+        position = tokens[array_end].start
+        return text[:position] + insertion + text[position:]
+    position = tokens[root_end].start
+    empty = root_end == 1
+    has_trailing_comma = not empty and tokens[root_end - 1].value == ","
+    prefix = "" if empty or has_trailing_comma else ","
+    insertion = f"{prefix}\n  codex_users: [{record}],\n"
+    return text[:position] + insertion + text[position:]
+
+
+def _write_config_update(transform) -> LLMChatConfig:
     try:
         requested_path = config_path()
         path = requested_path.resolve(strict=True)
@@ -410,36 +434,10 @@ def update_user_access(user_id: int, capability: str, enabled: bool) -> LLMChatC
             before_stat = path.stat()
             original = path.read_text(encoding="utf-8")
             config = parse_config(original)
-            if not any(user.id == user_id for user in configured_users(config)):
-                raise ConfigUpdateError(f"user {user_id} is not configured")
-            updated = _updated_source(original, user_id, capability, enabled, config)
+            updated, expected = transform(original, config)
             if updated == original:
                 return config
             candidate = parse_config(updated)
-            roster = list(config.codex_users)
-            for index, user in enumerate(roster):
-                if user.id == user_id:
-                    roster[index] = CodexUser(
-                        user.id,
-                        user.name,
-                        enabled if capability == "codex_enabled" else user.codex_enabled,
-                        enabled if capability == "imagegen_enabled" else user.imagegen_enabled,
-                    )
-                    break
-            else:
-                legacy = next(user for user in configured_users(config) if user.id == user_id)
-                roster.append(CodexUser(
-                    user_id,
-                    None,
-                    enabled if capability == "codex_enabled" else legacy.codex_enabled,
-                    enabled if capability == "imagegen_enabled" else legacy.imagegen_enabled,
-                ))
-            expected = LLMChatConfig(
-                config.codex_allowed_users,
-                config.codex_imagegen_allowed_users,
-                valid=True,
-                codex_users=tuple(roster),
-            )
             if candidate != expected:
                 raise ConfigUpdateError("generated configuration did not preserve policy semantics")
             fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -492,3 +490,71 @@ def update_user_access(user_id: int, capability: str, enabled: bool) -> LLMChatC
     except Exception as exc:
         target = locals().get("path", locals().get("requested_path", config_path()))
         raise ConfigUpdateError(f"could not update {target}: {exc}") from exc
+
+
+def update_user_access(user_id: int, capability: str, enabled: bool) -> LLMChatConfig:
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        raise ConfigUpdateError("user_id must be an integer")
+    if capability not in ("codex_enabled", "imagegen_enabled"):
+        raise ConfigUpdateError("capability must be codex_enabled or imagegen_enabled")
+    if type(enabled) is not bool:
+        raise ConfigUpdateError("enabled must be a boolean")
+
+    def transform(original, config):
+        if not any(user.id == user_id for user in configured_users(config)):
+            raise ConfigUpdateError(f"user {user_id} is not configured")
+        updated = _updated_source(original, user_id, capability, enabled, config)
+        roster = list(config.codex_users)
+        for index, user in enumerate(roster):
+            if user.id == user_id:
+                roster[index] = CodexUser(
+                    user.id,
+                    user.name,
+                    enabled if capability == "codex_enabled" else user.codex_enabled,
+                    enabled if capability == "imagegen_enabled" else user.imagegen_enabled,
+                )
+                break
+        else:
+            legacy = next(user for user in configured_users(config) if user.id == user_id)
+            roster.append(CodexUser(
+                user_id,
+                None,
+                enabled if capability == "codex_enabled" else legacy.codex_enabled,
+                enabled if capability == "imagegen_enabled" else legacy.imagegen_enabled,
+            ))
+        expected = LLMChatConfig(
+            config.codex_allowed_users,
+            config.codex_imagegen_allowed_users,
+            valid=True,
+            codex_users=tuple(roster),
+        )
+        return updated, expected
+
+    return _write_config_update(transform)
+
+
+def add_user(user_id: int, *, name: Optional[str] = None) -> LLMChatConfig:
+    """Append a disabled roster record unless the user is already configured."""
+    if (
+        isinstance(user_id, bool)
+        or not isinstance(user_id, int)
+        or not 0 < user_id <= 2**63 - 1
+    ):
+        raise ConfigUpdateError("user_id must be a positive signed 64-bit integer")
+    if name is not None and not isinstance(name, str):
+        raise ConfigUpdateError("name must be a string or None")
+
+    def transform(original, config):
+        if any(user.id == user_id for user in configured_users(config)):
+            return original, config
+        user = CodexUser(user_id, name, False, False)
+        updated = _added_user_source(original, user_id, name)
+        expected = LLMChatConfig(
+            config.codex_allowed_users,
+            config.codex_imagegen_allowed_users,
+            valid=True,
+            codex_users=config.codex_users + (user,),
+        )
+        return updated, expected
+
+    return _write_config_update(transform)

@@ -78,6 +78,23 @@ shared history never count as private contact. See [metadata storage](llm_user_m
 - `.codex-users <user-id> <model-id>`: immediately save a specific model as
   that user's personal default, including custom model IDs.
 
+Choose **Add user** to enter a positive numeric Telegram user ID or `@username`.
+The bot resolves a username to its stable numeric ID before showing an identity
+preview. Unknown numeric IDs are accepted with “Profile not known yet”; unknown
+usernames, groups, channels, bots, and known bot admins are rejected.
+
+The preview starts both personal grants off. **Add user** confirms the insertion;
+**Cancel** clears the pending flow. No message is sent to the target, no contact
+status is inferred, and no saved model is changed. If another admin has already
+added the user, confirmation opens the existing record without changing its
+settings. Authorization, config validity, and current membership are checked
+again when confirming.
+
+Each pending flow belongs to one admin in one chat. In groups, reply to the
+specific prompt; unrelated messages are ignored by the onboarding flow. Pending
+flows are held in memory and disappear on restart. Stale confirmation buttons
+cannot act on a newer flow.
+
 Access buttons save an explicit enabled/disabled value to the JSON5 file and
 refresh the menu. Repeated clicks do not invert the state unexpectedly.
 Disabling Codex preserves the image flag: images are paused outside contexts
@@ -87,19 +104,21 @@ policies in effect. The menu states this distinction.
 
 Config writes use a lock and atomic replacement, preserving file permissions
 and unrelated settings. Existing comments and formatting are retained when
-updating a flag. Invalid config, removed users, or detected concurrent manual
-edits prevent an update rather than replacing the config with defaults.
+updating a flag or inserting a roster record. Invalid config, removed users, or
+detected concurrent manual edits prevent an update rather than replacing the
+config with defaults.
 
 Model changes do not require the user's confirmation. They replace only the
 saved personal default; the user can subsequently change it again. An admin
 can save a Codex default while personal access is off, ready for re-enabling.
 Chat-specific models and per-message prefixes retain their usual precedence.
 
-The command and every button check the caller's bot-admin access and the
-target's current roster membership. Bot admins are excluded as targets, and
-admin-only models cannot be assigned to non-admin users. Invalid config and
+The command and every button check the caller's own bot-admin identity. Trusted
+chat membership alone does not authorize roster management. Existing-user
+controls also check the target's current roster membership. Bot admins are
+excluded as targets, and admin-only models cannot be assigned to non-admin users. Invalid config and
 removed membership prevent changes from previously opened menus. The existing
-trusted-chat rules apply to the caller.
+trusted-chat rules still apply to model and image access independently.
 
 ### When access is disabled
 

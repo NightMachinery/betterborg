@@ -54,6 +54,23 @@ class Event:
         self.edit = AsyncMock()
 
 
+class AddEvent(Event):
+    def __init__(self, text="", *, sender_id=900, chat_id=901, private=True, reply_to=None):
+        super().__init__()
+        self.sender_id = sender_id
+        self.chat_id = chat_id
+        self.is_private = private
+        self.out = False
+        self.raw_text = text
+        self.text = text
+        self.message = SimpleNamespace(reply_to_msg_id=reply_to)
+        self.get_sender = AsyncMock(
+            return_value=llm_chat.User(id=sender_id, first_name="Admin", username="admin")
+        )
+        self.respond = AsyncMock(return_value=SimpleNamespace(id=777))
+        self.reply = AsyncMock(return_value=SimpleNamespace(id=778))
+
+
 def config(*ids, valid=True, users=()):
     return llm_chat_config.LLMChatConfig(tuple(ids), (), valid=valid, codex_users=tuple(users))
 
@@ -68,7 +85,7 @@ class CodexUsersTests(unittest.TestCase):
         event = Event(argument)
         cfg = cfg or config(123)
         entity = self.entity if entity is None else entity
-        with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=admin)), patch.object(
+        with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=admin)), patch.object(
             llm_chat.llm_chat_config, "load_config", return_value=cfg
         ), patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=entity), create=True), patch.object(
             llm_chat, "send_info_message", new=AsyncMock()
@@ -197,7 +214,7 @@ class CodexUsersTests(unittest.TestCase):
         manager.storage.set.side_effect = lambda uid, value: records.__setitem__(uid, value)
         event = Event("123 provider/custom")
         with patch.object(llm_chat, "user_manager", manager), patch.object(
-            llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)
+            llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)
         ), patch.object(llm_chat.llm_chat_config, "load_config", return_value=config(123)), patch.object(
             builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True
         ), patch.object(llm_chat, "send_info_message", new=AsyncMock()):
@@ -225,7 +242,7 @@ class CodexUsersTests(unittest.TestCase):
         token = llm_chat._codex_users_model_token(OPENAI_CODEX_GPT_5_6_SOL)
         event = Event()
         event.data = f"cu:m:123:{token}".encode()
-        with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)), patch.object(
+        with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
             llm_chat.llm_chat_config, "load_config", return_value=config(123)
         ), patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True), patch.object(
             llm_chat.user_manager, "set_model"
@@ -238,7 +255,7 @@ class CodexUsersTests(unittest.TestCase):
         for admin, data in ((False, b"cu:u:123"), (True, b"cu:m:123:forged")):
             event = Event()
             event.data = data
-            with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=admin)), patch.object(
+            with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=admin)), patch.object(
                 llm_chat.llm_chat_config, "load_config", return_value=config(123)
             ) as load, patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True), patch.object(
                 llm_chat.user_manager, "set_model"
@@ -252,7 +269,7 @@ class CodexUsersTests(unittest.TestCase):
         token = llm_chat._codex_users_model_token(OPENAI_CODEX_GPT_5_6_SOL)
         event = Event()
         event.data = f"cu:m:123:{token}".encode()
-        with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)), patch.object(
+        with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
             llm_chat.llm_chat_config, "load_config", return_value=config()
         ), patch.object(llm_chat.user_manager, "set_model") as set_model:
             asyncio.run(llm_chat.callback_handler(event))
@@ -265,7 +282,7 @@ class CodexUsersTests(unittest.TestCase):
                 cfg = config(users=(roster_user,))
                 event = Event()
                 event.data = f"cu:a:123:{capability_token}:1".encode()
-                with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)), patch.object(
+                with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
                     llm_chat.llm_chat_config, "load_config", return_value=cfg
                 ), patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True), patch.object(
                     llm_chat.llm_chat_config, "update_user_access", return_value=cfg
@@ -284,7 +301,7 @@ class CodexUsersTests(unittest.TestCase):
         event.edit.side_effect = llm_chat.errors.rpcerrorlist.MessageNotModifiedError(
             request=None
         )
-        with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)), patch.object(
+        with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
             llm_chat.llm_chat_config, "load_config", return_value=cfg
         ), patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True), patch.object(
             llm_chat.llm_chat_config, "update_user_access", return_value=cfg
@@ -298,7 +315,7 @@ class CodexUsersTests(unittest.TestCase):
     def test_nonadmin_access_toggle_does_not_update(self):
         event = Event()
         event.data = b"cu:a:123:c:1"
-        with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=False)), patch.object(
+        with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=False)), patch.object(
             llm_chat.llm_chat_config, "update_user_access"
         ) as update:
             asyncio.run(llm_chat.callback_handler(event))
@@ -310,7 +327,7 @@ class CodexUsersTests(unittest.TestCase):
         cfg = config(users=(roster_user,))
         event = Event()
         event.data = b"cu:a:123:i:1"
-        with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)), patch.object(
+        with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
             llm_chat.llm_chat_config, "load_config", return_value=cfg
         ), patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True), patch.object(
             llm_chat.llm_chat_config, "update_user_access", return_value=cfg
@@ -330,7 +347,7 @@ class CodexUsersTests(unittest.TestCase):
                 event = Event()
                 event.data = b"cu:a:123:c:0"
                 update = Mock(side_effect=error)
-                with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)), patch.object(
+                with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
                     llm_chat.llm_chat_config, "load_config", return_value=cfg
                 ), patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=entity), create=True), patch.object(
                     llm_chat.llm_chat_config, "update_user_access", update
@@ -348,7 +365,7 @@ class CodexUsersTests(unittest.TestCase):
         cfg = config(users=(roster_user,))
         event = Event()
         event.data = b"cu:a:123:c:0"
-        with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)), patch.object(
+        with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
             llm_chat.llm_chat_config, "load_config", return_value=cfg
         ), patch.object(builtins.borg, "get_entity", new=AsyncMock(return_value=self.entity), create=True), patch.object(
             llm_chat.llm_chat_config,
@@ -453,7 +470,7 @@ class CodexUsersTests(unittest.TestCase):
         self.assertIn("Configured label: <b>Configured &lt;label&gt;</b>", text)
         self.assertIn("Telegram name: <b>Ada Lovelace</b>", text)
         self.assertIn("Username: <b>@ada</b>", text)
-        self.assertIn("Bot contact: Started 2026-01-02 00:00 UTC", text)
+        self.assertIn("Bot contact: Started", text)
         self.assertIn("gemini — 2026-02-03 00:00 UTC", text)
         self.assertIn("openrouter — Set date unknown", text)
 
@@ -499,6 +516,303 @@ class CodexUsersTests(unittest.TestCase):
         users = [(llm_chat_config.CodexUser(123, None, True, False), "Ada", "model")]
         rows, _, _ = llm_chat._codex_users_user_buttons(users, 0)
         self.assertTrue(any(button.data in (b"cu:add", "cu:add") for row in rows for button in row))
+
+    def test_sender_only_admin_does_not_trust_chat_policy(self):
+        event = AddEvent(private=False)
+        with patch.object(llm_chat.util, "admins", [901]), patch.object(
+            llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)
+        ):
+            self.assertFalse(asyncio.run(llm_chat._codex_users_admin(event)))
+
+    def test_add_input_group_requires_prompt_reply_and_ignores_commands(self):
+        llm_chat.CODEX_USERS_ADD_PENDING.clear()
+        llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = {
+            "token": "token", "prompt_id": 777, "phase": "input"
+        }
+        for text, reply_to in (("123", None), ("/help", 777)):
+            event = AddEvent(text, private=False, reply_to=reply_to)
+            asyncio.run(llm_chat.codex_user_add_input_handler(event))
+        event = AddEvent("unrelated words", private=False, reply_to=777)
+        with self.assertRaises(llm_chat.events.StopPropagation):
+            asyncio.run(llm_chat.codex_user_add_input_handler(event))
+        self.assertEqual(llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)]["phase"], "input")
+
+    def test_add_numeric_unknown_previews_disabled_grants_without_contact(self):
+        llm_chat.CODEX_USERS_ADD_PENDING.clear()
+        llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = {
+            "token": "safe-token", "prompt_id": 777, "phase": "input"
+        }
+        event = AddEvent("123")
+        with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
+            builtins.borg, "get_entity", new=AsyncMock(side_effect=ValueError), create=True
+        ), patch.object(llm_chat.llm_chat_config, "load_config", return_value=config()), patch.object(
+            llm_chat.llm_db, "record_user_profile"
+        ) as record, patch.object(llm_chat, "send_info_message", new=AsyncMock()) as send:
+            with self.assertRaises(llm_chat.events.StopPropagation):
+                asyncio.run(llm_chat.codex_user_add_input_handler(event))
+        self.assertIn("Profile not known yet", send.await_args.args[1])
+        self.assertIn("Codex off; images off", send.await_args.args[1])
+        record.assert_not_called()
+        self.assertEqual(llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)]["target_id"], 123)
+
+    def test_username_add_rejects_nonusers_bots_and_admins(self):
+        channel = SimpleNamespace(id=123, title="Group")
+        bot = llm_chat.User(id=123, first_name="Bot", username="botname", bot=True)
+        admin = llm_chat.User(id=123, first_name="Admin", username="boss")
+        for entity, expected in (
+            (channel, "group or channel"),
+            (bot, "Bots"),
+            (admin, "administrators"),
+        ):
+            with self.subTest(expected=expected), patch.object(
+                builtins.borg, "get_entity", new=AsyncMock(return_value=entity), create=True
+            ), patch.object(llm_chat.util, "admins", ["boss"] if entity is admin else []):
+                _, _, error = asyncio.run(llm_chat._resolve_codex_add_target("@validname"))
+            self.assertIn(expected, error)
+
+    def test_confirmation_is_scoped_rechecks_auth_and_never_changes_model(self):
+        llm_chat.CODEX_USERS_ADD_PENDING.clear()
+        llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = {
+            "token": "right", "prompt_id": 777, "phase": "confirm", "target_id": 123
+        }
+        stale = AddEvent()
+        stale.data = b"cu:add:yes:wrong"
+        asyncio.run(llm_chat.callback_handler(stale))
+        stale.answer.assert_awaited_with("This add-user confirmation is stale.", show_alert=True)
+        self.assertIn((900, 901), llm_chat.CODEX_USERS_ADD_PENDING)
+
+        event = AddEvent()
+        event.data = b"cu:add:yes:right"
+        with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
+            builtins.borg, "get_entity", new=AsyncMock(side_effect=ValueError), create=True
+        ), patch.object(llm_chat.llm_chat_config, "load_config", return_value=config()), patch.object(
+            llm_chat.llm_chat_config, "add_user", return_value=config(123)
+        ) as add, patch.object(llm_chat, "_show_codex_user_detail", new=AsyncMock(return_value=True)), patch.object(
+            llm_chat.user_manager, "set_model"
+        ) as set_model:
+            asyncio.run(llm_chat.callback_handler(event))
+        add.assert_called_once_with(123)
+        set_model.assert_not_called()
+        self.assertNotIn((900, 901), llm_chat.CODEX_USERS_ADD_PENDING)
+
+    def test_confirmation_revocation_invalid_config_and_duplicate_do_not_add(self):
+        cases = ((False, config()), (True, config(valid=False)), (True, config(123)))
+        for authorized, cfg in cases:
+            with self.subTest(authorized=authorized, cfg=cfg):
+                llm_chat.CODEX_USERS_ADD_PENDING.clear()
+                llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = {
+                    "token": "right", "prompt_id": 777, "phase": "confirm", "target_id": 123
+                }
+                event = AddEvent()
+                event.data = b"cu:add:yes:right"
+                with patch.object(
+                    llm_chat, "_codex_users_admin", new=AsyncMock(return_value=authorized)
+                ), patch.object(llm_chat.llm_chat_config, "load_config", return_value=cfg), patch.object(
+                    llm_chat.llm_chat_config, "add_user"
+                ) as add, patch.object(
+                    llm_chat, "_show_codex_user_detail", new=AsyncMock(return_value=True)
+                ):
+                    asyncio.run(llm_chat.callback_handler(event))
+                add.assert_not_called()
+
+    def test_add_callback_denies_nonadmin_even_when_chat_is_trusted(self):
+        event = AddEvent(private=False)
+        event.data = b"cu:add"
+        with patch.object(llm_chat.util, "admins", [901]), patch.object(
+            llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)
+        ):
+            asyncio.run(llm_chat.callback_handler(event))
+        event.answer.assert_awaited_with(llm_chat.ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+        event.respond.assert_not_awaited()
+
+    def test_add_callback_rejects_invalid_config_before_prompt(self):
+        event = AddEvent()
+        event.data = b"cu:add"
+        with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
+            llm_chat.llm_chat_config, "load_config", return_value=config(valid=False)
+        ):
+            asyncio.run(llm_chat.callback_handler(event))
+        event.respond.assert_not_awaited()
+        event.answer.assert_awaited_with(
+            "The LLM chat access configuration is invalid.", show_alert=True
+        )
+
+    def test_unknown_numeric_bot_id_is_rejected(self):
+        with patch.object(llm_chat, "BOT_ID", 42), patch.object(
+            builtins.borg, "get_entity", new=AsyncMock(side_effect=ValueError), create=True
+        ):
+            _, _, error = asyncio.run(llm_chat._resolve_codex_add_target("42"))
+        self.assertIn("bot itself", error)
+
+    def test_cancel_token_is_scoped_to_admin_and_chat(self):
+        llm_chat.CODEX_USERS_ADD_PENDING.clear()
+        llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = {
+            "token": "right", "prompt_id": 777, "phase": "input"
+        }
+        wrong_chat = AddEvent(chat_id=902)
+        wrong_chat.data = b"cu:add:cancel:right"
+        asyncio.run(llm_chat.callback_handler(wrong_chat))
+        wrong_chat.answer.assert_awaited_with("This add-user prompt is stale.", show_alert=True)
+        self.assertIn((900, 901), llm_chat.CODEX_USERS_ADD_PENDING)
+
+    def test_reverse_list_registration_orders_observer_then_add_flow(self):
+        registered = []
+
+        class RegisteringBorg:
+            def on(self, builder):
+                return lambda handler: registered.append(handler.__name__) or handler
+
+        with patch.object(builtins, "borg", RegisteringBorg()):
+            llm_chat.register_handlers()
+        self.assertEqual(
+            list(reversed(registered[-2:])),
+            ["observe_incoming_user_profile", "codex_user_add_input_handler"],
+        )
+
+    def test_concurrent_add_inputs_cannot_replace_visible_preview_target(self):
+        async def scenario():
+            llm_chat.CODEX_USERS_ADD_PENDING.clear()
+            pending = {"token": "token", "prompt_id": 777, "phase": "input"}
+            llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = pending
+            started = asyncio.Event()
+            release = asyncio.Event()
+
+            async def resolve(value):
+                started.set()
+                await release.wait()
+                return int(value), None, None
+
+            first = AddEvent("123")
+            second = AddEvent("124")
+            with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
+                llm_chat, "_resolve_codex_add_target", side_effect=resolve
+            ), patch.object(llm_chat.llm_chat_config, "load_config", return_value=config()), patch.object(
+                llm_chat, "send_info_message", new=AsyncMock()
+            ):
+                first_task = asyncio.create_task(llm_chat.codex_user_add_input_handler(first))
+                await started.wait()
+                self.assertEqual(pending["phase"], "resolving")
+                await llm_chat.codex_user_add_input_handler(second)
+                release.set()
+                with self.assertRaises(llm_chat.events.StopPropagation):
+                    await first_task
+            self.assertEqual(pending["target_id"], 123)
+            self.assertEqual(pending["phase"], "confirm")
+
+        asyncio.run(scenario())
+
+    def test_cancel_during_final_authorization_prevents_write(self):
+        async def scenario():
+            llm_chat.CODEX_USERS_ADD_PENDING.clear()
+            pending = {
+                "token": "right", "prompt_id": 777, "phase": "confirm", "target_id": 123
+            }
+            llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = pending
+            final_auth_started = asyncio.Event()
+            release = asyncio.Event()
+            auth_calls = 0
+
+            async def authorize(event):
+                nonlocal auth_calls
+                auth_calls += 1
+                if auth_calls == 2:
+                    final_auth_started.set()
+                    await release.wait()
+                return True
+
+            confirm = AddEvent()
+            confirm.data = b"cu:add:yes:right"
+            cancel = AddEvent()
+            cancel.data = b"cu:add:cancel:right"
+            with patch.object(llm_chat, "_codex_users_admin", side_effect=authorize), patch.object(
+                llm_chat, "_resolve_codex_add_target", new=AsyncMock(return_value=(123, None, None))
+            ), patch.object(llm_chat.llm_chat_config, "load_config", return_value=config()), patch.object(
+                llm_chat.llm_chat_config, "add_user"
+            ) as add:
+                task = asyncio.create_task(llm_chat.callback_handler(confirm))
+                await final_auth_started.wait()
+                await llm_chat.callback_handler(cancel)
+                release.set()
+                await task
+            add.assert_not_called()
+            confirm.answer.assert_awaited_with("This add-user confirmation is stale.", show_alert=True)
+
+        asyncio.run(scenario())
+
+    def test_double_confirmation_performs_at_most_one_write(self):
+        async def scenario():
+            llm_chat.CODEX_USERS_ADD_PENDING.clear()
+            llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = {
+                "token": "right", "prompt_id": 777, "phase": "confirm", "target_id": 123
+            }
+            started = asyncio.Event()
+            release = asyncio.Event()
+            calls = 0
+
+            async def authorize(event):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    started.set()
+                    await release.wait()
+                return True
+
+            first = AddEvent()
+            first.data = b"cu:add:yes:right"
+            second = AddEvent()
+            second.data = b"cu:add:yes:right"
+            with patch.object(llm_chat, "_codex_users_admin", side_effect=authorize), patch.object(
+                llm_chat, "_resolve_codex_add_target", new=AsyncMock(return_value=(123, None, None))
+            ), patch.object(llm_chat.llm_chat_config, "load_config", return_value=config()), patch.object(
+                llm_chat.llm_chat_config, "add_user", return_value=config(123)
+            ) as add, patch.object(
+                llm_chat, "_show_codex_user_detail", new=AsyncMock(return_value=True)
+            ):
+                task = asyncio.create_task(llm_chat.callback_handler(first))
+                await started.wait()
+                await llm_chat.callback_handler(second)
+                release.set()
+                await task
+            add.assert_called_once_with(123)
+            second.answer.assert_awaited_with("This add-user confirmation is stale.", show_alert=True)
+
+        asyncio.run(scenario())
+
+    def test_prompt_is_not_active_until_delivery_and_can_be_cancelled(self):
+        async def scenario():
+            llm_chat.CODEX_USERS_ADD_PENDING.clear()
+            event = AddEvent()
+            unrelated = AddEvent("123", private=False)
+            unrelated.message.reply_to_msg_id = None
+            async def deliver(*args, **kwargs):
+                await llm_chat.codex_user_add_input_handler(unrelated)
+                llm_chat.CODEX_USERS_ADD_PENDING.clear()
+                return SimpleNamespace(id=777)
+            event.respond = AsyncMock(side_effect=deliver)
+            with patch.object(llm_chat, "_resolve_codex_add_target", new=AsyncMock()) as resolve:
+                await llm_chat._start_codex_user_add(event)
+            resolve.assert_not_awaited()
+            self.assertFalse(llm_chat.CODEX_USERS_ADD_PENDING)
+        asyncio.run(scenario())
+
+    def test_new_flow_survives_previous_confirmation_write(self):
+        llm_chat.CODEX_USERS_ADD_PENDING.clear()
+        llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = {
+            "token": "right", "prompt_id": 777, "phase": "confirm", "target_id": 123
+        }
+        new_pending = {"token": "new", "prompt_id": 888, "phase": "input"}
+        async def write(*args, **kwargs):
+            llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)] = new_pending
+            return config(123)
+        event = AddEvent()
+        event.data = b"cu:add:yes:right"
+        with patch.object(llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)), patch.object(
+            llm_chat, "_resolve_codex_add_target", new=AsyncMock(return_value=(123, None, None))
+        ), patch.object(llm_chat.llm_chat_config, "load_config", return_value=config()), patch.object(
+            llm_chat.asyncio, "to_thread", new=AsyncMock(side_effect=write)
+        ), patch.object(llm_chat, "_show_codex_user_detail", new=AsyncMock(return_value=True)):
+            asyncio.run(llm_chat.callback_handler(event))
+        self.assertIs(llm_chat.CODEX_USERS_ADD_PENDING[(900, 901)], new_pending)
 
     def test_command_routing(self):
         self.assertTrue(llm_chat._is_known_command(".codex-users"))
