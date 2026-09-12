@@ -76,7 +76,7 @@ See [docs/codex_caching.md](codex_caching.md) for Codex prompt caching behavior.
 
 ## Image generation
 
-Documentation and code reviewed on 2026-09-12:
+Documentation, code, and a live OAuth request verified on 2026-09-12:
 
 - Codex supports built-in image generation with ChatGPT subscription access.
   The [official image-generation guide](https://learn.chatgpt.com/docs/image-generation)
@@ -90,14 +90,47 @@ Documentation and code reviewed on 2026-09-12:
 - The separate `image_gen_plugins/image_gen.py` plugin uses Google Imagen;
   it is not connected to Codex OAuth.
 
-The product feature does not establish support for image generation through
-Betterborg's borrowed-token endpoint. That endpoint was not live-tested for
-image generation during this review. Do not assume adding a tool declaration
-alone enables it.
+### Live verification
 
-Using Codex's built-in workflow offers subscription-backed generation but
-requires integration with that workflow. The documented programmatic alternative
-is the [OpenAI image-generation API](https://developers.openai.com/api/docs/guides/tools-image-generation),
-with separate API billing. Its Responses tool returns `image_generation_call`
-items containing base64 image data, which would need decoding and Telegram
-delivery support in Betterborg.
+The borrowed-token approach works for image generation on the tested account.
+A standalone probe loaded the actual `_create_async_client()` and
+`prepare_codex_response_kwargs()` functions from `uniborg/codex_util.py`, omitting
+the application startup import. It used the installed `llm-openai-via-codex`
+authentication helper and OpenAI Python SDK 2.37.0, with no API-key fallback or
+additional Codex client headers.
+
+The request went to `https://chatgpt.com/backend-api/codex/responses` with
+`gpt-5.6-sol`, `reasoning.effort="low"`, `store=false`, `stream=true`, and:
+
+```json
+{"tools": [{"type": "image_generation"}]}
+```
+
+The instructions explicitly requested one image using the tool. The prompt was
+an orange circle centered on a white square background. The response:
+
+- Selected `gpt-image-2-codex`, PNG output, and automatic quality and size.
+- Emitted image-generation progress events and a `response.output_item.done`
+  item with `type="image_generation_call"` and base64 image data in `result`.
+- Returned one valid 1254 by 1254 PNG, 724,526 bytes, in about 19.8 seconds.
+  Pillow verified the file, and visual inspection confirmed the requested image.
+- Finished with `response.completed` and status `completed`.
+
+This proves endpoint compatibility for a basic generation, not end-to-end
+Telegram support. Betterborg still needs to enable the tool, collect/decode
+image items, and send them to Telegram. Deduplicate image items by ID if handling
+both `response.output_item.done` and `response.completed`. This request emitted
+`response.output_text.done` without text delta events, so image delivery must not
+depend on the current text accumulator.
+
+The same endpoint and event format are documented by the
+[chatgpt-imagegen project](https://github.com/leeguooooo/chatgpt-imagegen/blob/main/docs/how-it-works.md).
+A [Codex issue](https://github.com/openai/codex/issues/28723) reports that explicit
+size and quality parameters can be overridden. Our test used defaults; edits,
+explicit image model selection, dimensions, quality controls, and other account
+entitlements remain untested.
+
+Reusing OAuth avoids a separate API-key integration and uses the subscription
+path, but the internal endpoint and parameter behavior can change. The
+[OpenAI image-generation API](https://developers.openai.com/api/docs/guides/tools-image-generation)
+offers the documented public API contract with separate API billing.
