@@ -184,7 +184,8 @@ default models. The panel separates configured labels from Telegram identity,
 shows recorded private contact, and lists personal API-key providers with their
 last-set UTC times, without exposing keys. Historical keys show an unknown date.
 Use *Add user* to enter a numeric ID or =@username= and confirm the identity.
-New users start with Codex and images off; their saved model is preserved.
+Phone-number lookup requires a Telegram user account and is not supported by
+the bot. New users start with Codex and images off; their saved model is preserved.
 In groups, reply to the add-user prompt. Roster controls require the caller to
 be a bot admin, independently of trusted-chat model grants.
 Disabled users remain listed; configured trusted-chat access

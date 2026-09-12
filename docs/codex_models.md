@@ -83,6 +83,14 @@ The bot resolves a username to its stable numeric ID before showing an identity
 preview. Unknown numeric IDs are accepted with “Profile not known yet”; unknown
 usernames, groups, channels, bots, and known bot admins are rejected.
 
+Phone-number lookup is not supported by the bot: Telegram restricts
+[`contacts.resolvePhone`](https://core.telegram.org/method/contacts.resolvePhone)
+to authenticated user accounts, and resolution also depends on the target's
+privacy settings. A separate user-account resolver would require additional
+account access. Telegram's private-chat
+[user picker](https://core.telegram.org/constructor/keyboardButtonRequestPeer)
+is a possible alternative; neither extension is currently implemented.
+
 The preview starts both personal grants off. **Add user** confirms the insertion;
 **Cancel** clears the pending flow. No message is sent to the target, no contact
 status is inferred, and no saved model is changed. If another admin has already
