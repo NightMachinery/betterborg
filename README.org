@@ -172,8 +172,11 @@ all of its messages; the reaction-only bulk command is available separately. See
 
 ** Codex models
 =llm_chat= can expose =openai-codex/gpt-5.6-sol= and =openai-codex/gpt-6-astra=
-as admin-only chat models using the published =llm-openai-via-codex= package and
-local Codex OAuth credentials. See [[file:docs/codex_models.md][docs/codex_models.md]] and
+as access-controlled chat models using the published =llm-openai-via-codex=
+package and local Codex OAuth credentials. Access is configured in
+=~/.borg/llm_chat_config.json5= (or =LLM_CHAT_CONFIG_PATH=) using numeric
+Telegram user IDs and the optional =MAGIC_ADMINS= sentinel. See
+[[file:docs/codex_models.md][docs/codex_models.md]] and
 [[file:docs/codex_caching.md][docs/codex_caching.md]].
 The current adapter accepts image inputs but returns text only. Image generation
 through the same OAuth endpoint passed a live test, but Telegram delivery is not

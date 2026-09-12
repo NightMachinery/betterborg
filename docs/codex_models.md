@@ -1,12 +1,36 @@
-# Admin-Only Codex Models
+# Codex Models
 
-`llm_chat` exposes the ChatGPT Codex backend as admin-only models:
+`llm_chat` exposes the ChatGPT Codex backend as access-controlled models:
 
 - `openai-codex/gpt-5.6-sol`
 - `openai-codex/gpt-6-astra`
 
-Non-admin users should not see them in `/setModel` or `/setModelHere`, and
-direct selection attempts are rejected server-side.
+Users without Codex access do not see them in `/setModel` or `/setModelHere`,
+and direct selection attempts are rejected server-side.
+
+## Access configuration
+
+On first use, Betterborg creates `~/.borg/llm_chat_config.json5` if it does not
+exist. Set `LLM_CHAT_CONFIG_PATH` to use another path. The default is:
+
+```json5
+{
+  codex_allowed_users: ["MAGIC_ADMINS"],
+  codex_imagegen_allowed_users: ["MAGIC_ADMINS"],
+}
+```
+
+Each array is a complete policy. Entries may be numeric Telegram user IDs or
+the exact string `"MAGIC_ADMINS"`. The sentinel delegates to Betterborg's
+existing `util.isAdmin(event)` check, including trusted-chat access. A numeric
+ID grants only the named Codex capability; it does not make that user a bot
+admin or permit changing group settings. Remove the sentinel to remove
+automatic admin access. An empty array grants nobody access.
+
+Both keys are required. Betterborg reloads the file when it changes. If the
+file is invalid or unreadable, all Codex access is disabled until it is fixed;
+the invalid file is logged and left untouched. Other model providers continue
+working. Image generation requires a user to pass both policies.
 
 Runtime requirements:
 
@@ -17,7 +41,7 @@ Runtime requirements:
 
 The integration depends on the published `llm-openai-via-codex` pip package for
 Codex OAuth token borrowing and refresh. Betterborg only owns the Telegram
-message conversion, admin gating, and streaming response handling.
+message conversion, access checks, and streaming response handling.
 
 ## Availability
 
@@ -45,7 +69,7 @@ The `ultra` level advertised by the Codex CLI model list is a Codex-app
 subagent mode, not an API value. Sending it returns an "Invalid value" error,
 so it is deliberately absent from the level sets.
 
-## Admin-only quick prefixes
+## Access-controlled quick prefixes
 
 - `.c` and `.cm`: GPT-5.6 Sol with `medium` reasoning.
 - `.cl`: GPT-5.6 Sol with `low` reasoning.

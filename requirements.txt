@@ -53,6 +53,7 @@ llm-gemini
 llm-openai-via-codex
 
 aiofiles
+json5
 
 python-magic
 

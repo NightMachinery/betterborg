@@ -55,6 +55,7 @@ class ModelSpec:
     reasoning_levels: Tuple[str, ...] = NO_REASONING_LEVELS
     default_reasoning: str = DEFAULT_REASONING_EFFORT
     admin_only: bool = False
+    codex_access: bool = False
     #: Known to the registry but not offered in the model pickers.
     hidden: bool = False
 
@@ -116,18 +117,18 @@ MODEL_SPECS = [
     ModelSpec("mistral/mistral-medium-latest", "Mistral Medium (Latest)"),
     ModelSpec("mistral/magistral-medium-latest", "Magistral Medium (Latest)"),
     ModelSpec("mistral/pixtral-large-latest", "Pixtral Large (Latest)"),
-    ## Codex (admin-only, ChatGPT OAuth)
+    ## Codex (configurable access, ChatGPT OAuth)
     ModelSpec(
         OPENAI_CODEX_GPT_5_6_SOL,
-        "GPT-5.6 Sol (Codex, Admin)",
+        "GPT-5.6 Sol (Codex)",
         OPENAI_REASONING_LEVELS,
-        admin_only=True,
+        codex_access=True,
     ),
     ModelSpec(
         OPENAI_CODEX_ASTRA,
-        "GPT-6 Astra (Codex, Admin)",
+        "GPT-6 Astra (Codex)",
         ASTRA_REASONING_LEVELS,
-        admin_only=True,
+        codex_access=True,
     ),
     ## Pioneer (admin-only) - no longer used, kept for easy re-enabling.
     #: Uncomment these and the `.sn`/`.o` prefixes in llm_chat.py to bring it
@@ -138,23 +139,23 @@ MODEL_SPECS = [
     ## Codex models known to the registry but kept out of the pickers.
     ModelSpec(
         OPENAI_CODEX_GPT_5_6_TERRA,
-        "GPT-5.6 Terra (Codex, Admin)",
+        "GPT-5.6 Terra (Codex)",
         OPENAI_REASONING_LEVELS,
-        admin_only=True,
+        codex_access=True,
         hidden=True,
     ),
     ModelSpec(
         OPENAI_CODEX_GPT_5_6_LUNA,
-        "GPT-5.6 Luna (Codex, Admin)",
+        "GPT-5.6 Luna (Codex)",
         OPENAI_REASONING_LEVELS,
-        admin_only=True,
+        codex_access=True,
         hidden=True,
     ),
     ModelSpec(
         OPENAI_CODEX_GPT_5_5,
-        "GPT-5.5 (Codex, Admin)",
+        "GPT-5.5 (Codex)",
         OPENAI_LEGACY_REASONING_LEVELS,
-        admin_only=True,
+        codex_access=True,
         hidden=True,
     ),
 ]
@@ -167,7 +168,7 @@ def public_model_choices() -> Dict[str, str]:
     return {
         spec.id: spec.display_name
         for spec in MODEL_SPECS
-        if not spec.admin_only and not spec.hidden
+        if not spec.admin_only and not spec.codex_access and not spec.hidden
     }
 
 
@@ -180,6 +181,15 @@ def admin_model_choices() -> Dict[str, str]:
     }
 
 
+def codex_model_choices() -> Dict[str, str]:
+    """Picker entries controlled by the Codex access policy."""
+    return {
+        spec.id: spec.display_name
+        for spec in MODEL_SPECS
+        if spec.codex_access and not spec.hidden
+    }
+
+
 def _synthesized_spec(model: str) -> ModelSpec:
     """Best-effort spec for a model the registry does not know (custom IDs)."""
     if codex_util.is_codex_model(model):
@@ -187,7 +197,7 @@ def _synthesized_spec(model: str) -> ModelSpec:
             model,
             model,
             OPENAI_REASONING_LEVELS,
-            admin_only=True,
+            codex_access=True,
             hidden=True,
         )
     if pioneer_util.is_pioneer_model(model):

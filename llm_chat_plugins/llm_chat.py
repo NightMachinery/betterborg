@@ -170,6 +170,7 @@ from uniborg import gemini_live_util
 from uniborg import codex_util
 from uniborg import pioneer_util
 from uniborg import llm_models
+from uniborg import llm_chat_config
 from uniborg.llm_models import DEFAULT_REASONING_EFFORT, ModelSpec
 
 # Redis utilities for smart context state persistence
@@ -226,6 +227,16 @@ ADMIN_PREFIX_MODEL_MAPPING = {
     ".asxx": (OPENAI_CODEX_ASTRA, "max"),
     ".as": (OPENAI_CODEX_ASTRA, "medium"),
 }
+
+# Restricted Codex prefixes which have no public-provider meaning. Recognize
+# these for denied requests too, so they cannot silently become prompt text.
+DENIED_CODEX_PREFIX_MODEL_MAPPING = {
+    key: value
+    for key, value in ADMIN_PREFIX_MODEL_MAPPING.items()
+    if key != (".c", ".چ")
+}
+
+CODEX_ACCESS_DENIED = "Codex access is not enabled for you."
 
 #: Sets reasoning effort for one message without changing the model. Available
 #: to everyone; a level the model does not accept is ignored by the resolver.
@@ -955,30 +966,36 @@ MAGIC_PATTERN_AS_USER = re.compile(rf"\b{MAGIC_STR_AS_USER}\b")
 MODEL_CHOICES = llm_models.public_model_choices()
 
 ADMIN_MODEL_CHOICES = llm_models.admin_model_choices()
+CODEX_MODEL_CHOICES = llm_models.codex_model_choices()
 
 # Chat model options including "Not Set" option for removing chat-specific model
 CHAT_MODEL_OPTIONS = {"": "Not Set (Use Personal Default)"}
 CHAT_MODEL_OPTIONS.update(MODEL_CHOICES)
 
 
-def _model_display_name(model: str, *, include_admin: bool = True) -> str:
+def _model_display_name(model: str, *, include_restricted: bool = True) -> str:
     if model in MODEL_CHOICES:
         return MODEL_CHOICES[model]
-    if include_admin and model in ADMIN_MODEL_CHOICES:
-        return ADMIN_MODEL_CHOICES[model]
+    if include_restricted:
+        if model in ADMIN_MODEL_CHOICES:
+            return ADMIN_MODEL_CHOICES[model]
+        if model in CODEX_MODEL_CHOICES:
+            return CODEX_MODEL_CHOICES[model]
     return model
 
 
-def _model_choices_for_admin_p(admin_p: bool) -> dict:
+def _model_choices_for_access(*, admin_p: bool, codex_p: bool) -> dict:
     choices = dict(MODEL_CHOICES)
     if admin_p:
         choices.update(ADMIN_MODEL_CHOICES)
+    if codex_p:
+        choices.update(CODEX_MODEL_CHOICES)
     return choices
 
 
-def _chat_model_options_for_admin_p(admin_p: bool) -> dict:
+def _chat_model_options_for_access(*, admin_p: bool, codex_p: bool) -> dict:
     choices = {"": "Not Set (Use Personal Default)"}
-    choices.update(_model_choices_for_admin_p(admin_p))
+    choices.update(_model_choices_for_access(admin_p=admin_p, codex_p=codex_p))
     return choices
 
 
@@ -992,23 +1009,35 @@ def pioneer_model_name(model: str) -> str:
 
 def _is_admin_only_model(model: str) -> bool:
     return (
-        codex_util.is_codex_model(model)
-        or is_pioneer_model(model)
+        is_pioneer_model(model)
         or model in ADMIN_MODEL_CHOICES
     )
 
 
-async def _can_user_access_model(event, model: str) -> bool:
-    if not model or not _is_admin_only_model(model):
+async def _can_user_access_model(event, model: str, *, config=None) -> bool:
+    if not model:
+        return True
+    if codex_util.is_codex_model(model):
+        config = config or llm_chat_config.load_config()
+        return await llm_chat_config.can_use_codex(event, config)
+    if not _is_admin_only_model(model):
         return True
     return await util.isAdmin(event)
 
 
-async def _guard_model_access(event, model: str) -> bool:
-    if await _can_user_access_model(event, model):
+async def _guard_model_access(event, model: str, *, config=None) -> bool:
+    if await _can_user_access_model(event, model, config=config):
         return True
-    await send_info_message(event, ADMIN_ONLY_COMMAND_IGNORED)
+    await send_info_message(event, _model_access_denial(model))
     return False
+
+
+def _model_access_denial(model: str) -> str:
+    return (
+        CODEX_ACCESS_DENIED
+        if codex_util.is_codex_model(model)
+        else ADMIN_ONLY_COMMAND_IGNORED
+    )
 
 
 # Text input patterns for clearing/resetting values
@@ -2124,14 +2153,14 @@ class ModelMenu:
 
 
 def _build_model_menu(
-    chat_id: int, user_id: int, *, scope: str, admin_p: bool
+    chat_id: int, user_id: int, *, scope: str, admin_p: bool, codex_p: bool
 ) -> ModelMenu:
     """Model choices for `scope`, followed by reasoning levels for its model."""
     if scope == REASONING_SCOPE_CHAT:
-        options = _chat_model_options_for_admin_p(admin_p)
+        options = _chat_model_options_for_access(admin_p=admin_p, codex_p=codex_p)
         current_value = chat_manager.get_model(chat_id) or ""
     elif scope == REASONING_SCOPE_PERSONAL:
-        options = _model_choices_for_admin_p(admin_p)
+        options = _model_choices_for_access(admin_p=admin_p, codex_p=codex_p)
         current_value = user_manager.get_prefs(user_id).model
     else:
         raise ValueError(f"Unknown reasoning scope: {scope}")
@@ -2144,7 +2173,8 @@ def _build_model_menu(
     )
 
     options = dict(options)
-    if state.spec.supports_reasoning_p():
+    can_show_reasoning = not state.spec.codex_access or codex_p
+    if state.spec.supports_reasoning_p() and can_show_reasoning:
         for key, display in state.options.items():
             #: present_options only ticks `current_value`, so tick these here.
             tick = "✅ " if key == state.current_value else ""
@@ -2223,7 +2253,7 @@ def _match_message_prefix(text: str, mapping: dict):
 
 
 def _detect_and_process_message_prefix(
-    text: str, *, admin_p: bool = False
+    text: str, *, admin_p: bool = False, codex_p: bool = False
 ) -> PrefixProcessResult:
     """
     Detects if a message starts with a model prefix and returns the model and processed text.
@@ -2254,8 +2284,10 @@ def _detect_and_process_message_prefix(
 
     processed_text = text.lstrip()
     prefix_mappings = []
-    if admin_p:
+    if codex_p:
         prefix_mappings.append(ADMIN_PREFIX_MODEL_MAPPING)
+    else:
+        prefix_mappings.append(DENIED_CODEX_PREFIX_MODEL_MAPPING)
     prefix_mappings.append(PREFIX_MODEL_MAPPING)
 
     model = None
@@ -4414,7 +4446,7 @@ async def _process_message_content(
         #: admin_p=True so admin-only prefixes are stripped from history too.
         #: This only removes text; model access is gated at send time.
         prefix_detection = _detect_and_process_message_prefix(
-            processed_text, admin_p=True
+            processed_text, admin_p=True, codex_p=True
         )
         processed_text = prefix_detection.processed_text
 
@@ -5230,7 +5262,9 @@ async def initialize_llm_chat():
     await load_smart_context_states()
 
     # Populate callback hash map for persistent button handling
-    bot_util.populate_callback_hash_map(MODEL_CHOICES, ADMIN_MODEL_CHOICES)
+    bot_util.populate_callback_hash_map(
+        MODEL_CHOICES, ADMIN_MODEL_CHOICES, CODEX_MODEL_CHOICES
+    )
 
     register_handlers()
 
@@ -5291,7 +5325,8 @@ async def help_handler(event):
         await send_info_message(event, "API key setup cancelled.")
     cancel_input_flow(event.sender_id)
     prefs = user_manager.get_prefs(event.sender_id)
-    is_admin = await util.isAdmin(event)
+    config = llm_chat_config.load_config()
+    has_codex_access = await llm_chat_config.can_use_codex(event, config)
 
     # Dynamically build the group trigger instructions based on user settings
     activation_instructions = []
@@ -5308,13 +5343,13 @@ async def help_handler(event):
     group_trigger_text = " or ".join(activation_instructions)
 
     codex_shortcuts_text = (
-        "- `.c` / `.cm` → Codex GPT-5.6 Sol (medium, admin-only)\n"
+        "- `.c` / `.cm` → Codex GPT-5.6 Sol (medium)\n"
         "- `.cl` / `.ch` / `.cx` / `.cxx` → Codex GPT-5.6 Sol "
-        "(low / high / extra high / max, admin-only)\n"
-        "- `.as` / `.asm` → Codex GPT-6 Astra (medium, admin-only)\n"
+        "(low / high / extra high / max)\n"
+        "- `.as` / `.asm` → Codex GPT-6 Astra (medium)\n"
         "- `.asl` / `.ash` / `.asx` / `.asxx` → Codex GPT-6 Astra "
-        "(low / high / extra high / max, admin-only)"
-        if is_admin
+        "(low / high / extra high / max)"
+        if has_codex_access
         else "- `.c` → GPT-5.6 Sol (OpenRouter): Latest OpenAI model on OpenRouter"
     )
 
@@ -5507,6 +5542,7 @@ async def status_handler(event):
     user_id = event.sender_id
     chat_id = event.chat_id
 
+    config = llm_chat_config.load_config()
     prefs = user_manager.get_prefs(user_id)
     chat_prefs = chat_manager.get_prefs(chat_id)
     chat_prompt = chat_prefs.system_prompt
@@ -5527,11 +5563,11 @@ async def status_handler(event):
 
     # Determine model status - check for chat-specific model
     visible_user_model = prefs.model
-    if not await _can_user_access_model(event, visible_user_model):
+    if not await _can_user_access_model(event, visible_user_model, config=config):
         visible_user_model = DEFAULT_MODEL
     model_status = f"`{visible_user_model}`"
     chat_model = chat_manager.get_model(chat_id)
-    if chat_model and not await _can_user_access_model(event, chat_model):
+    if chat_model and not await _can_user_access_model(event, chat_model, config=config):
         chat_model = None
     if chat_model:
         model_status += f" (overridden in this chat)"
@@ -5759,10 +5795,12 @@ async def set_model_handler(event):
     user_id = event.sender_id
     model_name_match = event.pattern_match.group(1)
     prefs = user_manager.get_prefs(user_id)
+    config = llm_chat_config.load_config()
+    codex_p = await llm_chat_config.can_use_codex(event, config)
 
     if model_name_match:
         model_name = model_name_match.strip()
-        if not await _guard_model_access(event, model_name):
+        if not await _guard_model_access(event, model_name, config=config):
             return
         user_manager.set_model(user_id, model_name)
         cancel_input_flow(user_id)
@@ -5775,6 +5813,7 @@ async def set_model_handler(event):
             user_id,
             scope=REASONING_SCOPE_PERSONAL,
             admin_p=await util.isAdmin(event),
+            codex_p=codex_p,
         )
         await bot_util.present_options(
             event,
@@ -5891,6 +5930,8 @@ async def set_model_here_handler(event):
     """Sets a model for the current chat only, now with an interactive flow."""
     is_bot_admin = await util.isAdmin(event)
     is_group_admin = await util.is_group_admin(event)
+    config = llm_chat_config.load_config()
+    codex_p = await llm_chat_config.can_use_codex(event, config)
 
     if not event.is_private and not (is_bot_admin or is_group_admin):
         await event.reply(
@@ -5905,7 +5946,7 @@ async def set_model_here_handler(event):
 
     if model_match and model_match.strip():
         model = model_match.strip()
-        if not await _guard_model_access(event, model):
+        if not await _guard_model_access(event, model, config=config):
             return
         chat_manager.set_model(chat_id, model)
         cancel_input_flow(user_id)
@@ -5918,6 +5959,7 @@ async def set_model_here_handler(event):
             user_id,
             scope=REASONING_SCOPE_CHAT,
             admin_p=await util.isAdmin(event),
+            codex_p=codex_p,
         )
         await bot_util.present_options(
             event,
@@ -5942,7 +5984,8 @@ async def get_model_here_handler(event):
     chat_id = event.chat_id
     effective_model, _ = _get_effective_model_and_service(chat_id, user_id)
     chat_model = chat_manager.get_model(chat_id)
-    if not await _can_user_access_model(event, effective_model):
+    config = llm_chat_config.load_config()
+    if not await _can_user_access_model(event, effective_model, config=config):
         effective_model = DEFAULT_MODEL
         chat_model = None
 
@@ -6234,6 +6277,9 @@ async def _set_think_common(event, *, scope: str):
     chat_id = event.chat_id
     user_id = event.sender_id
     state = _think_menu_state(chat_id, user_id, scope=scope)
+    config = llm_chat_config.load_config()
+    if not await _guard_model_access(event, state.model, config=config):
+        return
 
     if not state.spec.supports_reasoning_p():
         await event.reply(
@@ -6424,6 +6470,8 @@ async def callback_handler(event):
     #: @Claude Based on the Telethon documentation, I can now confirm that event.sender_id in a CallbackQuery event is indeed the ID of the person who clicked the button, not the original sender of the menu message.
 
     prefs = user_manager.get_prefs(user_id)
+    config = llm_chat_config.load_config()
+    codex_p = await llm_chat_config.can_use_codex(event, config)
 
     if data_str.startswith("model_"):
         admin_p = await util.isAdmin(event)
@@ -6431,6 +6479,16 @@ async def callback_handler(event):
         level_key = _reasoning_menu_key_level(model_id)
 
         if level_key is not None:
+            selected_model = _scope_selected_model(
+                event.chat_id, user_id, scope=REASONING_SCOPE_PERSONAL
+            )
+            if not await _can_user_access_model(
+                event, selected_model, config=config
+            ):
+                await event.answer(
+                    _model_access_denial(selected_model), show_alert=True
+                )
+                return
             feedback = await _apply_reasoning_menu_choice(
                 event, scope=REASONING_SCOPE_PERSONAL, level_key=level_key
             )
@@ -6438,18 +6496,19 @@ async def callback_handler(event):
                 await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
                 return
         else:
-            model_choices = _model_choices_for_admin_p(admin_p)
+            model_choices = _model_choices_for_access(admin_p=admin_p, codex_p=codex_p)
             if model_id not in model_choices or not await _can_user_access_model(
-                event, model_id
+                event, model_id, config=config
             ):
-                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                await event.answer(_model_access_denial(model_id), show_alert=True)
                 return
             user_manager.set_model(user_id, model_id)
             cancel_input_flow(user_id)  # Cancel the custom input flow
             feedback = f"Model set to {model_choices[model_id]}"
 
         menu = _build_model_menu(
-            event.chat_id, user_id, scope=REASONING_SCOPE_PERSONAL, admin_p=admin_p
+            event.chat_id, user_id, scope=REASONING_SCOPE_PERSONAL,
+            admin_p=admin_p, codex_p=codex_p
         )
         buttons = [
             KeyboardButtonCallback(
@@ -6476,6 +6535,16 @@ async def callback_handler(event):
             return
 
         if level_key is not None:
+            selected_model = _scope_selected_model(
+                chat_id, user_id, scope=REASONING_SCOPE_CHAT
+            )
+            if not await _can_user_access_model(
+                event, selected_model, config=config
+            ):
+                await event.answer(
+                    _model_access_denial(selected_model), show_alert=True
+                )
+                return
             feedback_msg = await _apply_reasoning_menu_choice(
                 event, scope=REASONING_SCOPE_CHAT, level_key=level_key
             )
@@ -6483,11 +6552,13 @@ async def callback_handler(event):
                 await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
                 return
         else:
-            chat_model_options = _chat_model_options_for_admin_p(admin_p)
+            chat_model_options = _chat_model_options_for_access(
+                admin_p=admin_p, codex_p=codex_p
+            )
             if model_id not in chat_model_options or not await _can_user_access_model(
-                event, model_id
+                event, model_id, config=config
             ):
-                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                await event.answer(_model_access_denial(model_id), show_alert=True)
                 return
             # Handle "Not Set" option (empty string means remove chat-specific model)
             if model_id == "":
@@ -6499,7 +6570,8 @@ async def callback_handler(event):
             cancel_input_flow(user_id)  # Cancel the custom input flow
 
         menu = _build_model_menu(
-            chat_id, user_id, scope=REASONING_SCOPE_CHAT, admin_p=admin_p
+            chat_id, user_id, scope=REASONING_SCOPE_CHAT,
+            admin_p=admin_p, codex_p=codex_p
         )
         buttons = [
             KeyboardButtonCallback(
@@ -6528,6 +6600,9 @@ async def callback_handler(event):
 
         level = data_str.split("_", 1)[1]
         state = _think_menu_state(event.chat_id, user_id, scope=scope)
+        if not await _can_user_access_model(event, state.model, config=config):
+            await event.answer(_model_access_denial(state.model), show_alert=True)
+            return
         if level != REASONING_CLEAR_KEY and not state.spec.supports_level_p(level):
             await event.answer(
                 f"{level} is not supported by {_model_display_name(state.model)}.",
@@ -6802,6 +6877,16 @@ async def generic_input_handler(event):
         return
 
     input_type = flow_data.get("type")
+    config = llm_chat_config.load_config()
+
+    if input_type in ("chatmodel", "think_here_selection") and not event.is_private:
+        if not (await util.isAdmin(event) or await util.is_group_admin(event)):
+            cancel_input_flow(user_id)
+            await send_info_message(
+                event,
+                "You must be a group admin or bot admin to change this chat's settings.",
+            )
+            return
 
     if text.lower() in CANCEL_KEYWORDS:
         cancel_input_flow(user_id)
@@ -6818,6 +6903,14 @@ async def generic_input_handler(event):
                 if input_type == "chatmodel"
                 else REASONING_SCOPE_PERSONAL
             )
+            selected_model = _scope_selected_model(
+                event.chat_id, user_id, scope=scope
+            )
+            if not await _guard_model_access(
+                event, selected_model, config=config
+            ):
+                cancel_input_flow(user_id)
+                return
             feedback = await _apply_reasoning_menu_choice(
                 event, scope=scope, level_key=level_key
             )
@@ -6832,7 +6925,7 @@ async def generic_input_handler(event):
 
     # Handle simple text inputs
     if input_type == "model":
-        if not await _guard_model_access(event, text):
+        if not await _guard_model_access(event, text, config=config):
             cancel_input_flow(user_id)
             return
         user_manager.set_model(user_id, text)
@@ -6845,7 +6938,7 @@ async def generic_input_handler(event):
                 f"{BOT_META_INFO_PREFIX}✅ This chat's model cleared (using personal default)"
             )
         else:
-            if not await _guard_model_access(event, text):
+            if not await _guard_model_access(event, text, config=config):
                 cancel_input_flow(user_id)
                 return
             chat_manager.set_model(chat_id, text)
@@ -6915,6 +7008,10 @@ async def generic_input_handler(event):
                         else REASONING_SCOPE_PERSONAL
                     )
                     state = _think_menu_state(event.chat_id, user_id, scope=scope)
+                    if not await _guard_model_access(
+                        event, state.model, config=config
+                    ):
+                        return
                     level = (
                         None if selected_key == REASONING_CLEAR_KEY else selected_key
                     )
@@ -7859,6 +7956,8 @@ async def chat_handler(event):
     prefs = user_manager.get_prefs(user_id)
     is_private = event.is_private
     user_is_admin = await util.isAdmin(event)
+    config = llm_chat_config.load_config()
+    user_has_codex_access = await llm_chat_config.can_use_codex(event, config)
 
     # --- Context and Separator Logic ---
     context_mode_to_use = await _determine_context_mode_and_handle_transitions(
@@ -7871,7 +7970,7 @@ async def chat_handler(event):
     # Detect model prefix and process message text
     prefix_text = strip_leading_bot_username(event.text)
     prefix_result = _detect_and_process_message_prefix(
-        prefix_text, admin_p=user_is_admin
+        prefix_text, admin_p=user_is_admin, codex_p=user_has_codex_access
     )
 
     # Audio URL Magic: Check if message contains only a URL pointing to audio
@@ -7893,7 +7992,10 @@ async def chat_handler(event):
     model_in_use, service_needed = _get_effective_model_and_service(
         chat_id, user_id, prefix_model=prefix_result.model
     )
-    if not await _can_user_access_model(event, model_in_use):
+    if not await _can_user_access_model(event, model_in_use, config=config):
+        if prefix_result.model and codex_util.is_codex_model(prefix_result.model):
+            await send_info_message(event, CODEX_ACCESS_DENIED)
+            return
         model_in_use = DEFAULT_MODEL
         service_needed = llm_util.get_service_from_model(model_in_use)
     model_capabilities = get_model_capabilities(model_in_use)
