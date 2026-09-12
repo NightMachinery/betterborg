@@ -36,3 +36,12 @@ proves private contact but has no reliable identity fields, pass
 that comparison atomically, including when multiple bot processes share the
 database. Naive input datetimes are interpreted as UTC; returned timestamps are
 UTC-aware datetimes.
+
+Incoming private messages remain the primary contact evidence. When an older
+profile has no contact timestamp, the Codex user panel performs a bounded,
+read-only scan of the bot's Telegram dialog list. An exact private-user dialog is
+positive evidence because a bot cannot initiate it; the scan records the current
+UTC observation time and refreshes that user's identity. Group/channel dialogs,
+other users, bots, admins, missing dialogs, and API failures do not mark contact.
+The scan does not use the shared message-history cache and never sends a message
+or chat action.

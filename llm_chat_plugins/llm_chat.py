@@ -5918,6 +5918,7 @@ async def set_pioneer_key_handler(event):
 
 
 CODEX_USERS_PAGE_SIZE = 8
+CODEX_USERS_DIALOG_SCAN_LIMIT = 500
 CODEX_USERS_CALLBACK_PREFIX = "cu:"
 CODEX_USERS_ADD_PENDING = {}
 TELEGRAM_SIGNED_ID_MAX = 2**63 - 1
@@ -6071,6 +6072,61 @@ def _entity_is_bot_admin(user_id: int, entity) -> bool:
     )
 
 
+async def _backfill_codex_user_contacts(user_ids) -> dict[int, llm_db.UserProfile]:
+    """Record positive private-dialog evidence for configured users, if available."""
+    if IS_BOT is not True or not isinstance(BOT_ID, int) or BOT_ID <= 0:
+        return {}
+    pending = {
+        user_id
+        for user_id in user_ids
+        if isinstance(user_id, int)
+        and user_id > 0
+        and user_id != BOT_ID
+        and not util.is_admin_by_id(user_id)
+    }
+    if not pending:
+        return {}
+
+    profiles = {}
+    try:
+        # folder=None includes archived dialogs. The finite limit keeps a panel
+        # refresh from walking an unbounded account history or hitting long
+        # flood waits; anything not positively found remains unknown.
+        async for dialog in borg.iter_dialogs(
+            limit=CODEX_USERS_DIALOG_SCAN_LIMIT,
+            folder=None,
+        ):
+            entity = getattr(dialog, "entity", None)
+            user_id = getattr(entity, "id", None)
+            if (
+                user_id not in pending
+                or not getattr(dialog, "is_user", False)
+                or not isinstance(entity, User)
+                or getattr(entity, "is_self", False)
+                or getattr(entity, "bot", False)
+                or _entity_is_bot_admin(user_id, entity)
+            ):
+                continue
+            try:
+                profile = llm_db.record_user_profile(
+                    BOT_ID,
+                    user_id,
+                    getattr(entity, "first_name", None),
+                    getattr(entity, "last_name", None),
+                    getattr(entity, "username", None),
+                    private_contact_at=datetime.now(timezone.utc),
+                )
+            except Exception:
+                continue
+            profiles[user_id] = profile
+            pending.remove(user_id)
+            if not pending:
+                break
+    except Exception:
+        pass
+    return profiles
+
+
 async def _codex_users_admin(event) -> bool:
     """Authorize from the callback/message sender, never from a trusted chat."""
     user_id = getattr(event, "sender_id", None)
@@ -6104,6 +6160,7 @@ async def _eligible_codex_users(config):
     if not config.valid:
         return []
     users = []
+    profiles = {}
     for configured_user in llm_chat_config.configured_users(config):
         entity = await _codex_user_entity(configured_user.id)
         if not _entity_is_bot_admin(configured_user.id, entity):
@@ -6114,15 +6171,31 @@ async def _eligible_codex_users(config):
                     profile = llm_db.get_user_profile(BOT_ID, configured_user.id)
                 except Exception:
                     pass
+            profiles[configured_user.id] = profile
             users.append((
                 configured_user,
                 configured_user.name or telegram_name,
                 user_manager.get_prefs(configured_user.id).model,
                 telegram_name,
                 getattr(entity, "username", None),
-                profile.private_contact_at if profile is not None else None,
             ))
-    return users
+    unknown_ids = {
+        configured_user.id
+        for configured_user, *_ in users
+        if (
+            profiles[configured_user.id] is None
+            or profiles[configured_user.id].private_contact_at is None
+        )
+    }
+    profiles.update(await _backfill_codex_user_contacts(unknown_ids))
+    return [
+        user + (
+            profiles[user[0].id].private_contact_at
+            if profiles[user[0].id] is not None
+            else None,
+        )
+        for user in users
+    ]
 
 
 async def _eligible_codex_target(target_id: int, config):
@@ -6363,6 +6436,10 @@ async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False, 
         profile = llm_db.get_user_profile(BOT_ID, target_id) if BOT_ID is not None else None
     except Exception:
         profile = None
+    if profile is None or profile.private_contact_at is None:
+        profile = (await _backfill_codex_user_contacts({target_id})).get(
+            target_id, profile
+        )
     codex_action = "Disable" if configured_user.codex_enabled else "Enable"
     image_action = "Disable" if configured_user.imagegen_enabled else "Enable"
     buttons = util.build_menu(

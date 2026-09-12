@@ -75,7 +75,11 @@ Contact status is scoped to this bot: “Started” means an incoming private me
 was recorded, including commands. The overview shows only the known “Started”
 state; the detail panel states when no private contact is recorded. Group activity,
 identity lookup, roster membership, keys, and shared history never count as
-private contact. See [metadata storage](llm_user_metadata.md).
+private contact. If local metadata is missing, the panel also treats an existing
+private user dialog in the bot's direct Telegram dialog list as positive evidence;
+bots cannot initiate that dialog. This read-only scan is capped, sends nothing,
+and leaves absent or unavailable results unknown. See
+[metadata storage](llm_user_metadata.md).
 
 - `.codex-users`: browse the list and select a user.
 - `.codex-users <user-id>`: inspect access and the saved default, toggle the

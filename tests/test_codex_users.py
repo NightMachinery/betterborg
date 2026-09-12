@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from telethon.tl.types import (
-    KeyboardButtonRequestPeer, MessageActionRequestedPeerSentMe, MessageReplyHeader,
+    Channel, KeyboardButtonRequestPeer, MessageActionRequestedPeerSentMe, MessageReplyHeader,
     MessageService, PeerUser, ReplyKeyboardHide, ReplyKeyboardMarkup,
     RequestPeerTypeUser, RequestedPeerUser, UpdateNewMessage,
 )
@@ -613,6 +613,113 @@ class CodexUsersTests(unittest.TestCase):
         self.assertEqual(record.call_args_list[0].args[:2], (42, 123))
         self.assertEqual(record.call_args_list[0].kwargs["private_contact_at"], date)
         self.assertIsNone(record.call_args_list[1].kwargs["private_contact_at"])
+
+    def test_private_dialog_backfills_contact_and_renders_started(self):
+        entity = llm_chat.User(
+            id=123, first_name="Ada", last_name="Lovelace", username="ada", bot=False
+        )
+        profiles = {
+            123: llm_chat.llm_db.UserProfile(42, 123, "Ada", "Lovelace", "ada", None)
+        }
+
+        async def dialogs():
+            yield SimpleNamespace(is_user=True, entity=entity)
+            raise AssertionError("dialog scan did not stop after finding every candidate")
+
+        def record(bot_id, user_id, first_name, last_name, username,
+                   private_contact_at=None, **kwargs):
+            profiles[user_id] = llm_chat.llm_db.UserProfile(
+                bot_id, user_id, first_name, last_name, username, private_contact_at
+            )
+            return profiles[user_id]
+
+        event = Event()
+        with patch.object(llm_chat, "IS_BOT", True), patch.object(
+            llm_chat, "BOT_ID", 42
+        ), patch.object(
+            llm_chat.llm_chat_config, "load_config", return_value=config(123)
+        ), patch.object(
+            llm_chat, "_codex_user_entity", new=AsyncMock(return_value=entity)
+        ), patch.object(
+            llm_chat.llm_db, "get_user_profile", side_effect=lambda bot_id, user_id: profiles.get(user_id)
+        ), patch.object(
+            llm_chat.llm_db, "record_user_profile", side_effect=record
+        ) as record_profile, patch.object(
+            builtins.borg, "iter_dialogs", side_effect=lambda **kwargs: dialogs(), create=True
+        ) as iter_dialogs, patch.object(
+            builtins.borg, "send_message", new=AsyncMock(), create=True
+        ) as client_send, patch.object(
+            llm_chat.llm_db, "get_api_key_metadata", return_value=[]
+        ), patch.object(
+            llm_chat.user_manager, "get_prefs", return_value=SimpleNamespace(model="model")
+        ), patch.object(llm_chat, "send_info_message", new=AsyncMock()) as send:
+            asyncio.run(llm_chat._show_codex_users(event))
+
+        self.assertIn("Contact: Started", send.await_args.args[1])
+        iter_dialogs.assert_called_once_with(
+            limit=llm_chat.CODEX_USERS_DIALOG_SCAN_LIMIT, folder=None
+        )
+        contact_at = record_profile.call_args.kwargs["private_contact_at"]
+        self.assertEqual(contact_at.tzinfo, timezone.utc)
+        client_send.assert_not_awaited()
+
+    def test_contact_backfill_ignores_group_and_unrelated_user_dialogs(self):
+        group = Channel(id=123, title="Target ID group", photo=None, date=None)
+        unrelated = llm_chat.User(id=999, first_name="Other", bot=False)
+
+        async def dialogs():
+            yield SimpleNamespace(is_user=False, entity=group)
+            yield SimpleNamespace(is_user=True, entity=unrelated)
+
+        with patch.object(llm_chat, "IS_BOT", True), patch.object(
+            llm_chat, "BOT_ID", 42
+        ), patch.object(
+            builtins.borg, "iter_dialogs", side_effect=lambda **kwargs: dialogs(), create=True
+        ), patch.object(llm_chat.llm_db, "record_user_profile") as record:
+            profiles = asyncio.run(llm_chat._backfill_codex_user_contacts({123}))
+
+        self.assertEqual(profiles, {})
+        record.assert_not_called()
+
+    def test_missing_or_failed_dialog_scan_keeps_contact_unknown(self):
+        async def no_dialogs():
+            if False:
+                yield None
+
+        async def failed_dialogs():
+            raise RuntimeError("Telegram unavailable")
+            yield None
+
+        for stream in (no_dialogs, failed_dialogs):
+            with self.subTest(stream=stream.__name__), patch.object(
+                llm_chat, "IS_BOT", True
+            ), patch.object(llm_chat, "BOT_ID", 42), patch.object(
+                builtins.borg, "iter_dialogs", side_effect=lambda **kwargs: stream(), create=True
+            ), patch.object(llm_chat.llm_db, "record_user_profile") as record:
+                profiles = asyncio.run(llm_chat._backfill_codex_user_contacts({123}))
+            self.assertEqual(profiles, {})
+            record.assert_not_called()
+
+    def test_recorded_contact_skips_dialog_api(self):
+        contact_at = datetime(2026, 4, 5, tzinfo=timezone.utc)
+        profile = llm_chat.llm_db.UserProfile(
+            42, 123, "Ada", "Lovelace", "ada", contact_at
+        )
+        with patch.object(llm_chat, "IS_BOT", True), patch.object(
+            llm_chat, "BOT_ID", 42
+        ), patch.object(
+            llm_chat, "_codex_user_entity", new=AsyncMock(return_value=self.entity)
+        ), patch.object(
+            llm_chat.llm_db, "get_user_profile", return_value=profile
+        ), patch.object(
+            builtins.borg, "iter_dialogs", create=True
+        ) as iter_dialogs, patch.object(
+            llm_chat.user_manager, "get_prefs", return_value=SimpleNamespace(model="model")
+        ):
+            users = asyncio.run(llm_chat._eligible_codex_users(config(123)))
+
+        self.assertEqual(users[0][-1], contact_at)
+        iter_dialogs.assert_not_called()
 
     def test_add_user_button_is_present(self):
         users = [(llm_chat_config.CodexUser(123, None, True, False), "Ada", "model")]

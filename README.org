@@ -186,7 +186,9 @@ Known private contact appears as *Started*. Pages contain at most eight users
 and split earlier when needed to stay within Telegram's message limit.
 The detail panel separates configured labels from Telegram identity and lists
 personal API-key providers with their last-set UTC times. Historical keys show
-an unknown date.
+an unknown date. For older contacts missing from local metadata, opening the
+panel can recover positive *Started* evidence from the bot's private-dialog list
+without sending anything; an absent or unavailable dialog remains unknown.
 Use *Add user*, then *Choose user* in a private chat to select someone in
 Telegram and confirm their identity. Numeric ID and =@username= entry also work.
 Phone-number lookup requires a Telegram user account and is not supported by
