@@ -201,13 +201,13 @@ so it is deliberately absent from the level sets.
 
 ## Access-controlled quick prefixes
 
-- `.c` and `.cm`: GPT-5.6 Sol with `medium` reasoning.
-- `.cl`: GPT-5.6 Sol with `low` reasoning.
-- `.ch`: GPT-5.6 Sol with `high` reasoning.
-- `.cx`: GPT-5.6 Sol with `xhigh` reasoning.
-- `.cxx`: GPT-5.6 Sol with `max` reasoning.
-- `.as`, `.asm`, `.asl`, `.ash`, `.asx`, `.asxx`: the same ladder for GPT-6
-  Astra.
+- `.c` / `.چ` and `.cm` / `.چم`: GPT-5.6 Sol with `medium` reasoning.
+- `.cl` / `.چل`: GPT-5.6 Sol with `low` reasoning.
+- `.ch` / `.چه`: GPT-5.6 Sol with `high` reasoning.
+- `.cx` / `.چخ`: GPT-5.6 Sol with `xhigh` reasoning.
+- `.cxx` / `.چخخ`: GPT-5.6 Sol with `max` reasoning.
+- `.as` / `.اس`, `.asm` / `.اسم`, `.asl` / `.اسل`, `.ash` / `.اسه`,
+  `.asx` / `.اسخ`, and `.asxx` / `.اسخخ`: the same ladder for GPT-6 Astra.
 
 `.a` belongs to `advanced_get` and `.o` was Pioneer's, so Astra uses `.as`.
 

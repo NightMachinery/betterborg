@@ -223,30 +223,30 @@ PREFIX_MODEL_MAPPING = {
     (".d", ".د"): "deepseek/deepseek-reasoner",
 }
 
-ADMIN_PREFIX_MODEL_MAPPING = {
+CODEX_PREFIX_MODEL_MAPPING = {
     #: Pioneer is no longer used; uncomment to bring the prefixes back.
     # ".sn": (PIONEER_SONNET_4_6, None),
     # ".o": (PIONEER_OPUS_4_8, None),
-    ".cl": (OPENAI_CODEX_GPT_5_6_SOL, "low"),
-    ".cm": (OPENAI_CODEX_GPT_5_6_SOL, "medium"),
-    ".ch": (OPENAI_CODEX_GPT_5_6_SOL, "high"),
-    ".cx": (OPENAI_CODEX_GPT_5_6_SOL, "xhigh"),
-    ".cxx": (OPENAI_CODEX_GPT_5_6_SOL, "max"),
+    (".cl", ".چل"): (OPENAI_CODEX_GPT_5_6_SOL, "low"),
+    (".cm", ".چم"): (OPENAI_CODEX_GPT_5_6_SOL, "medium"),
+    (".ch", ".چه"): (OPENAI_CODEX_GPT_5_6_SOL, "high"),
+    (".cx", ".چخ"): (OPENAI_CODEX_GPT_5_6_SOL, "xhigh"),
+    (".cxx", ".چخخ"): (OPENAI_CODEX_GPT_5_6_SOL, "max"),
     (".c", ".چ"): (OPENAI_CODEX_GPT_5_6_SOL, "medium"),
     #: `.a` belongs to advanced_get and `.o` was Pioneer's, so Astra uses `.as`.
-    ".asl": (OPENAI_CODEX_ASTRA, "low"),
-    ".asm": (OPENAI_CODEX_ASTRA, "medium"),
-    ".ash": (OPENAI_CODEX_ASTRA, "high"),
-    ".asx": (OPENAI_CODEX_ASTRA, "xhigh"),
-    ".asxx": (OPENAI_CODEX_ASTRA, "max"),
-    ".as": (OPENAI_CODEX_ASTRA, "medium"),
+    (".asl", ".اسل"): (OPENAI_CODEX_ASTRA, "low"),
+    (".asm", ".اسم"): (OPENAI_CODEX_ASTRA, "medium"),
+    (".ash", ".اسه"): (OPENAI_CODEX_ASTRA, "high"),
+    (".asx", ".اسخ"): (OPENAI_CODEX_ASTRA, "xhigh"),
+    (".asxx", ".اسخخ"): (OPENAI_CODEX_ASTRA, "max"),
+    (".as", ".اس"): (OPENAI_CODEX_ASTRA, "medium"),
 }
 
 # Restricted Codex prefixes which have no public-provider meaning. Recognize
 # these for denied requests too, so they cannot silently become prompt text.
 DENIED_CODEX_PREFIX_MODEL_MAPPING = {
     key: value
-    for key, value in ADMIN_PREFIX_MODEL_MAPPING.items()
+    for key, value in CODEX_PREFIX_MODEL_MAPPING.items()
     if key != (".c", ".چ")
 }
 
@@ -2364,7 +2364,7 @@ def _detect_and_process_message_prefix(
     processed_text = text.lstrip()
     prefix_mappings = []
     if codex_p:
-        prefix_mappings.append(ADMIN_PREFIX_MODEL_MAPPING)
+        prefix_mappings.append(CODEX_PREFIX_MODEL_MAPPING)
     else:
         prefix_mappings.append(DENIED_CODEX_PREFIX_MODEL_MAPPING)
     prefix_mappings.append(PREFIX_MODEL_MAPPING)
@@ -4547,7 +4547,7 @@ async def _process_message_content(
             processed_text = processed_text[2:].strip()
 
         # Strip model selection prefixes from all user messages in history
-        #: admin_p=True so admin-only prefixes are stripped from history too.
+        #: Enable every access-controlled prefix so history stores no command text.
         #: This only removes text; model access is gated at send time.
         prefix_detection = _detect_and_process_message_prefix(
             processed_text, admin_p=True, codex_p=True
@@ -5509,11 +5509,13 @@ async def help_handler(event):
     group_trigger_text = " or ".join(activation_instructions)
 
     codex_shortcuts_text = (
-        "- `.c` / `.cm` → Codex GPT-5.6 Sol (medium)\n"
-        "- `.cl` / `.ch` / `.cx` / `.cxx` → Codex GPT-5.6 Sol "
+        "- `.c` / `.چ` / `.cm` / `.چم` → Codex GPT-5.6 Sol (medium)\n"
+        "- `.cl` / `.چل` / `.ch` / `.چه` / `.cx` / `.چخ` / "
+        "`.cxx` / `.چخخ` → Codex GPT-5.6 Sol "
         "(low / high / extra high / max)\n"
-        "- `.as` / `.asm` → Codex GPT-6 Astra (medium)\n"
-        "- `.asl` / `.ash` / `.asx` / `.asxx` → Codex GPT-6 Astra "
+        "- `.as` / `.اس` / `.asm` / `.اسم` → Codex GPT-6 Astra (medium)\n"
+        "- `.asl` / `.اسل` / `.ash` / `.اسه` / `.asx` / `.اسخ` / "
+        "`.asxx` / `.اسخخ` → Codex GPT-6 Astra "
         "(low / high / extra high / max)"
         if has_codex_access
         else "- `.c` → GPT-5.6 Sol (OpenRouter): Latest OpenAI model on OpenRouter"

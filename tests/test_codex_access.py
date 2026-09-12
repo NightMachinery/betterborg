@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from uniborg import llm_chat_config
 from uniborg.constants import (
+    OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_GPT_5_6_SOL,
     OR_OPENAI_LATEST,
     PIONEER_OPUS_4_8,
@@ -104,36 +105,67 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         self.assertTrue(all(len(data.encode()) <= 64 for data in callbacks))
 
     def test_codex_prefix_and_reasoning_work_for_authorized_nonadmin(self):
+        cases = {
+            (".c", ".چ", ".cm", ".چم"): (OPENAI_CODEX_GPT_5_6_SOL, "medium"),
+            (".cl", ".چل"): (OPENAI_CODEX_GPT_5_6_SOL, "low"),
+            (".ch", ".چه"): (OPENAI_CODEX_GPT_5_6_SOL, "high"),
+            (".cx", ".چخ"): (OPENAI_CODEX_GPT_5_6_SOL, "xhigh"),
+            (".cxx", ".چخخ"): (OPENAI_CODEX_GPT_5_6_SOL, "max"),
+            (".as", ".اس", ".asm", ".اسم"): (OPENAI_CODEX_ASTRA, "medium"),
+            (".asl", ".اسل"): (OPENAI_CODEX_ASTRA, "low"),
+            (".ash", ".اسه"): (OPENAI_CODEX_ASTRA, "high"),
+            (".asx", ".اسخ"): (OPENAI_CODEX_ASTRA, "xhigh"),
+            (".asxx", ".اسخخ"): (OPENAI_CODEX_ASTRA, "max"),
+        }
+        for prefixes, (model, effort) in cases.items():
+            for prefix in prefixes:
+                with self.subTest(prefix=prefix):
+                    result = llm_chat._detect_and_process_message_prefix(
+                        f"{prefix} hello", admin_p=False, codex_p=True
+                    )
+                    self.assertEqual(result.model, model)
+                    self.assertEqual(result.reasoning_effort, effort)
+                    self.assertEqual(result.processed_text, "hello")
+
         result = llm_chat._detect_and_process_message_prefix(
-            ".th .c hello", admin_p=False, codex_p=True
+            ".th .چ hello", admin_p=False, codex_p=True
         )
         self.assertEqual(result.model, OPENAI_CODEX_GPT_5_6_SOL)
         self.assertEqual(result.reasoning_effort, "high")
         self.assertEqual(result.processed_text, "hello")
 
     def test_revoked_c_prefix_keeps_openrouter_meaning(self):
-        result = llm_chat._detect_and_process_message_prefix(
-            ".c hello", admin_p=True, codex_p=False
-        )
-        self.assertEqual(result.model, OR_OPENAI_LATEST)
+        for prefix in (".c", ".چ"):
+            with self.subTest(prefix=prefix):
+                result = llm_chat._detect_and_process_message_prefix(
+                    f"{prefix} hello", admin_p=True, codex_p=False
+                )
+                self.assertEqual(result.model, OR_OPENAI_LATEST)
 
     def test_restricted_prefix_is_recognized_for_explicit_denial(self):
-        result = llm_chat._detect_and_process_message_prefix(
-            ".cm hello", admin_p=True, codex_p=False
-        )
-        self.assertEqual(result.model, OPENAI_CODEX_GPT_5_6_SOL)
-        config = llm_chat_config.LLMChatConfig((), ())
-        self.assertFalse(
-            asyncio.run(
-                llm_chat._can_user_access_model(
-                    Event(), result.model, config=config
+        for prefix, model in (
+            (".cm", OPENAI_CODEX_GPT_5_6_SOL),
+            (".چم", OPENAI_CODEX_GPT_5_6_SOL),
+            (".asx", OPENAI_CODEX_ASTRA),
+            (".اسخ", OPENAI_CODEX_ASTRA),
+        ):
+            with self.subTest(prefix=prefix):
+                result = llm_chat._detect_and_process_message_prefix(
+                    f"{prefix} hello", admin_p=True, codex_p=False
                 )
-            )
-        )
-        self.assertEqual(
-            llm_chat._model_access_denial(result.model),
-            llm_chat.CODEX_ACCESS_DENIED,
-        )
+                self.assertEqual(result.model, model)
+                config = llm_chat_config.LLMChatConfig((), ())
+                self.assertFalse(
+                    asyncio.run(
+                        llm_chat._can_user_access_model(
+                            Event(), result.model, config=config
+                        )
+                    )
+                )
+                self.assertEqual(
+                    llm_chat._model_access_denial(result.model),
+                    llm_chat.CODEX_ACCESS_DENIED,
+                )
 
     def test_explicit_id_allows_codex_dispatch_for_nonadmin(self):
         config = llm_chat_config.LLMChatConfig((123,), ())

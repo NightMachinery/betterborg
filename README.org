@@ -200,6 +200,8 @@ Disabled users remain listed; configured trusted-chat access
 still applies. Use =.codex-users <user-id> <model-id>= to set a default
 immediately. If Codex is unavailable, ordinary messages fall back to Gemini
 Flash with a notice, preserving the saved default.
+Codex quick prefixes have matching Persian aliases: =.چ*= for GPT-5.6 Sol and
+=.اس*= for GPT-6 Astra; see [[file:docs/codex_models.md][the complete mapping]].
 Use =.i= on the current message to enable Codex image generation, for example
 =.i .cl draw a fox=. Both access policies must allow the sender. Previews and
 final images are sent separately, alongside any text response; the switch does
