@@ -175,6 +175,9 @@ all of its messages; the reaction-only bulk command is available separately. See
 as admin-only chat models using the published =llm-openai-via-codex= package and
 local Codex OAuth credentials. See [[file:docs/codex_models.md][docs/codex_models.md]] and
 [[file:docs/codex_caching.md][docs/codex_caching.md]].
+The current adapter accepts image inputs but returns text only. Codex's built-in
+subscription image generation is not yet integrated; see the image-generation
+section in [[file:docs/codex_models.md][docs/codex_models.md]] for the distinction.
 
 ** Pioneer (not in use)
 The Pioneer backend is still wired up but its models and prefixes are commented

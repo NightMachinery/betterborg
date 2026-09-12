@@ -73,3 +73,31 @@ they use an `image/*` MIME type.
 ## Prompt caching
 
 See [docs/codex_caching.md](codex_caching.md) for Codex prompt caching behavior.
+
+## Image generation
+
+Documentation and code reviewed on 2026-09-12:
+
+- Codex supports built-in image generation with ChatGPT subscription access.
+  The [official image-generation guide](https://learn.chatgpt.com/docs/image-generation)
+  says it uses `gpt-image-2`, counts toward general Codex usage limits, and
+  consumes included limits about 3–5 times faster than comparable text turns,
+  depending on image quality and size.
+- Betterborg's Codex adapter currently supports image inputs and text outputs.
+  The chat integration only enables `web_search`; it does not request an
+  `image_generation` tool. `stream_codex_response()` consumes text deltas and
+  completion status, without extracting generated images.
+- The separate `image_gen_plugins/image_gen.py` plugin uses Google Imagen;
+  it is not connected to Codex OAuth.
+
+The product feature does not establish support for image generation through
+Betterborg's borrowed-token endpoint. That endpoint was not live-tested for
+image generation during this review. Do not assume adding a tool declaration
+alone enables it.
+
+Using Codex's built-in workflow offers subscription-backed generation but
+requires integration with that workflow. The documented programmatic alternative
+is the [OpenAI image-generation API](https://developers.openai.com/api/docs/guides/tools-image-generation),
+with separate API billing. Its Responses tool returns `image_generation_call`
+items containing base64 image data, which would need decoding and Telegram
+delivery support in Betterborg.
