@@ -2,7 +2,19 @@ import os
 import atexit
 import re
 import traceback
-from sqlalchemy import create_engine, event, Column, Integer, String
+from dataclasses import dataclass
+from datetime import datetime, timezone
+
+from sqlalchemy import (
+    create_engine,
+    event,
+    Column,
+    DateTime,
+    Integer,
+    String,
+    inspect,
+    text,
+)
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
@@ -105,6 +117,35 @@ class UserApiKey(Base):
     user_id = Column(Integer, primary_key=True, autoincrement=False)
     service = Column(String, primary_key=True)
     api_key = Column(String, nullable=False)
+    last_set_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class UserProfileRecord(Base):
+    """Identity and private-contact metadata, isolated per bot."""
+
+    __tablename__ = "user_profiles"
+    bot_id = Column(Integer, primary_key=True, autoincrement=False)
+    user_id = Column(Integer, primary_key=True, autoincrement=False)
+    first_name = Column(String, nullable=True)
+    last_name = Column(String, nullable=True)
+    username = Column(String, nullable=True)
+    private_contact_at = Column(DateTime(timezone=True), nullable=True)
+
+
+@dataclass(frozen=True)
+class ApiKeyMetadata:
+    service: str
+    last_set_at: datetime | None
+
+
+@dataclass(frozen=True)
+class UserProfile:
+    bot_id: int
+    user_id: int
+    first_name: str | None
+    last_name: str | None
+    username: str | None
+    private_contact_at: datetime | None
 
 
 db_path = os.path.expanduser("~/.borg/llm_api_keys.db")
@@ -131,6 +172,31 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 
 
 Base.metadata.create_all(engine)
+
+
+def _migrate_schema(target_engine=engine):
+    """Apply additive, idempotent migrations for databases from older releases."""
+    with target_engine.connect() as connection:
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+        try:
+            columns = {
+                column["name"]
+                for column in inspect(connection).get_columns("user_api_keys")
+            }
+            if "last_set_at" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE user_api_keys "
+                        "ADD COLUMN last_set_at DATETIME NULL"
+                    )
+                )
+            connection.commit()
+        except:
+            connection.rollback()
+            raise
+
+
+_migrate_schema()
 Session = sessionmaker(bind=engine)
 
 
@@ -146,10 +212,14 @@ def set_api_key(*, user_id: int, service: str, key: str):
             .filter(UserApiKey.user_id == user_id, UserApiKey.service == service)
             .first()
         )
+        now = datetime.now(timezone.utc)
         if user_key:
             user_key.api_key = key
+            user_key.last_set_at = now
         else:
-            user_key = UserApiKey(user_id=user_id, service=service, api_key=key)
+            user_key = UserApiKey(
+                user_id=user_id, service=service, api_key=key, last_set_at=now
+            )
             session.add(user_key)
         session.commit()
     except:
@@ -175,6 +245,117 @@ def get_api_key(
         return result.api_key if result else None
     finally:
         session.close()
+
+
+def get_api_key_metadata(user_id: int) -> list[ApiKeyMetadata]:
+    """Return key metadata for a user without loading secret key values."""
+    session = Session()
+    try:
+        rows = (
+            session.query(UserApiKey.service, UserApiKey.last_set_at)
+            .filter(UserApiKey.user_id == user_id)
+            .order_by(UserApiKey.service)
+            .all()
+        )
+        return [
+            ApiKeyMetadata(service=row.service, last_set_at=_as_utc(row.last_set_at))
+            for row in rows
+        ]
+    finally:
+        session.close()
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def get_user_profile(bot_id: int, user_id: int) -> UserProfile | None:
+    """Return identity/contact metadata scoped to one bot."""
+    session = Session()
+    try:
+        row = (
+            session.query(UserProfileRecord)
+            .filter(
+                UserProfileRecord.bot_id == bot_id,
+                UserProfileRecord.user_id == user_id,
+            )
+            .first()
+        )
+        if row is None:
+            return None
+        return UserProfile(
+            bot_id=row.bot_id,
+            user_id=row.user_id,
+            first_name=row.first_name,
+            last_name=row.last_name,
+            username=row.username,
+            private_contact_at=_as_utc(row.private_contact_at),
+        )
+    finally:
+        session.close()
+
+
+def record_user_profile(
+    bot_id: int,
+    user_id: int,
+    first_name: str | None,
+    last_name: str | None,
+    username: str | None,
+    private_contact_at: datetime | None = None,
+    *,
+    refresh_identity: bool = True,
+) -> UserProfile:
+    """Atomically refresh identity and retain the earliest private contact time.
+
+    Pass ``refresh_identity=False`` when recording contact from an event without
+    identity fields. A normal refresh deliberately stores null fields, allowing a
+    removed username to be cleared.
+    """
+    contact_at = _as_utc(private_contact_at)
+    session = Session()
+    try:
+        session.execute(
+            text(
+                """
+                INSERT INTO user_profiles
+                    (bot_id, user_id, first_name, last_name, username, private_contact_at)
+                VALUES
+                    (:bot_id, :user_id, :first_name, :last_name, :username, :private_contact_at)
+                ON CONFLICT(bot_id, user_id) DO UPDATE SET
+                    first_name = CASE WHEN :refresh_identity THEN excluded.first_name ELSE user_profiles.first_name END,
+                    last_name = CASE WHEN :refresh_identity THEN excluded.last_name ELSE user_profiles.last_name END,
+                    username = CASE WHEN :refresh_identity THEN excluded.username ELSE user_profiles.username END,
+                    private_contact_at = CASE
+                        WHEN excluded.private_contact_at IS NULL THEN user_profiles.private_contact_at
+                        WHEN user_profiles.private_contact_at IS NULL THEN excluded.private_contact_at
+                        WHEN excluded.private_contact_at < user_profiles.private_contact_at THEN excluded.private_contact_at
+                        ELSE user_profiles.private_contact_at
+                    END
+                """
+            ),
+            {
+                "bot_id": bot_id,
+                "user_id": user_id,
+                "first_name": first_name,
+                "last_name": last_name,
+                "username": username,
+                "private_contact_at": contact_at.isoformat() if contact_at else None,
+                "refresh_identity": refresh_identity,
+            },
+        )
+        session.commit()
+    except:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+    profile = get_user_profile(bot_id, user_id)
+    assert profile is not None
+    return profile
 
 
 _GEMINI_ROTATE_KEYS = None
