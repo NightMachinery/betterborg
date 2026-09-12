@@ -180,7 +180,10 @@ Telegram user IDs and the optional =MAGIC_ADMINS= sentinel. See
 [[file:docs/codex_caching.md][docs/codex_caching.md]].
 The =codex_users= roster stores names and separate Codex/image access flags.
 Bot admins can use =.codex-users= to toggle those grants and manage personal
-default models. Disabled users remain listed; configured trusted-chat access
+default models. The panel separates configured labels from Telegram identity,
+shows recorded private contact, and lists personal API-key providers with their
+last-set UTC times, without exposing keys. Historical keys show an unknown date.
+Disabled users remain listed; configured trusted-chat access
 still applies. Use =.codex-users <user-id> <model-id>= to set a default
 immediately. If Codex is unavailable, ordinary messages fall back to Gemini
 Flash with a notice, preserving the saved default.

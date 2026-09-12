@@ -23,6 +23,7 @@ import ipaddress
 import urllib.parse
 import tempfile
 import hashlib
+import html
 from datetime import datetime, timedelta, timezone
 import pytz
 from pathlib import Path
@@ -5027,6 +5028,50 @@ async def build_conversation_history(
 # --- Bot/Userbot Initialization ---
 
 
+async def observe_incoming_user_profile(event):
+    """Remember live user identity and the first private contact with this bot."""
+    if not IS_BOT or BOT_ID is None or getattr(event, "out", False):
+        return
+    user_id = getattr(event, "sender_id", None)
+    if not isinstance(user_id, int) or user_id <= 0 or user_id == BOT_ID:
+        return
+    try:
+        sender = await event.get_sender()
+    except Exception:
+        sender = None
+    # Telegram users have first_name; bots, channels, and anonymous senders do not
+    # qualify.  A failed private lookup can still record contact without replacing
+    # a previously persisted identity.
+    if sender is not None and (
+        not hasattr(sender, "first_name") or getattr(sender, "bot", False)
+    ):
+        return
+    contact_at = getattr(event, "date", None) if event.is_private else None
+    if sender is None:
+        if not event.is_private:
+            return
+        try:
+            llm_db.record_user_profile(
+                BOT_ID, user_id, None, None, None,
+                private_contact_at=contact_at or datetime.now(timezone.utc),
+                refresh_identity=False,
+            )
+        except Exception:
+            pass
+        return
+    try:
+        llm_db.record_user_profile(
+            BOT_ID,
+            user_id,
+            getattr(sender, "first_name", None),
+            getattr(sender, "last_name", None),
+            getattr(sender, "username", None),
+            private_contact_at=(contact_at or datetime.now(timezone.utc)) if event.is_private else None,
+        )
+    except Exception:
+        pass
+
+
 def register_handlers():
     """Dynamically registers all event handlers after initialization."""
     bot_username_suffix_re = f"(?:{re.escape(BOT_USERNAME)})?" if BOT_USERNAME else ""
@@ -5291,6 +5336,10 @@ def register_handlers():
 
     # Other Event Handlers
     borg.on(events.CallbackQuery())(callback_handler)
+
+    # ReverseList dispatches the most recently registered handler first.  Keep
+    # this last so even command messages establish private contact metadata.
+    borg.on(events.NewMessage())(observe_incoming_user_profile)
 
     print("LLM_Chat: All event handlers registered.")
 
@@ -5855,6 +5904,70 @@ async def set_pioneer_key_handler(event):
 
 CODEX_USERS_PAGE_SIZE = 8
 CODEX_USERS_CALLBACK_PREFIX = "cu:"
+TELEGRAM_TEXT_UTF16_LIMIT = 4096
+TELEGRAM_CALLBACK_BYTES_LIMIT = 64
+
+
+def _truncate_utf16(value: str, limit: int, *, suffix: str = "…") -> str:
+    if len(value.encode("utf-16-le")) // 2 <= limit:
+        return value
+    suffix_units = len(suffix.encode("utf-16-le")) // 2
+    result = []
+    used = 0
+    for character in value:
+        units = len(character.encode("utf-16-le")) // 2
+        if used + units + suffix_units > limit:
+            break
+        result.append(character)
+        used += units
+    return "".join(result) + suffix
+
+
+def _html_dynamic(value, limit: int = 180) -> str:
+    return html.escape(_truncate_utf16(str(value), limit), quote=False)
+
+
+def _bold_dynamic(value, limit: int = 180) -> str:
+    return f"<b>{_html_dynamic(value, limit)}</b>"
+
+
+def _format_utc(value: datetime, format_string: str = "%Y-%m-%d %H:%M UTC") -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).strftime(format_string)
+
+
+def _bounded_panel_text(text: str) -> str:
+    """Keep generated Telegram HTML safely below its UTF-16 message limit."""
+    # Reserve room for BOT_META_INFO_PREFIX, which the sending wrapper prepends.
+    content_limit = TELEGRAM_TEXT_UTF16_LIMIT - 64
+    plain = html.unescape(re.sub(r"<[^>]+>", "", text))
+    if len(plain.encode("utf-16-le")) // 2 <= content_limit:
+        return text
+    # Dynamic fields are bounded before escaping, so this is only a final guard.
+    return html.escape(_truncate_utf16(plain, content_limit), quote=False)
+
+
+def _profile_display_name(profile, user_id: int) -> str:
+    if profile is None:
+        return str(user_id)
+    name = " ".join(
+        part for part in (profile.first_name, profile.last_name) if part
+    ).strip()
+    return name or (f"@{profile.username}" if profile.username else str(user_id))
+
+
+def _profile_from_entity(user_id: int, entity):
+    if entity is None:
+        return None
+    return llm_db.UserProfile(
+        bot_id=BOT_ID or 0,
+        user_id=user_id,
+        first_name=getattr(entity, "first_name", None),
+        last_name=getattr(entity, "last_name", None),
+        username=getattr(entity, "username", None),
+        private_contact_at=None,
+    )
 
 
 def _codex_user_ids(config) -> list[int]:
@@ -5866,9 +5979,32 @@ def _codex_user_ids(config) -> list[int]:
 
 async def _codex_user_entity(user_id: int):
     try:
-        return await borg.get_entity(user_id)
+        entity = await borg.get_entity(user_id)
+        if getattr(entity, "id", None) != user_id:
+            return None
+        if getattr(entity, "is_self", False) or getattr(entity, "bot", False):
+            return entity
+        if not hasattr(entity, "first_name"):
+            return None
+        if BOT_ID is not None:
+            try:
+                llm_db.record_user_profile(
+                    BOT_ID,
+                    user_id,
+                    getattr(entity, "first_name", None),
+                    getattr(entity, "last_name", None),
+                    getattr(entity, "username", None),
+                )
+            except Exception:
+                pass
+        return entity
     except Exception:
-        return None
+        if BOT_ID is None:
+            return None
+        try:
+            return llm_db.get_user_profile(BOT_ID, user_id)
+        except Exception:
+            return None
 
 
 def _entity_is_bot_admin(user_id: int, entity) -> bool:
@@ -5879,6 +6015,7 @@ def _entity_is_bot_admin(user_id: int, entity) -> bool:
     username = getattr(entity, "username", None)
     return bool(
         getattr(entity, "is_self", False)
+        or getattr(entity, "bot", False)
         or getattr(entity, "id", user_id) in util.admins
         or username in util.admins
     )
@@ -5903,10 +6040,20 @@ async def _eligible_codex_users(config):
     for configured_user in llm_chat_config.configured_users(config):
         entity = await _codex_user_entity(configured_user.id)
         if not _entity_is_bot_admin(configured_user.id, entity):
+            telegram_name = _codex_user_name(configured_user.id, entity)
+            profile = None
+            if BOT_ID is not None:
+                try:
+                    profile = llm_db.get_user_profile(BOT_ID, configured_user.id)
+                except Exception:
+                    pass
             users.append((
                 configured_user,
-                configured_user.name or _codex_user_name(configured_user.id, entity),
+                configured_user.name or telegram_name,
                 user_manager.get_prefs(configured_user.id).model,
+                telegram_name,
+                getattr(entity, "username", None),
+                profile.private_contact_at if profile is not None else None,
             ))
     return users
 
@@ -5950,9 +6097,10 @@ def _codex_users_user_buttons(users, page: int):
     start = page * CODEX_USERS_PAGE_SIZE
     buttons = [
         KeyboardButtonCallback(
-            f"{name[:60]} ({configured_user.id})", data=f"cu:u:{configured_user.id}"
+            _truncate_utf16(f"{name} ({configured_user.id})", 48),
+            data=f"cu:u:{configured_user.id}",
         )
-        for configured_user, name, _ in users[start : start + CODEX_USERS_PAGE_SIZE]
+        for configured_user, name, *_ in users[start : start + CODEX_USERS_PAGE_SIZE]
     ]
     if page_count > 1:
         if page:
@@ -5960,7 +6108,13 @@ def _codex_users_user_buttons(users, page: int):
         buttons.append(KeyboardButtonCallback(f"{page + 1}/{page_count}", data=b"cu:no"))
         if page + 1 < page_count:
             buttons.append(KeyboardButtonCallback("➡️", data=f"cu:p:{page + 1}"))
-    return util.build_menu(buttons, n_cols=1), page, page_count
+    buttons.append(KeyboardButtonCallback("＋ Add user", data="cu:add"))
+    assert all(
+        len((button.data if isinstance(button.data, bytes) else button.data.encode()))
+        <= TELEGRAM_CALLBACK_BYTES_LIMIT
+        for button in buttons
+    )
+    return util.build_menu(buttons, n_cols=2), page, page_count
 
 
 async def _show_codex_users(event, *, page: int = 0, edit: bool = False):
@@ -5974,25 +6128,37 @@ async def _show_codex_users(event, *, page: int = 0, edit: bool = False):
         return
     users = await _eligible_codex_users(config)
     buttons, page, page_count = _codex_users_user_buttons(users, page)
-    text = "Codex users explicitly configured:" if users else "No eligible explicit Codex users are configured."
+    text = "<b>Codex users</b>" if users else "<b>Codex users</b>\n\nNo eligible explicit users are configured."
     if page_count > 1:
         text += f" Page {page + 1}/{page_count}."
     start = page * CODEX_USERS_PAGE_SIZE
-    for configured_user, name, model in users[start : start + CODEX_USERS_PAGE_SIZE]:
+    for configured_user, name, model, telegram_name, username, contact_at in users[start : start + CODEX_USERS_PAGE_SIZE]:
         codex_state = "on" if configured_user.codex_enabled else "off"
         if configured_user.imagegen_enabled and not configured_user.codex_enabled:
             image_state = "paused"
         else:
             image_state = "on" if configured_user.imagegen_enabled else "off"
+        identity_lines = []
+        if configured_user.name and configured_user.name != telegram_name:
+            identity_lines.append(f"  Telegram: {_bold_dynamic(telegram_name, 64)}")
+        if username and f"@{username}" != telegram_name:
+            identity_lines.append(f"  Username: {_bold_dynamic('@' + username, 40)}")
+        contact = "Unknown — no private contact recorded" if contact_at is None else f"Started {_format_utc(contact_at, '%Y-%m-%d')}"
         text += (
-            f"\n{name[:80]} ({configured_user.id}): {model[:160]}"
-            f" | Codex {codex_state} | Images {image_state}"
+            f"\n\n• {_bold_dynamic(name, 64)}\n"
+            + ("\n".join(identity_lines) + "\n" if identity_lines else "")
+            +
+            f"  ID: {configured_user.id}\n"
+            f"  Model: {_html_dynamic(_model_display_name(model), 80)}\n"
+            f"  Grants: Codex {codex_state}; images {image_state}\n"
+            f"  Bot contact: {contact}"
         )
-    text += "\nPersonal grants shown; admin/trusted-chat policies may still allow access."
+    text += "\n\nTrusted chats may grant additional access."
+    text = _bounded_panel_text(text)
     if edit:
-        await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=buttons, parse_mode=None)
+        await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=buttons, parse_mode="html")
     else:
-        await send_info_message(event, text, buttons=buttons, parse_mode=None)
+        await send_info_message(event, text, buttons=buttons, parse_mode="html")
 
 
 def _codex_user_access_text(configured_user) -> str:
@@ -6011,7 +6177,12 @@ async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False):
         return False
     configured_user, entity = target
     current = user_manager.get_prefs(target_id).model
-    name = configured_user.name or _codex_user_name(target_id, entity)
+    telegram_name = _codex_user_name(target_id, entity)
+    name = configured_user.name or telegram_name
+    try:
+        profile = llm_db.get_user_profile(BOT_ID, target_id) if BOT_ID is not None else None
+    except Exception:
+        profile = None
     codex_action = "Disable" if configured_user.codex_enabled else "Enable"
     image_action = "Disable" if configured_user.imagegen_enabled else "Enable"
     buttons = util.build_menu(
@@ -6024,30 +6195,59 @@ async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False):
                 f"{image_action} images",
                 data=f"cu:a:{target_id}:i:{int(not configured_user.imagegen_enabled)}",
             ),
-            KeyboardButtonCallback("Change default model", data=f"cu:models:{target_id}"),
-            KeyboardButtonCallback("⬅️ Back to users", data="cu:p:0"),
+            KeyboardButtonCallback("Model", data=f"cu:models:{target_id}"),
+            KeyboardButtonCallback("⬅ Users", data="cu:p:0"),
         ],
         n_cols=2,
     )
+    identity_lines = [f"<b>{_html_dynamic(name, 180)}</b>"]
+    if configured_user.name and configured_user.name != telegram_name:
+        identity_lines.append(f"Configured label: {_bold_dynamic(configured_user.name)}")
+        identity_lines.append(f"Telegram name: {_bold_dynamic(telegram_name)}")
+    username = getattr(entity, "username", None)
+    if username and f"@{username}" != telegram_name:
+        identity_lines.append(f"Username: {_bold_dynamic('@' + username)}")
+    identity_lines.append(f"Numeric ID: {target_id}")
+    contact_at = profile.private_contact_at if profile is not None else None
+    contact = "Unknown — no private contact recorded" if contact_at is None else f"Started {_format_utc(contact_at)}"
+
+    try:
+        metadata = llm_db.get_api_key_metadata(target_id)
+    except Exception:
+        metadata = None
+    if metadata:
+        key_lines = []
+        for item in metadata:
+            if item.last_set_at is None:
+                set_text = "Set date unknown"
+            else:
+                set_text = _format_utc(item.last_set_at)
+            key_lines.append(f"• {_html_dynamic(item.service, 60)} — {set_text}")
+        keys_text = "\n".join(key_lines)
+    else:
+        keys_text = "API-key metadata unavailable" if metadata is None else "No personal API keys"
+
     text = (
-        f"{name} ({target_id})\nPersonal default: {current}\n"
-        f"{_codex_user_access_text(configured_user)}"
+        "<b>Identity</b>\n" + "\n".join(identity_lines) + f"\nBot contact: {contact}"
+        f"\n\n<b>Model</b>\nPersonal default: {_html_dynamic(_model_display_name(current), 180)}"
+        f"\n\n<b>Access</b>\n{_codex_user_access_text(configured_user)}"
+        f"\n\n<b>API keys</b>\n{keys_text}"
     )
     if not configured_user.codex_enabled and codex_util.is_codex_model(current):
-        text += f"\nOutside admin/trusted contexts, fallback model: {DEFAULT_MODEL}"
+        text += f"\nOutside admin/trusted contexts, fallback model: {_html_dynamic(_model_display_name(DEFAULT_MODEL))}"
     text += (
-        "\nAdmin and trusted-chat policies may still grant access."
-        "\nChat-specific model overrides retain precedence."
+        "\n\nTrusted chats may grant additional access. Chat model overrides take precedence."
     )
+    text = _bounded_panel_text(text)
     if edit:
         try:
             await event.edit(
-                f"{BOT_META_INFO_PREFIX}{text}", buttons=buttons, parse_mode=None
+                f"{BOT_META_INFO_PREFIX}{text}", buttons=buttons, parse_mode="html"
             )
         except errors.rpcerrorlist.MessageNotModifiedError:
             pass
     else:
-        await send_info_message(event, text, buttons=buttons, parse_mode=None)
+        await send_info_message(event, text, buttons=buttons, parse_mode="html")
     return True
 
 
@@ -6061,18 +6261,21 @@ async def _show_codex_user_models(event, target_id: int, *, edit: bool = False):
     choices = _codex_users_model_choices()
     buttons = [
         KeyboardButtonCallback(
-            f"✅ {name}" if model_id == current else name,
+            _truncate_utf16(f"✅ {model_id}" if model_id == current else model_id, 80),
             data=f"cu:m:{target_id}:{_codex_users_model_token(model_id)}",
         )
         for model_id, name in choices.items()
     ]
     buttons.append(KeyboardButtonCallback("⬅️ Back to user", data=f"cu:u:{target_id}"))
     name = configured_user.name or _codex_user_name(target_id, entity)
-    text = f"{name} ({target_id})\nPersonal default: {current}\nChoose a new personal default."
+    text = (
+        f"{_bold_dynamic(name)} ({target_id})\n"
+        f"Personal default: {_html_dynamic(current)}\nChoose a new personal default."
+    )
     if edit:
-        await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=util.build_menu(buttons, n_cols=2), parse_mode=None)
+        await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=util.build_menu(buttons, n_cols=2), parse_mode="html")
     else:
-        await send_info_message(event, text, buttons=util.build_menu(buttons, n_cols=2), parse_mode=None)
+        await send_info_message(event, text, buttons=util.build_menu(buttons, n_cols=2), parse_mode="html")
     return True
 
 
