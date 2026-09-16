@@ -459,5 +459,114 @@ class TimeFormattingTests(unittest.TestCase):
         self.assertNotIn("`x`", plugin._md_code("a`x`b")[1:-1])
 
 
+class CodexStatusCommandTests(unittest.TestCase):
+    def test_command_is_registered_for_the_telegram_menu(self):
+        commands = {entry["command"] for entry in plugin.BOT_COMMANDS}
+        self.assertIn("codexstatus", commands)
+
+    def test_command_is_known_so_it_never_reaches_the_chat_handler(self):
+        self.assertIn("/codexstatus", plugin.KNOWN_COMMAND_SET)
+
+    def test_help_mentions_the_command(self):
+        #: /help builds its text inline, so assert on the source of truth.
+        import inspect
+
+        source = inspect.getsource(plugin.help_handler)
+        self.assertIn("/codexStatus", source)
+        self.assertIn("Luna Reserve", source)
+
+    def test_armed_stand_in_opens_even_without_codex_access(self):
+        #: Otherwise a user who lost access could never cancel their stand-in.
+        event = SimpleNamespace(sender_id=123, chat_id=456, is_private=True)
+        fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
+        with ExitStack() as stack:
+            enter = stack.enter_context
+            enter(
+                patch.object(
+                    plugin.user_manager,
+                    "get_codex_quota_fallback",
+                    return_value=fallback,
+                )
+            )
+            enter(
+                patch.object(
+                    plugin.codex_util,
+                    "fetch_codex_usage",
+                    new=AsyncMock(return_value=None),
+                )
+            )
+            enter(patch.object(plugin, "get_effective_api_key", return_value="k"))
+            can_use = enter(
+                patch.object(
+                    plugin.llm_chat_config,
+                    "can_use_codex",
+                    new=AsyncMock(return_value=False),
+                )
+            )
+            show = enter(
+                patch.object(plugin, "_show_codex_quota_panel", new=AsyncMock())
+            )
+            enter(patch.object(plugin, "IS_BOT", True))
+            asyncio.run(plugin.codex_status_handler(event))
+        can_use.assert_not_awaited()
+        show.assert_awaited_once()
+        self.assertIn("Stand-in Active", show.await_args.args[1].text)
+
+    def test_without_access_and_without_a_stand_in_it_is_declined(self):
+        event = SimpleNamespace(sender_id=123, chat_id=456, is_private=True)
+        with ExitStack() as stack:
+            enter = stack.enter_context
+            enter(
+                patch.object(
+                    plugin.user_manager, "get_codex_quota_fallback", return_value=None
+                )
+            )
+            enter(
+                patch.object(
+                    plugin.llm_chat_config,
+                    "can_use_codex",
+                    new=AsyncMock(return_value=False),
+                )
+            )
+            info = enter(patch.object(plugin, "send_info_message", new=AsyncMock()))
+            asyncio.run(plugin.codex_status_handler(event))
+        self.assertEqual(info.await_args.args[1], plugin.CODEX_ACCESS_DENIED)
+
+
+class StatusLineTests(unittest.TestCase):
+    def render(self, fallback):
+        event = SimpleNamespace(sender_id=123, chat_id=456, is_private=True)
+        with ExitStack() as stack:
+            enter = stack.enter_context
+            enter(patch.object(plugin.user_manager, "get_prefs", return_value=_prefs()))
+            enter(
+                patch.object(
+                    plugin.chat_manager, "get_prefs", return_value=plugin.ChatPrefs()
+                )
+            )
+            enter(patch.object(plugin.chat_manager, "get_model", return_value=None))
+            enter(
+                patch.object(
+                    plugin.user_manager,
+                    "get_codex_quota_fallback",
+                    return_value=fallback,
+                )
+            )
+            enter(
+                patch.object(
+                    plugin, "_can_user_access_model", new=AsyncMock(return_value=True)
+                )
+            )
+            enter(patch.object(plugin.llm_chat_config, "load_config"))
+            info = enter(patch.object(plugin, "send_info_message", new=AsyncMock()))
+            asyncio.run(plugin.status_handler(event))
+        return info.await_args.args[1]
+
+    def test_line_appears_only_while_a_stand_in_is_armed(self):
+        armed = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
+        self.assertIn("Codex Stand-in", self.render(armed))
+        self.assertNotIn("Codex Stand-in", self.render(None))
+
+
 if __name__ == "__main__":
     unittest.main()

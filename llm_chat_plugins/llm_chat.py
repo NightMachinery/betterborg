@@ -1150,6 +1150,10 @@ BOT_COMMANDS = [
     },
     {"command": "setmodel", "description": "Set your preferred chat model"},
     {
+        "command": "codexstatus",
+        "description": "Codex usage limits and temporary stand-in model",
+    },
+    {
         "command": "setsystemprompt",
         "description": "Customize the bot's system prompt (default in all chats)",
     },
@@ -5259,6 +5263,12 @@ def register_handlers():
             pattern=rf"(?i)^\.codex-users{bot_username_suffix_re}(?:\s+([\s\S]+))?\s*$"
         )
     )(codex_users_handler)
+    #: Not private-only: a stand-in armed in a group has to be cancellable there.
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^(?:/codexstatus|\.codex-status){bot_username_suffix_re}\s*$"
+        )
+    )(codex_status_handler)
     borg.on(
         events.NewMessage(
             pattern=rf"(?i)^/helpmagics{bot_username_suffix_re}\s*$",
@@ -5628,6 +5638,7 @@ async def help_handler(event):
         "- `.cl` / `.چل` / `.ch` / `.چه` / `.cx` / `.چخ` / "
         "`.cxx` / `.چخخ` → Codex GPT-5.6 Sol "
         "(low / high / extra high / max)\n"
+        "- `.cr` / `.چر` → Codex Luna Reserve (medium)\n"
         "- `.as` / `.اس` / `.asm` / `.اسم` → Codex GPT-6 Astra (medium)\n"
         "- `.asl` / `.اسل` / `.ash` / `.اسه` / `.asx` / `.اسخ` / "
         "`.asxx` / `.اسخخ` → Codex GPT-6 Astra "
@@ -5639,6 +5650,17 @@ async def help_handler(event):
         codex_shortcuts_text += (
             "\n- `.i` → enable Codex image generation for this message; combine "
             "with Codex and reasoning shortcuts in any order"
+        )
+    if has_codex_access:
+        codex_shortcuts_text += (
+            "\n\n**When Codex Hits Its Usage Limit**\n"
+            "The Codex account is shared. When its allowance runs out I "
+            "automatically retry on the Luna Reserve, which is metered "
+            "separately, and say so when an answer came from there. If that is "
+            "spent too, I offer a temporary stand-in model: yours alone, "
+            "applied only to your saved default, expiring by itself at the "
+            "reset, and never rewriting your settings. Codex shortcuts always "
+            "stay on Codex. See /codexStatus."
         )
 
     help_text = f"""
@@ -5679,6 +5701,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /asfile or ..: Export conversation history as markdown file.
 - /setgeminikey: Sets or updates your Gemini API key.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
+- /codexStatus: Codex usage limits and the temporary stand-in model.
 - /setSystemPrompt: Change my core instructions or reset to default.
 - /setModelHere: Set the AI model for the current chat only.
 - /getModelHere: View the effective AI model for the current chat.
@@ -5924,6 +5947,17 @@ async def status_handler(event):
         prefs.group_activation_mode,
         prefs.group_activation_mode.replace("_", " ").title(),
     )
+    #: Only rendered while a stand-in is armed, so the block does not grow for
+    #: everyone else.
+    quota_fallback = user_manager.get_codex_quota_fallback(user_id)
+    codex_quota_line = ""
+    if quota_fallback is not None:
+        codex_quota_line = (
+            "• **Codex Stand-in:** "
+            f"{_md_code(_model_display_name(quota_fallback.model))} until "
+            f"{_md_code(_format_local(quota_fallback.until))} "
+            f"({_format_relative(quota_fallback.until)})\n"
+        )
     effective_model, _ = _get_effective_model_and_service(chat_id, user_id)
     reasoning = _get_effective_reasoning(chat_id, user_id, model=effective_model)
     if reasoning.level:
@@ -5951,6 +5985,7 @@ async def status_handler(event):
     status_message = (
         f"**Your Personal Bot Settings**\n\n"
         f"• **Model:** {model_status}\n"
+        f"{codex_quota_line}"
         f"• **Reasoning Effort ({_model_display_name(effective_model)}):** {thinking_status}\n"
         f"• **Enabled Tools:** `{enabled_tools_str}`\n"
         f"• **JSON Mode:** `{'Enabled' if prefs.json_mode else 'Disabled'}`\n"
@@ -7250,7 +7285,7 @@ def _codex_quota_panel(
         lines.extend(_codex_quota_missing_key_lines(candidates))
 
     lines.append("")
-    lines.append("Use /codexQuota any time to change or cancel this.")
+    lines.append("Use /codexStatus any time to change or cancel this.")
 
     buttons = _codex_quota_switch_buttons(
         usable, owner_id=user_id, deadline=deadline, reported_p=reported_p
@@ -7293,6 +7328,48 @@ def _apply_codex_quota_choice(user_id: int, *, key: str, deadline=None) -> str:
         raise ValueError(f"Unknown Codex stand-in token: {key}")
     user_manager.set_codex_quota_fallback(user_id, model=model, until=deadline)
     return f"Using {_model_display_name(model)} until {_format_local(deadline)}"
+
+
+async def codex_status_handler(event):
+    """Show Codex allowances and the temporary stand-in controls."""
+    user_id = event.sender_id
+    fallback = user_manager.get_codex_quota_fallback(user_id)
+    if fallback is None:
+        #: An armed stand-in always opens, even for someone who has since lost
+        #: Codex access, or they could never cancel it.
+        config = llm_chat_config.load_config()
+        if not await llm_chat_config.can_use_codex(event, config):
+            await send_info_message(event, CODEX_ACCESS_DENIED)
+            return
+
+    usage = await codex_util.fetch_codex_usage()
+    panel = _codex_quota_panel(
+        user_id, usage=usage, fallback=fallback, buttons_p=bool(IS_BOT)
+    )
+    if IS_BOT:
+        await _show_codex_quota_panel(event, panel)
+        return
+
+    await send_info_message(event, panel.text, parse_mode="md")
+    candidates = [item for item in _codex_quota_candidates(user_id) if item.usable_p]
+    if not candidates:
+        return
+    deadline, _ = _codex_quota_deadline(None, usage, now=datetime.now(timezone.utc))
+    options = {item.token: _model_display_name(item.model) for item in candidates}
+    if fallback is not None:
+        options[""] = "Switch back to Codex now"
+    await bot_util.present_options(
+        event,
+        title="Codex Stand-in",
+        options=options,
+        current_value=(fallback.model if fallback is not None else ""),
+        callback_prefix=CODEX_QUOTA_CALLBACK_PREFIX,
+        awaiting_key="codexquota_selection",
+        n_cols=1,
+        awaiting_users_dict=AWAITING_INPUT_FROM_USERS,
+        is_bot=False,
+    )
+    AWAITING_INPUT_FROM_USERS[user_id]["deadline"] = int(deadline.timestamp())
 
 
 async def key_submission_handler(event):
@@ -8762,6 +8839,17 @@ async def generic_input_handler(event):
                     await event.reply(
                         f"{BOT_META_INFO_PREFIX}✅ Group metadata mode set to: **{METADATA_MODES[selected_key]}**"
                     )
+                elif input_type == "codexquota_selection":
+                    deadline_epoch = flow_data.get("deadline")
+                    deadline = (
+                        datetime.fromtimestamp(deadline_epoch, tz=timezone.utc)
+                        if isinstance(deadline_epoch, int)
+                        else None
+                    )
+                    feedback = _apply_codex_quota_choice(
+                        user_id, key=selected_key, deadline=deadline
+                    )
+                    await event.reply(f"{BOT_META_INFO_PREFIX}✅ {feedback}")
                 elif input_type == "group_activation_mode_selection":
                     user_manager.set_group_activation_mode(user_id, selected_key)
                     await event.reply(
@@ -9852,7 +9940,7 @@ async def chat_handler(event):
         if request_model.quota_fallback_from:
             warnings.append(
                 "Codex is over its shared usage limit; using "
-                f"{_model_display_name(request_model.model)} for now. /codexQuota"
+                f"{_model_display_name(request_model.model)} for now. /codexStatus"
             )
 
         # ic(messages)
