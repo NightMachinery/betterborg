@@ -432,6 +432,25 @@ class QuotaPanelTests(unittest.TestCase):
             with self.subTest(kwargs=sorted(kwargs)):
                 self.assertIn("Your model", self.panel(**kwargs).text)
 
+    def test_a_failure_outranks_an_armed_stand_in(self):
+        #: A request that had just failed used to be answered with a green
+        #: "Stand-in Active" panel that never mentioned the failure.
+        fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
+        with patch.object(
+            plugin, "_codex_quota_saved_model", return_value=OPENAI_CODEX_GPT_5_6_SOL
+        ):
+            panel = self.panel(quota=self.quota, usage=_usage(), fallback=fallback)
+        self.assertIn("Codex Usage Limit Reached", panel.text)
+        self.assertIn("temporarily switched to", panel.text)
+
+        labels = [b.text for row in panel.buttons for b in row]
+        self.assertTrue(any("Switch back" in label for label in labels), labels)
+        self.assertTrue(any("🔁" in label for label in labels), labels)
+
+    def test_an_armed_stand_in_alone_still_reads_as_active(self):
+        fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
+        self.assertIn("Stand-in Active", self.panel(fallback=fallback).text)
+
     def test_buttons_are_suppressed_for_userbot_mode(self):
         panel = self.panel(quota=self.quota, usage=_usage(), buttons_p=False)
         self.assertIsNone(panel.buttons)

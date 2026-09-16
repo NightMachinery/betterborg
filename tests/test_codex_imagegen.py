@@ -12,6 +12,7 @@ from uniborg.constants import (
     GEMINI_FLASH_LATEST,
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_GPT_5_6_SOL,
+    OPENAI_CODEX_LUNA_RESERVE,
 )
 
 
@@ -82,6 +83,41 @@ class CodexImagePrefixTests(unittest.TestCase):
                 prefix_model=None, selected_model=GEMINI_FLASH_LATEST
             ),
             OPENAI_CODEX_GPT_5_6_SOL,
+        )
+
+    def test_a_codex_stand_in_takes_over_an_unprefixed_request(self):
+        #: `.i` is a flag, not a model choice, so an armed stand-in applies to
+        #: it -- and the Reserve generates images.
+        self.assertEqual(
+            llm_chat._resolve_image_generation_model(
+                prefix_model=None,
+                selected_model=OPENAI_CODEX_GPT_5_6_SOL,
+                stand_in=OPENAI_CODEX_LUNA_RESERVE,
+            ),
+            OPENAI_CODEX_LUNA_RESERVE,
+        )
+
+    def test_a_non_codex_stand_in_cannot_take_an_image_request(self):
+        #: Image generation runs as a Codex tool; there is nowhere else to
+        #: send it, so the saved Codex model stands.
+        self.assertEqual(
+            llm_chat._resolve_image_generation_model(
+                prefix_model=None,
+                selected_model=OPENAI_CODEX_ASTRA,
+                stand_in=GEMINI_FLASH_LATEST,
+            ),
+            OPENAI_CODEX_ASTRA,
+        )
+
+    def test_an_explicit_codex_prefix_outranks_the_stand_in(self):
+        #: `.as` *is* a model choice, and those stay where they were aimed.
+        self.assertEqual(
+            llm_chat._resolve_image_generation_model(
+                prefix_model=OPENAI_CODEX_ASTRA,
+                selected_model=OPENAI_CODEX_GPT_5_6_SOL,
+                stand_in=OPENAI_CODEX_LUNA_RESERVE,
+            ),
+            OPENAI_CODEX_ASTRA,
         )
 
     def test_explicit_non_codex_model_conflicts(self):

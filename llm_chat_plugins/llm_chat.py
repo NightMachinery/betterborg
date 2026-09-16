@@ -1060,12 +1060,26 @@ def _model_access_denial(model: str) -> str:
 
 
 def _resolve_image_generation_model(
-    *, prefix_model: Optional[str], selected_model: Optional[str]
+    *,
+    prefix_model: Optional[str],
+    selected_model: Optional[str],
+    stand_in: Optional[str] = None,
 ) -> str:
+    """The Codex model an `.i` request should generate on.
+
+    `.i` is a *flag*, not a model choice: unlike `.c` / `.as` / `.cr` it says
+    what to do, not which model to do it with. So an armed stand-in applies to
+    it, where those prefixes deliberately pin the request to Codex proper.
+    That only helps when the stand-in is itself a Codex model -- the Reserve
+    is, and generates images -- since image generation runs as a Codex tool
+    and there is nowhere else to send it.
+    """
     if prefix_model:
         if not codex_util.is_codex_model(prefix_model):
             raise ValueError(CODEX_IMAGEGEN_MODEL_CONFLICT)
         return prefix_model
+    if stand_in and codex_util.is_codex_model(stand_in):
+        return stand_in
     if selected_model and codex_util.is_codex_model(selected_model):
         return selected_model
     return OPENAI_CODEX_GPT_5_6_SOL
@@ -7517,7 +7531,11 @@ def _codex_quota_panel(
     deadline, reported_p = _codex_quota_deadline(quota, usage, now=now)
     lines = []
 
-    if fallback is not None:
+    #: A reported failure outranks an armed stand-in. Taking the stand-in
+    #: branch whenever one existed meant a request that had just *failed* was
+    #: answered with a green "Stand-in Active" panel that never said so --
+    #: which is how `.i` looked broken rather than out of quota.
+    if fallback is not None and quota is None:
         lines.append("✅ **Temporary Codex Stand-in Active**")
         lines.append("")
         lines.append(_codex_quota_model_line(saved_model, stand_in=fallback.model))
@@ -7559,7 +7577,11 @@ def _codex_quota_panel(
         lines.append("No temporary stand-in is active.")
         lines.append("")
 
-    lines.append(_codex_quota_model_line(saved_model))
+    lines.append(
+        _codex_quota_model_line(
+            saved_model, stand_in=(fallback.model if fallback is not None else None)
+        )
+    )
 
     meter_lines = [
         _codex_meter_line(
@@ -7609,8 +7631,22 @@ def _codex_quota_panel(
     buttons = _codex_quota_reserve_buttons(
         usage, owner_id=user_id, source_message_id=source_message_id
     )
+    if fallback is not None:
+        #: Reachable now that a failure can be reported while a stand-in is
+        #: armed: the undo has to come with it, or the panel names a rule it
+        #: gives no way to lift.
+        buttons.append(
+            KeyboardButtonCallback(
+                f"{CODEX_QUOTA_ICON_UNDO} Switch back to Codex now",
+                data=f"{CODEX_QUOTA_CALLBACK_PREFIX}u:{user_id}",
+            )
+        )
     buttons += _codex_quota_switch_buttons(
-        usable, owner_id=user_id, deadline=deadline, reported_p=reported_p
+        usable,
+        owner_id=user_id,
+        deadline=deadline,
+        reported_p=reported_p,
+        active_model=(fallback.model if fallback is not None else None),
     )
     return CodexQuotaPanel(
         text=_bounded_panel_text("\n".join(lines)),
@@ -10244,9 +10280,12 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
             await send_info_message(event, CODEX_IMAGEGEN_ACCESS_DENIED)
             return
         selected_model, _ = _get_effective_model_and_service(chat_id, user_id)
+        quota_fallback = user_manager.get_codex_quota_fallback(user_id)
         try:
             prefix_result.model = _resolve_image_generation_model(
-                prefix_model=prefix_result.model, selected_model=selected_model
+                prefix_model=prefix_result.model,
+                selected_model=selected_model,
+                stand_in=(quota_fallback.model if quota_fallback is not None else None),
             )
         except ValueError as exc:
             await send_info_message(event, str(exc))

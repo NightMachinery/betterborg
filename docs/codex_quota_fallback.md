@@ -90,6 +90,37 @@ The model is read through `_codex_quota_saved_model`, which takes an optional
 `chat_id`: the chat's model overrides the personal default, and the panel is
 also built from places that have no chat in hand.
 
+### Model prefixes and flag prefixes
+
+A stand-in redirects saved defaults and leaves *model* prefixes alone: `.c`,
+`.ch`, `.cxx`, `.as`, `.cr` and their Persian aliases each name a model, and
+someone who named one gets it, or gets its error.
+
+`.i` is not one of those. It is a **flag** -- it says to generate an image, not
+which model to do it on -- so the stand-in applies to it like any saved
+default. That only helps when the stand-in is itself a Codex model, since image
+generation runs as a Codex tool and there is nowhere else to send it; the
+Reserve qualifies and generates images. A non-Codex stand-in leaves `.i` on the
+saved Codex model, which is the only thing that could have served it anyway.
+
+This was a real bug: `.i` resolved through `_resolve_image_generation_model`,
+which set `prefix_result.model`, and a set prefix model makes
+`_resolve_request_model` return before it ever consults the stand-in. So `.i`
+went to the exhausted saved model while a perfectly good Reserve stand-in sat
+armed.
+
+## A failure outranks an armed stand-in
+
+The panel used to take its stand-in branch whenever one was armed, whatever
+else had happened. A request that had *just failed* was therefore answered with
+a green "Temporary Codex Stand-in Active" panel that never mentioned the
+failure -- which is how a broken `.i` looked like a status report.
+
+A reported `quota` now wins the branch, and the stand-in is folded into the
+lines that were already there: the model line says "X, temporarily switched to
+Y", the active-rule button carries `🔁`, and the undo button comes along so the
+panel cannot name a rule it gives no way to lift.
+
 ## What the stand-in does
 
 While armed, requests that would have used a Codex model use the stand-in
