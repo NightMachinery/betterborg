@@ -7224,12 +7224,16 @@ def _codex_quota_panel(
             buttons=(util.build_menu(buttons, n_cols=1) if buttons_p else None),
         )
 
+    primary = getattr(usage, "primary", None)
+    limit_in_evidence_p = quota is not None or (
+        primary is not None and not primary.allowed
+    )
+
     if quota is not None:
         lines.append("❌ **Codex Usage Limit Reached**")
         lines.append("")
-        reserve_note = (
-            " The Luna Reserve was tried and is spent too." if reserve_tried_p else ""
-        )
+        #: Never assert the Reserve is spent — the meters below say so or not.
+        reserve_note = " The Luna Reserve was tried as well." if reserve_tried_p else ""
         lines.append(
             "The ChatGPT account behind Codex is shared, and its allowance is"
             f" used up.{reserve_note}"
@@ -7238,7 +7242,7 @@ def _codex_quota_panel(
         if quota.plan_type:
             lines.append(f"• **Plan:** {_md_code(quota.plan_type)}")
     else:
-        lines.append("🧠 **Codex Quota**")
+        lines.append("🧠 **Codex Status**")
         lines.append("")
         lines.append(
             "No temporary stand-in is active — your saved model settings are in"
@@ -7264,7 +7268,11 @@ def _codex_quota_panel(
 
     lines.append("")
     if usable:
-        lines.append("**Use another model for now?**")
+        lines.append(
+            "**Use another model for now?**"
+            if limit_in_evidence_p
+            else "**Want a stand-in ready anyway?**"
+        )
         lines.append(
             "I can send your saved-default requests elsewhere"
             + (" until the quota resets" if reported_p else " for about 6 hours")

@@ -327,7 +327,7 @@ class QuotaPanelTests(unittest.TestCase):
 
     def test_idle_panel_reports_meters_without_a_limit(self):
         panel = self.panel(usage=_usage(primary_allowed=True))
-        self.assertIn("Codex Quota", panel.text)
+        self.assertIn("Codex Status", panel.text)
         self.assertIn("Regular allowance", panel.text)
 
     def test_buttons_are_suppressed_for_userbot_mode(self):
