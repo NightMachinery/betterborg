@@ -200,6 +200,13 @@ Disabled users remain listed; configured trusted-chat access
 still applies. Use =.codex-users <user-id> <model-id>= to set a default
 immediately. If Codex is unavailable, ordinary messages fall back to Gemini
 Flash with a notice, preserving the saved default.
+When the shared account's allowance runs out, requests are retried
+automatically on the Luna Reserve, reached through the =gpt-reserve= routing
+slug rather than =gpt-5.6-luna=, and also selectable with =.cr= / =.چر=. If the
+Reserve is spent too, =/codexStatus= reports the account's live meters and can
+park a user's saved default on another provider until the window resets. See
+[[file:docs/codex_luna_reserve.md][docs/codex_luna_reserve.md]] and
+[[file:docs/codex_quota_fallback.md][docs/codex_quota_fallback.md]].
 Codex quick prefixes have matching Persian aliases: =.چ*= for GPT-5.6 Sol and
 =.اس*= for GPT-6 Astra; see [[file:docs/codex_models.md][the complete mapping]].
 Use =.i= on the current message to enable Codex image generation, for example

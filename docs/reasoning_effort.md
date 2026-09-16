@@ -77,3 +77,15 @@ included.
 
 `/status` shows the resolved level for the effective model and where it came
 from, plus any level stored for the current chat.
+
+## Codex Luna Reserve
+
+`openai-codex/gpt-reserve` accepts every OpenAI level: `none`, `low`, `medium`,
+`high`, `xhigh` and `max`, all verified against the live backend. Because
+effort is a per-model preference, the automatic fallback to the Reserve
+re-resolves it for the Reserve model rather than reusing the level chosen for
+the model that hit the limit.
+
+While a cross-provider stand-in is active, effort resolves for the stand-in
+model. The effort saved against the Codex model is untouched and returns with
+it. See [Codex quota fallback](codex_quota_fallback.md).

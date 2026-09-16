@@ -4,6 +4,8 @@
 
 - `openai-codex/gpt-5.6-sol`
 - `openai-codex/gpt-6-astra`
+- `openai-codex/gpt-reserve` (Luna Reserve; see
+  [Codex Luna Reserve](codex_luna_reserve.md))
 
 Users without Codex access do not see them in `/setModel` or `/setModelHere`,
 and direct selection attempts are rejected server-side.
@@ -147,6 +149,19 @@ excluded as targets, and admin-only models cannot be assigned to non-admin users
 removed membership prevent changes from previously opened menus. The existing
 trusted-chat rules still apply to model and image access independently.
 
+### When the shared account hits its usage limit
+
+The account's allowance is shared by every Codex user, so it runs out for
+everyone at once. A request that hits it is retried automatically on the Luna
+Reserve, which is metered separately, and the reply says when an answer came
+from there. Only if the Reserve is unavailable or also spent does the bot show
+a quota panel offering a temporary stand-in model from another provider.
+
+The stand-in is per-user and opt-in, applies to saved defaults only, expires by
+itself at the reset, and never rewrites saved settings. `/codexStatus` (also
+`.codex-status`) reports the account's live meters and controls the stand-in.
+See [Codex quota fallback](codex_quota_fallback.md).
+
 ### When access is disabled
 
 If a saved personal or chat model is Codex but the current request has no
@@ -179,13 +194,19 @@ Verified directly against the ChatGPT Codex backend, the models exposed to a
 ChatGPT account are `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
 `gpt-5.4` and `gpt-5.4-mini`.
 
-GPT-6 Astra is wired up but is still rolling out. Until it reaches the account,
-a request returns:
+The catalog endpoint also reports `gpt-reserve` and `codex-auto-review` with
+`supported_in_api` true but `visibility: hide`, so they do not appear in the
+listed set above. `gpt-reserve` is the Luna Reserve routing slug and is used
+deliberately; `codex-auto-review` is not investigated.
+
+GPT-6 Astra was previously rejected with:
 
     The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.
 
-No code change is needed once it goes live. `OPENAI_CODEX_LATEST` in
-`uniborg/constants.py` can then be pointed at `OPENAI_CODEX_ASTRA`.
+The catalog now lists it as available, but this has not been re-tested against
+a live request. Once the regular allowance resets, confirm it answers before
+pointing `OPENAI_CODEX_LATEST` in `uniborg/constants.py` at
+`OPENAI_CODEX_ASTRA`.
 
 ## Reasoning effort
 
@@ -208,6 +229,7 @@ so it is deliberately absent from the level sets.
 - `.cxx` / `.چخخ`: GPT-5.6 Sol with `max` reasoning.
 - `.as` / `.اس`, `.asm` / `.اسم`, `.asl` / `.اسل`, `.ash` / `.اسه`,
   `.asx` / `.اسخ`, and `.asxx` / `.اسخخ`: the same ladder for GPT-6 Astra.
+- `.cr` / `.چر`: Luna Reserve with `medium` reasoning.
 
 `.a` belongs to `advanced_get` and `.o` was Pioneer's, so Astra uses `.as`.
 
