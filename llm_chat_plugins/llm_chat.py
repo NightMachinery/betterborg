@@ -257,6 +257,8 @@ CODEX_ACCESS_DENIED = "Codex access is not enabled for you."
 CODEX_IMAGEGEN_ACCESS_DENIED = "Codex image generation access is not enabled for you."
 CODEX_IMAGEGEN_MODEL_CONFLICT = "`.i` can only be combined with a Codex model."
 CODEX_SETTINGS_UNCHANGED = "Your saved model settings are unchanged."
+#: The timezone absolute times are presented in.
+DISPLAY_TIMEZONE = "Asia/Tehran"
 
 #: Sets reasoning effort for one message without changing the model. Available
 #: to everyone; a level the model does not accept is ignored by the resolver.
@@ -3891,7 +3893,7 @@ def get_system_prompt_info(
     )
 
 
-def get_runtime_context_text(*, timezone_name="Asia/Tehran") -> str:
+def get_runtime_context_text(*, timezone_name=DISPLAY_TIMEZONE) -> str:
     """Return volatile per-request facts that should stay out of the cacheable prefix."""
     tz = pytz.timezone(timezone_name)
     current_time = datetime.now(tz)
@@ -6135,6 +6137,33 @@ def _bold_dynamic(value, limit: int = 180) -> str:
     return f"<b>{_html_dynamic(value, limit)}</b>"
 
 
+def _format_local(value: datetime, *, timezone_name: str = DISPLAY_TIMEZONE) -> str:
+    """An absolute time in the timezone the bot presents times in."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(pytz.timezone(timezone_name)).strftime("%Y-%m-%d %H:%M %Z")
+
+
+def _format_relative(value: datetime, *, now: Optional[datetime] = None) -> str:
+    """A coarse `in 4 days, 6 hours`, keeping only the two largest units."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    seconds = int((value - (now or datetime.now(timezone.utc))).total_seconds())
+    if seconds <= 0:
+        return "now"
+    parts = []
+    for label, size in (("day", 86400), ("hour", 3600), ("minute", 60)):
+        count, seconds = divmod(seconds, size)
+        if count:
+            parts.append(f"{count} {label}{'s' if count != 1 else ''}")
+    return "in " + ", ".join(parts[:2] or ["less than a minute"])
+
+
+def _md_code(value, limit: int = 120) -> str:
+    """One inline-code span from untrusted text; backticks cannot escape it."""
+    return f"`{_truncate_utf16(str(value).replace('`', chr(39)), limit)}`"
+
+
 def _format_utc(value: datetime, format_string: str = "%Y-%m-%d %H:%M UTC") -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
@@ -6991,6 +7020,279 @@ async def codex_users_handler(event):
         return
     _apply_personal_model_choice(target_id, model_id)
     await send_info_message(event, f"Set {target_id}'s personal default to: {model_id}", parse_mode=None)
+
+
+# --- Codex Quota Panel ---
+
+CODEX_QUOTA_CALLBACK_PREFIX = "cq:"
+#: Stand-ins offered once Codex cannot answer at all. Single-character tokens
+#: keep the callback payload small; the map is closed, so an unknown token is
+#: a stale button rather than a new model.
+CODEX_QUOTA_FALLBACK_MODELS = {
+    "g": GEMINI_FLASH_LATEST,
+    "o": OR_OPENAI_5_6_SOL,
+}
+CODEX_QUOTA_SETKEY_COMMANDS = {
+    "gemini": "/setGeminiKey",
+    "openrouter": "/setOpenRouterKey",
+}
+#: Used when a usage-limit payload reported no usable deadline, and by
+#: /codexQuota when it is invoked with no limit in evidence.
+CODEX_QUOTA_DEFAULT_WINDOW = timedelta(hours=6)
+
+
+@dataclass(frozen=True)
+class CodexQuotaCandidate:
+    """One offered stand-in model, and whether this user can actually reach it."""
+
+    token: str
+    model: str
+    service: str
+    usable_p: bool
+    setkey_command: str
+
+
+@dataclass(frozen=True)
+class CodexQuotaPanel:
+    """Rendered quota panel text with its inline buttons, if any."""
+
+    text: str
+    buttons: Optional[list] = None
+
+
+def _codex_quota_candidates(user_id: int) -> list:
+    candidates = []
+    for token, model in CODEX_QUOTA_FALLBACK_MODELS.items():
+        service = llm_util.get_service_from_model(model)
+        setkey_command = CODEX_QUOTA_SETKEY_COMMANDS.get(service)
+        if setkey_command is None:
+            raise ValueError(f"No key-setup command for stand-in service: {service}")
+        candidates.append(
+            CodexQuotaCandidate(
+                token=token,
+                model=model,
+                service=service,
+                usable_p=bool(get_effective_api_key(user_id, service)),
+                setkey_command=setkey_command,
+            )
+        )
+    return candidates
+
+
+def _codex_quota_deadline(quota, usage, *, now):
+    """When a stand-in window should end, and whether that was actually reported."""
+    reported = [getattr(quota, "resets_at", None)]
+    primary = getattr(usage, "primary", None)
+    reported.append(getattr(primary, "resets_at", None))
+    for value in reported:
+        if value is not None and value > now:
+            return value, True
+    return now + CODEX_QUOTA_DEFAULT_WINDOW, False
+
+
+def _codex_meter_line(label: str, meter, *, now) -> Optional[str]:
+    if meter is None:
+        return None
+    parts = []
+    if meter.used_percent is not None:
+        parts.append(f"{meter.used_percent:g}% used")
+    if meter.resets_at is not None:
+        parts.append(
+            f"resets {_md_code(_format_local(meter.resets_at))}"
+            f" ({_format_relative(meter.resets_at, now=now)})"
+        )
+    state = "available" if meter.allowed else "exhausted"
+    detail = f" — {', '.join(parts)}" if parts else ""
+    return f"• **{label}:** {state}{detail}"
+
+
+def _codex_quota_switch_buttons(candidates, *, owner_id, deadline, reported_p):
+    window = "until reset" if reported_p else "for ~6 hours"
+    buttons = []
+    for candidate in candidates:
+        if not candidate.usable_p:
+            continue
+        data = (
+            f"{CODEX_QUOTA_CALLBACK_PREFIX}s:{owner_id}:{candidate.token}"
+            f":{int(deadline.timestamp())}"
+        )
+        assert len(data.encode("utf-8")) <= TELEGRAM_CALLBACK_BYTES_LIMIT
+        label = f"🔁 Use {_model_display_name(candidate.model)} {window}"
+        buttons.append(KeyboardButtonCallback(_truncate_utf16(label, 48), data=data))
+    return buttons
+
+
+def _codex_quota_missing_key_lines(candidates) -> list:
+    return [
+        f"• {_model_display_name(candidate.model)} — needs {candidate.setkey_command}"
+        for candidate in candidates
+        if not candidate.usable_p
+    ]
+
+
+def _codex_quota_scope_lines() -> list:
+    return [
+        "• Only you are affected; nobody else's settings change.",
+        "• Only your **saved** model is redirected — your personal default and"
+        " this chat's model.",
+        "• Codex prefixes stay Codex: `.c`, `.ch`, `.cxx`, `.as`, `.cr` and their"
+        " Persian aliases keep reporting the limit.",
+        "• Nothing is overwritten. Your saved Codex model returns on its own.",
+    ]
+
+
+def _codex_quota_panel(
+    user_id: int,
+    quota=None,
+    *,
+    usage=None,
+    fallback=None,
+    reserve_tried_p: bool = False,
+    buttons_p: bool = True,
+    now=None,
+) -> CodexQuotaPanel:
+    """Render the quota panel for whichever state this user is actually in."""
+    now = now or datetime.now(timezone.utc)
+    candidates = _codex_quota_candidates(user_id)
+    usable = [candidate for candidate in candidates if candidate.usable_p]
+    deadline, reported_p = _codex_quota_deadline(quota, usage, now=now)
+    lines = []
+
+    if fallback is not None:
+        lines.append("✅ **Temporary Codex Stand-in Active**")
+        lines.append("")
+        lines.append(f"• **Using:** {_md_code(_model_display_name(fallback.model))}")
+        lines.append(
+            f"• **Until:** {_md_code(_format_local(fallback.until))}"
+            f" ({_format_relative(fallback.until, now=now)})"
+        )
+        lines.append("• **Scope:** you only, saved defaults only")
+        lines.append("")
+        lines.append(
+            "Your saved Codex model is untouched and returns automatically."
+            " Codex prefixes still go to Codex."
+        )
+        buttons = [
+            KeyboardButtonCallback(
+                "↩️ Switch back to Codex now",
+                data=f"{CODEX_QUOTA_CALLBACK_PREFIX}u:{user_id}",
+            )
+        ]
+        buttons += _codex_quota_switch_buttons(
+            [c for c in usable if c.model != fallback.model],
+            owner_id=user_id,
+            deadline=deadline,
+            reported_p=reported_p,
+        )
+        return CodexQuotaPanel(
+            text=_bounded_panel_text("\n".join(lines)),
+            buttons=(util.build_menu(buttons, n_cols=1) if buttons_p else None),
+        )
+
+    if quota is not None:
+        lines.append("❌ **Codex Usage Limit Reached**")
+        lines.append("")
+        reserve_note = (
+            " The Luna Reserve was tried and is spent too." if reserve_tried_p else ""
+        )
+        lines.append(
+            "The ChatGPT account behind Codex is shared, and its allowance is"
+            f" used up.{reserve_note}"
+        )
+        lines.append("")
+        if quota.plan_type:
+            lines.append(f"• **Plan:** {_md_code(quota.plan_type)}")
+    else:
+        lines.append("🧠 **Codex Quota**")
+        lines.append("")
+        lines.append(
+            "No temporary stand-in is active — your saved model settings are in"
+            " full effect."
+        )
+        lines.append("")
+
+    meter_lines = [
+        _codex_meter_line("Regular allowance", getattr(usage, "primary", None), now=now),
+        #: Only selected accounts have a Reserve; say nothing when there is none.
+        _codex_meter_line(
+            "Luna Reserve", usage.reserve() if usage is not None else None, now=now
+        ),
+    ]
+    meter_lines = [line for line in meter_lines if line]
+    if meter_lines:
+        lines.extend(meter_lines)
+    elif quota is not None and quota.resets_at is not None:
+        lines.append(
+            f"• **Resets:** {_md_code(_format_local(quota.resets_at))}"
+            f" ({_format_relative(quota.resets_at, now=now)})"
+        )
+
+    lines.append("")
+    if usable:
+        lines.append("**Use another model for now?**")
+        lines.append(
+            "I can send your saved-default requests elsewhere"
+            + (" until the quota resets" if reported_p else " for about 6 hours")
+            + ", then switch back on my own."
+        )
+        lines.append("")
+        lines.extend(_codex_quota_scope_lines())
+        missing = _codex_quota_missing_key_lines(candidates)
+        if missing:
+            lines.append("")
+            lines.append("Also available once configured:")
+            lines.extend(missing)
+    else:
+        lines.append("**No stand-in available**")
+        lines.append(
+            "A stand-in needs an API key I can use, and you have none configured:"
+        )
+        lines.extend(_codex_quota_missing_key_lines(candidates))
+
+    lines.append("")
+    lines.append("Use /codexQuota any time to change or cancel this.")
+
+    buttons = _codex_quota_switch_buttons(
+        usable, owner_id=user_id, deadline=deadline, reported_p=reported_p
+    )
+    return CodexQuotaPanel(
+        text=_bounded_panel_text("\n".join(lines)),
+        buttons=(util.build_menu(buttons, n_cols=1) if buttons_p and buttons else None),
+    )
+
+
+async def _show_codex_quota_panel(event, panel, *, message=None, edit=False):
+    """Render a panel in place, into an existing message, or as a fresh reply."""
+    body = f"{BOT_META_INFO_PREFIX}{panel.text}"
+    if edit:
+        try:
+            await event.edit(body, buttons=panel.buttons, parse_mode="md")
+        except errors.rpcerrorlist.MessageNotModifiedError:
+            pass
+        return
+    if message is not None:
+        try:
+            await message.edit(
+                body, buttons=panel.buttons, parse_mode="md", link_preview=False
+            )
+            return
+        except errors.rpcerrorlist.MessageNotModifiedError:
+            return
+        except Exception as exc:
+            print(f"Codex quota panel edit failed; sending a new message: {exc}")
+    await send_info_message(event, panel.text, buttons=panel.buttons, parse_mode="md")
+
+
+def _apply_codex_quota_choice(user_id: int, *, key: str, deadline=None) -> str:
+    """Arm or clear a stand-in. `key` is a model token, or "" to clear."""
+    if not key:
+        user_manager.clear_codex_quota_fallback(user_id)
+        return "Switched back to your saved Codex model."
+    model = CODEX_QUOTA_FALLBACK_MODELS.get(key)
+    if model is None:
+        raise ValueError(f"Unknown Codex stand-in token: {key}")
+    user_manager.set_codex_quota_fallback(user_id, model=model, until=deadline)
+    return f"Using {_model_display_name(model)} until {_format_local(deadline)}"
 
 
 async def key_submission_handler(event):
@@ -7870,6 +8172,72 @@ async def callback_handler(event):
         except (ValueError, OverflowError):
             pass
         await event.answer("This Codex user menu is invalid or stale.", show_alert=True)
+        return
+
+    if data_str.startswith(CODEX_QUOTA_CALLBACK_PREFIX):
+        parts = data_str.split(":")
+        #: Owner and deadline travel in the payload, so both checks survive a
+        #: restart and need no server-side record of the panel.
+        if len(parts) < 3 or not parts[2].lstrip("-").isdigit():
+            await event.answer("This quota panel is invalid.", show_alert=True)
+            return
+        if int(parts[2]) != user_id:
+            await event.answer("This panel belongs to another user.", show_alert=True)
+            return
+
+        action = parts[1]
+        if action == "u":
+            feedback = _apply_codex_quota_choice(user_id, key="")
+        elif action == "s":
+            if len(parts) != 5 or not parts[4].lstrip("-").isdigit():
+                await event.answer("This quota panel is invalid.", show_alert=True)
+                return
+            candidate = next(
+                (
+                    item
+                    for item in _codex_quota_candidates(user_id)
+                    if item.token == parts[3]
+                ),
+                None,
+            )
+            if candidate is None:
+                await event.answer("That option is no longer offered.", show_alert=True)
+                return
+            if not candidate.usable_p:
+                await event.answer(
+                    f"{_model_display_name(candidate.model)} needs"
+                    f" {candidate.setkey_command} first.",
+                    show_alert=True,
+                )
+                return
+            try:
+                deadline = datetime.fromtimestamp(int(parts[4]), tz=timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                await event.answer("This quota panel is invalid.", show_alert=True)
+                return
+            if deadline <= datetime.now(timezone.utc):
+                await event.answer(
+                    "That quota window has already passed.", show_alert=True
+                )
+                deadline = None
+            if deadline is not None:
+                feedback = _apply_codex_quota_choice(
+                    user_id, key=parts[3], deadline=deadline
+                )
+            else:
+                feedback = None
+        else:
+            await event.answer("This quota panel is invalid.", show_alert=True)
+            return
+
+        panel = _codex_quota_panel(
+            user_id,
+            usage=await codex_util.fetch_codex_usage(),
+            fallback=user_manager.get_codex_quota_fallback(user_id),
+        )
+        await _show_codex_quota_panel(event, panel, edit=True)
+        if feedback is not None:
+            await event.answer(_truncate_utf16(feedback, 200))
         return
 
     prefs = user_manager.get_prefs(user_id)
@@ -9649,6 +10017,7 @@ async def chat_handler(event):
             edit_interval = get_streaming_delay(model_in_use)
             delivered_image_count = 0
             image_sequence = 0
+            reserve_attempted_p = False
 
             async def deliver_codex_image(image):
                 nonlocal delivered_image_count, image_sequence
@@ -9727,6 +10096,7 @@ async def chat_handler(event):
                         model=OPENAI_CODEX_LUNA_RESERVE,
                         prefix_effort=prefix_result.reasoning_effort,
                     )
+                    reserve_attempted_p = True
                     codex_response = await _run_codex(
                         OPENAI_CODEX_LUNA_RESERVE,
                         reasoning_effort=reserve_reasoning.level,
@@ -9740,10 +10110,37 @@ async def chat_handler(event):
                 finish_reason = codex_response.finish_reason
                 has_image = codex_response.has_image
             except codex_util.CodexStreamError as e:
-                error_text = f"{BOT_META_INFO_PREFIX}❌ {e}"
-                if e.response.text.strip():
+                partial = e.response.text.strip()
+                if e.usage_limit is not None:
+                    panel = _codex_quota_panel(
+                        user_id,
+                        e.usage_limit,
+                        usage=await codex_util.fetch_codex_usage(),
+                        fallback=user_manager.get_codex_quota_fallback(user_id),
+                        reserve_tried_p=reserve_attempted_p,
+                        buttons_p=IS_BOT,
+                    )
+                    if partial:
+                        #: edit_message chunks a partial answer that a direct
+                        #: Telethon edit would reject as too long, so keep it
+                        #: where it is and put the panel in its own message.
+                        await util.edit_message(
+                            response_message,
+                            f"{partial}\n\n{BOT_META_INFO_LINE}\n"
+                            f"{BOT_META_INFO_PREFIX}❌ Codex usage limit reached.",
+                            parse_mode="md",
+                        )
+                        await _show_codex_quota_panel(event, panel)
+                    else:
+                        await _show_codex_quota_panel(
+                            event, panel, message=response_message
+                        )
+                    return
+                #: Fenced so JSON braces and backticks cannot break markdown.
+                error_text = f"{BOT_META_INFO_PREFIX}❌ Codex request failed.\n```\n{e}\n```"
+                if partial:
                     error_text = (
-                        f"{e.response.text.strip()}\n\n{BOT_META_INFO_LINE}\n{error_text}"
+                        f"{partial}\n\n{BOT_META_INFO_LINE}\n{error_text}"
                     )
                 await util.edit_message(
                     response_message,

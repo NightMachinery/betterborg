@@ -244,5 +244,220 @@ class MissingFallbackKeyTests(unittest.TestCase):
         self.assertIn(plugin.CODEX_SETTINGS_UNCHANGED, info.await_args.args[1])
 
 
+def _usage(*, reserve=True, primary_allowed=False):
+    additional = ()
+    if reserve:
+        additional = (
+            plugin.codex_util.CodexMeter(
+                name="gpt-reserve",
+                allowed=False,
+                used_percent=100,
+                resets_at=NOW + timedelta(days=5),
+            ),
+        )
+    return plugin.codex_util.CodexUsage(
+        plan_type="prolite",
+        primary=plugin.codex_util.CodexMeter(
+            name="primary",
+            allowed=primary_allowed,
+            used_percent=100,
+            resets_at=NOW + timedelta(days=2),
+        ),
+        additional=additional,
+    )
+
+
+class QuotaPanelTests(unittest.TestCase):
+    quota = None
+
+    def setUp(self):
+        self.quota = plugin.codex_util.CodexUsageLimit(
+            plan_type="prolite", resets_at=NOW + timedelta(days=2)
+        )
+
+    def panel(self, *, keys=("gemini", "openrouter"), **kwargs):
+        with patch.object(
+            plugin,
+            "get_effective_api_key",
+            side_effect=lambda user_id, service: "k" if service in keys else None,
+        ):
+            return plugin._codex_quota_panel(123, now=NOW, **kwargs)
+
+    def test_both_keys_present_offers_both_stand_ins(self):
+        panel = self.panel(quota=self.quota, usage=_usage())
+        flat = [button for row in panel.buttons for button in row]
+        self.assertEqual(len(flat), 2)
+        self.assertIn("Codex Usage Limit Reached", panel.text)
+
+    def test_one_key_offers_one_and_names_the_missing_command(self):
+        panel = self.panel(quota=self.quota, usage=_usage(), keys=("gemini",))
+        flat = [button for row in panel.buttons for button in row]
+        self.assertEqual(len(flat), 1)
+        self.assertIn("/setOpenRouterKey", panel.text)
+
+    def test_no_keys_offers_nothing_and_explains(self):
+        panel = self.panel(quota=self.quota, usage=_usage(), keys=())
+        self.assertIsNone(panel.buttons)
+        self.assertIn("No stand-in available", panel.text)
+        self.assertIn("/setGeminiKey", panel.text)
+        self.assertIn("/setOpenRouterKey", panel.text)
+
+    def test_reserve_line_is_shown_only_when_the_account_has_one(self):
+        with_reserve = self.panel(quota=self.quota, usage=_usage())
+        self.assertIn("Luna Reserve", with_reserve.text)
+        without = self.panel(quota=self.quota, usage=_usage(reserve=False))
+        self.assertNotIn("Luna Reserve", without.text)
+
+    def test_reserve_tried_note_is_opt_in(self):
+        self.assertNotIn(
+            "Reserve was tried", self.panel(quota=self.quota, usage=_usage()).text
+        )
+        self.assertIn(
+            "Reserve was tried",
+            self.panel(quota=self.quota, usage=_usage(), reserve_tried_p=True).text,
+        )
+
+    def test_active_fallback_offers_an_undo(self):
+        fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
+        panel = self.panel(fallback=fallback)
+        flat = [button for row in panel.buttons for button in row]
+        self.assertIn("Switch back", flat[0].text)
+        self.assertEqual(flat[0].data, "cq:u:123")
+        self.assertIn("Temporary Codex Stand-in Active", panel.text)
+
+    def test_idle_panel_reports_meters_without_a_limit(self):
+        panel = self.panel(usage=_usage(primary_allowed=True))
+        self.assertIn("Codex Quota", panel.text)
+        self.assertIn("Regular allowance", panel.text)
+
+    def test_buttons_are_suppressed_for_userbot_mode(self):
+        panel = self.panel(quota=self.quota, usage=_usage(), buttons_p=False)
+        self.assertIsNone(panel.buttons)
+
+    def test_callback_payloads_fit_telegram_and_carry_the_owner(self):
+        panel = self.panel(quota=self.quota, usage=_usage())
+        for row in panel.buttons:
+            for button in row:
+                self.assertLessEqual(
+                    len(button.data.encode("utf-8")),
+                    plugin.TELEGRAM_CALLBACK_BYTES_LIMIT,
+                )
+                self.assertIn(":123:", button.data)
+
+    def test_panel_stays_within_the_telegram_message_limit(self):
+        panel = self.panel(quota=self.quota, usage=_usage())
+        self.assertLessEqual(
+            plugin._utf16_units(panel.text), plugin.TELEGRAM_TEXT_UTF16_LIMIT
+        )
+
+    def test_missing_deadline_falls_back_to_a_bounded_window(self):
+        deadline, reported = plugin._codex_quota_deadline(None, None, now=NOW)
+        self.assertFalse(reported)
+        self.assertEqual(deadline, NOW + plugin.CODEX_QUOTA_DEFAULT_WINDOW)
+
+
+class QuotaCallbackTests(unittest.TestCase):
+    def press(self, data, *, sender_id=123, keys=("gemini",)):
+        event = SimpleNamespace(
+            data=data.encode("utf-8"),
+            sender_id=sender_id,
+            chat_id=456,
+            is_private=True,
+            answer=AsyncMock(),
+            edit=AsyncMock(),
+        )
+        with ExitStack() as stack:
+            enter = stack.enter_context
+            enter(
+                patch.object(
+                    plugin,
+                    "get_effective_api_key",
+                    side_effect=lambda uid, service: "k" if service in keys else None,
+                )
+            )
+            enter(
+                patch.object(
+                    plugin.codex_util,
+                    "fetch_codex_usage",
+                    new=AsyncMock(return_value=None),
+                )
+            )
+            enter(
+                patch.object(
+                    plugin.user_manager, "get_codex_quota_fallback", return_value=None
+                )
+            )
+            armed = enter(patch.object(plugin.user_manager, "set_codex_quota_fallback"))
+            cleared = enter(
+                patch.object(plugin.user_manager, "clear_codex_quota_fallback")
+            )
+            asyncio.run(plugin.callback_handler(event))
+        return event, armed, cleared
+
+    def _future(self):
+        return int((datetime.now(timezone.utc) + timedelta(days=1)).timestamp())
+
+    def test_owner_can_arm_a_stand_in(self):
+        event, armed, _ = self.press(f"cq:s:123:g:{self._future()}")
+        armed.assert_called_once()
+        self.assertEqual(armed.call_args.kwargs["model"], GEMINI_FLASH_LATEST)
+        event.edit.assert_awaited()
+
+    def test_another_user_cannot_press_someone_elses_panel(self):
+        event, armed, _ = self.press(f"cq:s:123:g:{self._future()}", sender_id=999)
+        armed.assert_not_called()
+        self.assertIn("another user", event.answer.await_args.args[0])
+
+    def test_expired_window_is_refused(self):
+        past = int((datetime.now(timezone.utc) - timedelta(days=1)).timestamp())
+        event, armed, _ = self.press(f"cq:s:123:g:{past}")
+        armed.assert_not_called()
+        self.assertIn("already passed", event.answer.await_args_list[0].args[0])
+
+    def test_unknown_token_is_refused(self):
+        event, armed, _ = self.press(f"cq:s:123:zz:{self._future()}")
+        armed.assert_not_called()
+        self.assertIn("no longer offered", event.answer.await_args.args[0])
+
+    def test_candidate_without_a_key_is_refused_with_the_setup_command(self):
+        event, armed, _ = self.press(f"cq:s:123:o:{self._future()}")
+        armed.assert_not_called()
+        self.assertIn("/setOpenRouterKey", event.answer.await_args.args[0])
+
+    def test_undo_clears_and_rerenders(self):
+        event, _, cleared = self.press("cq:u:123")
+        cleared.assert_called_once_with(123)
+        event.edit.assert_awaited()
+
+    def test_malformed_payload_is_refused(self):
+        event, armed, _ = self.press("cq:s:notanid:g:1")
+        armed.assert_not_called()
+        self.assertIn("invalid", event.answer.await_args.args[0])
+
+
+class TimeFormattingTests(unittest.TestCase):
+    def test_absolute_time_is_rendered_in_the_display_timezone(self):
+        rendered = plugin._format_local(
+            datetime(2026, 9, 20, 16, 32, tzinfo=timezone.utc)
+        )
+        self.assertTrue(rendered.startswith("2026-09-20 20:02"))
+
+    def test_relative_time_keeps_two_units(self):
+        self.assertEqual(
+            plugin._format_relative(
+                NOW + timedelta(days=4, hours=6, minutes=30), now=NOW
+            ),
+            "in 4 days, 6 hours",
+        )
+
+    def test_relative_time_in_the_past_reads_as_now(self):
+        self.assertEqual(
+            plugin._format_relative(NOW - timedelta(hours=1), now=NOW), "now"
+        )
+
+    def test_inline_code_neutralises_backticks(self):
+        self.assertNotIn("`x`", plugin._md_code("a`x`b")[1:-1])
+
+
 if __name__ == "__main__":
     unittest.main()
