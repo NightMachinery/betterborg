@@ -1030,10 +1030,7 @@ def pioneer_model_name(model: str) -> str:
 
 
 def _is_admin_only_model(model: str) -> bool:
-    return (
-        is_pioneer_model(model)
-        or model in ADMIN_MODEL_CHOICES
-    )
+    return is_pioneer_model(model) or model in ADMIN_MODEL_CHOICES
 
 
 async def _can_user_access_model(event, model: str, *, config=None) -> bool:
@@ -2283,9 +2280,8 @@ def _build_model_menu(
     )
 
     options = dict(options)
-    can_show_reasoning = (
-        (not state.spec.admin_only or admin_p)
-        and (not state.spec.codex_access or codex_p)
+    can_show_reasoning = (not state.spec.admin_only or admin_p) and (
+        not state.spec.codex_access or codex_p
     )
     if state.spec.supports_reasoning_p() and can_show_reasoning:
         for key, display in state.options.items():
@@ -2306,7 +2302,11 @@ def _model_menu_buttons(
     buttons = []
     for key, display in menu.options.items():
         is_reasoning = _reasoning_menu_key_level(key) is not None
-        label = display if is_reasoning or model_label is None else model_label(key, display)
+        label = (
+            display
+            if is_reasoning or model_label is None
+            else model_label(key, display)
+        )
         if key == menu.current_value:
             label = f"✅ {label}"
         data = callback_data(key)
@@ -2326,8 +2326,7 @@ def _apply_reasoning_choice(
     """Validate and store one model-specific reasoning choice."""
     state = _think_menu_state(chat_id, user_id, scope=scope, model=model)
     if not state.spec.supports_reasoning_p() or (
-        level_key != REASONING_CLEAR_KEY
-        and not state.spec.supports_level_p(level_key)
+        level_key != REASONING_CLEAR_KEY and not state.spec.supports_level_p(level_key)
     ):
         return None
 
@@ -5221,7 +5220,11 @@ async def observe_incoming_user_profile(event):
             return
         try:
             llm_db.record_user_profile(
-                BOT_ID, user_id, None, None, None,
+                BOT_ID,
+                user_id,
+                None,
+                None,
+                None,
                 private_contact_at=contact_at or datetime.now(timezone.utc),
                 refresh_identity=False,
             )
@@ -5235,7 +5238,9 @@ async def observe_incoming_user_profile(event):
             getattr(sender, "first_name", None),
             getattr(sender, "last_name", None),
             getattr(sender, "username", None),
-            private_contact_at=(contact_at or datetime.now(timezone.utc)) if event.is_private else None,
+            private_contact_at=(
+                (contact_at or datetime.now(timezone.utc)) if event.is_private else None
+            ),
         )
     except Exception:
         pass
@@ -5879,7 +5884,9 @@ async def status_handler(event):
         visible_user_model = DEFAULT_MODEL
     model_status = f"`{visible_user_model}`"
     chat_model = chat_manager.get_model(chat_id)
-    if chat_model and not await _can_user_access_model(event, chat_model, config=config):
+    if chat_model and not await _can_user_access_model(
+        event, chat_model, config=config
+    ):
         chat_model = None
     if chat_model:
         model_status += f" (overridden in this chat)"
@@ -6133,10 +6140,16 @@ class CodexUserRequestedPeer(events.NewMessage):
 def _codex_user_picker_markup(button_id: int):
     return ReplyKeyboardMarkup(
         rows=[
-            KeyboardButtonRow([KeyboardButtonRequestPeer(
-                "Choose user", button_id=button_id,
-                peer_type=RequestPeerTypeUser(bot=False), max_quantity=1,
-            )]),
+            KeyboardButtonRow(
+                [
+                    KeyboardButtonRequestPeer(
+                        "Choose user",
+                        button_id=button_id,
+                        peer_type=RequestPeerTypeUser(bot=False),
+                        max_quantity=1,
+                    )
+                ]
+            ),
             KeyboardButtonRow([KeyboardButton("Cancel")]),
         ],
         resize=True,
@@ -6365,7 +6378,11 @@ def _codex_user_name(user_id: int, entity) -> str:
     if entity is None:
         return str(user_id)
     name = " ".join(
-        part for part in (getattr(entity, "first_name", None), getattr(entity, "last_name", None))
+        part
+        for part in (
+            getattr(entity, "first_name", None),
+            getattr(entity, "last_name", None),
+        )
         if part
     ).strip()
     if not name and getattr(entity, "username", None):
@@ -6389,13 +6406,15 @@ async def _eligible_codex_users(config):
                 except Exception:
                     pass
             profiles[configured_user.id] = profile
-            users.append((
-                configured_user,
-                configured_user.name or telegram_name,
-                user_manager.get_prefs(configured_user.id).model,
-                telegram_name,
-                getattr(entity, "username", None),
-            ))
+            users.append(
+                (
+                    configured_user,
+                    configured_user.name or telegram_name,
+                    user_manager.get_prefs(configured_user.id).model,
+                    telegram_name,
+                    getattr(entity, "username", None),
+                )
+            )
     unknown_ids = {
         configured_user.id
         for configured_user, *_ in users
@@ -6406,10 +6425,13 @@ async def _eligible_codex_users(config):
     }
     profiles.update(await _backfill_codex_user_contacts(unknown_ids))
     return [
-        user + (
-            profiles[user[0].id].private_contact_at
-            if profiles[user[0].id] is not None
-            else None,
+        user
+        + (
+            (
+                profiles[user[0].id].private_contact_at
+                if profiles[user[0].id] is not None
+                else None
+            ),
         )
         for user in users
     ]
@@ -6419,7 +6441,11 @@ async def _eligible_codex_target(target_id: int, config):
     if not config.valid:
         return False, None
     configured_user = next(
-        (user for user in llm_chat_config.configured_users(config) if user.id == target_id),
+        (
+            user
+            for user in llm_chat_config.configured_users(config)
+            if user.id == target_id
+        ),
         None,
     )
     if configured_user is None:
@@ -6442,7 +6468,8 @@ def _codex_users_model_token(model_id: str) -> str:
 
 def _codex_users_model_from_token(token: str) -> Optional[str]:
     matches = [
-        model_id for model_id in _codex_users_model_choices()
+        model_id
+        for model_id in _codex_users_model_choices()
         if _codex_users_model_token(model_id) == token
     ]
     return matches[0] if len(matches) == 1 else None
@@ -6553,12 +6580,15 @@ def _codex_users_overview_pages(users):
     footer = "Trusted chats may grant additional access."
 
     def fits(entries) -> bool:
-        candidate = worst_header + "\n\n" + "\n\n".join(
-            entry_text for _, entry_text in entries
-        ) + "\n\n" + footer
+        candidate = (
+            worst_header
+            + "\n\n"
+            + "\n\n".join(entry_text for _, entry_text in entries)
+            + "\n\n"
+            + footer
+        )
         return (
-            _utf16_units(BOT_META_INFO_PREFIX + candidate)
-            + CODEX_USERS_PAYLOAD_MARGIN
+            _utf16_units(BOT_META_INFO_PREFIX + candidate) + CODEX_USERS_PAYLOAD_MARGIN
             <= TELEGRAM_TEXT_UTF16_LIMIT
         )
 
@@ -6600,7 +6630,9 @@ def _codex_users_user_buttons(users, page: int, *, pages=None):
     if page_count > 1:
         if page:
             buttons.append(KeyboardButtonCallback("⬅️", data=f"cu:p:{page - 1}"))
-        buttons.append(KeyboardButtonCallback(f"{page + 1}/{page_count}", data=b"cu:no"))
+        buttons.append(
+            KeyboardButtonCallback(f"{page + 1}/{page_count}", data=b"cu:no")
+        )
         if page + 1 < page_count:
             buttons.append(KeyboardButtonCallback("➡️", data=f"cu:p:{page + 1}"))
     buttons.append(KeyboardButtonCallback("＋ Add user", data="cu:add"))
@@ -6617,7 +6649,9 @@ async def _show_codex_users(event, *, page: int = 0, edit: bool = False):
     if not config.valid:
         text = "The LLM chat access configuration is invalid; no users were shown."
         if edit:
-            await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=None, parse_mode=None)
+            await event.edit(
+                f"{BOT_META_INFO_PREFIX}{text}", buttons=None, parse_mode=None
+            )
         else:
             await send_info_message(event, text, parse_mode=None)
         return
@@ -6633,7 +6667,9 @@ async def _show_codex_users(event, *, page: int = 0, edit: bool = False):
         <= TELEGRAM_TEXT_UTF16_LIMIT
     )
     if edit:
-        await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=buttons, parse_mode="html")
+        await event.edit(
+            f"{BOT_META_INFO_PREFIX}{text}", buttons=buttons, parse_mode="html"
+        )
     else:
         await send_info_message(event, text, buttons=buttons, parse_mode="html")
 
@@ -6647,7 +6683,9 @@ def _codex_user_access_text(configured_user) -> str:
     return f"Personal Codex grant: {codex_state}\nPersonal image grant: {image_state}"
 
 
-async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False, reply_to=True):
+async def _show_codex_user_detail(
+    event, target_id: int, *, edit: bool = False, reply_to=True
+):
     config = llm_chat_config.load_config()
     eligible, target = await _eligible_codex_target(target_id, config)
     if not eligible:
@@ -6657,7 +6695,9 @@ async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False, 
     telegram_name = _codex_user_name(target_id, entity)
     name = configured_user.name or telegram_name
     try:
-        profile = llm_db.get_user_profile(BOT_ID, target_id) if BOT_ID is not None else None
+        profile = (
+            llm_db.get_user_profile(BOT_ID, target_id) if BOT_ID is not None else None
+        )
     except Exception:
         profile = None
     if profile is None or profile.private_contact_at is None:
@@ -6683,14 +6723,18 @@ async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False, 
     )
     identity_lines = [f"<b>{_html_dynamic(name, 180)}</b>"]
     if configured_user.name and configured_user.name != telegram_name:
-        identity_lines.append(f"Configured label: {_bold_dynamic(configured_user.name)}")
+        identity_lines.append(
+            f"Configured label: {_bold_dynamic(configured_user.name)}"
+        )
         identity_lines.append(f"Telegram name: {_bold_dynamic(telegram_name)}")
     username = getattr(entity, "username", None)
     if username and f"@{username}" != telegram_name:
         identity_lines.append(f"Username: {_bold_dynamic('@' + username)}")
     identity_lines.append(f"Numeric ID: {target_id}")
     contact_at = profile.private_contact_at if profile is not None else None
-    contact = "Unknown — no private contact recorded" if contact_at is None else "Started"
+    contact = (
+        "Unknown — no private contact recorded" if contact_at is None else "Started"
+    )
 
     try:
         metadata = llm_db.get_api_key_metadata(target_id)
@@ -6706,7 +6750,11 @@ async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False, 
             key_lines.append(f"• {_html_dynamic(item.service, 60)} — {set_text}")
         keys_text = "\n".join(key_lines)
     else:
-        keys_text = "API-key metadata unavailable" if metadata is None else "No personal API keys"
+        keys_text = (
+            "API-key metadata unavailable"
+            if metadata is None
+            else "No personal API keys"
+        )
 
     model_text = f"Personal default: {_html_dynamic(_model_display_name(current), 180)}"
     reasoning = _think_menu_state(
@@ -6716,9 +6764,8 @@ async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False, 
         model=current,
     )
     if reasoning.spec.supports_reasoning_p():
-        model_text += (
-            "\nPersonal reasoning: "
-            + _html_dynamic(reasoning.options[reasoning.current_value], 180)
+        model_text += "\nPersonal reasoning: " + _html_dynamic(
+            reasoning.options[reasoning.current_value], 180
         )
 
     text = (
@@ -6729,9 +6776,7 @@ async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False, 
     )
     if not configured_user.codex_enabled and codex_util.is_codex_model(current):
         text += f"\nOutside admin/trusted contexts, fallback model: {_html_dynamic(_model_display_name(DEFAULT_MODEL))}"
-    text += (
-        "\n\nTrusted chats may grant additional access. Chat model overrides take precedence."
-    )
+    text += "\n\nTrusted chats may grant additional access. Chat model overrides take precedence."
     text = _bounded_panel_text(text)
     if edit:
         try:
@@ -6741,7 +6786,9 @@ async def _show_codex_user_detail(event, target_id: int, *, edit: bool = False, 
         except errors.rpcerrorlist.MessageNotModifiedError:
             pass
     else:
-        await send_info_message(event, text, buttons=buttons, parse_mode="html", reply_to=reply_to)
+        await send_info_message(
+            event, text, buttons=buttons, parse_mode="html", reply_to=reply_to
+        )
     return True
 
 
@@ -6773,9 +6820,15 @@ async def _show_codex_user_models(event, target_id: int, *, edit: bool = False):
         "for the selected model."
     )
     if edit:
-        await event.edit(f"{BOT_META_INFO_PREFIX}{text}", buttons=util.build_menu(buttons, n_cols=2), parse_mode="html")
+        await event.edit(
+            f"{BOT_META_INFO_PREFIX}{text}",
+            buttons=util.build_menu(buttons, n_cols=2),
+            parse_mode="html",
+        )
     else:
-        await send_info_message(event, text, buttons=util.build_menu(buttons, n_cols=2), parse_mode="html")
+        await send_info_message(
+            event, text, buttons=util.build_menu(buttons, n_cols=2), parse_mode="html"
+        )
     return True
 
 
@@ -6792,14 +6845,23 @@ async def _start_codex_user_add(event):
     token = secrets.token_urlsafe(12)
     private = bool(getattr(event, "is_private", False))
     request_id = _random_signed32() if private else None
-    buttons = (_codex_user_picker_markup(request_id) if private else
-               [[KeyboardButtonCallback("Cancel", data=f"cu:add:cancel:{token}")]])
-    pending = {"token": token, "prompt_id": None, "phase": "prompting",
-               "request_id": request_id}
+    buttons = (
+        _codex_user_picker_markup(request_id)
+        if private
+        else [[KeyboardButtonCallback("Cancel", data=f"cu:add:cancel:{token}")]]
+    )
+    pending = {
+        "token": token,
+        "prompt_id": None,
+        "phase": "prompting",
+        "request_id": request_id,
+    }
     CODEX_USERS_ADD_PENDING[key] = pending
-    prompt_text = ("Choose a Telegram user, or reply with a positive numeric user ID or @username."
-                   if private else
-                   "Reply with a positive numeric Telegram user ID or @username. In groups, reply directly to this prompt.")
+    prompt_text = (
+        "Choose a Telegram user, or reply with a positive numeric user ID or @username."
+        if private
+        else "Reply with a positive numeric Telegram user ID or @username. In groups, reply directly to this prompt."
+    )
     try:
         message = await event.respond(
             f"{BOT_META_INFO_PREFIX}{prompt_text}",
@@ -6813,17 +6875,26 @@ async def _start_codex_user_add(event):
     if CODEX_USERS_ADD_PENDING.get(key) is pending:
         pending.update(prompt_id=getattr(message, "id", None), phase="input")
     elif private:
-        await send_info_message(event, "Add-user flow cancelled.",
-                                buttons=ReplyKeyboardHide(), parse_mode=None,
-                                reply_to=False)
+        await send_info_message(
+            event,
+            "Add-user flow cancelled.",
+            buttons=ReplyKeyboardHide(),
+            parse_mode=None,
+            reply_to=False,
+        )
         replacement = CODEX_USERS_ADD_PENDING.get(key)
-        if (replacement is not None and replacement is not pending
-                and replacement.get("request_id") is not None
-                and replacement.get("phase") in ("prompting", "input")):
+        if (
+            replacement is not None
+            and replacement is not pending
+            and replacement.get("request_id") is not None
+            and replacement.get("phase") in ("prompting", "input")
+        ):
             await send_info_message(
-                event, "Choose a Telegram user, or reply with a positive numeric user ID or @username.",
+                event,
+                "Choose a Telegram user, or reply with a positive numeric user ID or @username.",
                 buttons=_codex_user_picker_markup(replacement["request_id"]),
-                parse_mode=None, reply_to=False,
+                parse_mode=None,
+                reply_to=False,
             )
     await event.answer()
 
@@ -6835,7 +6906,11 @@ async def _resolve_codex_add_target(value: str):
         except Exception:
             return None, None, "That username could not be resolved to a Telegram user."
         if not isinstance(entity, User):
-            return None, None, "That username belongs to a group or channel, not a user."
+            return (
+                None,
+                None,
+                "That username belongs to a group or channel, not a user.",
+            )
         user_id = entity.id
     else:
         try:
@@ -6843,7 +6918,11 @@ async def _resolve_codex_add_target(value: str):
         except ValueError:
             return None, None, "Enter a positive numeric user ID or @username."
         if user_id <= 0 or user_id > TELEGRAM_SIGNED_ID_MAX:
-            return None, None, "The numeric user ID is outside Telegram's supported range."
+            return (
+                None,
+                None,
+                "The numeric user ID is outside Telegram's supported range.",
+            )
         try:
             candidate = await borg.get_entity(user_id)
         except Exception:
@@ -6856,74 +6935,126 @@ async def _resolve_codex_add_target(value: str):
     if BOT_ID is not None and user_id == BOT_ID:
         return None, None, "The bot itself cannot be added to the explicit-user roster."
     if user_id in util.admins:
-        return None, None, "Bot administrators cannot be added to the explicit-user roster."
+        return (
+            None,
+            None,
+            "Bot administrators cannot be added to the explicit-user roster.",
+        )
     if entity is None and BOT_ID is not None:
         try:
             profile = llm_db.get_user_profile(BOT_ID, user_id)
         except Exception:
             profile = None
         if profile is not None and _entity_is_bot_admin(user_id, profile):
-            return None, None, "Bot administrators cannot be added to the explicit-user roster."
+            return (
+                None,
+                None,
+                "Bot administrators cannot be added to the explicit-user roster.",
+            )
     if entity is not None:
         if entity.id != user_id or getattr(entity, "bot", False):
             return None, None, "Bots and mismatched Telegram entities cannot be added."
         if _entity_is_bot_admin(user_id, entity):
-            return None, None, "Bot administrators cannot be added to the explicit-user roster."
+            return (
+                None,
+                None,
+                "Bot administrators cannot be added to the explicit-user roster.",
+            )
         if BOT_ID is not None:
             try:
                 llm_db.record_user_profile(
-                    BOT_ID, user_id, entity.first_name, entity.last_name, entity.username
+                    BOT_ID,
+                    user_id,
+                    entity.first_name,
+                    entity.last_name,
+                    entity.username,
                 )
             except Exception:
                 pass
     return user_id, entity, None
 
 
-async def _finish_codex_add_resolution(event, key, pending, user_id, entity, error,
-                                       *, service=False):
+async def _finish_codex_add_resolution(
+    event, key, pending, user_id, entity, error, *, service=False
+):
     if CODEX_USERS_ADD_PENDING.get(key) is not pending:
         raise events.StopPropagation
-    picker = (_codex_user_picker_markup(pending["request_id"])
-              if pending.get("request_id") is not None else None)
+    picker = (
+        _codex_user_picker_markup(pending["request_id"])
+        if pending.get("request_id") is not None
+        else None
+    )
     if error:
         pending["phase"] = "input"
-        await send_info_message(event, error, buttons=picker, parse_mode=None,
-                                reply_to=False if service else True)
+        await send_info_message(
+            event,
+            error,
+            buttons=picker,
+            parse_mode=None,
+            reply_to=False if service else True,
+        )
         raise events.StopPropagation
     config = llm_chat_config.load_config()
     if not config.valid:
         CODEX_USERS_ADD_PENDING.pop(key, None)
-        await send_info_message(event, "The LLM chat access configuration is invalid.",
-                                buttons=ReplyKeyboardHide() if picker is not None else None,
-                                parse_mode=None,
-                                reply_to=False if picker is not None else True)
+        await send_info_message(
+            event,
+            "The LLM chat access configuration is invalid.",
+            buttons=ReplyKeyboardHide() if picker is not None else None,
+            parse_mode=None,
+            reply_to=False if picker is not None else True,
+        )
         raise events.StopPropagation
     if user_id in _codex_user_ids(config):
         CODEX_USERS_ADD_PENDING.pop(key, None)
         if picker is not None:
-            await send_info_message(event, "That user is already in the roster.",
-                                    buttons=ReplyKeyboardHide(), parse_mode=None, reply_to=False)
-        await _show_codex_user_detail(event, user_id, reply_to=False if service else True)
+            await send_info_message(
+                event,
+                "That user is already in the roster.",
+                buttons=ReplyKeyboardHide(),
+                parse_mode=None,
+                reply_to=False,
+            )
+        await _show_codex_user_detail(
+            event, user_id, reply_to=False if service else True
+        )
         raise events.StopPropagation
     pending.update(target_id=user_id, phase="confirm", resolved=entity is not None)
     if entity is None:
         identity = f"<b>{user_id}</b>\nProfile not known yet."
     else:
-        identity = f"{_bold_dynamic(_codex_user_name(user_id, entity))}\nNumeric ID: {user_id}"
+        identity = (
+            f"{_bold_dynamic(_codex_user_name(user_id, entity))}\nNumeric ID: {user_id}"
+        )
         if getattr(entity, "username", None):
             identity += f"\nUsername: {_bold_dynamic('@' + entity.username)}"
     if picker is not None:
-        await send_info_message(event, "Review the selected user below.",
-                                buttons=ReplyKeyboardHide(), parse_mode=None, reply_to=False)
-        if (CODEX_USERS_ADD_PENDING.get(key) is not pending
-                or pending.get("phase") != "confirm"):
+        await send_info_message(
+            event,
+            "Review the selected user below.",
+            buttons=ReplyKeyboardHide(),
+            parse_mode=None,
+            reply_to=False,
+        )
+        if (
+            CODEX_USERS_ADD_PENDING.get(key) is not pending
+            or pending.get("phase") != "confirm"
+        ):
             raise events.StopPropagation
     token = pending["token"]
-    buttons = [[KeyboardButtonCallback("Add user", data=f"cu:add:yes:{token}"),
-                KeyboardButtonCallback("Cancel", data=f"cu:add:cancel:{token}")]]
-    await send_info_message(event, f"{identity}\n\nInitial grants: Codex off; images off.",
-                            buttons=buttons, parse_mode="html",
-                            reply_to=False if service else True)
+    buttons = [
+        [
+            KeyboardButtonCallback("Add user", data=f"cu:add:yes:{token}"),
+            KeyboardButtonCallback("Cancel", data=f"cu:add:cancel:{token}"),
+        ]
+    ]
+    await send_info_message(
+        event,
+        f"{identity}\n\nInitial grants: Codex off; images off.",
+        buttons=buttons,
+        parse_mode="html",
+        reply_to=False if service else True,
+    )
     raise events.StopPropagation
 
 
@@ -6932,17 +7063,23 @@ async def codex_user_add_input_handler(event):
     pending = CODEX_USERS_ADD_PENDING.get(key)
     if pending is None or getattr(event, "out", False):
         return
-    text = (getattr(event, "raw_text", None) or getattr(event, "text", None) or "").strip()
+    text = (
+        getattr(event, "raw_text", None) or getattr(event, "text", None) or ""
+    ).strip()
     if not event.is_private:
         reply_id = getattr(getattr(event, "message", None), "reply_to_msg_id", None)
         if pending.get("prompt_id") is None or reply_id != pending["prompt_id"]:
             return
     if text.lower() in ("cancel", "/cancel"):
         CODEX_USERS_ADD_PENDING.pop(key, None)
-        await send_info_message(event, "Add-user flow cancelled.",
-                                buttons=(ReplyKeyboardHide()
-                                         if pending.get("request_id") is not None else None),
-                                parse_mode=None)
+        await send_info_message(
+            event,
+            "Add-user flow cancelled.",
+            buttons=(
+                ReplyKeyboardHide() if pending.get("request_id") is not None else None
+            ),
+            parse_mode=None,
+        )
         raise events.StopPropagation
     if pending["phase"] != "input":
         return
@@ -6954,10 +7091,17 @@ async def codex_user_add_input_handler(event):
         direct_group_reply = not event.is_private
         if not candidate_like and not direct_group_reply:
             return
-        picker = (_codex_user_picker_markup(pending["request_id"])
-                  if pending.get("request_id") is not None else None)
-        await send_info_message(event, "Enter a positive numeric user ID or a valid @username.",
-                                buttons=picker, parse_mode=None)
+        picker = (
+            _codex_user_picker_markup(pending["request_id"])
+            if pending.get("request_id") is not None
+            else None
+        )
+        await send_info_message(
+            event,
+            "Enter a positive numeric user ID or a valid @username.",
+            buttons=picker,
+            parse_mode=None,
+        )
         raise events.StopPropagation
     pending["phase"] = "resolving"
     authorized = await _codex_users_admin(event)
@@ -6965,11 +7109,15 @@ async def codex_user_add_input_handler(event):
         raise events.StopPropagation
     if not authorized:
         CODEX_USERS_ADD_PENDING.pop(key, None)
-        await send_info_message(event, ADMIN_ONLY_COMMAND_IGNORED,
-                                buttons=(ReplyKeyboardHide()
-                                         if pending.get("request_id") is not None else None),
-                                parse_mode=None,
-                                reply_to=False if pending.get("request_id") is not None else True)
+        await send_info_message(
+            event,
+            ADMIN_ONLY_COMMAND_IGNORED,
+            buttons=(
+                ReplyKeyboardHide() if pending.get("request_id") is not None else None
+            ),
+            parse_mode=None,
+            reply_to=False if pending.get("request_id") is not None else True,
+        )
         raise events.StopPropagation
     user_id, entity, error = await _resolve_codex_add_target(text)
     await _finish_codex_add_resolution(event, key, pending, user_id, entity, error)
@@ -6978,13 +7126,19 @@ async def codex_user_add_input_handler(event):
 async def codex_user_requested_peer_handler(event):
     message = getattr(event, "message", None)
     action = getattr(message, "action", None)
-    if (getattr(event, "out", False) or not getattr(event, "is_private", False)
-            or not isinstance(action, MessageActionRequestedPeerSentMe)):
+    if (
+        getattr(event, "out", False)
+        or not getattr(event, "is_private", False)
+        or not isinstance(action, MessageActionRequestedPeerSentMe)
+    ):
         return
     key = _codex_add_key(event)
     pending = CODEX_USERS_ADD_PENDING.get(key)
-    if (pending is None or pending.get("phase") != "input"
-            or action.button_id != pending.get("request_id")):
+    if (
+        pending is None
+        or pending.get("phase") != "input"
+        or action.button_id != pending.get("request_id")
+    ):
         return
     if len(action.peers) != 1 or not isinstance(action.peers[0], RequestedPeerUser):
         return
@@ -6998,8 +7152,13 @@ async def codex_user_requested_peer_handler(event):
         raise events.StopPropagation
     if not authorized:
         CODEX_USERS_ADD_PENDING.pop(key, None)
-        await send_info_message(event, ADMIN_ONLY_COMMAND_IGNORED,
-                                buttons=ReplyKeyboardHide(), parse_mode=None, reply_to=False)
+        await send_info_message(
+            event,
+            ADMIN_ONLY_COMMAND_IGNORED,
+            buttons=ReplyKeyboardHide(),
+            parse_mode=None,
+            reply_to=False,
+        )
         raise events.StopPropagation
     checked_id, entity, error = await _resolve_codex_add_target(str(user_id))
     if CODEX_USERS_ADD_PENDING.get(key) is not pending:
@@ -7010,7 +7169,11 @@ async def codex_user_requested_peer_handler(event):
         else:
             pending["selected_username"] = requested.username
             try:
-                profile = llm_db.get_user_profile(BOT_ID, user_id) if BOT_ID is not None else None
+                profile = (
+                    llm_db.get_user_profile(BOT_ID, user_id)
+                    if BOT_ID is not None
+                    else None
+                )
             except Exception:
                 profile = None
             if profile is None:
@@ -7022,8 +7185,9 @@ async def codex_user_requested_peer_handler(event):
                     last_name=profile.last_name or requested.last_name,
                     username=profile.username or requested.username,
                 )
-    await _finish_codex_add_resolution(event, key, pending, checked_id, entity, error,
-                                       service=True)
+    await _finish_codex_add_resolution(
+        event, key, pending, checked_id, entity, error, service=True
+    )
 
 
 async def codex_users_handler(event):
@@ -7039,22 +7203,30 @@ async def codex_users_handler(event):
     try:
         target_id = int(parts[0])
     except ValueError:
-        await send_info_message(event, "Use .codex-users <numeric-user-id> [model-id].", parse_mode=None)
+        await send_info_message(
+            event, "Use .codex-users <numeric-user-id> [model-id].", parse_mode=None
+        )
         return
     config = llm_chat_config.load_config()
     eligible, _ = await _eligible_codex_target(target_id, config)
     if not eligible:
-        await send_info_message(event, "That user is not an eligible explicit Codex user.", parse_mode=None)
+        await send_info_message(
+            event, "That user is not an eligible explicit Codex user.", parse_mode=None
+        )
         return
     if len(parts) == 1:
         await _show_codex_user_detail(event, target_id)
         return
     model_id = parts[1].strip()
     if not model_id or _is_admin_only_model(model_id):
-        await send_info_message(event, "That model cannot be assigned to this user.", parse_mode=None)
+        await send_info_message(
+            event, "That model cannot be assigned to this user.", parse_mode=None
+        )
         return
     _apply_personal_model_choice(target_id, model_id)
-    await send_info_message(event, f"Set {target_id}'s personal default to: {model_id}", parse_mode=None)
+    await send_info_message(
+        event, f"Set {target_id}'s personal default to: {model_id}", parse_mode=None
+    )
 
 
 # --- Codex Quota Panel ---
@@ -7251,7 +7423,9 @@ def _codex_quota_panel(
         lines.append("")
 
     meter_lines = [
-        _codex_meter_line("Regular allowance", getattr(usage, "primary", None), now=now),
+        _codex_meter_line(
+            "Regular allowance", getattr(usage, "primary", None), now=now
+        ),
         #: Only selected accounts have a Reserve; say nothing when there is none.
         _codex_meter_line(
             "Luna Reserve", usage.reserve() if usage is not None else None, now=now
@@ -8074,21 +8248,29 @@ async def callback_handler(event):
                 return
             config = llm_chat_config.load_config()
             if not config.valid:
-                await event.answer("The LLM chat access configuration is invalid.", show_alert=True)
+                await event.answer(
+                    "The LLM chat access configuration is invalid.", show_alert=True
+                )
                 return
             await _start_codex_user_add(event)
             return
         if len(parts) == 4 and parts[:3] == ["cu", "add", "cancel"]:
             pending = CODEX_USERS_ADD_PENDING.get(_codex_add_key(event))
-            if pending is None or not secrets.compare_digest(pending["token"], parts[3]):
+            if pending is None or not secrets.compare_digest(
+                pending["token"], parts[3]
+            ):
                 await event.answer("This add-user prompt is stale.", show_alert=True)
                 return
             CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
             await event.answer("Add-user flow cancelled")
             if pending.get("request_id") is not None:
-                await send_info_message(event, "Add-user flow cancelled.",
-                                        buttons=ReplyKeyboardHide(), parse_mode=None,
-                                        reply_to=False)
+                await send_info_message(
+                    event,
+                    "Add-user flow cancelled.",
+                    buttons=ReplyKeyboardHide(),
+                    parse_mode=None,
+                    reply_to=False,
+                )
             try:
                 await event.edit(buttons=None)
             except Exception:
@@ -8101,7 +8283,9 @@ async def callback_handler(event):
                 or pending.get("phase") != "confirm"
                 or not secrets.compare_digest(pending["token"], parts[3])
             ):
-                await event.answer("This add-user confirmation is stale.", show_alert=True)
+                await event.answer(
+                    "This add-user confirmation is stale.", show_alert=True
+                )
                 return
             pending["phase"] = "confirming"
             if not await _codex_users_admin(event):
@@ -8110,34 +8294,49 @@ async def callback_handler(event):
                 await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
                 return
             if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is not pending:
-                await event.answer("This add-user confirmation is stale.", show_alert=True)
+                await event.answer(
+                    "This add-user confirmation is stale.", show_alert=True
+                )
                 return
             config = llm_chat_config.load_config()
             if not config.valid:
                 CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
-                await event.answer("The LLM chat access configuration is invalid.", show_alert=True)
+                await event.answer(
+                    "The LLM chat access configuration is invalid.", show_alert=True
+                )
                 return
             target_id = pending["target_id"]
             selected_username = pending.get("selected_username")
             if selected_username in util.admins:
                 CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
-                await event.answer("Bot administrators cannot be added to the explicit-user roster.", show_alert=True)
+                await event.answer(
+                    "Bot administrators cannot be added to the explicit-user roster.",
+                    show_alert=True,
+                )
                 return
             if target_id in _codex_user_ids(config):
                 CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
                 if not await _show_codex_user_detail(event, target_id, edit=True):
-                    await event.answer("That existing user can no longer be opened.", show_alert=True)
+                    await event.answer(
+                        "That existing user can no longer be opened.", show_alert=True
+                    )
                     return
-                await event.answer(f"User {target_id} already exists; opened existing settings")
+                await event.answer(
+                    f"User {target_id} already exists; opened existing settings"
+                )
                 return
             else:
                 checked_id, _, error = await _resolve_codex_add_target(str(target_id))
                 if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is not pending:
-                    await event.answer("This add-user confirmation is stale.", show_alert=True)
+                    await event.answer(
+                        "This add-user confirmation is stale.", show_alert=True
+                    )
                     return
                 if error or checked_id != target_id:
                     CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
-                    await event.answer(error or "The target identity changed.", show_alert=True)
+                    await event.answer(
+                        error or "The target identity changed.", show_alert=True
+                    )
                     return
                 if not await _codex_users_admin(event):
                     if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is pending:
@@ -8145,7 +8344,9 @@ async def callback_handler(event):
                     await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
                     return
                 if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is not pending:
-                    await event.answer("This add-user confirmation is stale.", show_alert=True)
+                    await event.answer(
+                        "This add-user confirmation is stale.", show_alert=True
+                    )
                     return
                 # Claim the mutation synchronously. Cancellation and a second
                 # confirmation become stale before the thread can write.
@@ -8153,10 +8354,16 @@ async def callback_handler(event):
                 try:
                     await asyncio.to_thread(llm_chat_config.add_user, target_id)
                 except llm_chat_config.ConfigUpdateError as exc:
-                    await event.answer(_truncate_utf16(str(exc) or "Could not add user.", 200), show_alert=True)
+                    await event.answer(
+                        _truncate_utf16(str(exc) or "Could not add user.", 200),
+                        show_alert=True,
+                    )
                     return
             if not await _show_codex_user_detail(event, target_id, edit=True):
-                await event.answer("The user was added, but the panel could not be refreshed.", show_alert=True)
+                await event.answer(
+                    "The user was added, but the panel could not be refreshed.",
+                    show_alert=True,
+                )
                 return
             await event.answer(f"User {target_id} is in the roster; opened settings")
             return
@@ -8199,7 +8406,9 @@ async def callback_handler(event):
                 try:
                     await asyncio.to_thread(
                         llm_chat_config.update_user_access,
-                        target_id, capability=capability, enabled=enabled,
+                        target_id,
+                        capability=capability,
+                        enabled=enabled,
                     )
                 except llm_chat_config.ConfigUpdateError as exc:
                     error_text = str(exc) or "Could not update the Codex user roster."
@@ -8338,9 +8547,7 @@ async def callback_handler(event):
             selected_model = _scope_selected_model(
                 event.chat_id, user_id, scope=REASONING_SCOPE_PERSONAL
             )
-            if not await _can_user_access_model(
-                event, selected_model, config=config
-            ):
+            if not await _can_user_access_model(event, selected_model, config=config):
                 await event.answer(
                     _model_access_denial(selected_model), show_alert=True
                 )
@@ -8363,14 +8570,15 @@ async def callback_handler(event):
             feedback = f"Model set to {model_choices[model_id]}"
 
         menu = _build_model_menu(
-            event.chat_id, user_id, scope=REASONING_SCOPE_PERSONAL,
-            admin_p=admin_p, codex_p=codex_p
+            event.chat_id,
+            user_id,
+            scope=REASONING_SCOPE_PERSONAL,
+            admin_p=admin_p,
+            codex_p=codex_p,
         )
         buttons = _model_menu_buttons(
             menu,
-            callback_data=lambda key: (
-                f"model_{bot_util.sanitize_callback_data(key)}"
-            ),
+            callback_data=lambda key: (f"model_{bot_util.sanitize_callback_data(key)}"),
         )
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
         await event.answer(feedback)
@@ -8393,9 +8601,7 @@ async def callback_handler(event):
             selected_model = _scope_selected_model(
                 chat_id, user_id, scope=REASONING_SCOPE_CHAT
             )
-            if not await _can_user_access_model(
-                event, selected_model, config=config
-            ):
+            if not await _can_user_access_model(event, selected_model, config=config):
                 await event.answer(
                     _model_access_denial(selected_model), show_alert=True
                 )
@@ -8425,8 +8631,11 @@ async def callback_handler(event):
             cancel_input_flow(user_id)  # Cancel the custom input flow
 
         menu = _build_model_menu(
-            chat_id, user_id, scope=REASONING_SCOPE_CHAT,
-            admin_p=admin_p, codex_p=codex_p
+            chat_id,
+            user_id,
+            scope=REASONING_SCOPE_CHAT,
+            admin_p=admin_p,
+            codex_p=codex_p,
         )
         buttons = _model_menu_buttons(
             menu,
@@ -8757,12 +8966,8 @@ async def generic_input_handler(event):
                 if input_type == "chatmodel"
                 else REASONING_SCOPE_PERSONAL
             )
-            selected_model = _scope_selected_model(
-                event.chat_id, user_id, scope=scope
-            )
-            if not await _guard_model_access(
-                event, selected_model, config=config
-            ):
+            selected_model = _scope_selected_model(event.chat_id, user_id, scope=scope)
+            if not await _guard_model_access(event, selected_model, config=config):
                 cancel_input_flow(user_id)
                 return
             feedback = await _apply_reasoning_menu_choice(
@@ -8873,9 +9078,7 @@ async def generic_input_handler(event):
                         else REASONING_SCOPE_PERSONAL
                     )
                     state = _think_menu_state(event.chat_id, user_id, scope=scope)
-                    if not await _guard_model_access(
-                        event, state.model, config=config
-                    ):
+                    if not await _guard_model_access(event, state.model, config=config):
                         return
                     level = (
                         None if selected_key == REASONING_CLEAR_KEY else selected_key
@@ -10233,11 +10436,11 @@ async def chat_handler(event):
                         )
                     return
                 #: Fenced so JSON braces and backticks cannot break markdown.
-                error_text = f"{BOT_META_INFO_PREFIX}❌ Codex request failed.\n```\n{e}\n```"
+                error_text = (
+                    f"{BOT_META_INFO_PREFIX}❌ Codex request failed.\n```\n{e}\n```"
+                )
                 if partial:
-                    error_text = (
-                        f"{partial}\n\n{BOT_META_INFO_LINE}\n{error_text}"
-                    )
+                    error_text = f"{partial}\n\n{BOT_META_INFO_LINE}\n{error_text}"
                 await util.edit_message(
                     response_message,
                     error_text,
