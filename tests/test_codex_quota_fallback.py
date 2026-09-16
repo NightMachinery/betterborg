@@ -451,6 +451,57 @@ class QuotaPanelTests(unittest.TestCase):
         fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
         self.assertIn("Stand-in Active", self.panel(fallback=fallback).text)
 
+    def recommended_label(self, **kwargs):
+        panel = self.panel(**kwargs)
+        starred = [
+            b.text for row in (panel.buttons or []) for b in row if "⭐" in b.text
+        ]
+        return panel.text, starred
+
+    def test_the_reserve_is_recommended_and_named_in_a_tldr(self):
+        text, starred = self.recommended_label(
+            quota=self.quota, usage=_usage(reserve_allowed=True)
+        )
+        self.assertTrue(text.startswith("👉 **TL;DR:**"), text[:60])
+        self.assertIn("Luna Reserve", text.split("\n")[0])
+        self.assertEqual(len(starred), 1)
+        self.assertIn("Luna Reserve", starred[0])
+
+    def test_a_spent_or_absent_reserve_hands_the_star_to_the_next_one(self):
+        for usage in (_usage(), _usage(reserve=False)):
+            with self.subTest(usage=usage):
+                text, starred = self.recommended_label(quota=self.quota, usage=usage)
+                self.assertEqual(len(starred), 1)
+                self.assertIn(
+                    plugin._model_display_name(GEMINI_FLASH_LATEST), starred[0]
+                )
+                self.assertIn(
+                    plugin._model_display_name(GEMINI_FLASH_LATEST),
+                    text.split("\n")[0],
+                )
+
+    def test_nothing_is_recommended_while_the_allowance_is_intact(self):
+        #: There is no limit to route around, so the panel opens on its title.
+        text, _ = self.recommended_label(
+            usage=_usage(primary_allowed=True, reserve_allowed=True)
+        )
+        self.assertNotIn("TL;DR", text)
+
+    def test_the_armed_stand_in_is_not_recommended_to_itself(self):
+        fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
+        _, starred = self.recommended_label(fallback=fallback, usage=_usage())
+        self.assertEqual(starred, [])
+
+    def test_an_armed_stand_in_still_hears_about_a_better_one(self):
+        #: On Gemini with the Reserve free: worth saying, since the Reserve is
+        #: the one that keeps the request on Codex.
+        fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
+        _, starred = self.recommended_label(
+            fallback=fallback, usage=_usage(reserve_allowed=True)
+        )
+        self.assertEqual(len(starred), 1)
+        self.assertIn("Luna Reserve", starred[0])
+
     def test_buttons_are_suppressed_for_userbot_mode(self):
         panel = self.panel(quota=self.quota, usage=_usage(), buttons_p=False)
         self.assertIsNone(panel.buttons)

@@ -162,7 +162,32 @@ since lost Codex access, or they could never cancel it.
 
 ## Panel buttons
 
+### The recommendation
+
+A limit panel opens with a one-line TL;DR naming the button to press, and that
+button carries a trailing `⭐`. Someone whose request just failed wants their
+answer back; making them read a status report to find the one tap that gets it
+is the panel failing at its job.
+
+Which one is recommended is not a rule here but the **order of
+`CODEX_QUOTA_FALLBACK_MODELS`**: `_codex_quota_recommended_model` returns the
+first entry the user can actually reach. The Reserve leads, keeping the request
+on Codex -- same subscription, same models, the answer they were already going
+to get. A Reserve that is absent or spent therefore hands the star to Gemini
+Flash, and a missing Gemini key hands it on again, with nothing in the function
+knowing any of those names. Reordering the table is the whole of changing the
+policy.
+
+Two cases get no recommendation. With the allowance intact there is nothing to
+route around, so `/codexStatus` opens on its own title. And the stand-in
+already armed is never recommended to itself -- though a *better* one still is,
+so someone parked on Gemini with the Reserve free hears about it.
+
 ### What an icon claims
+
+The `⭐` is the one marker that is not about the tap at all -- it describes the
+option rather than the action, which is why it trails the label where the
+action icons lead it.
 
 `🔁` is a **state**: this switch rule is in force right now. Exactly one button
 can wear it, the one naming the active stand-in, and tapping that button writes

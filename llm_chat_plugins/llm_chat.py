@@ -7250,9 +7250,11 @@ CODEX_QUOTA_CALLBACK_PREFIX = "cq:"
 #: Stand-ins offered once Codex cannot answer at all. Single-character tokens
 #: keep the callback payload small; the map is closed, so an unknown token is
 #: a stale button rather than a new model.
-#: The Reserve leads: it is the smallest step of the three -- same
-#: subscription, same provider, just the other meter -- where the other two
-#: hand the request to a different vendor.
+#: Ordered by preference, and read that way: `_codex_quota_recommended_model`
+#: singles out the first of these the user can actually reach. The Reserve
+#: leads because it is the smallest step of the three -- same subscription,
+#: same provider, just the other meter -- where the other two hand the request
+#: to a different vendor.
 CODEX_QUOTA_FALLBACK_MODELS = {
     "l": OPENAI_CODEX_LUNA_RESERVE,
     "g": GEMINI_FLASH_LATEST,
@@ -7367,10 +7369,42 @@ CODEX_QUOTA_ICON_ACTIVE = "🔁"
 CODEX_QUOTA_ICON_SWITCH = "➡️"
 CODEX_QUOTA_ICON_UNDO = "↩️"
 CODEX_QUOTA_ICON_RESERVE = "🌙"
+#: Trailing, not leading: the icon at the front says what the tap does, and
+#: this says something about the option instead. One button can carry it.
+CODEX_QUOTA_ICON_RECOMMENDED = "⭐"
+
+
+def _codex_quota_recommended_model(candidates, *, fallback) -> Optional[str]:
+    """The stand-in worth singling out, or None when none is.
+
+    The first *usable* one, which makes `CODEX_QUOTA_FALLBACK_MODELS`' order
+    the single place this preference lives. The Reserve leads because it keeps
+    the request on Codex -- same subscription, same models, the answer the
+    user was already going to get -- and the vendor stand-ins queue behind it.
+    A Reserve that is absent or spent therefore hands the recommendation to
+    Gemini Flash without anything here having to know that, and reordering the
+    table is the whole of changing the policy.
+
+    None once the winner is already armed: recommending what is in force is
+    noise, not advice.
+    """
+    for candidate in candidates:
+        if not candidate.usable_p:
+            continue
+        if fallback is not None and fallback.model == candidate.model:
+            return None
+        return candidate.model
+    return None
 
 
 def _codex_quota_switch_buttons(
-    candidates, *, owner_id, deadline, reported_p, active_model=None
+    candidates,
+    *,
+    owner_id,
+    deadline,
+    reported_p,
+    active_model=None,
+    recommended_model=None,
 ):
     window = "until reset" if reported_p else "for ~6 hours"
     buttons = []
@@ -7403,6 +7437,8 @@ def _codex_quota_switch_buttons(
             f"{CODEX_QUOTA_ICON_SWITCH} Use"
             f" {_model_display_name(candidate.model)} {window}"
         )
+        if recommended_model is not None and candidate.model == recommended_model:
+            label = f"{label} {CODEX_QUOTA_ICON_RECOMMENDED}"
         buttons.append(KeyboardButtonCallback(_truncate_utf16(label, 48), data=data))
     return buttons
 
@@ -7529,6 +7565,11 @@ def _codex_quota_panel(
     saved_model = _codex_quota_saved_model(user_id, chat_id=chat_id)
     usable = [candidate for candidate in candidates if candidate.usable_p]
     deadline, reported_p = _codex_quota_deadline(quota, usage, now=now)
+    recommended = _codex_quota_recommended_model(candidates, fallback=fallback)
+    primary = getattr(usage, "primary", None)
+    limit_in_evidence_p = quota is not None or (
+        primary is not None and not primary.allowed
+    )
     lines = []
 
     #: A reported failure outranks an armed stand-in. Taking the stand-in
@@ -7557,16 +7598,24 @@ def _codex_quota_panel(
             deadline=deadline,
             reported_p=reported_p,
             active_model=fallback.model,
+            recommended_model=recommended,
         )
         return CodexQuotaPanel(
             text=_bounded_panel_text("\n".join(lines)),
             buttons=(util.build_menu(buttons, n_cols=1) if buttons_p else None),
         )
 
-    primary = getattr(usage, "primary", None)
-    limit_in_evidence_p = quota is not None or (
-        primary is not None and not primary.allowed
-    )
+    if recommended is not None and limit_in_evidence_p:
+        #: First, before the heading: someone who wants their answer back
+        #: should not have to read a status report to find the one tap that
+        #: gets it. Only with a limit actually in evidence -- there is nothing
+        #: to recommend while the allowance is fine.
+        lines.append(
+            f"👉 **TL;DR:** tap **{CODEX_QUOTA_ICON_SWITCH} Use"
+            f" {_model_display_name(recommended)} {'until reset' if reported_p else 'for ~6 hours'}"
+            f" {CODEX_QUOTA_ICON_RECOMMENDED}** below."
+        )
+        lines.append("")
 
     if quota is not None:
         lines.append("❌ **Codex Usage Limit Reached**")
@@ -7647,6 +7696,7 @@ def _codex_quota_panel(
         deadline=deadline,
         reported_p=reported_p,
         active_model=(fallback.model if fallback is not None else None),
+        recommended_model=recommended,
     )
     return CodexQuotaPanel(
         text=_bounded_panel_text("\n".join(lines)),
