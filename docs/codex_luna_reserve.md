@@ -57,12 +57,19 @@ It used to retry by itself, and that was wrong on two counts:
 - **Consent.** It moved the account onto a second meter without asking. The
   meters are separate allowances, and spending the Reserve is a decision.
 
-Tapping the button changes no saved setting, so the next message asks again.
-That is deliberate: the allowance can come back at any time, and a remembered
-"use the Reserve" would keep spending it after the regular one had reset. It is
-also why the offer is per-message rather than a stand-in -- see
-[Codex quota fallback](codex_quota_fallback.md) for the stand-in, which *is*
-remembered and covers a different case.
+Tapping that button changes no saved setting, so the next message asks again.
+That is deliberate for a *one-off*: the allowance can come back at any time,
+and an implicit "use the Reserve from now on" would keep spending it after the
+regular one had reset.
+
+Someone who does want to stay on it says so: the Reserve is also offered as a
+**stand-in**, `➡️ Use Luna Reserve (Codex) until reset`, beside the Gemini and
+OpenRouter ones. That is remembered, expires at the reset by itself, and is
+listed first because it is the smallest of the three steps -- same
+subscription, same provider, just the other meter. See
+[Codex quota fallback](codex_quota_fallback.md). The difference between the
+two buttons is consent, not mechanism: one answers a message, the other
+changes where saved defaults go until the allowance returns.
 
 The button appears only when there is a message it could answer, the account
 has a Reserve, and that Reserve is not itself spent. A request already aimed at

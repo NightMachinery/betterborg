@@ -245,6 +245,11 @@ class MissingFallbackKeyTests(unittest.TestCase):
         self.assertIn(plugin.CODEX_SETTINGS_UNCHANGED, info.await_args.args[1])
 
 
+def _as_text(data) -> str:
+    """Callback payloads are bytes in Telethon and str under the test stub."""
+    return data.decode("utf-8") if isinstance(data, bytes) else data
+
+
 def _usage(*, reserve=True, reserve_allowed=False, primary_allowed=False):
     additional = ()
     if reserve:
@@ -332,7 +337,36 @@ class QuotaPanelTests(unittest.TestCase):
                 self.assertNotIn("🔁", button.text)
 
         fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
-        self.assertIn("🔁", self.panel(fallback=fallback).text)
+        labels = [b.text for row in self.panel(fallback=fallback).buttons for b in row]
+        active = [label for label in labels if "🔁" in label]
+        self.assertEqual(len(active), 1)
+        self.assertIn(plugin._model_display_name(GEMINI_FLASH_LATEST), active[0])
+
+    def test_the_active_stand_in_keeps_a_button_rather_than_vanishing(self):
+        #: It used to be dropped from the offers, which left the rule in force
+        #: visible nowhere among the switches.
+        fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
+        buttons = [b for row in self.panel(fallback=fallback).buttons for b in row]
+        self.assertIn("cq:a:123", [_as_text(b.data) for b in buttons])
+
+    def test_the_luna_reserve_is_offered_beside_the_vendor_stand_ins(self):
+        panel = self.panel(quota=self.quota, usage=_usage(reserve_allowed=True))
+        labels = [b.text for row in panel.buttons for b in row]
+        self.assertTrue(
+            any("Luna Reserve" in label and "until reset" in label for label in labels),
+            labels,
+        )
+
+    def test_a_spent_or_absent_reserve_is_not_offered_as_a_stand_in(self):
+        for usage in (_usage(), _usage(reserve=False)):
+            with self.subTest(usage=usage):
+                panel = self.panel(quota=self.quota, usage=usage)
+                labels = [b.text for row in panel.buttons for b in row]
+                self.assertFalse(
+                    any("Luna Reserve" in label for label in labels), labels
+                )
+                #: ...and not listed as something a key would fix, either.
+                self.assertNotIn("Luna Reserve —", panel.text)
 
     def test_active_fallback_offers_an_undo(self):
         fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)

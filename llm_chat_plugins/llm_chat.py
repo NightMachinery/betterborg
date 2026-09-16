@@ -5660,12 +5660,13 @@ async def help_handler(event):
         codex_shortcuts_text += (
             "\n\n**When Codex Hits Its Usage Limit**\n"
             "The Codex account is shared. When its allowance runs out I show "
-            "you what is left and offer two things, never taking either on my "
-            "own: one tap answers that message from the Luna Reserve, which is "
-            "metered separately; or a temporary stand-in model, yours alone, "
-            "applied only to your saved default, expiring by itself at the "
-            "reset, and never rewriting your settings. Codex shortcuts always "
-            "stay on Codex. See /codexStatus."
+            "you what is left and offer, never taking either on my own: one "
+            "tap to answer that message from the Luna Reserve, which is "
+            "metered separately; or a temporary stand-in until the reset -- "
+            "the Reserve itself, or another provider. A stand-in is yours "
+            "alone, applies only to your saved default, expires by itself and "
+            "never rewrites your settings. Codex shortcuts always stay on "
+            "Codex, so they keep reporting the limit. See /codexStatus."
         )
 
     help_text = f"""
@@ -7235,7 +7236,11 @@ CODEX_QUOTA_CALLBACK_PREFIX = "cq:"
 #: Stand-ins offered once Codex cannot answer at all. Single-character tokens
 #: keep the callback payload small; the map is closed, so an unknown token is
 #: a stale button rather than a new model.
+#: The Reserve leads: it is the smallest step of the three -- same
+#: subscription, same provider, just the other meter -- where the other two
+#: hand the request to a different vendor.
 CODEX_QUOTA_FALLBACK_MODELS = {
+    "l": OPENAI_CODEX_LUNA_RESERVE,
     "g": GEMINI_FLASH_LATEST,
     "o": OR_OPENAI_5_6_SOL,
 }
@@ -7256,7 +7261,10 @@ class CodexQuotaCandidate:
     model: str
     service: str
     usable_p: bool
-    setkey_command: str
+    #: What the user would have to run to make this one usable, or None when
+    #: there is nothing they could run: the Reserve needs no key of its own,
+    #: it is simply there or spent.
+    setkey_command: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -7267,10 +7275,34 @@ class CodexQuotaPanel:
     buttons: Optional[list] = None
 
 
-def _codex_quota_candidates(user_id: int) -> list:
+def _codex_quota_candidates(user_id: int, *, usage=None) -> list:
+    """The stand-ins this user could switch to, and whether each is reachable.
+
+    `usage` is optional because reachability means different things: the
+    vendor stand-ins need an API key, which is a local fact, while the Reserve
+    needs the account to have one and not have spent it, which only the meters
+    know. Unknown usage reads the Reserve as usable -- the panel that offered
+    the button had the meters in hand, and the tap that follows should not pay
+    to fetch them again.
+    """
+    reserve = usage.reserve() if usage is not None else None
     candidates = []
     for token, model in CODEX_QUOTA_FALLBACK_MODELS.items():
         service = llm_util.get_service_from_model(model)
+
+        if codex_util.is_luna_reserve_model(model):
+            candidates.append(
+                CodexQuotaCandidate(
+                    token=token,
+                    model=model,
+                    service=service,
+                    usable_p=(
+                        usage is None or (reserve is not None and reserve.allowed)
+                    ),
+                )
+            )
+            continue
+
         setkey_command = CODEX_QUOTA_SETKEY_COMMANDS.get(service)
         if setkey_command is None:
             raise ValueError(f"No key-setup command for stand-in service: {service}")
@@ -7323,11 +7355,30 @@ CODEX_QUOTA_ICON_UNDO = "↩️"
 CODEX_QUOTA_ICON_RESERVE = "🌙"
 
 
-def _codex_quota_switch_buttons(candidates, *, owner_id, deadline, reported_p):
+def _codex_quota_switch_buttons(
+    candidates, *, owner_id, deadline, reported_p, active_model=None
+):
     window = "until reset" if reported_p else "for ~6 hours"
     buttons = []
     for candidate in candidates:
         if not candidate.usable_p:
+            continue
+
+        if active_model is not None and candidate.model == active_model:
+            #: The only button that reports a state instead of offering one,
+            #: and so the only one wearing the state icon. It used to be
+            #: dropped from the list entirely, which left the switch rule in
+            #: force visible nowhere among the switches.
+            buttons.append(
+                KeyboardButtonCallback(
+                    _truncate_utf16(
+                        f"{CODEX_QUOTA_ICON_ACTIVE} Using"
+                        f" {_model_display_name(candidate.model)} {window}",
+                        48,
+                    ),
+                    data=f"{CODEX_QUOTA_CALLBACK_PREFIX}a:{owner_id}",
+                )
+            )
             continue
         data = (
             f"{CODEX_QUOTA_CALLBACK_PREFIX}s:{owner_id}:{candidate.token}"
@@ -7372,17 +7423,19 @@ def _codex_quota_missing_key_lines(candidates) -> list:
     return [
         f"• {_model_display_name(candidate.model)} — needs {candidate.setkey_command}"
         for candidate in candidates
-        if not candidate.usable_p
+        #: An unusable Reserve is not a configuration gap, so it is left out
+        #: rather than listed under something the user could go and fix.
+        if not candidate.usable_p and candidate.setkey_command
     ]
 
 
 def _codex_quota_scope_lines() -> list:
     return [
         "• Only you are affected; nobody else's settings change.",
-        "• Only your **saved** model is redirected — your personal default and"
-        " this chat's model.",
-        "• Codex prefixes stay Codex: `.c`, `.ch`, `.cxx`, `.as`, `.cr` and their"
-        " Persian aliases keep reporting the limit.",
+        "• Your Codex requests are redirected — **unless** you ask for Codex"
+        " directly with a magic prefix like `.as`, `.c`, `.ch`, `.cxx` or"
+        " `.cr` (or a Persian alias). Those stay on Codex, so while the limit"
+        " lasts they will just error.",
         "• Nothing is overwritten. Your saved Codex model returns on its own.",
     ]
 
@@ -7449,14 +7502,14 @@ def _codex_quota_panel(
 ) -> CodexQuotaPanel:
     """Render the quota panel for whichever state this user is actually in."""
     now = now or datetime.now(timezone.utc)
-    candidates = _codex_quota_candidates(user_id)
+    candidates = _codex_quota_candidates(user_id, usage=usage)
     saved_model = _codex_quota_saved_model(user_id, chat_id=chat_id)
     usable = [candidate for candidate in candidates if candidate.usable_p]
     deadline, reported_p = _codex_quota_deadline(quota, usage, now=now)
     lines = []
 
     if fallback is not None:
-        lines.append(f"{CODEX_QUOTA_ICON_ACTIVE} **Temporary Codex Stand-in Active**")
+        lines.append("✅ **Temporary Codex Stand-in Active**")
         lines.append("")
         lines.append(_codex_quota_model_line(saved_model, stand_in=fallback.model))
         lines.append(
@@ -7476,10 +7529,11 @@ def _codex_quota_panel(
             )
         ]
         buttons += _codex_quota_switch_buttons(
-            [c for c in usable if c.model != fallback.model],
+            usable,
             owner_id=user_id,
             deadline=deadline,
             reported_p=reported_p,
+            active_model=fallback.model,
         )
         return CodexQuotaPanel(
             text=_bounded_panel_text("\n".join(lines)),
@@ -7646,7 +7700,9 @@ async def codex_status_handler(event):
         return
 
     await send_info_message(event, panel.text, parse_mode="md")
-    candidates = [item for item in _codex_quota_candidates(user_id) if item.usable_p]
+    candidates = [
+        item for item in _codex_quota_candidates(user_id, usage=usage) if item.usable_p
+    ]
     if not candidates:
         return
     deadline, _ = _codex_quota_deadline(None, usage, now=datetime.now(timezone.utc))
@@ -8599,6 +8655,18 @@ async def callback_handler(event):
                 return
             await _answer_from_luna_reserve(event, message_id=int(parts[3]))
             return
+        if action == "a":
+            #: The state button. Nothing to write; say what is already true.
+            current = user_manager.get_codex_quota_fallback(user_id)
+            await event.answer(
+                (
+                    f"Already using {_model_display_name(current.model)}."
+                    if current is not None
+                    else "That stand-in is no longer active."
+                ),
+                show_alert=True,
+            )
+            return
         if action == "u":
             feedback = _apply_codex_quota_choice(user_id, key="")
         elif action == "s":
@@ -8618,8 +8686,13 @@ async def callback_handler(event):
                 return
             if not candidate.usable_p:
                 await event.answer(
-                    f"{_model_display_name(candidate.model)} needs"
-                    f" {candidate.setkey_command} first.",
+                    (
+                        f"{_model_display_name(candidate.model)} needs"
+                        f" {candidate.setkey_command} first."
+                        if candidate.setkey_command
+                        else f"{_model_display_name(candidate.model)} is not"
+                        " available right now."
+                    ),
                     show_alert=True,
                 )
                 return

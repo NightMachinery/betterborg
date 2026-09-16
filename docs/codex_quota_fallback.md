@@ -38,8 +38,21 @@ window, are discarded.
   time and as a relative duration.
 - The plan type, when reported.
 - The Luna Reserve meter, but only when the account actually has one.
-- The stand-in models the user holds a usable API key for, as buttons.
+- The stand-ins that are actually reachable, as buttons.
 - For the rest, the command that would configure them.
+
+"Reachable" means different things per stand-in, which is why
+`_codex_quota_candidates` takes the meters. The vendor stand-ins need an API
+key, a local fact. The **Luna Reserve** needs no key at all -- it rides the
+same Codex credentials as the model it stands in for -- so what gates it is
+whether the account has a Reserve and has not spent it, which only the meters
+know. It is listed first, being the smallest step of the three: same
+subscription, same provider, the other meter, where the others hand the
+request to a different vendor.
+
+An unreachable Reserve is simply absent. It is not a configuration gap, so it
+never appears under "available once configured" beside a command that would
+not help.
 
 When no stand-in is reachable the panel says so and names `/setGeminiKey` and
 `/setOpenRouterKey` rather than offering a button that cannot work.
@@ -112,14 +125,18 @@ since lost Codex access, or they could never cancel it.
 
 ### What an icon claims
 
-`🔁` is a **state**: this switch rule is in force right now. It appears on the
-stand-in-active header and nowhere else. Every other button carries an *action*
-icon saying what the tap does -- `➡️` switch to this model, `↩️` undo the
-switch, `🌙` answer this one message from the Luna Reserve.
+`🔁` is a **state**: this switch rule is in force right now. Exactly one button
+can wear it, the one naming the active stand-in, and tapping that button writes
+nothing -- it answers "Already using X". Every other button carries an *action*
+icon saying what the tap does: `➡️` switch to this model, `↩️` undo the switch,
+`🌙` answer this one message from the Luna Reserve.
 
-The offers used to wear `🔁` too, which made a panel that had switched nothing
-read as though it already had. The icons are named constants
-(`CODEX_QUOTA_ICON_*`) so the distinction survives the next label edit.
+Two things were wrong before. The offers wore `🔁` too, so a panel that had
+switched nothing read as though it already had. And the active stand-in was
+dropped from the button list altogether, so the rule actually in force was
+visible nowhere among the switches -- which is the one place a reader looks to
+find out what is switched. The icons are named constants (`CODEX_QUOTA_ICON_*`)
+so the distinction survives the next label edit.
 
 ### Payloads
 
