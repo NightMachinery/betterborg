@@ -267,5 +267,90 @@ class LunaReserveRetryTests(unittest.TestCase):
         self.assertIn(OPENAI_CODEX_LUNA_RESERVE, models)
 
 
+#: Captured from the live endpoint, trimmed to the fields that are read.
+USAGE_PAYLOAD = {
+    "plan_type": "prolite",
+    "rate_limit": {
+        "allowed": False,
+        "limit_reached": True,
+        "primary_window": {
+            "used_percent": 100,
+            "limit_window_seconds": 604800,
+            "reset_after_seconds": 351009,
+            "reset_at": 1789921958,
+        },
+        "secondary_window": None,
+    },
+    "additional_rate_limits": [
+        {
+            "limit_name": "GPT-5.3-Codex-Spark",
+            "metered_feature": "codex_bengalfox",
+            "rate_limit": {
+                "allowed": True,
+                "limit_reached": False,
+                "primary_window": {
+                    "used_percent": 0,
+                    "limit_window_seconds": 18000,
+                    "reset_at": 1789588949,
+                },
+            },
+            "normal_model_slug": None,
+        },
+        {
+            "limit_name": "gpt-reserve",
+            "metered_feature": "base_model_inference",
+            "rate_limit": {
+                "allowed": True,
+                "limit_reached": False,
+                "primary_window": {
+                    "used_percent": 1,
+                    "limit_window_seconds": 604800,
+                    "reset_at": 1790174851,
+                },
+            },
+            "normal_model_slug": "gpt-5.6-luna",
+        },
+    ],
+}
+
+
+class CodexUsageParsingTests(unittest.TestCase):
+    def test_primary_window_is_read(self):
+        usage = codex_util._usage_from_payload(USAGE_PAYLOAD)
+        self.assertEqual(usage.plan_type, "prolite")
+        self.assertFalse(usage.primary.allowed)
+        self.assertEqual(usage.primary.used_percent, 100)
+        self.assertEqual(usage.primary.window_seconds, 604800)
+        self.assertIsNotNone(usage.primary.resets_at)
+
+    def test_reserve_meter_is_found_among_additional_limits(self):
+        reserve = codex_util._usage_from_payload(USAGE_PAYLOAD).reserve()
+        self.assertIsNotNone(reserve)
+        self.assertTrue(reserve.allowed)
+        self.assertEqual(reserve.used_percent, 1)
+
+    def test_reserve_is_none_for_an_account_without_one(self):
+        #: The Reserve is limited to selected accounts; elsewhere the entry is
+        #: simply absent and nothing about it should be shown.
+        payload = dict(USAGE_PAYLOAD)
+        payload["additional_rate_limits"] = [
+            entry
+            for entry in USAGE_PAYLOAD["additional_rate_limits"]
+            if entry["limit_name"] != "gpt-reserve"
+        ]
+        usage = codex_util._usage_from_payload(payload)
+        self.assertIsNone(usage.reserve())
+        self.assertEqual(len(usage.additional), 1)
+
+    def test_malformed_payloads_do_not_raise(self):
+        for payload in (None, [], "nope", {}, {"additional_rate_limits": [1, None]}):
+            with self.subTest(payload=repr(payload)[:30]):
+                usage = codex_util._usage_from_payload(payload)
+                if payload in (None, [], "nope"):
+                    self.assertIsNone(usage)
+                else:
+                    self.assertIsNone(usage.reserve())
+
+
 if __name__ == "__main__":
     unittest.main()

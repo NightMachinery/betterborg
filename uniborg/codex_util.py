@@ -11,6 +11,7 @@ from typing import Awaitable, Callable, Optional
 
 from urllib.parse import urlparse
 
+import httpx
 import openai
 from PIL import Image
 
@@ -255,6 +256,112 @@ def _stream_error_message(stream_event) -> str:
     )
     base = "Codex backend reported a streaming error."
     return f"{base} {detail}" if detail else base
+
+
+#: Reports the account's rate-limit meters. Not part of the Codex API surface
+#: proper, which is why it sits on a different path from CODEX_BASE_URL.
+CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+#: Opting in is what makes the Reserve meter appear in the reply at all.
+CODEX_RESERVE_HEADER = "x-openai-codex-luna-reserve"
+#: The `limit_name` the Luna Reserve meter is reported under.
+CODEX_RESERVE_LIMIT_NAME = "gpt-reserve"
+
+
+@dataclass(frozen=True)
+class CodexMeter:
+    """One rate-limit window as the Codex usage endpoint reports it."""
+
+    name: str
+    allowed: bool
+    used_percent: Optional[float] = None
+    resets_at: Optional[datetime] = None
+    window_seconds: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class CodexUsage:
+    """The account's regular allowance plus any separately metered pools."""
+
+    plan_type: Optional[str] = None
+    primary: Optional[CodexMeter] = None
+    additional: tuple = ()
+
+    def reserve(self) -> Optional[CodexMeter]:
+        """The Luna Reserve meter, or None when this account has no Reserve."""
+        for meter in self.additional:
+            if meter.name.lower() == CODEX_RESERVE_LIMIT_NAME:
+                return meter
+        return None
+
+
+def _epoch_to_datetime(value) -> Optional[datetime]:
+    seconds = _epoch_seconds(value)
+    if seconds is None:
+        return None
+    try:
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _meter_from_rate_limit(name: str, rate_limit) -> Optional[CodexMeter]:
+    if not isinstance(rate_limit, dict):
+        return None
+    window = rate_limit.get("primary_window")
+    window = window if isinstance(window, dict) else {}
+    used = window.get("used_percent")
+    return CodexMeter(
+        name=name,
+        allowed=bool(rate_limit.get("allowed")),
+        used_percent=float(used) if isinstance(used, (int, float)) else None,
+        resets_at=_epoch_to_datetime(window.get("reset_at")),
+        window_seconds=(
+            window.get("limit_window_seconds")
+            if isinstance(window.get("limit_window_seconds"), int)
+            else None
+        ),
+    )
+
+
+def _usage_from_payload(payload) -> Optional[CodexUsage]:
+    if not isinstance(payload, dict):
+        return None
+    plan_type = payload.get("plan_type")
+    additional = []
+    for entry in payload.get("additional_rate_limits") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("limit_name")
+        meter = _meter_from_rate_limit(name, entry.get("rate_limit"))
+        if isinstance(name, str) and meter is not None:
+            additional.append(meter)
+    return CodexUsage(
+        plan_type=plan_type if isinstance(plan_type, str) else None,
+        primary=_meter_from_rate_limit("primary", payload.get("rate_limit")),
+        additional=tuple(additional),
+    )
+
+
+async def fetch_codex_usage(*, timeout: float = 20.0) -> Optional[CodexUsage]:
+    """Read the account's rate-limit meters, or None when unavailable.
+
+    Used by status surfaces only, never on the request path. Never raises: a
+    status panel must still render when this lookup fails.
+    """
+    try:
+        token, headers, _ = await asyncio.to_thread(_get_codex_auth)
+        request_headers = dict(headers)
+        request_headers["Authorization"] = f"Bearer {token}"
+        request_headers[CODEX_RESERVE_HEADER] = "1"
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(CODEX_USAGE_URL, headers=request_headers)
+        if response.status_code != 200:
+            print(f"Codex usage lookup returned HTTP {response.status_code}.")
+            return None
+        return _usage_from_payload(response.json())
+    except Exception as exc:
+        print(f"Codex usage lookup failed: {exc}")
+        return None
 
 
 def is_codex_model(model: str) -> bool:
