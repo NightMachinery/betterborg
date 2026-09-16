@@ -36,6 +36,14 @@ window, are discarded.
   below apply to it at all.
 - Which allowances are spent, with percentage used and reset times in local
   time and as a relative duration.
+
+And deliberately little else. The plan type, "only you are affected", and the
+explanation that the ChatGPT account is shared all came out. A quota panel is
+read in a hurry by someone who wants their answer back; every line that is not
+about getting it costs the two that are. The prefix caveat is phrased against
+the moment -- "so they keep erroring" only when a limit is actually in evidence,
+since on a panel opened with the allowance intact that sentence would
+contradict the meters printed directly above it.
 - The plan type, when reported.
 - The Luna Reserve meter, but only when the account actually has one.
 - The stand-ins that are actually reachable, as buttons.

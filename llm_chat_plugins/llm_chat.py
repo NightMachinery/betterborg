@@ -7429,14 +7429,32 @@ def _codex_quota_missing_key_lines(candidates) -> list:
     ]
 
 
-def _codex_quota_scope_lines() -> list:
+#: The prefixes that keep going to Codex whatever is armed, named once.
+CODEX_QUOTA_PREFIX_LIST = "`.as`, `.c`, `.ch`, `.cxx`, `.cr`"
+
+
+def _codex_quota_scope_lines(*, limit_in_evidence_p: bool = True) -> list:
+    """The two things a stand-in does not do, and nothing else.
+
+    "Only you are affected", the plan type and the shared-account framing all
+    came out: a panel is read in a hurry by someone who wants their answer
+    back, and every line that is not about that costs the two that are.
+
+    `limit_in_evidence_p` because "they keep erroring" is a claim about right
+    now. On a panel opened with the allowance intact nothing is erroring, and
+    saying otherwise would be the copy contradicting the meters above it.
+    """
+    prefixes = (
+        f"• Magic prefixes ({CODEX_QUOTA_PREFIX_LIST} and Persian aliases)"
+        " stay on Codex"
+    )
     return [
-        "• Only you are affected; nobody else's settings change.",
-        "• Your Codex requests are redirected — **unless** you ask for Codex"
-        " directly with a magic prefix like `.as`, `.c`, `.ch`, `.cxx` or"
-        " `.cr` (or a Persian alias). Those stay on Codex, so while the limit"
-        " lasts they will just error.",
-        "• Nothing is overwritten. Your saved Codex model returns on its own.",
+        (
+            f"{prefixes}, so they keep erroring."
+            if limit_in_evidence_p
+            else f"{prefixes}."
+        ),
+        "• You'll automatically go back to your Codex model when the quota resets.",
     ]
 
 
@@ -7467,26 +7485,17 @@ def _codex_quota_model_line(model: str, *, stand_in: Optional[str] = None) -> st
         if not codex_p:
             #: An armed stand-in only redirects Codex, so a saved model that is
             #: no longer Codex leaves it armed but inert.
-            return (
-                f"• **Your model:** {name} — not Codex, so the stand-in below"
-                " is not redirecting anything."
-            )
+            return f"• **Your model:** {name} — not Codex, so the stand-in is idle."
         return (
             f"• **Your model:** {name}, temporarily switched to"
             f" {_md_code(_model_display_name(stand_in))}"
         )
 
     if codex_util.is_luna_reserve_model(model):
-        return (
-            f"• **Your model:** {name} — metered on the Reserve below, not the"
-            " regular allowance."
-        )
+        return f"• **Your model:** {name} — uses the Reserve, not the allowance."
     if codex_p:
-        return f"• **Your model:** {name} — the allowances below are the ones it uses."
-    return (
-        f"• **Your model:** {name} — not Codex, so these allowances do not"
-        " affect it. Only the Codex prefixes (`.c`, `.cr`, …) use them."
-    )
+        return f"• **Your model:** {name} — uses the allowance below."
+    return f"• **Your model:** {name} — not Codex, so none of this affects it."
 
 
 def _codex_quota_panel(
@@ -7516,12 +7525,8 @@ def _codex_quota_panel(
             f"• **Until:** {_md_code(_format_local(fallback.until))}"
             f" ({_format_relative(fallback.until, now=now)})"
         )
-        lines.append("• **Scope:** you only, saved defaults only")
         lines.append("")
-        lines.append(
-            "Your saved Codex model is untouched and returns automatically."
-            " Codex prefixes still go to Codex."
-        )
+        lines.extend(_codex_quota_scope_lines())
         buttons = [
             KeyboardButtonCallback(
                 f"{CODEX_QUOTA_ICON_UNDO} Switch back to Codex now",
@@ -7548,13 +7553,6 @@ def _codex_quota_panel(
     if quota is not None:
         lines.append("❌ **Codex Usage Limit Reached**")
         lines.append("")
-        lines.append(
-            "The ChatGPT account behind Codex is shared, and its allowance is"
-            " used up."
-        )
-        lines.append("")
-        if quota.plan_type:
-            lines.append(f"• **Plan:** {_md_code(quota.plan_type)}")
     else:
         lines.append("🧠 **Codex Status**")
         lines.append("")
@@ -7589,26 +7587,24 @@ def _codex_quota_panel(
             else "**Want a stand-in ready anyway?**"
         )
         lines.append(
-            "I can send your saved-default requests elsewhere"
+            "Tap one below and your saved Codex model goes there"
             + (" until the quota resets" if reported_p else " for about 6 hours")
-            + ", then switch back on my own."
+            + "."
         )
         lines.append("")
-        lines.extend(_codex_quota_scope_lines())
+        lines.extend(_codex_quota_scope_lines(limit_in_evidence_p=limit_in_evidence_p))
         missing = _codex_quota_missing_key_lines(candidates)
         if missing:
             lines.append("")
             lines.append("Also available once configured:")
             lines.extend(missing)
+        lines.append("")
+        lines.append("Use /codexStatus any time to change or cancel this.")
     else:
-        lines.append("**No stand-in available**")
-        lines.append(
-            "A stand-in needs an API key I can use, and you have none configured:"
-        )
+        lines.append("**No stand-in available** — I need an API key first:")
         lines.extend(_codex_quota_missing_key_lines(candidates))
-
-    lines.append("")
-    lines.append("Use /codexStatus any time to change or cancel this.")
+        lines.append("")
+        lines.append("Use /codexStatus any time to change or cancel this.")
 
     buttons = _codex_quota_reserve_buttons(
         usage, owner_id=user_id, source_message_id=source_message_id

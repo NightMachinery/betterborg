@@ -387,12 +387,12 @@ class QuotaPanelTests(unittest.TestCase):
     def test_a_codex_model_is_told_the_allowances_are_its_own(self):
         line = self.model_line(OPENAI_CODEX_GPT_5_6_SOL)
         self.assertIn("Your model", line)
-        self.assertIn("the ones it uses", line)
+        self.assertIn("uses the allowance", line)
 
     def test_a_non_codex_model_is_told_the_allowances_do_not_apply(self):
         line = self.model_line(GEMINI_FLASH_LATEST)
         self.assertIn("not Codex", line)
-        self.assertIn("`.c`", line)
+        self.assertIn("none of this affects it", line)
 
     def test_the_reserve_model_is_distinguished_from_the_plan_allowance(self):
         line = self.model_line(OPENAI_CODEX_LUNA_RESERVE)
@@ -408,7 +408,19 @@ class QuotaPanelTests(unittest.TestCase):
         #: Armed, then the saved model changed away from Codex: the stand-in is
         #: still armed but redirects nothing, and the panel has to say so.
         line = self.model_line(GEMINI_FLASH_LATEST, stand_in=OR_OPENAI_5_6_SOL)
-        self.assertIn("not redirecting", line)
+        self.assertIn("the stand-in is idle", line)
+
+    def test_the_prefix_caveat_survives_in_every_branch_that_offers_one(self):
+        #: The one thing a stand-in does *not* cover, so it cannot be dropped.
+        fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
+        for kwargs in (
+            {"quota": self.quota, "usage": _usage()},
+            {"fallback": fallback},
+        ):
+            with self.subTest(kwargs=sorted(kwargs)):
+                text = self.panel(**kwargs).text
+                self.assertIn("`.as`", text)
+                self.assertIn("keep erroring", text)
 
     def test_the_panel_states_the_model_in_every_branch(self):
         fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
