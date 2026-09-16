@@ -174,6 +174,7 @@ from uniborg.constants import (
     OPENAI_CODEX_GPT_5_6_SOL,
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_LATEST,
+    OPENAI_CODEX_LUNA_RESERVE,
     PIONEER_OPUS_4_8,
     PIONEER_GPT_5_5,
     PIONEER_SONNET_4_6,
@@ -240,6 +241,8 @@ CODEX_PREFIX_MODEL_MAPPING = {
     (".asx", ".اسخ"): (OPENAI_CODEX_ASTRA, "xhigh"),
     (".asxx", ".اسخخ"): (OPENAI_CODEX_ASTRA, "max"),
     (".as", ".اس"): (OPENAI_CODEX_ASTRA, "medium"),
+    #: The Luna Reserve meter, which survives the regular allowance running out.
+    (".cr", ".چر"): (OPENAI_CODEX_LUNA_RESERVE, "medium"),
 }
 
 # Restricted Codex prefixes which have no public-provider meaning. Recognize

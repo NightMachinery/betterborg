@@ -24,6 +24,11 @@ OPENAI_CODEX_GPT_5_6_SOL = "openai-codex/gpt-5.6-sol"
 OPENAI_CODEX_GPT_5_6_TERRA = "openai-codex/gpt-5.6-terra"
 OPENAI_CODEX_GPT_5_6_LUNA = "openai-codex/gpt-5.6-luna"
 OPENAI_CODEX_ASTRA = "openai-codex/gpt-6-astra"
+#: The Luna Reserve routing slug. `gpt-5.6-luna` is the model it presents as,
+#: but only `gpt-reserve` bills to the separate reserve meter, which stays
+#: usable after the regular plan allowance is spent. The Codex catalog marks it
+#: `visibility: hide`, so model listings that filter on that never expose it.
+OPENAI_CODEX_LUNA_RESERVE = "openai-codex/gpt-reserve"
 #: Astra is still rolling out to ChatGPT accounts; flip this once it is live.
 OPENAI_CODEX_LATEST = OPENAI_CODEX_GPT_5_6_SOL
 

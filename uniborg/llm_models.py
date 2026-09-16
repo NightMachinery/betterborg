@@ -23,6 +23,7 @@ from uniborg.constants import (
     OPENAI_CODEX_GPT_5_6_LUNA,
     OPENAI_CODEX_GPT_5_6_SOL,
     OPENAI_CODEX_GPT_5_6_TERRA,
+    OPENAI_CODEX_LUNA_RESERVE,
     OR_OPENAI_5_6_SOL,
 )
 
@@ -128,6 +129,14 @@ MODEL_SPECS = [
         OPENAI_CODEX_ASTRA,
         "GPT-6 Astra (Codex)",
         ASTRA_REASONING_LEVELS,
+        codex_access=True,
+    ),
+    #: Billed to the Luna Reserve meter, so it keeps answering once the regular
+    #: plan allowance is spent. Every level was verified against the backend.
+    ModelSpec(
+        OPENAI_CODEX_LUNA_RESERVE,
+        "Luna Reserve (Codex)",
+        OPENAI_REASONING_LEVELS,
         codex_access=True,
     ),
     ## Pioneer (admin-only) - no longer used, kept for easy re-enabling.

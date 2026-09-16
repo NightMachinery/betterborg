@@ -15,6 +15,7 @@ import openai
 from PIL import Image
 
 from uniborg import util
+from uniborg.constants import OPENAI_CODEX_LUNA_RESERVE
 
 
 CODEX_MODEL_PREFIX = "openai-codex/"
@@ -262,6 +263,13 @@ def is_codex_model(model: str) -> bool:
 
 def codex_model_name(model: str) -> str:
     return model.removeprefix(CODEX_MODEL_PREFIX)
+
+
+def is_luna_reserve_model(model: str) -> bool:
+    """Whether `model` routes to the Luna Reserve rather than the plan allowance."""
+    return bool(model) and codex_model_name(model) == codex_model_name(
+        OPENAI_CODEX_LUNA_RESERVE
+    )
 
 
 def codex_prompt_cache_key(*, model: str, chat_id=None, user_id=None) -> str:
