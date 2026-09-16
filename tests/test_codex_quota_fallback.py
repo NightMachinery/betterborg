@@ -12,6 +12,7 @@ from uniborg.constants import (
     GEMINI_FLASH_LATEST,
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_GPT_5_6_SOL,
+    OPENAI_CODEX_LUNA_RESERVE,
     OR_OPENAI_5_6_SOL,
 )
 
@@ -329,6 +330,45 @@ class QuotaPanelTests(unittest.TestCase):
         panel = self.panel(usage=_usage(primary_allowed=True))
         self.assertIn("Codex Status", panel.text)
         self.assertIn("Regular allowance", panel.text)
+
+    def model_line(self, model, **kwargs):
+        return plugin._codex_quota_model_line(model, **kwargs)
+
+    def test_a_codex_model_is_told_the_allowances_are_its_own(self):
+        line = self.model_line(OPENAI_CODEX_GPT_5_6_SOL)
+        self.assertIn("Your model", line)
+        self.assertIn("the ones it uses", line)
+
+    def test_a_non_codex_model_is_told_the_allowances_do_not_apply(self):
+        line = self.model_line(GEMINI_FLASH_LATEST)
+        self.assertIn("not Codex", line)
+        self.assertIn("`.c`", line)
+
+    def test_the_reserve_model_is_distinguished_from_the_plan_allowance(self):
+        line = self.model_line(OPENAI_CODEX_LUNA_RESERVE)
+        self.assertIn("Reserve", line)
+        self.assertNotIn("not Codex", line)
+
+    def test_a_stand_in_names_both_the_saved_model_and_the_replacement(self):
+        line = self.model_line(OPENAI_CODEX_GPT_5_6_SOL, stand_in=GEMINI_FLASH_LATEST)
+        self.assertIn("temporarily switched to", line)
+        self.assertIn(plugin._model_display_name(GEMINI_FLASH_LATEST), line)
+
+    def test_a_stand_in_over_a_non_codex_model_says_it_is_not_redirecting(self):
+        #: Armed, then the saved model changed away from Codex: the stand-in is
+        #: still armed but redirects nothing, and the panel has to say so.
+        line = self.model_line(GEMINI_FLASH_LATEST, stand_in=OR_OPENAI_5_6_SOL)
+        self.assertIn("not redirecting", line)
+
+    def test_the_panel_states_the_model_in_every_branch(self):
+        fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
+        for kwargs in (
+            {"usage": _usage(primary_allowed=True)},
+            {"quota": self.quota, "usage": _usage()},
+            {"fallback": fallback},
+        ):
+            with self.subTest(kwargs=sorted(kwargs)):
+                self.assertIn("Your model", self.panel(**kwargs).text)
 
     def test_buttons_are_suppressed_for_userbot_mode(self):
         panel = self.panel(quota=self.quota, usage=_usage(), buttons_p=False)

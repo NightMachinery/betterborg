@@ -32,6 +32,8 @@ window, are discarded.
 
 ## What the panel shows
 
+- **The model the reader is actually on**, first, and whether the allowances
+  below apply to it at all.
 - Which allowances are spent, with percentage used and reset times in local
   time and as a relative duration.
 - The plan type, when reported.
@@ -41,6 +43,31 @@ window, are discarded.
 
 When no stand-in is reachable the panel says so and names `/setGeminiKey` and
 `/setOpenRouterKey` rather than offering a button that cannot work.
+
+### "Does this affect me?"
+
+The panel is shared, and the allowances on it belong to one ChatGPT account,
+but a reader's own model may have nothing to do with them. Someone whose saved
+model is Gemini used to see the same exhausted meters as someone on Codex, with
+nothing to tell the two apart. So `_codex_quota_model_line` opens the panel
+with the answer:
+
+- Saved model is Codex: *the allowances below are the ones it uses*.
+- Saved model is the Luna Reserve (`.cr`): *metered on the Reserve below, not
+  the regular allowance* -- the exhausted plan line is not its line.
+- Saved model is anything else: *not Codex, so these allowances do not affect
+  it*, plus the reminder that the Codex prefixes still do use them.
+- A stand-in is active: the saved model **and** what it is temporarily switched
+  to, rather than only the replacement.
+- A stand-in is active over a saved model that is no longer Codex: *the
+  stand-in below is not redirecting anything*. It stays armed, because
+  `_resolve_request_model` only redirects Codex, and a panel that showed it as
+  active without that caveat would be describing a redirect that is not
+  happening.
+
+The model is read through `_codex_quota_saved_model`, which takes an optional
+`chat_id`: the chat's model overrides the personal default, and the panel is
+also built from places that have no chat in hand.
 
 ## What the stand-in does
 

@@ -7348,10 +7348,60 @@ def _codex_quota_scope_lines() -> list:
     ]
 
 
+def _codex_quota_saved_model(user_id: int, *, chat_id: Optional[int] = None) -> str:
+    """The model this user's saved settings resolve to, ignoring any stand-in.
+
+    `chat_id` is optional because the panel is built from places that have no
+    chat in hand; without it the chat-specific override is invisible and the
+    personal default is the best answer available.
+    """
+    if chat_id is not None:
+        model, _ = _get_effective_model_and_service(chat_id, user_id)
+        return model
+    return user_manager.get_prefs(user_id).model
+
+
+def _codex_quota_model_line(model: str, *, stand_in: Optional[str] = None) -> str:
+    """What this user is on, and whether the allowances below apply to it.
+
+    The panel's first job is answering "does this affect me?". Someone whose
+    saved model is Gemini saw the same exhausted meters as someone on Codex,
+    with nothing on the panel to tell the two apart.
+    """
+    name = _md_code(_model_display_name(model))
+    codex_p = codex_util.is_codex_model(model)
+
+    if stand_in is not None:
+        if not codex_p:
+            #: An armed stand-in only redirects Codex, so a saved model that is
+            #: no longer Codex leaves it armed but inert.
+            return (
+                f"• **Your model:** {name} — not Codex, so the stand-in below"
+                " is not redirecting anything."
+            )
+        return (
+            f"• **Your model:** {name}, temporarily switched to"
+            f" {_md_code(_model_display_name(stand_in))}"
+        )
+
+    if codex_util.is_luna_reserve_model(model):
+        return (
+            f"• **Your model:** {name} — metered on the Reserve below, not the"
+            " regular allowance."
+        )
+    if codex_p:
+        return f"• **Your model:** {name} — the allowances below are the ones it uses."
+    return (
+        f"• **Your model:** {name} — not Codex, so these allowances do not"
+        " affect it. Only the Codex prefixes (`.c`, `.cr`, …) use them."
+    )
+
+
 def _codex_quota_panel(
     user_id: int,
     quota=None,
     *,
+    chat_id: Optional[int] = None,
     usage=None,
     fallback=None,
     reserve_tried_p: bool = False,
@@ -7361,6 +7411,7 @@ def _codex_quota_panel(
     """Render the quota panel for whichever state this user is actually in."""
     now = now or datetime.now(timezone.utc)
     candidates = _codex_quota_candidates(user_id)
+    saved_model = _codex_quota_saved_model(user_id, chat_id=chat_id)
     usable = [candidate for candidate in candidates if candidate.usable_p]
     deadline, reported_p = _codex_quota_deadline(quota, usage, now=now)
     lines = []
@@ -7368,7 +7419,7 @@ def _codex_quota_panel(
     if fallback is not None:
         lines.append("✅ **Temporary Codex Stand-in Active**")
         lines.append("")
-        lines.append(f"• **Using:** {_md_code(_model_display_name(fallback.model))}")
+        lines.append(_codex_quota_model_line(saved_model, stand_in=fallback.model))
         lines.append(
             f"• **Until:** {_md_code(_format_local(fallback.until))}"
             f" ({_format_relative(fallback.until, now=now)})"
@@ -7416,11 +7467,10 @@ def _codex_quota_panel(
     else:
         lines.append("🧠 **Codex Status**")
         lines.append("")
-        lines.append(
-            "No temporary stand-in is active — your saved model settings are in"
-            " full effect."
-        )
+        lines.append("No temporary stand-in is active.")
         lines.append("")
+
+    lines.append(_codex_quota_model_line(saved_model))
 
     meter_lines = [
         _codex_meter_line(
@@ -7526,7 +7576,11 @@ async def codex_status_handler(event):
 
     usage = await codex_util.fetch_codex_usage()
     panel = _codex_quota_panel(
-        user_id, usage=usage, fallback=fallback, buttons_p=bool(IS_BOT)
+        user_id,
+        chat_id=event.chat_id,
+        usage=usage,
+        fallback=fallback,
+        buttons_p=bool(IS_BOT),
     )
     if IS_BOT:
         await _show_codex_quota_panel(event, panel)
@@ -8526,6 +8580,7 @@ async def callback_handler(event):
 
         panel = _codex_quota_panel(
             user_id,
+            chat_id=event.chat_id,
             usage=await codex_util.fetch_codex_usage(),
             fallback=user_manager.get_codex_quota_fallback(user_id),
         )
@@ -10414,6 +10469,7 @@ async def chat_handler(event):
                     panel = _codex_quota_panel(
                         user_id,
                         e.usage_limit,
+                        chat_id=chat_id,
                         usage=await codex_util.fetch_codex_usage(),
                         fallback=user_manager.get_codex_quota_fallback(user_id),
                         reserve_tried_p=reserve_attempted_p,
