@@ -9541,28 +9541,71 @@ async def chat_handler(event):
                     raise RuntimeError("Telegram could not deliver a generated image.")
                 delivered_image_count += 1
 
-            codex_task = asyncio.create_task(
-                codex_util.stream_codex_response(
-                    event=event,
-                    response_message=response_message,
-                    model=model_in_use,
-                    messages=messages,
-                    reasoning_effort=api_kwargs.get("reasoning_effort"),
-                    tools=api_kwargs.get("tools"),
-                    edit_interval=edit_interval,
-                    prompt_cache_key=codex_util.codex_prompt_cache_key(
-                        model=model_in_use, chat_id=chat_id, user_id=user_id
-                    ),
-                    image_callback=(
-                        deliver_codex_image
-                        if prefix_result.image_generation
-                        else None
-                    ),
+            async def _run_codex(model, *, reasoning_effort):
+                """One Codex attempt, tracked so /stop can still cancel it."""
+                codex_task = asyncio.create_task(
+                    codex_util.stream_codex_response(
+                        event=event,
+                        response_message=response_message,
+                        model=model,
+                        messages=messages,
+                        reasoning_effort=reasoning_effort,
+                        tools=api_kwargs.get("tools"),
+                        edit_interval=edit_interval,
+                        prompt_cache_key=codex_util.codex_prompt_cache_key(
+                            model=model, chat_id=chat_id, user_id=user_id
+                        ),
+                        image_callback=(
+                            deliver_codex_image
+                            if prefix_result.image_generation
+                            else None
+                        ),
+                    )
                 )
-            )
-            add_active_llm_task(user_id, codex_task)
+                add_active_llm_task(user_id, codex_task)
+                try:
+                    return await codex_task
+                finally:
+                    remove_active_llm_task(user_id, codex_task)
+
             try:
-                codex_response = await codex_task
+                try:
+                    codex_response = await _run_codex(
+                        model_in_use,
+                        reasoning_effort=api_kwargs.get("reasoning_effort"),
+                    )
+                except codex_util.CodexStreamError as e:
+                    if e.usage_limit is None or codex_util.is_luna_reserve_model(
+                        model_in_use
+                    ):
+                        raise
+                    #: The plan allowance is spent, but the Luna Reserve is
+                    #: metered separately and may still answer. Retried on every
+                    #: message: it only runs after a failure, and the account can
+                    #: regain allowance at any time.
+                    await util.edit_message(
+                        response_message,
+                        f"{BOT_META_INFO_PREFIX}🌙 Codex is over its usage limit"
+                        " — trying the Luna Reserve…",
+                        parse_mode="md",
+                    )
+                    #: Reasoning effort is per-model, so re-resolve it rather
+                    #: than reusing a level chosen for the original model.
+                    reserve_reasoning = _get_effective_reasoning(
+                        chat_id,
+                        user_id,
+                        model=OPENAI_CODEX_LUNA_RESERVE,
+                        prefix_effort=prefix_result.reasoning_effort,
+                    )
+                    codex_response = await _run_codex(
+                        OPENAI_CODEX_LUNA_RESERVE,
+                        reasoning_effort=reserve_reasoning.level,
+                    )
+                    model_in_use = OPENAI_CODEX_LUNA_RESERVE
+                    warnings.append(
+                        "Regular Codex usage is exhausted; answered from the"
+                        " Luna Reserve."
+                    )
                 response_text = codex_response.text
                 finish_reason = codex_response.finish_reason
                 has_image = codex_response.has_image
@@ -9591,8 +9634,6 @@ async def chat_handler(event):
                     parse_mode="md",
                 )
                 raise
-            finally:
-                remove_active_llm_task(user_id, codex_task)
         else:
             edit_interval = get_streaming_delay(model_in_use) if use_streaming else None
 
