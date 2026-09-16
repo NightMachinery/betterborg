@@ -2,7 +2,8 @@
 
 The ChatGPT account behind Codex carries a second allowance, the Luna Reserve,
 on its own weekly meter. It stays usable after the regular plan allowance is
-spent, and `llm_chat` now falls back to it automatically.
+spent, and `llm_chat` offers it -- one tap, one message -- rather than
+switching meters on its own.
 
 ## The routing slug
 
@@ -41,22 +42,36 @@ Checked against the live backend while the regular allowance was exhausted:
 The Reserve is documented as limited to selected personal Plus and Pro
 accounts, so it may be absent elsewhere. Nothing assumes it exists.
 
-## Automatic fallback
+## Offered, never automatic
 
-When a Codex request fails with `usage_limit_reached`, `chat_handler` retries
-the same request once against `openai-codex/gpt-reserve`: same messages, same
-tools, same image callback. Reasoning effort is re-resolved for the Reserve
-model, because effort is a per-model preference. On success the answer carries
-a note saying it came from the Reserve.
+A `usage_limit_reached` failure shows the quota panel, and the panel carries a
+button: **🌙 Answer this from the Luna Reserve**. One tap re-runs that one
+message on `openai-codex/gpt-reserve` and saves nothing.
 
-The retry runs on every message rather than being remembered. It only happens
-after a request has already failed, and the account can regain allowance at any
-time, so a cached "reserve is spent" flag would buy nothing and could go stale.
+It used to retry by itself, and that was wrong on two counts:
 
-It applies to every Codex request, including the explicit `.c` / `.ch` /
-`.as` / `.i` prefixes: someone who asked for Codex still gets Codex, just on
-the other meter. Requests that already target the Reserve are not retried, and
-failures that are not usage limits are left alone.
+- **Latency.** The Reserve is only reached after a request that cannot succeed
+  has already gone out and come back, plus a message edit announcing the
+  retry. That is two wasted round-trips per message, on every message, for as
+  long as the allowance is spent -- days, on a weekly window.
+- **Consent.** It moved the account onto a second meter without asking. The
+  meters are separate allowances, and spending the Reserve is a decision.
+
+Tapping the button changes no saved setting, so the next message asks again.
+That is deliberate: the allowance can come back at any time, and a remembered
+"use the Reserve" would keep spending it after the regular one had reset. It is
+also why the offer is per-message rather than a stand-in -- see
+[Codex quota fallback](codex_quota_fallback.md) for the stand-in, which *is*
+remembered and covers a different case.
+
+The button appears only when there is a message it could answer, the account
+has a Reserve, and that Reserve is not itself spent. A request already aimed at
+the Reserve is offered nothing: there is nowhere left to go.
+
+The re-run enters through `chat_handler(..., forced_model=...)` as a **prefix**
+model, which is what it is -- a deliberate per-message choice. So it is never
+itself redirected by a stand-in, and the reasoning effort resolves against the
+Reserve, effort being a per-model preference.
 
 ## Direct use
 

@@ -5659,10 +5659,10 @@ async def help_handler(event):
     if has_codex_access:
         codex_shortcuts_text += (
             "\n\n**When Codex Hits Its Usage Limit**\n"
-            "The Codex account is shared. When its allowance runs out I "
-            "automatically retry on the Luna Reserve, which is metered "
-            "separately, and say so when an answer came from there. If that is "
-            "spent too, I offer a temporary stand-in model: yours alone, "
+            "The Codex account is shared. When its allowance runs out I show "
+            "you what is left and offer two things, never taking either on my "
+            "own: one tap answers that message from the Luna Reserve, which is "
+            "metered separately; or a temporary stand-in model, yours alone, "
             "applied only to your saved default, expiring by itself at the "
             "reset, and never rewriting your settings. Codex shortcuts always "
             "stay on Codex. See /codexStatus."
@@ -7313,6 +7313,16 @@ def _codex_meter_line(label: str, meter, *, now) -> Optional[str]:
     return f"• **{label}:** {state}{detail}"
 
 
+#: What a button's icon claims. `🔁` is a *state* -- this switch rule is in
+#: force right now -- so it never sits on an offer; every offer button carries
+#: an action icon saying what the tap does. An offer wearing the state icon is
+#: what made the panel read as though it had already switched.
+CODEX_QUOTA_ICON_ACTIVE = "🔁"
+CODEX_QUOTA_ICON_SWITCH = "➡️"
+CODEX_QUOTA_ICON_UNDO = "↩️"
+CODEX_QUOTA_ICON_RESERVE = "🌙"
+
+
 def _codex_quota_switch_buttons(candidates, *, owner_id, deadline, reported_p):
     window = "until reset" if reported_p else "for ~6 hours"
     buttons = []
@@ -7324,9 +7334,38 @@ def _codex_quota_switch_buttons(candidates, *, owner_id, deadline, reported_p):
             f":{int(deadline.timestamp())}"
         )
         assert len(data.encode("utf-8")) <= TELEGRAM_CALLBACK_BYTES_LIMIT
-        label = f"🔁 Use {_model_display_name(candidate.model)} {window}"
+        label = (
+            f"{CODEX_QUOTA_ICON_SWITCH} Use"
+            f" {_model_display_name(candidate.model)} {window}"
+        )
         buttons.append(KeyboardButtonCallback(_truncate_utf16(label, 48), data=data))
     return buttons
+
+
+def _codex_quota_reserve_buttons(usage, *, owner_id, source_message_id) -> list:
+    """The one-tap "answer this message from the Reserve" offer, when it applies.
+
+    Offered rather than taken, and for one message rather than until reset: the
+    Reserve is a different meter on the same subscription, and moving to it is
+    the user's call. Nothing is saved either way -- the next message asks
+    again, because the allowance can come back at any time.
+
+    Absent unless there is a message to answer, the account has a Reserve, and
+    that Reserve is not itself spent.
+    """
+    if source_message_id is None:
+        return []
+
+    reserve = usage.reserve() if usage is not None else None
+    if reserve is None or not reserve.allowed:
+        return []
+
+    return [
+        KeyboardButtonCallback(
+            f"{CODEX_QUOTA_ICON_RESERVE} Answer this from the Luna Reserve",
+            data=(f"{CODEX_QUOTA_CALLBACK_PREFIX}r:{owner_id}:{source_message_id}"),
+        )
+    ]
 
 
 def _codex_quota_missing_key_lines(candidates) -> list:
@@ -7404,7 +7443,7 @@ def _codex_quota_panel(
     chat_id: Optional[int] = None,
     usage=None,
     fallback=None,
-    reserve_tried_p: bool = False,
+    source_message_id: Optional[int] = None,
     buttons_p: bool = True,
     now=None,
 ) -> CodexQuotaPanel:
@@ -7417,7 +7456,7 @@ def _codex_quota_panel(
     lines = []
 
     if fallback is not None:
-        lines.append("✅ **Temporary Codex Stand-in Active**")
+        lines.append(f"{CODEX_QUOTA_ICON_ACTIVE} **Temporary Codex Stand-in Active**")
         lines.append("")
         lines.append(_codex_quota_model_line(saved_model, stand_in=fallback.model))
         lines.append(
@@ -7432,7 +7471,7 @@ def _codex_quota_panel(
         )
         buttons = [
             KeyboardButtonCallback(
-                "↩️ Switch back to Codex now",
+                f"{CODEX_QUOTA_ICON_UNDO} Switch back to Codex now",
                 data=f"{CODEX_QUOTA_CALLBACK_PREFIX}u:{user_id}",
             )
         ]
@@ -7455,11 +7494,9 @@ def _codex_quota_panel(
     if quota is not None:
         lines.append("❌ **Codex Usage Limit Reached**")
         lines.append("")
-        #: Never assert the Reserve is spent — the meters below say so or not.
-        reserve_note = " The Luna Reserve was tried as well." if reserve_tried_p else ""
         lines.append(
             "The ChatGPT account behind Codex is shared, and its allowance is"
-            f" used up.{reserve_note}"
+            " used up."
         )
         lines.append("")
         if quota.plan_type:
@@ -7519,13 +7556,35 @@ def _codex_quota_panel(
     lines.append("")
     lines.append("Use /codexStatus any time to change or cancel this.")
 
-    buttons = _codex_quota_switch_buttons(
+    buttons = _codex_quota_reserve_buttons(
+        usage, owner_id=user_id, source_message_id=source_message_id
+    )
+    buttons += _codex_quota_switch_buttons(
         usable, owner_id=user_id, deadline=deadline, reported_p=reported_p
     )
     return CodexQuotaPanel(
         text=_bounded_panel_text("\n".join(lines)),
         buttons=(util.build_menu(buttons, n_cols=1) if buttons_p and buttons else None),
     )
+
+
+async def _answer_from_luna_reserve(event, *, message_id: int) -> None:
+    """Re-run one message on the Reserve, changing no saved setting.
+
+    The model enters as a *prefix* model, which is what it is: a deliberate
+    per-message choice. `_resolve_request_model` never redirects one, so this
+    reaches the Reserve even while a stand-in is armed.
+    """
+    source = await borg.get_messages(event.chat_id, ids=message_id)
+    if source is None:
+        await event.answer("That message is no longer available.", show_alert=True)
+        return
+
+    await event.answer("Answering from the Luna Reserve…")
+    proxy = ProxyEvent(
+        source, message=source, text=source.text, id=getattr(source, "id", None)
+    )
+    await chat_handler(proxy, forced_model=OPENAI_CODEX_LUNA_RESERVE)
 
 
 async def _show_codex_quota_panel(event, panel, *, message=None, edit=False):
@@ -8534,6 +8593,12 @@ async def callback_handler(event):
             return
 
         action = parts[1]
+        if action == "r":
+            if len(parts) != 4 or not parts[3].lstrip("-").isdigit():
+                await event.answer("This quota panel is invalid.", show_alert=True)
+                return
+            await _answer_from_luna_reserve(event, message_id=int(parts[3]))
+            return
         if action == "u":
             feedback = _apply_codex_quota_choice(user_id, key="")
         elif action == "s":
@@ -10050,8 +10115,13 @@ def get_streaming_delay(model_name: str) -> float:
     return 0.8
 
 
-async def chat_handler(event):
-    """Main handler for all non-command messages in a private chat."""
+async def chat_handler(event, *, forced_model: Optional[str] = None):
+    """Main handler for all non-command messages in a private chat.
+
+    `forced_model` re-runs an existing message on a model the user picked after
+    the fact -- the quota panel's Reserve button is the only caller. It enters
+    as a prefix model, so it is treated as the deliberate choice it is.
+    """
     user_id = event.sender_id
     chat_id = event.chat_id
     # ic(user_id, chat_id)
@@ -10095,6 +10165,10 @@ async def chat_handler(event):
     prefix_result = _detect_and_process_message_prefix(
         prefix_text, admin_p=user_is_admin, codex_p=user_has_codex_access
     )
+    if forced_model is not None:
+        #: Before the image-generation branch, so a re-run of an `.i` request
+        #: is resolved against the model the user actually chose.
+        prefix_result.model = forced_model
 
     if prefix_result.image_generation:
         if not await llm_chat_config.can_use_codex_imagegen(event, config):
@@ -10371,7 +10445,6 @@ async def chat_handler(event):
             edit_interval = get_streaming_delay(model_in_use)
             delivered_image_count = 0
             image_sequence = 0
-            reserve_attempted_p = False
 
             async def deliver_codex_image(image):
                 nonlocal delivered_image_count, image_sequence
@@ -10422,44 +10495,15 @@ async def chat_handler(event):
                     remove_active_llm_task(user_id, codex_task)
 
             try:
-                try:
-                    codex_response = await _run_codex(
-                        model_in_use,
-                        reasoning_effort=api_kwargs.get("reasoning_effort"),
-                    )
-                except codex_util.CodexStreamError as e:
-                    if e.usage_limit is None or codex_util.is_luna_reserve_model(
-                        model_in_use
-                    ):
-                        raise
-                    #: The plan allowance is spent, but the Luna Reserve is
-                    #: metered separately and may still answer. Retried on every
-                    #: message: it only runs after a failure, and the account can
-                    #: regain allowance at any time.
-                    await util.edit_message(
-                        response_message,
-                        f"{BOT_META_INFO_PREFIX}🌙 Codex is over its usage limit"
-                        " — trying the Luna Reserve…",
-                        parse_mode="md",
-                    )
-                    #: Reasoning effort is per-model, so re-resolve it rather
-                    #: than reusing a level chosen for the original model.
-                    reserve_reasoning = _get_effective_reasoning(
-                        chat_id,
-                        user_id,
-                        model=OPENAI_CODEX_LUNA_RESERVE,
-                        prefix_effort=prefix_result.reasoning_effort,
-                    )
-                    reserve_attempted_p = True
-                    codex_response = await _run_codex(
-                        OPENAI_CODEX_LUNA_RESERVE,
-                        reasoning_effort=reserve_reasoning.level,
-                    )
-                    model_in_use = OPENAI_CODEX_LUNA_RESERVE
-                    warnings.append(
-                        "Regular Codex usage is exhausted; answered from the"
-                        " Luna Reserve."
-                    )
+                #: Deliberately no automatic retry on the Reserve. It cost a
+                #: doomed request and a message edit on *every* message while
+                #: the allowance was spent, and it moved the account to another
+                #: meter without being asked. The panel offers it as a button
+                #: instead; one tap answers this message and changes nothing.
+                codex_response = await _run_codex(
+                    model_in_use,
+                    reasoning_effort=api_kwargs.get("reasoning_effort"),
+                )
                 response_text = codex_response.text
                 finish_reason = codex_response.finish_reason
                 has_image = codex_response.has_image
@@ -10472,7 +10516,14 @@ async def chat_handler(event):
                         chat_id=chat_id,
                         usage=await codex_util.fetch_codex_usage(),
                         fallback=user_manager.get_codex_quota_fallback(user_id),
-                        reserve_tried_p=reserve_attempted_p,
+                        #: Only when there is something the Reserve could still
+                        #: answer: a request already aimed at it has nowhere
+                        #: left to go.
+                        source_message_id=(
+                            None
+                            if codex_util.is_luna_reserve_model(model_in_use)
+                            else event.id
+                        ),
                         buttons_p=IS_BOT,
                     )
                     if partial:

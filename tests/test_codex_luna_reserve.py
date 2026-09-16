@@ -101,8 +101,8 @@ class LunaReservePrefixTests(unittest.TestCase):
         self.assertIn((".cr", ".چر"), plugin.DENIED_CODEX_PREFIX_MODEL_MAPPING)
 
 
-class LunaReserveRetryTests(unittest.TestCase):
-    """A spent plan allowance must retry once on the separately metered Reserve."""
+class LunaReserveOfferTests(unittest.TestCase):
+    """A spent plan allowance is reported and offered, never silently rerouted."""
 
     def run_request(self, *, stream_results, text="hello", selected=None):
         selected = selected or OPENAI_CODEX_GPT_5_6_SOL
@@ -190,8 +190,21 @@ class LunaReserveRetryTests(unittest.TestCase):
                     new=AsyncMock(side_effect=stream_results),
                 )
             )
+            enter(
+                patch.object(
+                    plugin.codex_util,
+                    "fetch_codex_usage",
+                    new=AsyncMock(return_value=_usage_with_reserve()),
+                )
+            )
+            panel = enter(
+                patch.object(
+                    plugin, "_codex_quota_panel", wraps=plugin._codex_quota_panel
+                )
+            )
+            enter(patch.object(plugin, "_show_codex_quota_panel", new=AsyncMock()))
             asyncio.run(plugin.chat_handler(event))
-        return stream, edit
+        return SimpleNamespace(stream=stream, edit=edit, panel=panel)
 
     @staticmethod
     def _usage_limit_error():
@@ -205,66 +218,114 @@ class LunaReserveRetryTests(unittest.TestCase):
     def _ok(text="answered"):
         return codex_util.CodexResponse(text=text, finish_reason="completed")
 
-    def test_usage_limit_retries_once_on_the_reserve(self):
-        stream, edit = self.run_request(
-            stream_results=[self._usage_limit_error(), self._ok()]
-        )
-        self.assertEqual(stream.await_count, 2)
+    def test_a_usage_limit_is_never_rerouted_on_its_own(self):
+        #: The old behaviour spent a doomed request and a message edit on every
+        #: message while the allowance was spent, and moved the account to
+        #: another meter without being asked.
+        run = self.run_request(stream_results=[self._usage_limit_error(), self._ok()])
+        self.assertEqual(run.stream.await_count, 1)
         self.assertEqual(
-            stream.await_args_list[0].kwargs["model"], OPENAI_CODEX_GPT_5_6_SOL
+            run.stream.await_args_list[0].kwargs["model"], OPENAI_CODEX_GPT_5_6_SOL
         )
-        self.assertEqual(
-            stream.await_args_list[1].kwargs["model"], OPENAI_CODEX_LUNA_RESERVE
-        )
-        final = edit.await_args_list[-1].args[1]
-        self.assertIn("answered", final)
-        self.assertIn("Luna Reserve", final)
 
-    def test_reserve_attempt_uses_its_own_prompt_cache_key(self):
-        stream, _ = self.run_request(
-            stream_results=[self._usage_limit_error(), self._ok()]
+    def test_the_panel_is_offered_the_message_it_could_answer(self):
+        run = self.run_request(stream_results=[self._usage_limit_error()])
+        self.assertEqual(run.panel.call_args.kwargs["source_message_id"], 99)
+
+    def test_a_request_already_on_the_reserve_is_offered_nothing(self):
+        run = self.run_request(
+            stream_results=[self._usage_limit_error()],
+            selected=OPENAI_CODEX_LUNA_RESERVE,
         )
-        keys = [call.kwargs["prompt_cache_key"] for call in stream.await_args_list]
-        self.assertNotEqual(keys[0], keys[1])
-        self.assertEqual(
-            keys[1],
-            codex_util.codex_prompt_cache_key(
-                model=OPENAI_CODEX_LUNA_RESERVE, chat_id=456, user_id=123
-            ),
-        )
+        self.assertEqual(run.stream.await_count, 1)
+        self.assertIsNone(run.panel.call_args.kwargs["source_message_id"])
 
     def test_non_quota_failure_is_not_retried(self):
         error = codex_util.CodexStreamError(
             "connection lost", codex_util.CodexResponse(text="")
         )
-        stream, edit = self.run_request(stream_results=[error])
-        self.assertEqual(stream.await_count, 1)
-        self.assertIn("connection lost", edit.await_args_list[-1].args[1])
+        run = self.run_request(stream_results=[error])
+        self.assertEqual(run.stream.await_count, 1)
+        self.assertIn("connection lost", run.edit.await_args_list[-1].args[1])
 
-    def test_reserve_is_not_retried_against_itself(self):
-        stream, _ = self.run_request(
-            stream_results=[self._usage_limit_error()],
-            selected=OPENAI_CODEX_LUNA_RESERVE,
-        )
-        self.assertEqual(stream.await_count, 1)
 
-    def test_explicit_codex_prefix_still_reaches_the_reserve(self):
-        #: Asking for Codex explicitly still gets Codex, just the other meter.
-        stream, _ = self.run_request(
-            stream_results=[self._usage_limit_error(), self._ok()], text=".ch hello"
+class LunaReserveButtonTests(unittest.TestCase):
+    """The offer itself: when it appears, and what tapping it does."""
+
+    def buttons(self, *, usage, source_message_id=99):
+        return plugin._codex_quota_reserve_buttons(
+            usage, owner_id=123, source_message_id=source_message_id
         )
-        self.assertEqual(stream.await_count, 2)
+
+    def test_offered_when_a_message_and_an_available_reserve_both_exist(self):
+        buttons = self.buttons(usage=_usage_with_reserve())
+        self.assertEqual(len(buttons), 1)
+        self.assertIn("Luna Reserve", buttons[0].text)
+        self.assertEqual(_as_text(buttons[0].data), "cq:r:123:99")
+
+    def test_not_offered_without_a_message_to_answer(self):
+        #: `/codexStatus` has no failed request behind it.
         self.assertEqual(
-            stream.await_args_list[1].kwargs["model"], OPENAI_CODEX_LUNA_RESERVE
+            self.buttons(usage=_usage_with_reserve(), source_message_id=None), []
         )
 
-    def test_reserve_effort_is_resolved_for_the_reserve_model(self):
-        with patch.object(
-            plugin, "_get_effective_reasoning", wraps=plugin._get_effective_reasoning
-        ) as reasoning:
-            self.run_request(stream_results=[self._usage_limit_error(), self._ok()])
-        models = [call.kwargs.get("model") for call in reasoning.call_args_list]
-        self.assertIn(OPENAI_CODEX_LUNA_RESERVE, models)
+    def test_not_offered_when_the_reserve_is_spent(self):
+        self.assertEqual(self.buttons(usage=_usage_with_reserve(allowed=False)), [])
+
+    def test_not_offered_on_an_account_without_a_reserve(self):
+        self.assertEqual(self.buttons(usage=plugin.codex_util.CodexUsage()), [])
+
+    def test_the_tap_reruns_that_message_on_the_reserve(self):
+        source = SimpleNamespace(id=99, text="hello")
+        event = SimpleNamespace(chat_id=456, answer=AsyncMock())
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(
+                    builtins,
+                    "borg",
+                    SimpleNamespace(get_messages=AsyncMock(return_value=source)),
+                )
+            )
+            handler = stack.enter_context(
+                patch.object(plugin, "chat_handler", new=AsyncMock())
+            )
+            asyncio.run(plugin._answer_from_luna_reserve(event, message_id=99))
+
+        self.assertEqual(
+            handler.await_args.kwargs["forced_model"], OPENAI_CODEX_LUNA_RESERVE
+        )
+        self.assertEqual(handler.await_args.args[0].text, "hello")
+
+    def test_a_vanished_message_is_reported_rather_than_rerun(self):
+        event = SimpleNamespace(chat_id=456, answer=AsyncMock())
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(
+                    builtins,
+                    "borg",
+                    SimpleNamespace(get_messages=AsyncMock(return_value=None)),
+                )
+            )
+            handler = stack.enter_context(
+                patch.object(plugin, "chat_handler", new=AsyncMock())
+            )
+            asyncio.run(plugin._answer_from_luna_reserve(event, message_id=99))
+
+        handler.assert_not_awaited()
+        self.assertTrue(event.answer.await_args.kwargs["show_alert"])
+
+
+def _as_text(data) -> str:
+    """Callback payloads are bytes in Telethon and str under the test stub."""
+    return data.decode("utf-8") if isinstance(data, bytes) else data
+
+
+def _usage_with_reserve(*, allowed=True):
+    return plugin.codex_util.CodexUsage(
+        plan_type="prolite",
+        primary=plugin.codex_util.CodexMeter(name="primary", allowed=False),
+        additional=(plugin.codex_util.CodexMeter(name="gpt-reserve", allowed=allowed),),
+    )
 
 
 #: Captured from the live endpoint, trimmed to the fields that are read.

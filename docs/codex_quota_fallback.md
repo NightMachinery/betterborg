@@ -3,10 +3,10 @@
 When Codex cannot answer at all, `llm_chat` shows a structured panel instead of
 the raw provider error, and offers a temporary stand-in model.
 
-This is the last resort. The first response to a spent allowance is the
-automatic retry on the Luna Reserve; see
-[Codex Luna Reserve](codex_luna_reserve.md). The panel appears only when the
-Reserve is unavailable or also spent.
+The panel is also where the Luna Reserve is offered -- a one-tap re-run of the
+failed message on the other meter, which is a smaller step than redirecting
+saved defaults to another provider. See
+[Codex Luna Reserve](codex_luna_reserve.md). Neither is taken automatically.
 
 ## The error being handled
 
@@ -109,6 +109,19 @@ cancellable there. An armed stand-in opens the panel even for a user who has
 since lost Codex access, or they could never cancel it.
 
 ## Panel buttons
+
+### What an icon claims
+
+`🔁` is a **state**: this switch rule is in force right now. It appears on the
+stand-in-active header and nowhere else. Every other button carries an *action*
+icon saying what the tap does -- `➡️` switch to this model, `↩️` undo the
+switch, `🌙` answer this one message from the Luna Reserve.
+
+The offers used to wear `🔁` too, which made a panel that had switched nothing
+read as though it already had. The icons are named constants
+(`CODEX_QUOTA_ICON_*`) so the distinction survives the next label edit.
+
+### Payloads
 
 The owner's user id and the window deadline travel inside the callback payload,
 so both checks work after a restart with no stored record of the panel.

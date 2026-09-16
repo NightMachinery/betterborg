@@ -245,13 +245,13 @@ class MissingFallbackKeyTests(unittest.TestCase):
         self.assertIn(plugin.CODEX_SETTINGS_UNCHANGED, info.await_args.args[1])
 
 
-def _usage(*, reserve=True, primary_allowed=False):
+def _usage(*, reserve=True, reserve_allowed=False, primary_allowed=False):
     additional = ()
     if reserve:
         additional = (
             plugin.codex_util.CodexMeter(
                 name="gpt-reserve",
-                allowed=False,
+                allowed=reserve_allowed,
                 used_percent=100,
                 resets_at=NOW + timedelta(days=5),
             ),
@@ -309,14 +309,30 @@ class QuotaPanelTests(unittest.TestCase):
         without = self.panel(quota=self.quota, usage=_usage(reserve=False))
         self.assertNotIn("Luna Reserve", without.text)
 
-    def test_reserve_tried_note_is_opt_in(self):
-        self.assertNotIn(
-            "Reserve was tried", self.panel(quota=self.quota, usage=_usage()).text
+    def test_the_reserve_offer_joins_the_stand_in_buttons(self):
+        panel = self.panel(
+            quota=self.quota,
+            usage=_usage(reserve_allowed=True),
+            source_message_id=99,
         )
-        self.assertIn(
-            "Reserve was tried",
-            self.panel(quota=self.quota, usage=_usage(), reserve_tried_p=True).text,
-        )
+        labels = [button.text for row in panel.buttons for button in row]
+        self.assertIn("🌙 Answer this from the Luna Reserve", labels)
+
+        #: A spent Reserve has nothing to offer, so the button stays away.
+        spent = self.panel(quota=self.quota, usage=_usage(), source_message_id=99)
+        spent_labels = [button.text for row in spent.buttons for button in row]
+        self.assertNotIn("🌙 Answer this from the Luna Reserve", spent_labels)
+
+    def test_only_an_active_rule_wears_the_active_icon(self):
+        #: `🔁` is a state, not an offer: a button wearing it while nothing had
+        #: switched is what made the panel read as though it already had.
+        offers = self.panel(quota=self.quota, usage=_usage())
+        for row in offers.buttons:
+            for button in row:
+                self.assertNotIn("🔁", button.text)
+
+        fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
+        self.assertIn("🔁", self.panel(fallback=fallback).text)
 
     def test_active_fallback_offers_an_undo(self):
         fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
