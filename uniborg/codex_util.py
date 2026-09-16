@@ -1,9 +1,12 @@
 import asyncio
+import ast
 import base64
 import binascii
 import hashlib
 import io
+import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Optional
 
 from urllib.parse import urlparse
@@ -15,6 +18,25 @@ from uniborg import util
 
 
 CODEX_MODEL_PREFIX = "openai-codex/"
+
+#: The `error.type` (bodies) or `error.code` (stream events) that marks a
+#: ChatGPT plan allowance as spent, as opposed to an ordinary rate limit.
+CODEX_USAGE_LIMIT_TYPE = "usage_limit_reached"
+#: No plan window legitimately runs longer than this; beyond it the reported
+#: deadline is nonsense and is discarded rather than trusted.
+CODEX_USAGE_LIMIT_MAX_WINDOW_SECONDS = 45 * 24 * 3600
+#: Bounds how much of an exception string is handed to `ast.literal_eval`.
+CODEX_ERROR_STRING_MAX_CHARS = 8192
+_CODEX_ERROR_STRING_RE = re.compile(r"^Error code: \d+ - ")
+#: Fields read off an SDK stream event when it is not a plain mapping.
+_USAGE_LIMIT_FIELDS = (
+    "type",
+    "code",
+    "message",
+    "plan_type",
+    "resets_at",
+    "resets_in_seconds",
+)
 
 
 @dataclass
@@ -43,9 +65,26 @@ class CodexImage:
         return self.preview_index is not None
 
 
+@dataclass(frozen=True)
+class CodexUsageLimit:
+    """A parsed `usage_limit_reached` rejection from the Codex backend."""
+
+    message: Optional[str] = None
+    plan_type: Optional[str] = None
+    #: Timezone-aware UTC. None when the payload carried no usable deadline.
+    resets_at: Optional[datetime] = None
+
+
 class CodexStreamError(RuntimeError):
-    def __init__(self, message: str, response: CodexResponse):
+    def __init__(
+        self,
+        message: str,
+        response: CodexResponse,
+        *,
+        usage_limit: Optional[CodexUsageLimit] = None,
+    ):
         self.response = response
+        self.usage_limit = usage_limit
         super().__init__(
             message
             + (
@@ -75,6 +114,146 @@ def _decode_image(encoded: str) -> tuple[bytes, str]:
         return data, extension
     except (TypeError, ValueError, binascii.Error, OSError, SyntaxError) as exc:
         raise ValueError("Codex returned malformed image data.") from exc
+
+
+def _positive_number(value) -> Optional[float]:
+    """A finite, strictly positive number, rejecting `bool` and non-numerics."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")) or number <= 0:
+        return None
+    return number
+
+
+def _epoch_seconds(value) -> Optional[float]:
+    seconds = _positive_number(value)
+    if seconds is None:
+        return None
+    #: Some backends report milliseconds; no second-scale timestamp reaches 1e11.
+    return seconds / 1000 if seconds > 1e11 else seconds
+
+
+def _plausible_deadline(value: datetime, *, now: datetime) -> bool:
+    return now < value <= now + timedelta(seconds=CODEX_USAGE_LIMIT_MAX_WINDOW_SECONDS)
+
+
+def _usage_limit_deadline(fields: dict, *, now: datetime) -> Optional[datetime]:
+    """`resets_at` wins over `resets_in_seconds`; each is range-checked alone.
+
+    Validating them independently means a bogus absolute timestamp degrades to
+    the relative one instead of losing the deadline altogether.
+    """
+    absolute = _epoch_seconds(fields.get("resets_at"))
+    if absolute is not None:
+        try:
+            candidate = datetime.fromtimestamp(absolute, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            candidate = None
+        if candidate is not None and _plausible_deadline(candidate, now=now):
+            return candidate
+
+    relative = _positive_number(fields.get("resets_in_seconds"))
+    if relative is not None:
+        try:
+            candidate = now + timedelta(seconds=relative)
+        except OverflowError:
+            return None
+        if _plausible_deadline(candidate, now=now):
+            return candidate
+    return None
+
+
+def _literal_body(text: str) -> Optional[dict]:
+    """The mapping inside openai's `Error code: N - {...}` message, else None.
+
+    That message interpolates the decoded body with `repr`, so it is a Python
+    literal with `'` quotes and `None` rather than JSON.
+    """
+    if len(text) > CODEX_ERROR_STRING_MAX_CHARS:
+        return None
+    stripped = _CODEX_ERROR_STRING_RE.sub("", text.strip(), count=1)
+    try:
+        value = ast.literal_eval(stripped)
+    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _fields_from_object(payload) -> dict:
+    """Best-effort extraction from an SDK event object rather than a mapping."""
+    fields = {}
+    for name in _USAGE_LIMIT_FIELDS:
+        value = _field(payload, name)
+        if value is not None:
+            fields[name] = value
+    return fields
+
+
+def _usage_limit_mapping(payload) -> Optional[dict]:
+    """The mapping that may carry usage-limit fields, from any accepted payload."""
+    body = getattr(payload, "body", None)
+    if body is None:
+        if isinstance(payload, (dict, str)):
+            body = payload
+        elif isinstance(payload, BaseException):
+            body = str(payload)
+        else:
+            body = _fields_from_object(payload)
+    if isinstance(body, str):
+        body = _literal_body(body)
+    if not isinstance(body, dict):
+        return None
+    #: `.body` arrives already unwrapped; the message string keeps the wrapper,
+    #: and this backend also uses `detail` (sometimes holding a bare string).
+    for key in ("error", "detail"):
+        nested = body.get(key)
+        if isinstance(nested, dict):
+            return nested
+    return body
+
+
+def _is_usage_limit(fields: dict) -> bool:
+    #: Response bodies carry `type`; stream `error` events carry `code`.
+    return CODEX_USAGE_LIMIT_TYPE in (fields.get("type"), fields.get("code"))
+
+
+def parse_usage_limit(
+    payload, *, now: Optional[datetime] = None
+) -> Optional[CodexUsageLimit]:
+    """Read a ChatGPT usage-limit rejection out of `payload`, or return None.
+
+    `payload` may be an `openai.APIStatusError` (its decoded `.body` is used), a
+    mapping such as a response body or a `response.*` stream `error` event, or
+    the `Error code: 429 - {...}` string openai builds. An ordinary rate limit
+    is not a usage limit and yields None. Never raises.
+    """
+    try:
+        fields = _usage_limit_mapping(payload)
+    except Exception:
+        return None
+    if not isinstance(fields, dict) or not _is_usage_limit(fields):
+        return None
+
+    now = now or datetime.now(timezone.utc)
+    message = fields.get("message")
+    plan_type = fields.get("plan_type")
+    return CodexUsageLimit(
+        message=message if isinstance(message, str) else None,
+        plan_type=plan_type if isinstance(plan_type, str) else None,
+        resets_at=_usage_limit_deadline(fields, now=now),
+    )
+
+
+def _stream_error_message(stream_event) -> str:
+    """Keep the backend's own code and message instead of discarding them."""
+    detail = " ".join(
+        str(part)
+        for part in (_field(stream_event, "code"), _field(stream_event, "message"))
+        if part
+    )
+    base = "Codex backend reported a streaming error."
+    return f"{base} {detail}" if detail else base
 
 
 def is_codex_model(model: str) -> bool:
@@ -138,13 +317,20 @@ def _is_supported_codex_image_url(url: str) -> bool:
     return scheme in {"http", "https"}
 
 
-async def _create_async_client() -> openai.AsyncOpenAI:
+async def _create_async_client(
+    *, max_retries: Optional[int] = None
+) -> openai.AsyncOpenAI:
     token, headers, base_url = await asyncio.to_thread(_get_codex_auth)
-    return openai.AsyncOpenAI(
-        api_key=token,
-        base_url=base_url,
-        default_headers=headers,
-    )
+    kwargs = {
+        "api_key": token,
+        "base_url": base_url,
+        "default_headers": headers,
+    }
+    #: Left to the SDK default unless a caller caps it. A usage-limit 429 is not
+    #: worth retrying, and the default of 2 triples the wait before we see it.
+    if max_retries is not None:
+        kwargs["max_retries"] = max_retries
+    return openai.AsyncOpenAI(**kwargs)
 
 
 def _content_part_to_codex(part: dict) -> Optional[dict]:
@@ -246,6 +432,7 @@ async def stream_codex_response(
     edit_interval: float = 0.8,
     prompt_cache_key: Optional[str] = None,
     image_callback: Optional[Callable[[CodexImage], Awaitable[None]]] = None,
+    max_retries: Optional[int] = None,
 ) -> CodexResponse:
     """Deliver images serially; callback success means Telegram accepted the image.
 
@@ -271,6 +458,7 @@ async def stream_codex_response(
     client = None
     stream = None
     completed = False
+    usage_limit = None
 
     def text_key(item_id, output_index, content_index):
         return (item_id if item_id is not None else output_index, content_index)
@@ -327,7 +515,7 @@ async def stream_codex_response(
                     )
 
     try:
-        client = await _create_async_client()
+        client = await _create_async_client(max_retries=max_retries)
         stream = await client.responses.create(**kwargs)
         async for stream_event in stream:
             event_type = _field(stream_event, "type")
@@ -394,14 +582,19 @@ async def stream_codex_response(
                     )
                 completed = True
             elif event_type == "error":
-                raise RuntimeError("Codex backend reported a streaming error.")
+                #: A plain RuntimeError here; raising CodexStreamError inside the
+                #: try would be re-wrapped below and duplicate the message.
+                usage_limit = parse_usage_limit(stream_event)
+                raise RuntimeError(_stream_error_message(stream_event))
         if not completed:
             raise RuntimeError("Codex stream ended before response completion.")
         if not result.text.strip() and not result.has_image:
             raise RuntimeError("Codex returned an empty result (no text or images).")
         return result
     except Exception as exc:
-        raise CodexStreamError(str(exc), result) from exc
+        raise CodexStreamError(
+            str(exc), result, usage_limit=usage_limit or parse_usage_limit(exc)
+        ) from exc
     finally:
         # Cleanup errors must not mask generation failures or cancellation.
         for name, resource in (("stream", stream), ("client", client)):

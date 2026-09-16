@@ -2,6 +2,7 @@ import asyncio
 import base64
 import io
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from PIL import Image
@@ -310,6 +311,49 @@ class CodexStreamingTests(unittest.IsolatedAsyncioTestCase):
                 [_completed([_image_item("image-a", self.png_b64)])], callback=callback
             )
         self.assertEqual(raised.exception.response.images_delivered, 0)
+
+    async def test_create_time_usage_limit_reaches_the_error(self):
+        error = SimpleNamespace(
+            body={
+                "type": "usage_limit_reached",
+                "plan_type": "prolite",
+                "resets_in_seconds": 3600,
+            },
+            status_code=429,
+        )
+        #: SimpleNamespace is not raisable, so carry the body on a real exception.
+        rate_limited = RuntimeError("Error code: 429")
+        rate_limited.body = error.body
+
+        with self.assertRaises(codex_util.CodexStreamError) as raised:
+            await self._run(create_error=rate_limited)
+
+        usage_limit = raised.exception.usage_limit
+        self.assertIsNotNone(usage_limit)
+        self.assertEqual(usage_limit.plan_type, "prolite")
+        self.assertIsNotNone(usage_limit.resets_at)
+
+    async def test_mid_stream_usage_limit_is_captured_and_reported(self):
+        event = {
+            "type": "error",
+            "code": "usage_limit_reached",
+            "message": "The usage limit has been reached",
+        }
+        with self.assertRaises(codex_util.CodexStreamError) as raised:
+            await self._run([event])
+
+        self.assertIsNotNone(raised.exception.usage_limit)
+        #: The payload used to be discarded entirely; keep the backend's words.
+        self.assertIn("usage_limit_reached", str(raised.exception))
+
+    async def test_plain_backend_error_carries_no_usage_limit(self):
+        with self.assertRaises(codex_util.CodexStreamError) as raised:
+            await self._run([{"type": "error"}])
+        self.assertIsNone(raised.exception.usage_limit)
+
+    def test_error_is_still_constructible_without_a_usage_limit(self):
+        error = codex_util.CodexStreamError("boom", codex_util.CodexResponse(text=""))
+        self.assertIsNone(error.usage_limit)
 
     async def test_backend_error_is_wrapped(self):
         with self.assertRaisesRegex(
