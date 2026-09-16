@@ -256,6 +256,7 @@ DENIED_CODEX_PREFIX_MODEL_MAPPING = {
 CODEX_ACCESS_DENIED = "Codex access is not enabled for you."
 CODEX_IMAGEGEN_ACCESS_DENIED = "Codex image generation access is not enabled for you."
 CODEX_IMAGEGEN_MODEL_CONFLICT = "`.i` can only be combined with a Codex model."
+CODEX_SETTINGS_UNCHANGED = "Your saved model settings are unchanged."
 
 #: Sets reasoning effort for one message without changing the model. Available
 #: to everyone; a level the model does not accept is ignored by the resolver.
@@ -1477,6 +1478,11 @@ class UserPrefs(BaseModel):
     live_model: str = Field(default="gemini-2.5-flash-preview-native-audio-dialog")
     last_n_messages_limit: Optional[int] = Field(default=None)
     include_reply_chain: bool = Field(default=True)
+    #: A temporary, per-user redirect away from saved Codex defaults while both
+    #: the plan allowance and the Luna Reserve are spent. Epoch seconds, not a
+    #: datetime: prefs are persisted with a plain json.dump.
+    codex_quota_fallback_model: Optional[str] = Field(default=None)
+    codex_quota_fallback_until: Optional[int] = Field(default=None)
 
 
 class ChatPrefs(BaseModel):
@@ -1493,6 +1499,17 @@ class ChatPrefs(BaseModel):
     last_n_messages_limit: Optional[int] = Field(default=None)
     auto_delete_info_p: AutoDeleteMode = Field(default=AutoDeleteMode.GROUP_ONLY)
     include_reply_chain: Optional[bool] = Field(default=None)
+
+
+@dataclass(frozen=True)
+class CodexQuotaFallback:
+    """One user's temporary redirect away from Codex, and when it lapses."""
+
+    model: str
+    until: datetime
+
+    def is_expired(self, *, now: Optional[datetime] = None) -> bool:
+        return (now or datetime.now(timezone.utc)) >= self.until
 
 
 class UserManager:
@@ -1619,6 +1636,49 @@ class UserManager:
         prefs.include_reply_chain = not prefs.include_reply_chain
         self._save_prefs(user_id, prefs)
         return prefs.include_reply_chain
+
+    def get_codex_quota_fallback(
+        self, user_id: int, *, now=None
+    ) -> Optional[CodexQuotaFallback]:
+        """The active redirect, or None. A lapsed record is dropped on read.
+
+        Expiry is checked here rather than scheduled, so it survives restarts
+        and leaves no timer behind.
+        """
+        prefs = self.get_prefs(user_id)
+        model = getattr(prefs, "codex_quota_fallback_model", None)
+        until = getattr(prefs, "codex_quota_fallback_until", None)
+        if not model or not isinstance(until, int) or isinstance(until, bool):
+            return None
+        try:
+            deadline = datetime.fromtimestamp(until, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            self.clear_codex_quota_fallback(user_id)
+            return None
+        record = CodexQuotaFallback(model=model, until=deadline)
+        if record.is_expired(now=now):
+            self.clear_codex_quota_fallback(user_id)
+            return None
+        return record
+
+    def set_codex_quota_fallback(self, user_id: int, *, model: str, until: datetime):
+        prefs = self.get_prefs(user_id)
+        prefs.codex_quota_fallback_model = model
+        prefs.codex_quota_fallback_until = int(until.timestamp())
+        self._save_prefs(user_id, prefs)
+
+    def clear_codex_quota_fallback(self, user_id: int) -> bool:
+        """Drop any redirect. Returns whether one was actually cleared."""
+        prefs = self.get_prefs(user_id)
+        if (
+            getattr(prefs, "codex_quota_fallback_model", None) is None
+            and getattr(prefs, "codex_quota_fallback_until", None) is None
+        ):
+            return False
+        prefs.codex_quota_fallback_model = None
+        prefs.codex_quota_fallback_until = None
+        self._save_prefs(user_id, prefs)
+        return True
 
 
 class ChatManager:
@@ -2689,6 +2749,56 @@ def _get_effective_model_and_service(
     service_needed = llm_util.get_service_from_model(model_in_use)
 
     return model_in_use, service_needed
+
+
+@dataclass(frozen=True)
+class RequestModel:
+    """The model one request will actually use, and what it displaced."""
+
+    model: str
+    service: str
+    #: The saved Codex model a quota fallback redirected, when it did.
+    quota_fallback_from: Optional[str] = None
+
+
+def _resolve_request_model(
+    chat_id: int, user_id: int, *, prefix_model: Optional[str] = None, now=None
+) -> RequestModel:
+    """Apply a temporary Codex quota fallback to saved defaults only.
+
+    Kept out of `_get_effective_model_and_service` on purpose: the model menus,
+    `/status` and the image-generation resolver all need the model the user
+    actually saved, not the stand-in this one request happens to use.
+
+    A per-message prefix is a deliberate Codex request and is never redirected,
+    so `.c`/`.ch`/`.as*`/`.cr` and their Persian aliases still reach Codex.
+    """
+    model, service = _get_effective_model_and_service(
+        chat_id, user_id, prefix_model=prefix_model
+    )
+    if prefix_model or not codex_util.is_codex_model(model):
+        return RequestModel(model=model, service=service)
+
+    fallback = user_manager.get_codex_quota_fallback(user_id, now=now)
+    if fallback is None:
+        return RequestModel(model=model, service=service)
+
+    return RequestModel(
+        model=fallback.model,
+        service=llm_util.get_service_from_model(fallback.model),
+        quota_fallback_from=model,
+    )
+
+
+def _apply_personal_model_choice(user_id: int, model: str):
+    """Save an explicit personal model; an explicit choice ends any redirect."""
+    user_manager.set_model(user_id, model)
+    user_manager.clear_codex_quota_fallback(user_id)
+
+
+def _apply_chat_model_choice(chat_id: int, user_id: int, *, model: Optional[str]):
+    chat_manager.set_model(chat_id, model)
+    user_manager.clear_codex_quota_fallback(user_id)
 
 
 def get_effective_gemini_api_key(user_id: int) -> str | None:
@@ -6879,7 +6989,7 @@ async def codex_users_handler(event):
     if not model_id or _is_admin_only_model(model_id):
         await send_info_message(event, "That model cannot be assigned to this user.", parse_mode=None)
         return
-    user_manager.set_model(target_id, model_id)
+    _apply_personal_model_choice(target_id, model_id)
     await send_info_message(event, f"Set {target_id}'s personal default to: {model_id}", parse_mode=None)
 
 
@@ -6902,7 +7012,7 @@ async def set_model_handler(event):
         model_name = model_name_match.strip()
         if not await _guard_model_access(event, model_name, config=config):
             return
-        user_manager.set_model(user_id, model_name)
+        _apply_personal_model_choice(user_id, model_name)
         cancel_input_flow(user_id)
         await event.reply(
             f"{BOT_META_INFO_PREFIX}Your chat model has been set to: `{model_name}`"
@@ -7048,7 +7158,7 @@ async def set_model_here_handler(event):
         model = model_match.strip()
         if not await _guard_model_access(event, model, config=config):
             return
-        chat_manager.set_model(chat_id, model)
+        _apply_chat_model_choice(chat_id, user_id, model=model)
         cancel_input_flow(user_id)
         await event.reply(
             f"{BOT_META_INFO_PREFIX}✅ This chat's model has been set to: `{model}`"
@@ -7724,7 +7834,7 @@ async def callback_handler(event):
                 model_id = _codex_users_model_from_token(parts[3])
                 if not eligible or model_id is None or _is_admin_only_model(model_id):
                     raise ValueError
-                user_manager.set_model(target_id, model_id)
+                _apply_personal_model_choice(target_id, model_id)
                 await _show_codex_user_models(event, target_id, edit=True)
                 await event.answer(f"Set {target_id}'s personal default to {model_id}")
                 return
@@ -7795,7 +7905,7 @@ async def callback_handler(event):
             ):
                 await event.answer(_model_access_denial(model_id), show_alert=True)
                 return
-            user_manager.set_model(user_id, model_id)
+            _apply_personal_model_choice(user_id, model_id)
             cancel_input_flow(user_id)  # Cancel the custom input flow
             feedback = f"Model set to {model_choices[model_id]}"
 
@@ -7854,10 +7964,10 @@ async def callback_handler(event):
                 return
             # Handle "Not Set" option (empty string means remove chat-specific model)
             if model_id == "":
-                chat_manager.set_model(chat_id, None)
+                _apply_chat_model_choice(chat_id, user_id, model=None)
                 feedback_msg = "Chat model cleared (using personal default)"
             else:
-                chat_manager.set_model(chat_id, model_id)
+                _apply_chat_model_choice(chat_id, user_id, model=model_id)
                 feedback_msg = f"Chat model set to {_model_display_name(model_id)}"
             cancel_input_flow(user_id)  # Cancel the custom input flow
 
@@ -8219,12 +8329,12 @@ async def generic_input_handler(event):
         if not await _guard_model_access(event, text, config=config):
             cancel_input_flow(user_id)
             return
-        user_manager.set_model(user_id, text)
+        _apply_personal_model_choice(user_id, text)
         await send_info_message(event, f"✅ Model updated to: `{text}`")
     elif input_type == "chatmodel":
         chat_id = flow_data.get("chat_id", event.chat_id)
         if text.lower() in RESET_KEYWORDS:
-            chat_manager.set_model(chat_id, None)
+            _apply_chat_model_choice(chat_id, user_id, model=None)
             await event.reply(
                 f"{BOT_META_INFO_PREFIX}✅ This chat's model cleared (using personal default)"
             )
@@ -8232,7 +8342,7 @@ async def generic_input_handler(event):
             if not await _guard_model_access(event, text, config=config):
                 cancel_input_flow(user_id)
                 return
-            chat_manager.set_model(chat_id, text)
+            _apply_chat_model_choice(chat_id, user_id, model=text)
             await event.reply(
                 f"{BOT_META_INFO_PREFIX}✅ This chat's model updated to: `{text}`"
             )
@@ -9293,9 +9403,12 @@ async def chat_handler(event):
                     return
 
     # Determine effective model and service (with prefix model override)
-    model_in_use, service_needed = _get_effective_model_and_service(
+    #: Resolved before the access check so a redirected request presents its
+    #: stand-in model there and does not also draw the access notice.
+    request_model = _resolve_request_model(
         chat_id, user_id, prefix_model=prefix_result.model
     )
+    model_in_use, service_needed = request_model.model, request_model.service
     if not await _can_user_access_model(event, model_in_use, config=config):
         if prefix_result.model and codex_util.is_codex_model(prefix_result.model):
             await send_info_message(event, CODEX_ACCESS_DENIED)
@@ -9305,7 +9418,7 @@ async def chat_handler(event):
                 event,
                 "Codex access is unavailable for this request. "
                 f"Falling back to {_model_display_name(DEFAULT_MODEL)}. "
-                "Your saved model settings are unchanged.",
+                f"{CODEX_SETTINGS_UNCHANGED}",
                 parse_mode=None,
             )
         model_in_use = DEFAULT_MODEL
@@ -9314,6 +9427,18 @@ async def chat_handler(event):
     api_key = get_effective_api_key(user_id, service_needed)
 
     if not api_key:
+        if request_model.quota_fallback_from:
+            #: Prompting for a key the user never chose would be baffling; drop
+            #: the stand-in instead and say why.
+            user_manager.clear_codex_quota_fallback(user_id)
+            await send_info_message(
+                event,
+                "Your temporary Codex stand-in "
+                f"({_model_display_name(request_model.model)}) has no usable API "
+                f"key, so I turned it off. {CODEX_SETTINGS_UNCHANGED}",
+                parse_mode=None,
+            )
+            return
         await llm_db.request_api_key_message(event, service_needed)
         return
 
@@ -9356,6 +9481,11 @@ async def chat_handler(event):
         )
         messages = history_result.history
         warnings = history_result.warnings
+        if request_model.quota_fallback_from:
+            warnings.append(
+                "Codex is over its shared usage limit; using "
+                f"{_model_display_name(request_model.model)} for now. /codexQuota"
+            )
 
         # ic(messages)
         if not messages:
