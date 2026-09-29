@@ -217,6 +217,7 @@ def final_edit(
             "file_name_mode": "llm",
             "api_keys": {"gemini": _GEMINI_KEY},
             "reply_to": "event.message",
+            "send_new_on_head_failure": True,
         },
     )
 

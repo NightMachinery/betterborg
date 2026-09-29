@@ -393,6 +393,8 @@ async def llm_stt(*, cwd, event, model_name=STT_MODELS[0], log=True):
             api_keys={
                 "gemini": api_key,
             },
+            #: The transcript must survive a status message it can no longer edit.
+            send_new_on_head_failure=True,
         )
 
         if log:

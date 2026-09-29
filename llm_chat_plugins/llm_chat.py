@@ -10857,6 +10857,8 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
                     "gemini": get_effective_gemini_api_key(user_id),
                 },
                 reply_to=event.message,
+                #: The final answer must survive a head it can no longer edit.
+                send_new_on_head_failure=True,
             )
         else:
             # If we sent an image but have no text, delete the "..." message
