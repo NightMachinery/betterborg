@@ -34,6 +34,8 @@ from telethon.tl.types import (
     PeerUser,
 )
 
+from uniborg import topics
+
 
 class _FakeLoop:
     def create_task(self, coro):
@@ -360,7 +362,7 @@ class SmartModeTests(unittest.TestCase):
             enter = stack.enter_context
             enter(patch.object(plugin, "override_chat_context_mode", {}))
             enter(patch.object(plugin, "SMART_CONTEXT_STATE", state))
-            enter(patch.object(plugin, "TOPIC_ROOTS", plugin.TopicRootCache()))
+            enter(patch.object(topics, "TOPIC_ROOTS", topics.TopicRootCache()))
             enter(
                 patch.object(plugin.chat_manager, "get_context_mode", return_value=None)
             )
