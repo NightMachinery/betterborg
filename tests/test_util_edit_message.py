@@ -35,6 +35,8 @@ class _FakeMessage:
         #: Raised, in order, by the next calls of that kind.
         self.edit_errors = []
         self.reply_errors = []
+        self.respond_errors = []
+        self.delete_errors = []
 
     async def edit(self, text, **kwargs):
         self.chat.calls.append(("edit", self.id, text, kwargs))
@@ -48,8 +50,20 @@ class _FakeMessage:
             raise self.reply_errors.pop(0)
         return self.chat.message(text, reply_to_msg_id=self.id)
 
+    async def respond(self, text, *, reply_to=None, **kwargs):
+        self.chat.calls.append(
+            ("respond", self.id, text, {"reply_to": reply_to, **kwargs})
+        )
+        if self.respond_errors:
+            raise self.respond_errors.pop(0)
+        return self.chat.message(
+            text, reply_to_msg_id=getattr(reply_to, "id", reply_to)
+        )
+
     async def delete(self):
         self.chat.calls.append(("delete", self.id, None, {}))
+        if self.delete_errors:
+            raise self.delete_errors.pop(0)
 
     async def get_chat(self):
         return self.chat
@@ -548,6 +562,264 @@ class EditMessageFileModeTests(_EditChainCase):
         await self.edit("x" * 50, file_length_threshold=3)
 
         self.send_file.assert_not_awaited()
+
+
+def _flood_wait():
+    return errors.FloodWaitError(request=None, capture=120)
+
+
+class EditMessageHeadFailureTests(_EditChainCase):
+    """`send_new_on_head_failure` keeps the final text when the head cannot be edited."""
+
+    async def deliver(self, text, **kwargs):
+        kwargs.setdefault("send_new_on_head_failure", True)
+        await self.edit(text, **kwargs)
+
+    def new_head(self):
+        return self.state().head
+
+    async def test_flood_wait_sends_the_text_as_a_new_chain(self):
+        user_message = self.chat.message("question")
+        await self.edit("A" * 5)
+        self.head.edit_errors.append(_flood_wait())
+        self.chat.calls.clear()
+
+        await self.deliver(_blocks("A", "B", "C"), reply_to=user_message)
+
+        new_head = self.new_head()
+        child_b, child_c = self.state().children
+        self.assertEqual(
+            self.chat.calls,
+            [
+                (
+                    "edit",
+                    self.head.id,
+                    "A" * 10,
+                    {"parse_mode": "md", "link_preview": False},
+                ),
+                (
+                    "respond",
+                    self.head.id,
+                    "A" * 10,
+                    {
+                        "reply_to": user_message,
+                        "parse_mode": "md",
+                        "link_preview": False,
+                    },
+                ),
+                ("reply", new_head.id, "B" * 10, {"parse_mode": "md"}),
+                ("reply", child_b.id, "C" * 10, {"parse_mode": "md"}),
+                ("delete", self.head.id, None, {}),
+            ],
+        )
+        self.assertEqual(new_head.reply_to_msg_id, user_message.id)
+        self.assertEqual(child_c.reply_to_msg_id, child_b.id)
+        self.assertEqual(self.state().last_text, _blocks("A", "B", "C"))
+
+    async def test_stale_children_are_deleted_after_the_new_chain_is_sent(self):
+        await self.edit(_blocks("A", "B"))
+        (stale_b,) = self.state().children
+        self.head.edit_errors.append(_flood_wait())
+        self.chat.calls.clear()
+
+        await self.deliver(_blocks("X", "Y"))
+
+        new_head = self.new_head()
+        self.assertEqual(
+            self.chat.ops(),
+            [
+                ("edit", self.head.id, "X" * 10),
+                ("respond", self.head.id, "X" * 10),
+                ("reply", new_head.id, "Y" * 10),
+                ("delete", stale_b.id, None),
+                ("delete", self.head.id, None),
+            ],
+        )
+        self.assertEqual(
+            {chunk.text for chunk in self.state().sent.values()}, {"X" * 10, "Y" * 10}
+        )
+
+    async def test_later_calls_edit_the_new_chain(self):
+        self.head.edit_errors.append(_flood_wait())
+        await self.deliver("answer")
+        new_head = self.new_head()
+        self.chat.calls.clear()
+
+        await util.edit_message(self.head, "error", parse_mode="md", append_p=True)
+
+        expected = f"answer\n\n{BOT_META_INFO_LINE}\nerror"
+        self.assertEqual(self.chat.ops(), [("edit", new_head.id, expected)])
+        self.assertEqual(self.state().last_text, expected)
+
+    async def test_blank_text_after_a_resend_empties_the_new_head(self):
+        self.head.edit_errors.append(_flood_wait())
+        await self.deliver("answer")
+        new_head = self.new_head()
+        self.chat.calls.clear()
+
+        await self.edit("")
+
+        self.assertEqual(self.chat.ops(), [("edit", new_head.id, "__[empty]__")])
+
+    async def test_a_new_head_that_floods_is_replaced_in_turn(self):
+        self.head.edit_errors.append(_flood_wait())
+        await self.deliver("first")
+        first_replacement = self.new_head()
+        first_replacement.edit_errors.append(_flood_wait())
+        self.chat.calls.clear()
+
+        await self.deliver("second")
+
+        second_replacement = self.new_head()
+        self.assertIsNot(second_replacement, first_replacement)
+        self.assertEqual(
+            self.chat.ops(),
+            [
+                ("edit", first_replacement.id, "second"),
+                ("respond", first_replacement.id, "second"),
+                ("delete", first_replacement.id, None),
+            ],
+        )
+
+    async def test_message_gone_errors_also_resend(self):
+        for error in (
+            errors.MessageIdInvalidError(request=None),
+            errors.MessageAuthorRequiredError(request=None),
+            errors.MessageEditTimeExpiredError(request=None),
+        ):
+            with self.subTest(error=type(error).__name__):
+                util.EDIT_CHAINS.clear()
+                self.head = self.chat.message("...")
+                self.head.edit_errors.append(error)
+                self.chat.calls.clear()
+
+                await self.deliver("answer")
+
+                self.assertIn(("respond", self.head.id, "answer"), self.chat.ops())
+                self.assertIsNotNone(self.new_head())
+
+    async def test_a_head_that_is_not_ours_is_kept(self):
+        await self.edit(_blocks("A", "B"))
+        (stale_b,) = self.state().children
+        self.head.edit_errors.append(errors.MessageAuthorRequiredError(request=None))
+        self.chat.calls.clear()
+
+        await self.deliver(_blocks("X", "Y"))
+
+        self.assertIn(("delete", stale_b.id, None), self.chat.ops())
+        self.assertNotIn(("delete", self.head.id, None), self.chat.ops())
+        self.assertIsNotNone(self.new_head())
+
+    async def stream_then_flood_the_last_child(self):
+        """A streamed partial whose head chunk the final text leaves unchanged."""
+        await self.edit(_blocks("A", "B") + "C" * 5 + "▌")
+        child_b, stale_c = self.state().children
+        stale_c.edit_errors.append(_flood_wait())
+        self.chat.calls.clear()
+        return child_b, stale_c
+
+    async def test_a_flooded_child_is_replaced_with_the_rest_of_the_text(self):
+        child_b, stale_c = await self.stream_then_flood_the_last_child()
+
+        await self.deliver(_blocks("A", "B", "C", "D"))
+
+        kept_b, new_c, new_d = self.state().children
+        self.assertIs(kept_b, child_b)
+        self.assertEqual(
+            self.chat.ops(),
+            [
+                ("edit", stale_c.id, "C" * 10),
+                ("reply", child_b.id, "C" * 10),
+                ("reply", new_c.id, "D" * 10),
+                ("delete", stale_c.id, None),
+            ],
+        )
+        self.assertIsNone(self.new_head())
+        self.assertEqual(self.state().last_text, _blocks("A", "B", "C", "D"))
+        self.assertNotIn(stale_c.id, self.state().sent)
+
+    async def test_a_flooded_child_still_stops_the_chain_by_default(self):
+        child_b, stale_c = await self.stream_then_flood_the_last_child()
+
+        await self.edit(_blocks("A", "B", "C", "D"))
+
+        self.assertEqual(self.chat.ops(), [("edit", stale_c.id, "C" * 10)])
+        self.assertEqual(self.state().children, [child_b])
+
+    async def test_other_child_errors_still_stop_the_chain(self):
+        await self.edit(_blocks("A", "B"))
+        (child_b,) = self.state().children
+        child_b.edit_errors.append(RuntimeError("boom"))
+        self.chat.calls.clear()
+
+        await self.deliver(_blocks("A", "X", "Y"))
+
+        self.assertEqual(self.chat.ops(), [("edit", child_b.id, "X" * 10)])
+        self.assertEqual(self.state().children, [])
+
+    async def test_other_errors_still_abort(self):
+        self.head.edit_errors.append(RuntimeError("boom"))
+
+        await self.deliver("answer")
+
+        self.assertEqual(self.chat.ops(), [("edit", self.head.id, "answer")])
+        self.assertIsNone(self.state())
+
+    async def test_default_keeps_the_stale_head(self):
+        self.head.edit_errors.append(_flood_wait())
+
+        await self.edit("answer")
+
+        self.assertEqual(self.chat.ops(), [("edit", self.head.id, "answer")])
+
+    async def test_without_reply_to_the_new_head_replies_where_the_head_did(self):
+        self.head = self.chat.message("...", reply_to_msg_id=42)
+        self.head.edit_errors.append(_flood_wait())
+
+        await self.deliver("answer")
+
+        self.assertEqual(self.new_head().reply_to_msg_id, 42)
+
+    async def test_failed_resend_leaves_the_chain_as_it_was(self):
+        await self.edit("partial")
+        self.head.edit_errors.append(_flood_wait())
+        self.head.respond_errors.append(_flood_wait())
+        self.chat.calls.clear()
+
+        await self.deliver("answer")
+
+        self.assertEqual(
+            self.chat.ops(),
+            [("edit", self.head.id, "answer"), ("respond", self.head.id, "answer")],
+        )
+        self.assertIsNone(self.state().head)
+        self.assertEqual(self.state().last_text, "partial")
+
+    async def test_an_undeletable_stale_head_does_not_undo_the_resend(self):
+        self.head.edit_errors.append(_flood_wait())
+        self.head.delete_errors.append(errors.MessageDeleteForbiddenError(request=None))
+
+        await self.deliver("answer")
+
+        self.assertIsNotNone(self.new_head())
+        self.assertEqual(self.state().last_text, "answer")
+
+    async def test_final_delivery_shape_still_sends_the_file(self):
+        user_message = self.chat.message("question")
+        self.head.edit_errors.append(_flood_wait())
+
+        await self.deliver(
+            "x" * 5,
+            max_len=4096,
+            reply_to=user_message,
+            send_file_mode=util.SendFileMode.ALSO_IF_LESS_THAN,
+            file_length_threshold=3,
+            file_only_threshold=8,
+        )
+
+        self.assertIn(("respond", self.head.id, "x" * 5), self.chat.ops())
+        self.send_file.assert_awaited_once()
+        self.assertIs(self.send_file.await_args.kwargs["reply_to"], user_message)
 
 
 if __name__ == "__main__":

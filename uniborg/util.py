@@ -934,12 +934,19 @@ class EditChainState:
     #: Telethon's `Message.edit` returns a new object and leaves `.text` stale,
     #: so only this record can tell whether an edit would change anything.
     sent: dict = None
+    #: The message that stands in for the original head once the chain was
+    #: sent anew (see `send_new_on_head_failure`); None means the original.
+    head: typing.Any = None
 
     def __post_init__(self):
         if self.children is None:
             self.children = []
         if self.sent is None:
             self.sent = {}
+
+    def head_for(self, message_obj):
+        """The message currently heading the chain that `message_obj` started."""
+        return message_obj if self.head is None else self.head
 
     def forget_sent_except(self, messages):
         """Drop the records of messages that are no longer in the chain."""
@@ -1080,6 +1087,78 @@ async def _collapse_chain(edit_state, *, message_id, head, placeholder):
     EDIT_CHAINS[message_id] = edit_state
 
 
+async def _reply_chain(parent, chunks, *, edit_state, parse_mode):
+    """Send each chunk as a reply to the previous message, stopping at the first failure.
+
+    Returns the messages sent, and records each in `edit_state.sent`.
+    """
+    sent_messages = []
+    for chunk in chunks:
+        try:
+            parent = await parent.reply(chunk, parse_mode=parse_mode)
+        except Exception:
+            break
+        edit_state.sent[parent.id] = SentChunk(chunk, parse_mode=parse_mode)
+        sent_messages.append(parent)
+    return sent_messages
+
+
+#: Head-edit failures after which the head cannot show the text soon, or ever.
+#: Telethon sleeps through a FloodWait of up to `flood_sleep_threshold` (60 s by
+#: default) and raises only for longer ones. Sending is limited separately from
+#: editing, so a new message usually still goes through.
+HEAD_LOST_ERRORS = (
+    telethon.errors.rpcerrorlist.FloodWaitError,
+    telethon.errors.rpcerrorlist.MessageIdInvalidError,
+    telethon.errors.rpcerrorlist.MessageAuthorRequiredError,
+    telethon.errors.rpcerrorlist.MessageEditTimeExpiredError,
+)
+
+
+async def _resend_chain(
+    edit_state,
+    *,
+    chunks,
+    stale_head,
+    reply_to,
+    parse_mode,
+    link_preview,
+    delete_stale_head=True,
+) -> bool:
+    """Send `chunks` as a new chain, then delete the stale one, best-effort.
+
+    The first chunk replies to `reply_to`, or else to whatever the stale head
+    replied to (a reply to the stale head itself would point at a deleted
+    message). `delete_stale_head=False` keeps the stale head and deletes only
+    the children. On success, `edit_state` describes the new chain. Returns
+    False, leaving everything as it was, when not even the first chunk can be
+    sent.
+    """
+    anchor = reply_to if reply_to is not None else stale_head.reply_to_msg_id
+    try:
+        new_head = await stale_head.respond(
+            chunks[0],
+            reply_to=anchor,
+            parse_mode=parse_mode,
+            link_preview=link_preview,
+        )
+    except Exception as e:
+        print(f"Error sending a replacement for message {stale_head.id}: {e}")
+        return False
+
+    stale_messages = [*edit_state.children]
+    if delete_stale_head:
+        stale_messages.append(stale_head)
+    edit_state.head = new_head
+    edit_state.sent = {new_head.id: SentChunk(chunks[0], parse_mode=parse_mode)}
+    edit_state.children = await _reply_chain(
+        new_head, chunks[1:], edit_state=edit_state, parse_mode=parse_mode
+    )
+    for message in stale_messages:
+        await _safe_delete_message(message)
+    return True
+
+
 def _log_file_sending_error(context_name):
     """Log file sending error in a standardized way."""
     print(f"File sending failed in {context_name}:", file=sys.stderr)
@@ -1106,6 +1185,7 @@ async def edit_message(
     file_name_mode="random",
     title_model: str | None = None,
     api_keys: dict | None = None,
+    send_new_on_head_failure: bool = False,
 ):
     """
     Intelligently edits a message chain to reflect new text content,
@@ -1130,7 +1210,8 @@ async def edit_message(
         max_len (int): The maximum length of a single message.
         append_p (bool): If True, append new_text to existing content separated by BOT_META_INFO_LINE.
                         If False, replace existing content with new_text (default behavior).
-        reply_to: Optional message to reply to when sending a file.
+        reply_to: Optional message to reply to when sending a file, or a new
+            chain under `send_new_on_head_failure`.
         send_file_mode: SendFileMode.ALSO to also send as file in addition to text,
                        SendFileMode.ONLY to skip text editing and only send as file,
                        SendFileMode.ALSO_IF_LESS_THAN to send as both text and file only if length < file_only_threshold,
@@ -1144,6 +1225,23 @@ async def edit_message(
             constants.CHAT_TITLE_MODEL when not provided.
         api_keys (dict | None): Optional mapping of service name (e.g., "gemini") to
             API key value. If provided, avoids sender_id-based key lookup.
+        send_new_on_head_failure (bool): What to do when editing the head fails
+            with one of `HEAD_LOST_ERRORS` (a FloodWait too long for Telethon to
+            sleep through, or a head that is gone or no longer editable).
+            If False (the default, meant for partial streaming edits), print the
+            error and leave the chain as it was.
+            If True (meant for final delivery, so the answer is not lost), send
+            the text as a new chain: the first chunk replies to `reply_to` (else
+            to what the head replied to) and each further chunk to the previous
+            one; then delete the stale chain, best-effort (except a head that
+            is not ours). The new chain is recorded as `message_obj`'s, so later
+            calls with the same `message_obj` (say an `append_p` notice) edit
+            the new chain and append to its text; the stale head is never
+            touched again. A child edit that fails with one of these errors is
+            covered too, since the head edit is skipped when the head already
+            shows its chunk: that child and the ones after it are replaced by
+            new replies to the last child kept.
+            Other errors abort as with False.
     """
     global EDIT_CHAINS
     message_id = message_obj.id
@@ -1152,6 +1250,7 @@ async def edit_message(
 
     # Get or create the edit state for this message ID
     edit_state = EDIT_CHAINS.get(message_id, EditChainState())
+    head = edit_state.head_for(message_obj)
 
     # Handle append_p mode: append new_text to existing content
     if append_p:
@@ -1180,7 +1279,7 @@ async def edit_message(
         await _collapse_chain(
             edit_state,
             message_id=message_id,
-            head=message_obj,
+            head=head,
             placeholder="__[sent as file]__",
         )
 
@@ -1219,7 +1318,7 @@ async def edit_message(
             await _collapse_chain(
                 edit_state,
                 message_id=message_id,
-                head=message_obj,
+                head=head,
                 placeholder="__[empty]__",
             )
             return
@@ -1228,58 +1327,72 @@ async def edit_message(
         try:
             await _edit_chain_message(
                 edit_state,
-                message_obj,
+                head,
                 chunk=SentChunk(chunks[0], parse_mode=parse_mode),
                 link_preview=link_preview,
             )
         except Exception as e:
             print(f"Error editing original message {message_id}: {e}")
+            if send_new_on_head_failure and isinstance(e, HEAD_LOST_ERRORS):
+                if await _resend_chain(
+                    edit_state,
+                    chunks=chunks,
+                    stale_head=head,
+                    reply_to=reply_to,
+                    parse_mode=parse_mode,
+                    link_preview=link_preview,
+                    #: Someone else's message: not ours to delete, even where
+                    #: admin rights would let us.
+                    delete_stale_head=not isinstance(
+                        e, telethon.errors.rpcerrorlist.MessageAuthorRequiredError
+                    ),
+                ):
+                    edit_state.last_text = new_text
+                    EDIT_CHAINS[message_id] = edit_state
             return  # If the head of the chain fails, abort
 
         # Now, handle the children (the rest of the chunks)
-        num_new_chunks = len(chunks) - 1
-        num_existing_children = len(existing_children)
-        last_message_in_chain = message_obj
-
-        for i in range(max(num_new_chunks, num_existing_children)):
-            # --- Edit existing messages if we have a chunk for them ---
-            if i < num_new_chunks and i < num_existing_children:
-                child_to_edit = existing_children[i]
-                try:
-                    await _edit_chain_message(
-                        edit_state,
-                        child_to_edit,
-                        chunk=SentChunk(chunks[i + 1], parse_mode=parse_mode),
-                        link_preview=link_preview,
-                    )
-                except Exception:
-                    # If editing a child fails, stop processing the chain to avoid errors.
-                    break
-                new_children.append(child_to_edit)
-                last_message_in_chain = child_to_edit
-
-            # --- Create new messages if new text is longer ---
-            elif i < num_new_chunks:
-                try:
-                    new_child = await last_message_in_chain.reply(
-                        chunks[i + 1], parse_mode=parse_mode
-                    )
-                except Exception:
-                    break  # Stop if we can't send a new reply
-                edit_state.sent[new_child.id] = SentChunk(
-                    chunks[i + 1], parse_mode=parse_mode
+        chain_intact = True
+        #: zip stops at the shorter list: the children that get a chunk.
+        for child_to_edit, chunk in zip(existing_children, chunks[1:]):
+            try:
+                await _edit_chain_message(
+                    edit_state,
+                    child_to_edit,
+                    chunk=SentChunk(chunk, parse_mode=parse_mode),
+                    link_preview=link_preview,
                 )
-                new_children.append(new_child)
-                last_message_in_chain = new_child
+            except Exception as e:
+                if send_new_on_head_failure and isinstance(e, HEAD_LOST_ERRORS):
+                    #: The head of a long answer usually already shows its
+                    #: chunk, so a final edit's FloodWait lands here instead.
+                    #: This child and the rest are replaced below.
+                    print(
+                        f"Error editing message {child_to_edit.id} of chain {message_id}: {e}"
+                    )
+                else:
+                    # If editing a child fails, stop processing the chain to avoid errors.
+                    chain_intact = False
+                break
+            new_children.append(child_to_edit)
 
-            # --- Delete surplus messages if new text is shorter ---
-            elif i < num_existing_children:
-                child_to_delete = existing_children[i]
+        if chain_intact:
+            kept_count = len(new_children)
+            # --- Send the chunks that no kept child shows ---
+            new_children += await _reply_chain(
+                new_children[-1] if new_children else head,
+                chunks[1 + kept_count :],
+                edit_state=edit_state,
+                parse_mode=parse_mode,
+            )
+
+            # --- Delete the children not kept: surplus, or replaced above ---
+            for child_to_delete in existing_children[kept_count:]:
                 await _safe_delete_message(child_to_delete)
 
         # Update the global state with the new chain configuration
         edit_state.children = new_children
-        edit_state.forget_sent_except([message_obj, *new_children])
+        edit_state.forget_sent_except([head, *new_children])
         edit_state.last_text = (
             new_text  # Store the last text for future append operations
         )
