@@ -89,10 +89,13 @@ class Uniborg(telethon_safety.DifferenceFallbackMixin, TelegramClient):
         # precedence
         self._event_builders = hacks.ReverseList()
 
-        #: Here rather than at import: the difference fallback needs this
-        #: client, and importing uniborg (tests, tools) must not patch
-        #: Telethon. It still runs before `_async_init` first connects.
-        self.safety_stats = telethon_safety.install_safety_nets(client=self)
+        #: Here rather than at import: the alert and the difference fallback
+        #: need this client, and importing uniborg (tests, tools) must not
+        #: patch Telethon. It still runs before `_async_init` first connects.
+        self.safety_stats = telethon_safety.install_safety_nets(
+            client=self,
+            alert=self.send_safety_alert,
+        )
 
         await self._async_init(bot_token=bot_token)
         if log_chat:
@@ -161,6 +164,21 @@ class Uniborg(telethon_safety.DifferenceFallbackMixin, TelegramClient):
         self._is_bot = await self.is_bot()
         self._bot_id = self.me.id
         self._bot_username = f"@{self.me.username}" if self.me.username else None
+
+    async def send_safety_alert(self, text):
+        """Posts a safety-net alert to the log chat, if there is one.
+
+        `telethon_safety` has already logged the event, so a missing log chat
+        or a failed send is only logged.
+        """
+        if self.log_chat is None:
+            return
+        try:
+            await self.send_message(self.log_chat, f"{BOT_META_INFO_PREFIX}{text}")
+        except Exception:
+            self._logger.warning(
+                "Could not send a safety-net alert to the log chat", exc_info=True
+            )
 
     def load_plugin(self, shortname):
         self.load_plugin_from_file(f"{self._plugin_path}/{shortname}.py")

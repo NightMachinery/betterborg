@@ -15,9 +15,10 @@ everything around it:
 - inside ``getDifference`` or ``getChannelDifference``, the update loop
   disconnects the client, which ends the bot.
 
-The nets below shrink the loss to the one object and count every event in
-`SafetyStats`. This module imports only the standard library and Telethon, so
-tests and tools can load it without ``uniborg.util``.
+The nets below shrink the loss to the one object, count every event in
+`SafetyStats`, and send rate-limited alerts through an injected callable. This
+module imports only the standard library and Telethon, so tests and tools can
+load it without ``uniborg.util``.
 """
 import asyncio
 from collections import Counter
@@ -45,11 +46,17 @@ SAFETY_NETS_ENV = "borg_tg_safety_nets"
 #: `_process_message`/`_handle_container`/`_handle_gzip_packed`/`_handle_update`.
 SUPPORTED_TELETHON_VERSIONS = frozenset({"1.43.2", "1.45.0"})
 
+ALERT_INTERVAL_SECONDS = 10 * 60
+
+#: The record `MTProtoSender._recv_loop` logs when it drops a whole message.
+TELETHON_TYPE_NOT_FOUND_MSG = "Type %08x not found, remaining data %r"
+
 _ENABLED_VALUES = frozenset({"", "1", "true", "yes", "on"})
 _DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
 
 _log = logging.getLogger(__name__)
 
+AlertFn = Callable[[str], Awaitable[None]]
 ReportFn = Callable[..., None]
 
 
@@ -58,6 +65,7 @@ class SafetyKind(enum.Enum):
 
     CONTAINER_ENTRY = "container_entry"
     PROCESSING = "processing"
+    DROPPED_MESSAGE = "dropped_message"
     DIFFERENCE = "difference"
     CHANNEL_DIFFERENCE = "channel_difference"
     RPC_RESULT = "rpc_result"
@@ -75,6 +83,10 @@ _KIND_DESCRIPTIONS = {
     SafetyKind.PROCESSING: (
         "an unknown object surfaced while a received message was processed "
         "(usually gzip-packed); that message is lost"
+    ),
+    SafetyKind.DROPPED_MESSAGE: (
+        "Telethon dropped a received message it could not parse, "
+        "without acknowledging it"
     ),
     SafetyKind.DIFFERENCE: (
         "skipped an unparseable getDifference window; account updates in it are lost"
@@ -95,6 +107,7 @@ class SafetyNet(enum.Enum):
 
     CONTAINER_SKIP = "container_skip"
     MESSAGE_GUARD = "message_guard"
+    LOG_COUNTER = "log_counter"
     DIFFERENCE_FALLBACK = "difference_fallback"
 
 
@@ -147,16 +160,32 @@ class SafetyStats:
 
 
 class SafetyMonitor:
-    """Records safety-net events: counts them and logs them."""
+    """Records safety-net events: counts them, logs them, and alerts.
+
+    An alert goes out at most once per kind per `alert_interval_seconds`; the
+    next one mentions how many events were held back in between. `alert` is an
+    async callable taking the alert text, and may be replaced later.
+    """
 
     def __init__(
         self,
         *,
         stats: Optional[SafetyStats] = None,
+        alert: Optional[AlertFn] = None,
+        clock: Optional[Callable[[], float]] = None,
+        alert_interval_seconds: float = ALERT_INTERVAL_SECONDS,
+        context: str = "",
         logger: Optional[logging.Logger] = None,
     ):
         self.stats = stats if stats is not None else SafetyStats()
+        self.alert = alert
+        self._clock = clock or time.monotonic
+        self._alert_interval_seconds = alert_interval_seconds
+        self._context = context
         self._log = logger or _log
+        self._last_alert_at = {}
+        self._held_back = Counter()
+        self._alert_tasks = set()
 
     def report(
         self,
@@ -174,6 +203,104 @@ class SafetyMonitor:
             f"; {detail}" if detail else "",
             count,
         )
+        self._maybe_alert(kind, constructor_id=constructor_id, count=count)
+
+    def _maybe_alert(
+        self, kind: SafetyKind, *, constructor_id: Optional[int], count: int
+    ) -> None:
+        if self.alert is None:
+            return
+
+        now = self._clock()
+        last = self._last_alert_at.get(kind)
+        if last is not None and now - last < self._alert_interval_seconds:
+            self._held_back[kind] += 1
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            #: Only reachable from a thread without an event loop; the
+            #: warning above already recorded the event.
+            self._held_back[kind] += 1
+            return
+
+        self._last_alert_at[kind] = now
+        held_back = self._held_back.pop(kind, 0)
+        text = self.alert_text(
+            kind, constructor_id=constructor_id, count=count, held_back=held_back
+        )
+        task = loop.create_task(self._send_alert(text))
+        self._alert_tasks.add(task)
+        task.add_done_callback(self._alert_tasks.discard)
+
+    def alert_text(
+        self,
+        kind: SafetyKind,
+        *,
+        constructor_id: Optional[int],
+        count: int,
+        held_back: int = 0,
+    ) -> str:
+        parts = [
+            f"Telegram safety net [{kind.value}]: {kind.description}.",
+            f"Constructor {_format_constructor(constructor_id)}, {count} so far",
+        ]
+        if held_back:
+            parts[-1] += f", {held_back} more since the last alert"
+        parts[-1] += "."
+        if self._context:
+            parts.append(f"{self._context}.")
+        return " ".join(parts)
+
+    async def _send_alert(self, text: str) -> None:
+        try:
+            await self.alert(text)
+        except Exception:
+            self._log.warning("Could not deliver a safety-net alert", exc_info=True)
+
+
+class TypeNotFoundLogHandler(logging.Handler):
+    """Counts the unknown-constructor records Telethon's sender logs itself.
+
+    Attached to the ``telethon.network.mtprotosender`` logger. It sees:
+
+    - the INFO record `_recv_loop` logs when a whole message is dropped
+      (`SafetyKind.DROPPED_MESSAGE`);
+    - any record whose exception is a `TypeNotFoundError`, which without the
+      message guard is how a gzip-packed failure surfaces
+      (`SafetyKind.PROCESSING`).
+
+    A logger level above INFO on that logger hides the first kind from it.
+    """
+
+    def __init__(
+        self,
+        *,
+        report: ReportFn,
+        not_found_error: type = errors.TypeNotFoundError,
+    ):
+        super().__init__()
+        self._report = report
+        self._not_found_error = not_found_error
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if (
+                record.msg == TELETHON_TYPE_NOT_FOUND_MSG
+                and isinstance(record.args, tuple)
+                and record.args
+            ):
+                self._report(SafetyKind.DROPPED_MESSAGE, constructor_id=record.args[0])
+            elif record.exc_info and isinstance(
+                record.exc_info[1], self._not_found_error
+            ):
+                self._report(
+                    SafetyKind.PROCESSING,
+                    constructor_id=record.exc_info[1].invalid_constructor_id,
+                )
+        except Exception:
+            self.handleError(record)
 
 
 class SkippedObject(TLObject):
@@ -479,12 +606,21 @@ class _Patch:
 class _Installation:
     module: Any
     monitor: SafetyMonitor
+    handler: logging.Handler
+    sender_logger: logging.Logger
     patches: list
 
 
 #: Keyed by id() of the Telethon module; the entry keeps the module alive, so
 #: the id cannot be reused while it is registered.
 _INSTALLATIONS = {}
+
+
+def _telethon_layer(module: Any) -> Optional[int]:
+    try:
+        return module.tl.alltlobjects.LAYER
+    except AttributeError:
+        return None
 
 
 def _patch_telethon(module: Any, *, report: ReportFn) -> list:
@@ -514,9 +650,20 @@ def _patch_telethon(module: Any, *, report: ReportFn) -> list:
     ]
 
 
-def _install(module: Any, *, stats: Optional[SafetyStats]) -> _Installation:
+def _install(
+    module: Any,
+    *,
+    stats: Optional[SafetyStats],
+    alert: Optional[AlertFn],
+    clock: Optional[Callable[[], float]],
+) -> _Installation:
     version = getattr(module, "__version__", None)
-    monitor = SafetyMonitor(stats=stats)
+    monitor = SafetyMonitor(
+        stats=stats,
+        alert=alert,
+        clock=clock,
+        context=f"Telethon {version}, layer {_telethon_layer(module)}",
+    )
 
     patches = []
     if version in SUPPORTED_TELETHON_VERSIONS:
@@ -530,12 +677,27 @@ def _install(module: Any, *, stats: Optional[SafetyStats]) -> _Installation:
             ", ".join(sorted(SUPPORTED_TELETHON_VERSIONS)),
         )
 
-    return _Installation(module=module, monitor=monitor, patches=patches)
+    handler = TypeNotFoundLogHandler(
+        report=monitor.report,
+        not_found_error=module.errors.TypeNotFoundError,
+    )
+    sender_logger = logging.getLogger(f"{module.__name__}.network.mtprotosender")
+    sender_logger.addHandler(handler)
+    monitor.stats.installed.add(SafetyNet.LOG_COUNTER)
+
+    return _Installation(
+        module=module,
+        monitor=monitor,
+        handler=handler,
+        sender_logger=sender_logger,
+        patches=patches,
+    )
 
 
 def install_safety_nets(
     *,
     stats: Optional[SafetyStats] = None,
+    alert: Optional[AlertFn] = None,
     telethon_module: Any = None,
     client: Optional[DifferenceFallbackMixin] = None,
     environ=None,
@@ -546,11 +708,13 @@ def install_safety_nets(
 
     - The container skip and the message guard patch Telethon's classes, so
       they apply process-wide, only on `SUPPORTED_TELETHON_VERSIONS`.
+    - The log counter is a handler on Telethon's sender logger.
     - `client`, which must use `DifferenceFallbackMixin`, gets a
       `DifferenceFallback` reporting into the same stats.
 
     Idempotent per Telethon module: a repeat call keeps the first call's stats
-    and patches, and attaches `client` if it has no fallback yet. `SAFETY_NETS_ENV` switches all of it off; an
+    and patches, replaces the alert when one is given, and attaches `client`
+    if it has no fallback yet. `SAFETY_NETS_ENV` switches all of it off; an
     unrecognised value raises `ValueError`.
     """
     if not safety_nets_enabled(environ=environ):
@@ -566,8 +730,10 @@ def install_safety_nets(
     module = telethon_module or telethon
     installation = _INSTALLATIONS.get(id(module))
     if installation is None:
-        installation = _install(module, stats=stats)
+        installation = _install(module, stats=stats, alert=alert, clock=clock)
         _INSTALLATIONS[id(module)] = installation
+    elif alert is not None:
+        installation.monitor.alert = alert
 
     monitor = installation.monitor
     if client is not None:
@@ -583,7 +749,7 @@ def install_safety_nets(
 
 
 def uninstall_safety_nets(*, telethon_module: Any = None) -> bool:
-    """Restores Telethon's classes.
+    """Restores Telethon's classes and removes the log counter.
 
     Clients keep any `DifferenceFallback` already attached; set their
     `difference_fallback` to None to drop it. Returns whether anything was
@@ -596,5 +762,6 @@ def uninstall_safety_nets(*, telethon_module: Any = None) -> bool:
 
     for patch in reversed(installation.patches):
         patch.restore()
-    installation.monitor.stats.installed -= _PATCH_NETS
+    installation.sender_logger.removeHandler(installation.handler)
+    installation.monitor.stats.installed -= _PATCH_NETS | {SafetyNet.LOG_COUNTER}
     return True

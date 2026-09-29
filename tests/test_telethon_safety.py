@@ -30,6 +30,7 @@ SafetyKind = telethon_safety.SafetyKind
 SafetyNet = telethon_safety.SafetyNet
 
 UNKNOWN_ID = 0xDEADBEEF
+SENDER_LOGGER = "telethon.network.mtprotosender"
 
 
 def _entry(msg_id, body, *, seq_no=0):
@@ -147,12 +148,26 @@ class ContainerSkipTests(_InstalledTestCase):
         self.assertIsNot(patched_reader, original_reader)
         self.assertEqual(
             stats.installed,
-            {SafetyNet.CONTAINER_SKIP, SafetyNet.MESSAGE_GUARD},
+            {SafetyNet.CONTAINER_SKIP, SafetyNet.MESSAGE_GUARD, SafetyNet.LOG_COUNTER},
         )
+        handlers = logging.getLogger(SENDER_LOGGER).handlers
+        self.assertEqual(
+            sum(
+                isinstance(h, telethon_safety.TypeNotFoundLogHandler) for h in handlers
+            ),
+            1,
+        )
+
         self.assertTrue(telethon_safety.uninstall_safety_nets())
 
         self.assertIs(MessageContainer.__dict__["from_reader"], original_reader)
         self.assertIs(MTProtoSender.__dict__["_process_message"], original_process)
+        self.assertFalse(
+            any(
+                isinstance(h, telethon_safety.TypeNotFoundLogHandler)
+                for h in logging.getLogger(SENDER_LOGGER).handlers
+            )
+        )
 
 
 class VersionGuardTests(unittest.TestCase):
@@ -180,7 +195,7 @@ class VersionGuardTests(unittest.TestCase):
             )
 
         self.assertIn("1.99.0", "\n".join(logs.output))
-        self.assertEqual(stats.installed, set())
+        self.assertEqual(stats.installed, {SafetyNet.LOG_COUNTER})
         self.assertIs(container_cls.__dict__["from_reader"].__func__, id)
         self.assertIs(sender_cls.__dict__["_process_message"], id)
 
@@ -282,8 +297,14 @@ class DifferenceFallbackTests(unittest.TestCase):
     def setUp(self):
         self.clock = _Clock()
         self.sleeps = []
-        self.monitor = telethon_safety.SafetyMonitor()
+        self.alerts = []
+        self.monitor = telethon_safety.SafetyMonitor(
+            alert=self._alert, clock=self.clock
+        )
         self.stats = self.monitor.stats
+
+    async def _alert(self, text):
+        self.alerts.append(text)
 
     async def _sleep(self, seconds):
         self.sleeps.append(seconds)
@@ -424,6 +445,52 @@ class DifferenceFallbackTests(unittest.TestCase):
         self.assertEqual(self.sleeps, [1.0, 2.0])
         self.assertEqual(len(client.difference_fallback.backoffs), 1)
 
+    def test_alerts_are_rate_limited_per_kind(self):
+        client = self._client(
+            {
+                functions.updates.GetDifferenceRequest: self._not_found(),
+                functions.updates.GetStateRequest: _state(),
+            }
+        )
+
+        async def fall_back(times):
+            for _ in range(times):
+                await client(_difference_request())
+            await asyncio.sleep(0)
+
+        asyncio.run(fall_back(3))
+        self.assertEqual(len(self.alerts), 1)
+        self.assertIn("difference", self.alerts[0])
+        self.assertIn("0xdeadbeef", self.alerts[0])
+
+        self.clock.now += telethon_safety.ALERT_INTERVAL_SECONDS
+        asyncio.run(fall_back(1))
+        self.assertEqual(len(self.alerts), 2)
+        self.assertIn("2 more since the last alert", self.alerts[1])
+
+    def test_a_failing_alert_does_not_break_the_fallback(self):
+        async def broken_alert(text):
+            raise RuntimeError("log chat unreachable")
+
+        self.monitor.alert = broken_alert
+        client = self._client(
+            {
+                functions.updates.GetDifferenceRequest: self._not_found(),
+                functions.updates.GetStateRequest: _state(),
+            }
+        )
+
+        async def fall_back():
+            diff = await client(_difference_request())
+            await asyncio.sleep(0)
+            return diff
+
+        with self.assertLogs(telethon_safety.__name__, logging.WARNING) as logs:
+            diff = asyncio.run(fall_back())
+
+        self.assertIsInstance(diff, types.updates.Difference)
+        self.assertIn("Could not deliver a safety-net alert", "\n".join(logs.output))
+
 
 class InstallWiringTests(_InstalledTestCase):
     def test_install_attaches_the_fallback_to_the_client(self):
@@ -439,6 +506,37 @@ class InstallWiringTests(_InstalledTestCase):
     def test_install_rejects_a_client_without_the_mixin(self):
         with self.assertRaises(TypeError):
             self.install(client=_FakeTelethonClient({}))
+
+
+class LogCounterTests(_InstalledTestCase):
+    def setUp(self):
+        logger = logging.getLogger(SENDER_LOGGER)
+        previous_level = logger.level
+        logger.setLevel(logging.INFO)
+        self.addCleanup(logger.setLevel, previous_level)
+        self.logger = logger
+
+    def test_counts_telethons_type_not_found_record(self):
+        stats = self.install()
+
+        self.logger.info(telethon_safety.TELETHON_TYPE_NOT_FOUND_MSG, 0x1234, b"x")
+
+        self.assertEqual(stats.by_kind[SafetyKind.DROPPED_MESSAGE], 1)
+        self.assertEqual(stats.by_constructor[0x1234], 1)
+
+    def test_counts_records_carrying_a_type_not_found_exception(self):
+        stats = self.install()
+        error = errors.TypeNotFoundError(0x5678, b"")
+
+        self.logger.error(
+            "Unhandled error while processing msgs",
+            exc_info=(type(error), error, None),
+        )
+        self.logger.warning("Unrelated")
+
+        self.assertEqual(stats.by_kind[SafetyKind.PROCESSING], 1)
+        self.assertEqual(stats.total, 1)
+        self.assertEqual(stats.by_constructor[0x5678], 1)
 
 
 if __name__ == "__main__":
