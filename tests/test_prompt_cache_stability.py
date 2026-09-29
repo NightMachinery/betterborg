@@ -112,21 +112,29 @@ class RuntimeContextPlacementTests(unittest.TestCase):
             {
                 "role": "user",
                 "content": [
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,AA"},
+                    }
                 ],
             }
         ]
 
         self.llm_chat.append_runtime_context_to_latest_user_message(history, "now")
 
-        self.assertEqual(history[0]["content"][-1], {"type": "text", "text": "---\nRuntime context:\nnow"})
+        self.assertEqual(
+            history[0]["content"][-1],
+            {"type": "text", "text": "---\nRuntime context:\nnow"},
+        )
 
     def test_runtime_context_adds_user_turn_when_missing(self):
         history = [{"role": "system", "content": "stable"}]
 
         self.llm_chat.append_runtime_context_to_latest_user_message(history, "now")
 
-        self.assertEqual(history[-1], {"role": "user", "content": "Runtime context:\nnow"})
+        self.assertEqual(
+            history[-1], {"role": "user", "content": "Runtime context:\nnow"}
+        )
 
 
 class ModelPrefixAfterMentionTests(unittest.TestCase):
@@ -217,7 +225,6 @@ class CodexPromptCacheHintTests(unittest.TestCase):
         self.assertNotEqual(key1, key3)
 
 
-
 class LastNContextLimitTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -256,9 +263,11 @@ class LastNContextLimitTests(unittest.TestCase):
         )
         labels = [button.text for button in buttons]
         data = [
-            button.data.decode("utf-8")
-            if isinstance(button.data, bytes)
-            else button.data
+            (
+                button.data.decode("utf-8")
+                if isinstance(button.data, bytes)
+                else button.data
+            )
             for button in buttons
         ]
 

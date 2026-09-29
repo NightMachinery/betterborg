@@ -188,13 +188,17 @@ class CodexAccessIntegrationTests(unittest.TestCase):
             current_value=OPENAI_CODEX_GPT_5_6_SOL,
             think_state=Mock(),
         )
-        with patch.object(llm_chat.llm_chat_config, "load_config", return_value=config), patch.object(
+        with patch.object(
+            llm_chat.llm_chat_config, "load_config", return_value=config
+        ), patch.object(
             llm_chat.util, "isAdmin", new=AsyncMock(return_value=False)
         ), patch.object(
             llm_chat.bot_util,
             "unsanitize_callback_data",
             return_value=OPENAI_CODEX_GPT_5_6_SOL,
-        ), patch.object(llm_chat.user_manager, "set_model") as set_model, patch.object(
+        ), patch.object(
+            llm_chat.user_manager, "set_model"
+        ) as set_model, patch.object(
             llm_chat, "_build_model_menu", return_value=menu
         ):
             asyncio.run(llm_chat.callback_handler(event))
@@ -205,13 +209,17 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         event.data = b"model_codex"
         event.answer = AsyncMock()
         config = llm_chat_config.LLMChatConfig((), ())
-        with patch.object(llm_chat.llm_chat_config, "load_config", return_value=config), patch.object(
+        with patch.object(
+            llm_chat.llm_chat_config, "load_config", return_value=config
+        ), patch.object(
             llm_chat.util, "isAdmin", new=AsyncMock(return_value=True)
         ), patch.object(
             llm_chat.bot_util,
             "unsanitize_callback_data",
             return_value=OPENAI_CODEX_GPT_5_6_SOL,
-        ), patch.object(llm_chat.user_manager, "set_model") as set_model:
+        ), patch.object(
+            llm_chat.user_manager, "set_model"
+        ) as set_model:
             asyncio.run(llm_chat.callback_handler(event))
         set_model.assert_not_called()
         event.answer.assert_awaited_with(llm_chat.CODEX_ACCESS_DENIED, show_alert=True)
@@ -221,9 +229,13 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         event.text = "think:high"
         config = llm_chat_config.LLMChatConfig((), ())
         llm_chat.AWAITING_INPUT_FROM_USERS[123] = {"type": "model"}
-        with patch.object(llm_chat.llm_chat_config, "load_config", return_value=config), patch.object(
+        with patch.object(
+            llm_chat.llm_chat_config, "load_config", return_value=config
+        ), patch.object(
             llm_chat, "_scope_selected_model", return_value=OPENAI_CODEX_GPT_5_6_SOL
-        ), patch.object(llm_chat, "send_info_message", new=AsyncMock()), patch.object(
+        ), patch.object(
+            llm_chat, "send_info_message", new=AsyncMock()
+        ), patch.object(
             llm_chat, "_apply_reasoning_menu_choice", new=AsyncMock()
         ) as apply_choice:
             asyncio.run(llm_chat.generic_input_handler(event))
@@ -238,7 +250,9 @@ class CodexAccessIntegrationTests(unittest.TestCase):
             llm_chat.util, "isAdmin", new=AsyncMock(return_value=False)
         ), patch.object(
             llm_chat.util, "is_group_admin", new=AsyncMock(return_value=False)
-        ), patch.object(llm_chat, "send_info_message", new=AsyncMock()), patch.object(
+        ), patch.object(
+            llm_chat, "send_info_message", new=AsyncMock()
+        ), patch.object(
             llm_chat, "_apply_reasoning_menu_choice", new=AsyncMock()
         ) as apply_choice:
             asyncio.run(llm_chat.generic_input_handler(event))
