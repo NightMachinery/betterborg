@@ -10412,18 +10412,19 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
         event.message.text = prefix_text[2:].strip()
         event.text = event.message.text  #: might be redundant
 
-        response_message = await send_info_message(
-            event,
-            f"**Recent Context Mode:** I'll use only the recent messages to form the conversation context. I have waited {RECENT_WAIT_TIME} second(s) to receive all your messages.\n\nProcessing ... ",
-        )
+        placeholder_text = f"**Recent Context Mode:** I'll use only the recent messages to form the conversation context. I have waited {RECENT_WAIT_TIME} second(s) to receive all your messages.\n\nProcessing ... "
 
     else:
-        response_message = await send_info_message(event, "...")
+        placeholder_text = "..."
 
     import tempfile
 
     temp_dir = Path(tempfile.gettempdir()) / f"temp_llm_chat_{event.id}"
+    response_message = None
     try:
+        #: Inside `try`, so a chat the bot cannot post in reaches the error
+        #: reply below instead of escaping the handler.
+        response_message = await send_info_message(event, placeholder_text)
         temp_dir.mkdir(exist_ok=True)
 
         if group_id:

@@ -68,5 +68,66 @@ class StreamingEdgeTests(unittest.TestCase):
         self.assertEqual(result.finish_reason, "length")
 
 
+class PlaceholderFailureTests(unittest.TestCase):
+    def test_a_placeholder_that_cannot_be_sent_is_reported(self):
+        #: E.g. a group where the bot may no longer post.
+        event = SimpleNamespace(
+            sender_id=1,
+            chat_id=1,
+            grouped_id=None,
+            is_private=True,
+            text="hello",
+            message=SimpleNamespace(text="hello", media=None),
+            id=99,
+            file=None,
+        )
+        send_failure = RuntimeError("CHAT_WRITE_FORBIDDEN")
+        handle_llm_error = AsyncMock()
+        build_history = AsyncMock()
+        model = SimpleNamespace(
+            model="gemini/x", service="gemini", quota_fallback_from=None
+        )
+        with patch.object(plugin, "cleanup_completed_tasks"), patch.object(
+            plugin.llm_db, "is_awaiting_key", return_value=False
+        ), patch.object(
+            plugin.gemini_live_util.live_session_manager,
+            "is_live_mode_active",
+            return_value=False,
+        ), patch.object(
+            plugin.user_manager, "get_prefs", return_value=SimpleNamespace()
+        ), patch.object(
+            plugin.util, "isAdmin", new=AsyncMock(return_value=False)
+        ), patch.object(
+            plugin.llm_chat_config, "load_config", return_value={}
+        ), patch.object(
+            plugin.llm_chat_config, "can_use_codex", new=AsyncMock(return_value=False)
+        ), patch.object(
+            plugin,
+            "_determine_context_mode_and_handle_transitions",
+            new=AsyncMock(return_value="last_n"),
+        ), patch.object(
+            plugin, "_resolve_request_model", return_value=model
+        ), patch.object(
+            plugin, "_can_user_access_model", new=AsyncMock(return_value=True)
+        ), patch.object(
+            plugin, "get_model_capabilities", return_value={}
+        ), patch.object(
+            plugin, "get_effective_api_key", return_value="k"
+        ), patch.object(
+            plugin, "send_info_message", new=AsyncMock(side_effect=send_failure)
+        ), patch.object(
+            plugin.llm_util, "handle_llm_error", new=handle_llm_error
+        ), patch.object(
+            plugin, "build_conversation_history", new=build_history
+        ):
+            asyncio.run(plugin.chat_handler(event))
+
+        handle_llm_error.assert_awaited_once()
+        kwargs = handle_llm_error.await_args.kwargs
+        self.assertIsNone(kwargs["response_message"])
+        self.assertIs(kwargs["exception"], send_failure)
+        build_history.assert_not_awaited()
+
+
 if __name__ == "__main__":
     unittest.main()
