@@ -17,6 +17,7 @@ from pathlib import Path
 
 from telethon import events
 from telethon.errors import FloodWaitError
+from telethon.tl import functions
 from telethon.tl.tlobject import TLObject, TLRequest
 from telethon.tl.functions.channels import DeleteParticipantHistoryRequest
 from telethon.tl.functions.messages import (
@@ -45,9 +46,15 @@ TEXT_FILE_SUFFIXES = {".txt", ".md", ".markdown", ".org", ".rst", ".log"}
 HASHTAG_ONLY_RE = re.compile(r"#[^\W_]\w*", re.UNICODE)
 
 
-class DeleteParticipantReactionsRequest(TLRequest):
+class _FallbackDeleteParticipantReactionsRequest(TLRequest):
+    """`messages.deleteParticipantReactions` for Telethon builds that lack it.
+
+    It serializes exactly like the generated class, which has the same
+    constructor id.
+    """
+
     CONSTRUCTOR_ID = 0xA0B80CF8
-    SUBCLASS_OF_ID = 0x0F5B399AC
+    SUBCLASS_OF_ID = 0xF5B399AC
 
     def __init__(self, peer, participant):
         self.peer = peer
@@ -80,6 +87,15 @@ class DeleteParticipantReactionsRequest(TLRequest):
                 self.participant._bytes(),
             )
         )
+
+
+#: Telethon generates this request from 1.44.0 (layer 227) on; 1.43.2 does not
+#: have it.
+DeleteParticipantReactionsRequest = getattr(
+    functions.messages,
+    "DeleteParticipantReactionsRequest",
+    _FallbackDeleteParticipantReactionsRequest,
+)
 
 
 def _flood_wait_seconds(e):

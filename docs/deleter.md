@@ -56,8 +56,9 @@ deletion failure does not stop message deletion. Because
 `DeleteParticipantHistoryRequest` deletes server-side without returning message
 contents, `.delallself` writes a metadata-only deletion export.
 
-`.delallselfreactions` uses a raw MTProto request that is present in Telegram
-Android but not yet exposed by Telethon 1.43.2. Telegram may reject the command
+`.delallselfreactions` uses the MTProto request `messages.deleteParticipantReactions`.
+Telethon generates it from 1.44.0 (layer 227) on; on older Telethon the plugin
+uses a hand-written copy with the same constructor id. Telegram may reject the command
 server-side if deleting the current account's own reactions through the admin
 action is not allowed.
 
