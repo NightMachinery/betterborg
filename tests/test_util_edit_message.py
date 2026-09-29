@@ -11,7 +11,8 @@ from uniborg.constants import BOT_META_INFO_LINE
 class _Chat:
     """Hands out fake messages and records every Telegram call they make, in order."""
 
-    def __init__(self):
+    def __init__(self, chat_id=-1001):
+        self.chat_id = chat_id
         self.calls = []
         self._ids = itertools.count(100)
 
@@ -29,6 +30,7 @@ class _FakeMessage:
 
     def __init__(self, chat, *, msg_id, text, reply_to_msg_id):
         self.chat = chat
+        self.chat_id = chat.chat_id
         self.id = msg_id
         self.text = text
         self.reply_to_msg_id = reply_to_msg_id
@@ -204,7 +206,7 @@ class _EditChainCase(unittest.IsolatedAsyncioTestCase):
         await util.edit_message(self.head, text, **kwargs)
 
     def state(self):
-        return util.EDIT_CHAINS.get(self.head.id)
+        return util.EDIT_CHAINS.get(util._edit_chain_key(self.head))
 
 
 class EditMessageTests(_EditChainCase):
@@ -350,6 +352,19 @@ class EditMessageTests(_EditChainCase):
 
         self.assertEqual(self.chat.ops(), [("edit", self.head.id, "B" * 10)])
         self.assertEqual(self.state().last_text, "A" * 10)
+
+    async def test_a_same_id_in_another_chat_starts_its_own_chain(self):
+        await self.edit(_blocks("A", "B"))
+        other_chat = _Chat(chat_id=-1002)
+        other_head = other_chat.message("...")
+        self.assertEqual(other_head.id, self.head.id)
+        self.chat.calls.clear()
+
+        await util.edit_message(other_head, "hi", parse_mode="md", max_len=10)
+
+        self.assertEqual(self.chat.calls, [])
+        self.assertEqual(other_chat.ops(), [("edit", other_head.id, "hi")])
+        self.assertEqual(len(self.state().children), 1)
 
     async def test_child_edit_failure_stops_the_chain(self):
         await self.edit(_blocks("A", "B", "C"))

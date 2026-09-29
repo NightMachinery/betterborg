@@ -1071,7 +1071,7 @@ async def _edit_chain_message(edit_state, message, *, chunk, link_preview=None):
     edit_state.sent[message.id] = chunk
 
 
-async def _collapse_chain(edit_state, *, message_id, head, placeholder):
+async def _collapse_chain(edit_state, *, chain_key, head, placeholder):
     """Delete the children and leave only `placeholder` on the head, best-effort."""
     for child in edit_state.children:
         await _safe_delete_message(child)
@@ -1084,7 +1084,7 @@ async def _collapse_chain(edit_state, *, message_id, head, placeholder):
         )
     except Exception:
         pass
-    EDIT_CHAINS[message_id] = edit_state
+    EDIT_CHAINS[chain_key] = edit_state
 
 
 async def _reply_chain(parent, chunks, *, edit_state, parse_mode):
@@ -1166,8 +1166,17 @@ def _log_file_sending_error(context_name):
 
 
 # Dictionary to track message chains for the edit_message function
-# Key: original_message_id, Value: EditChainState object
+# Key: `_edit_chain_key` of the original message, Value: EditChainState object
 EDIT_CHAINS = {}
+
+
+def _edit_chain_key(message_obj):
+    """The `EDIT_CHAINS` key of the chain that `message_obj` started.
+
+    A message id alone is ambiguous: every supergroup and channel numbers its
+    own messages, so a bare id could pick up, and edit, another chat's chain.
+    """
+    return (getattr(message_obj, "chat_id", None), message_obj.id)
 
 
 async def edit_message(
@@ -1245,11 +1254,12 @@ async def edit_message(
     """
     global EDIT_CHAINS
     message_id = message_obj.id
+    chain_key = _edit_chain_key(message_obj)
 
     new_text = new_text.strip()
 
     # Get or create the edit state for this message ID
-    edit_state = EDIT_CHAINS.get(message_id, EditChainState())
+    edit_state = EDIT_CHAINS.get(chain_key, EditChainState())
     head = edit_state.head_for(message_obj)
 
     # Handle append_p mode: append new_text to existing content
@@ -1278,7 +1288,7 @@ async def edit_message(
     if only_send_file:
         await _collapse_chain(
             edit_state,
-            message_id=message_id,
+            chain_key=chain_key,
             head=head,
             placeholder="__[sent as file]__",
         )
@@ -1317,7 +1327,7 @@ async def edit_message(
         if not chunks:
             await _collapse_chain(
                 edit_state,
-                message_id=message_id,
+                chain_key=chain_key,
                 head=head,
                 placeholder="__[empty]__",
             )
@@ -1348,7 +1358,7 @@ async def edit_message(
                     ),
                 ):
                     edit_state.last_text = new_text
-                    EDIT_CHAINS[message_id] = edit_state
+                    EDIT_CHAINS[chain_key] = edit_state
             return  # If the head of the chain fails, abort
 
         # Now, handle the children (the rest of the chunks)
@@ -1398,9 +1408,9 @@ async def edit_message(
         )
 
         if new_children or new_text:
-            EDIT_CHAINS[message_id] = edit_state
+            EDIT_CHAINS[chain_key] = edit_state
         else:
-            EDIT_CHAINS.pop(message_id, None)
+            EDIT_CHAINS.pop(chain_key, None)
 
     finally:
         # Send file after message editing (success or failure)
