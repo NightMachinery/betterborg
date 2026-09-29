@@ -49,8 +49,11 @@ from telethon.tl.types import (
     BotCommandScopeDefault,
     Message,
     MessageActionRequestedPeerSentMe,
+    MessageActionTopicCreate,
     MessageMediaUnsupported,
+    MessageReplyHeader,
     MessageService,
+    PeerChannel,
     ReplyKeyboardHide,
     RequestPeerTypeUser,
     RequestedPeerUser,
@@ -59,7 +62,7 @@ from telethon.tl.types import (
     UpdateMessageReactions,
 )
 from pydantic import BaseModel, Field
-from typing import Callable, Optional, List, Dict, Tuple
+from typing import Any, Awaitable, Callable, Optional, List, Dict, Tuple
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -1099,6 +1102,8 @@ LAST_N_MESSAGES_LIMIT = 100
 LAST_N_QUICK_PICK_LIMITS = (50, 100, 200, 400, 800)
 HISTORY_MESSAGE_LIMIT = 1000
 REPLY_QUOTE_MAX_CHARS = 120
+#: How many topic roots `TOPIC_ROOTS` remembers, across all chats.
+TOPIC_ROOT_CACHE_SIZE = 4096
 REACTIONS_MAX_SENDERS = 20
 LOG_COUNT_LIMIT = 3
 AVAILABLE_TOOLS = ["googleSearch", "urlContext", "codeExecution"]
@@ -4450,21 +4455,160 @@ def _is_unreadable_rich_message(message) -> bool:
     )
 
 
+class TopicRootCache:
+    """The id of each topic's root message, keyed by chat and topic.
+
+    A topic's *root* is its `MessageActionTopicCreate` service message. In a
+    private chat with topics (threaded mode), the topic id Telegram sends
+    (`reply_to_top_id`) comes from the user's message box, so the root's id in
+    the bot's own box is only learned by loading it once. Bounded: past
+    MAX_SIZE entries, the least recently stored goes first.
+    """
+
+    def __init__(self, *, max_size: int = TOPIC_ROOT_CACHE_SIZE):
+        self.max_size = max_size
+        self._roots: Dict[Tuple[Any, int], int] = {}
+
+    def get(self, chat_id, top_id: int) -> Optional[int]:
+        return self._roots.get((chat_id, top_id))
+
+    def remember(self, chat_id, top_id: int, *, root_id: int) -> None:
+        key = (chat_id, top_id)
+        self._roots.pop(key, None)
+        self._roots[key] = root_id
+        while len(self._roots) > self.max_size:
+            del self._roots[next(iter(self._roots))]
+
+
+TOPIC_ROOTS = TopicRootCache()
+
+
+@dataclass(frozen=True)
+class ReplyTarget:
+    """The message another message really replies to."""
+
+    msg_id: int
+    #: The replied-to message, when it was already at hand or resolving loaded
+    #: it, so callers need not load it again.
+    message: Optional[Any] = None
+
+
+def _is_topic_root(message) -> bool:
+    return isinstance(getattr(message, "action", None), MessageActionTopicCreate)
+
+
+async def resolve_reply_target(
+    message,
+    *,
+    fetch_message: Optional[Callable[[int], Awaitable[Any]]] = None,
+    context_messages_by_id: Optional[Dict[int, Any]] = None,
+    topic_roots: Optional[TopicRootCache] = None,
+) -> Optional[ReplyTarget]:
+    """What MESSAGE really replies to, or None when it replies to no message.
+
+    Outside topics this is `reply_to_msg_id`, with no I/O. Inside a topic,
+    Telegram gives every message a reply header whose parent is the topic's
+    root, so a header pointing at the root is not a reply:
+
+    - In a forum supergroup, a message that replies to nothing has
+      `forum_topic` set and no `reply_to_top_id`, and an explicit reply has
+      both. The topic id is the root's own id there.
+    - In a private chat with topics, every message has `forum_topic` and
+      `reply_to_top_id` set, and a message that replies to nothing points
+      `reply_to_msg_id` at the root's id in the bot's box. Only the parent's
+      action tells the two apart, so the first such message of a topic loads
+      its parent, and TOPIC_ROOTS remembers the root for the rest.
+
+    MESSAGE may be a message or an event. The parent comes from
+    CONTEXT_MESSAGES_BY_ID when it is there, else from FETCH_MESSAGE, which
+    takes a message id in MESSAGE's chat and defaults to
+    `message.client.get_messages`. A parent that fails to load counts as a
+    real reply, since only a loaded parent can show it is a topic root.
+    """
+    reply_to_msg_id = getattr(message, "reply_to_msg_id", None)
+    if not reply_to_msg_id:
+        return None
+    parent = (context_messages_by_id or {}).get(reply_to_msg_id)
+    header = getattr(message, "reply_to", None)
+    if not (isinstance(header, MessageReplyHeader) and header.forum_topic):
+        return ReplyTarget(msg_id=reply_to_msg_id, message=parent)
+
+    top_id = header.reply_to_top_id
+    if top_id is None:
+        return None
+    if isinstance(getattr(message, "peer_id", None), PeerChannel):
+        if reply_to_msg_id == top_id:
+            return None
+        return ReplyTarget(msg_id=reply_to_msg_id, message=parent)
+
+    topic_roots = TOPIC_ROOTS if topic_roots is None else topic_roots
+    chat_id = getattr(message, "chat_id", None)
+    root_id = topic_roots.get(chat_id, top_id)
+    if root_id is not None:
+        if reply_to_msg_id == root_id:
+            return None
+        return ReplyTarget(msg_id=reply_to_msg_id, message=parent)
+
+    if parent is None:
+        if fetch_message is None:
+
+            async def fetch_message(msg_id):
+                return await message.client.get_messages(chat_id, ids=msg_id)
+
+        try:
+            parent = await fetch_message(reply_to_msg_id)
+        except Exception:
+            parent = None
+    if _is_topic_root(parent):
+        topic_roots.remember(chat_id, top_id, root_id=reply_to_msg_id)
+        return None
+    return ReplyTarget(msg_id=reply_to_msg_id, message=parent)
+
+
+async def _is_real_reply(
+    event,
+    *,
+    fetch_message: Optional[Callable[[int], Awaitable[Any]]] = None,
+    topic_roots: Optional[TopicRootCache] = None,
+) -> bool:
+    """`event.is_reply`, except that a header which only places EVENT in a
+    topic is not a reply. A reply without a message id, such as a story
+    reply, still is one."""
+    if not event.is_reply:
+        return False
+    if not getattr(event, "reply_to_msg_id", None):
+        return True
+    return (
+        await resolve_reply_target(
+            event, fetch_message=fetch_message, topic_roots=topic_roots
+        )
+        is not None
+    )
+
+
 async def _build_reply_quote(
-    message: Message, context_messages_by_id: Optional[Dict[int, Message]]
+    message: Message,
+    context_messages_by_id: Optional[Dict[int, Message]],
+    *,
+    topic_roots: Optional[TopicRootCache] = None,
 ) -> str:
     """
     Returns a Markdown blockquote of the replied-to message, for injecting into context.
     Falls back to fetching from Telegram if the parent is not in the context window.
     Includes a Media-ID tag when the parent has media.
     """
-    if not message.reply_to_msg_id:
+    target = await resolve_reply_target(
+        message,
+        context_messages_by_id=context_messages_by_id,
+        topic_roots=topic_roots,
+    )
+    if target is None:
         return ""
-    parent = (context_messages_by_id or {}).get(message.reply_to_msg_id)
+    parent = target.message
     if parent is None:
         try:
             parent = await message.client.get_messages(
-                message.chat_id, ids=message.reply_to_msg_id
+                message.chat_id, ids=target.msg_id
             )
         except Exception:
             return ""
@@ -5001,23 +5145,30 @@ async def _process_turns_to_history(
     return history, all_warnings
 
 
-async def _get_initial_messages_for_reply_chain(event) -> List[Message]:
-    if not event.message.reply_to_msg_id:
-        return []
+async def _get_initial_messages_for_reply_chain(
+    event, *, topic_roots: Optional[TopicRootCache] = None
+) -> List[Message]:
+    async def fetch_message(msg_id):
+        return await event.client.get_messages(event.chat_id, ids=msg_id)
+
+    async def target_of(message):
+        return await resolve_reply_target(
+            message, fetch_message=fetch_message, topic_roots=topic_roots
+        )
+
     messages = []
     try:
-        message = await event.client.get_messages(
-            event.chat_id, ids=event.message.reply_to_msg_id
-        )
-        while message:
+        target = await target_of(event.message)
+        while target is not None:
+            message = target.message
+            if message is None:
+                message = await fetch_message(target.msg_id)
+            if not message:
+                break
             messages.append(message)
             if len(messages) >= HISTORY_MESSAGE_LIMIT:
                 break
-            if not message.reply_to_msg_id:
-                break
-            message = await event.client.get_messages(
-                event.chat_id, ids=message.reply_to_msg_id
-            )
+            target = await target_of(message)
     except Exception:
         pass
     messages.reverse()
@@ -9732,7 +9883,7 @@ async def _determine_context_mode_and_handle_transitions(
             return None
 
         # Reply (not to a forward) switches back to reply_chain
-        if event.is_reply and not event.forward:
+        if not event.forward and await _is_real_reply(event):
             if current_smart_mode == "until_separator":
                 await set_smart_context_mode(user_id, "reply_chain")
 
@@ -10012,7 +10163,9 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
                 f"Unmatched mention in group chat: mention_re={mention_re}, text:\n{event.text}\n---"
             )
 
-        if prefs.group_activation_mode == "mention_and_reply" and event.is_reply:
+        if prefs.group_activation_mode == "mention_and_reply" and (
+            await _is_real_reply(event)
+        ):
             try:
                 reply_msg = await event.get_reply_message()
                 if reply_msg and reply_msg.sender_id == borg.me.id:
