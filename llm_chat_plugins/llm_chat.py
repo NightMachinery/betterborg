@@ -2907,9 +2907,17 @@ async def _call_llm_with_retry(
             # Streaming mode
             last_edit_time = asyncio.get_event_loop().time()
             streaming_start_time = last_edit_time
+            #: Tracked per chunk, so a stream that yields nothing still returns.
+            finish_reason = None
 
             async for chunk in response:
-                delta = chunk.choices[0].delta.content
+                if not chunk.choices:
+                    #: e.g. a trailing usage-only chunk
+                    continue
+
+                choice = chunk.choices[0]
+                finish_reason = choice.finish_reason
+                delta = choice.delta.content
                 if delta:
                     response_text += delta
                     current_time = asyncio.get_event_loop().time()
@@ -2949,8 +2957,6 @@ async def _call_llm_with_retry(
                             # Log other edit errors but don't stop the stream
                             print(f"Error during message edit: {e}")
 
-            # Get finish reason from the last chunk
-            finish_reason = chunk.choices[0].finish_reason if chunk.choices else None
             return LLMResponse(
                 text=response_text, finish_reason=finish_reason, has_image=False
             )
