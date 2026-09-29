@@ -1,8 +1,9 @@
 # Telethon Upgrades and Telegram Layers
 
 How this repo copes with Telegram's schema versions, what protects a running
-bot from objects Telethon cannot parse, and how to move from Telethon 1.43.2
-to 1.45.0 without taking every instance down.
+bot from objects Telethon cannot parse, how to move from Telethon 1.43.2 to
+1.45.0 without taking every instance down, how to build buttons that work on
+both, and how to see what an instance can use (`.tgcaps`).
 
 ## Terms
 
@@ -147,6 +148,12 @@ counter simply stops matching. Before adding a version to
 - `_update_loop` in `client/updates.py`, whose handling of
   `ChannelPrivateError` the channel fallback relies on.
 
+`uniborg/tg_compat.py` has no version guard, but it also leans on Telethon
+internals. Check them on any new version: the private `Button._is_inline` in
+`tl/custom/button.py`, which decides whether a row is inline, and
+`build_reply_markup` in `client/buttons.py`, which drops button objects it
+does not recognize.
+
 ### What they do not fix
 
 - An unknown object in a pushed message outside a container is still dropped
@@ -164,15 +171,17 @@ counter simply stops matching. Before adding a version to
    `KeyboardButtonRequestPeer` and the other per-kind keyboard classes, and
    `KeyboardButton` gains a required `type`. `uniborg/bot_util.py` imports one
    of the removed classes at startup, so without the refactor every instance
-   fails to start. Build buttons through version-neutral helpers and read
-   payloads through a helper, since 1.45.0 moves callback data to
-   `button.type.data`.
+   fails to start. Build buttons through the `uniborg/tg_compat.py` helpers
+   and read payloads through them too, since 1.45.0 moves callback data to
+   `button.type.data` (see "Building buttons on both versions" below).
 3. **Run the canary.** Give the throwaway bot its own venv (for example
    `~/.borg/canary/venv`, created with `--system-site-packages` so the other
    dependencies are shared) and install the PyPI 1.45.0 wheel there. Run the
    test suite with that interpreter, then run the canary bot on its own
    session for about a day. Watch the safety-net counts, every menu, the
-   request-peer keyboard, and callback data arriving as bytes.
+   request-peer keyboard, and callback data arriving as bytes. Send `.tgcaps`
+   to the canary first: it should report `telethon_version: 1.45.0`,
+   `layer: 229` and `button_schema: typed`.
 4. **Back up the `.session` files** before touching the shared env. Copy them
    while their instances are stopped, since SQLite may be mid-write otherwise.
 5. **Upgrade the shared env** to the pinned 1.45.0. Every instance picks it up
@@ -185,6 +194,67 @@ counter simply stops matching. Before adding a version to
 Telethon 1.44.0 (layer 227) is a fallback stepping stone: it needs no button
 changes and already has rich messages and guest mode, but lacks the draft stop
 button and the layer-229 keyboards.
+
+## Building buttons on both versions
+
+Terms used here:
+
+- **Per-kind schema**: layer 228 and older, where each button kind has its own
+  generated class, such as `KeyboardButtonCallback(text, data)` or
+  `KeyboardButtonRequestPeer(...)`. Telethon 1.43.2 uses it.
+- **Typed schema**: layer 229, where a reply button is `KeyboardButton(text,
+  type)` and an inline button is `KeyboardInlineButton(text, type)`. The
+  `type` object (`ButtonTypeDefault`, `ButtonTypeRequestPeer`,
+  `InlineButtonTypeCallback`, `InlineButtonTypeUrl` and so on) holds the
+  payload, and inline rows become `KeyboardInlineButtonRow`. Telethon 1.45.0
+  uses it. `KeyboardButtonRow`, `ReplyInlineMarkup`, `ReplyKeyboardMarkup` and
+  `KeyboardButtonStyle` exist in both.
+
+`uniborg/tg_compat.py` hides the difference. It imports only the standard
+library and Telethon, so tests can load it without `uniborg.util`.
+
+- **Build** with `callback_button(text, data)`, `url_button(text, url)`,
+  `text_button(text)` and `request_peer_button(text, button_id=...,
+  peer_type=..., max_quantity=1)`. Nested lists of them work as `buttons=`
+  exactly as before. For a markup object (a raw request, or keyboard options
+  such as `resize`), use `inline_keyboard(rows)` or `reply_keyboard(rows,
+  resize=..., single_use=...)`, or `button_row(buttons)` for one row.
+- **Read** with `button_data` (bytes or None), `button_data_text`,
+  `button_text`, `button_url`, `request_peer_spec` and `is_callback_button`,
+  never with `.data`. They also accept Telethon's `Button` and `MessageButton`
+  wrappers. Annotate with `tg_compat.CallbackButton`, never the removed
+  classes.
+- **Callback data** keeps the old meaning: a str is sent as its UTF-8 bytes
+  and bytes are sent unchanged. Telegram accepts 1 to 64 bytes, so anything
+  else raises `ValueError` when the button is built, not when the message is
+  sent. Unlike `Button.inline`, empty data is an error rather than a copy of
+  the button text.
+- **Option menus** (one button per choice, the current one ticked) come from
+  `bot_util.option_buttons(options, current_value=..., callback_prefix=...)`,
+  which `present_options`, `tts_bot` and `image_gen` share. `llm_chat` calls
+  `callback_button` directly.
+- **Tests** read buttons through the same readers. Never compare `.data` or
+  check `isinstance` against a per-kind class: both break on one of the two
+  versions.
+
+Why the builders return generated TL objects: 1.45.0's `build_reply_markup`
+keeps only real `KeyboardButton` and `KeyboardInlineButton` instances and
+silently drops anything else, so a look-alike object sends the message without
+its keyboard and logs nothing. 1.43.2 raised `AttributeError` on the same
+object.
+
+The builders attach no style object unless asked. On 1.43.2
+`callback_button(text, data)` therefore serializes to the same bytes as the
+old `KeyboardButtonCallback(text, data)`, whereas `Button.inline` always adds
+an empty `KeyboardButtonStyle`.
+
+**Button styles.** Every builder takes `style=ButtonStyle.PRIMARY` (blue),
+`SUCCESS` (green) or `DANGER` (red), or the same names as strings. An unknown
+style raises `ValueError`. Both pinned versions support styles. On a Telethon
+without `KeyboardButtonStyle`, the builders build the button without its
+style. That is not a silent fallback for an unknown value: the style is
+validated first on every version, and a style only colours a button; it never
+changes what the button sends.
 
 ## Rollback
 
@@ -225,12 +295,54 @@ instance and restart. Telethon's own behaviour comes back unchanged.
   difference fallback now skips that window instead of disconnecting, but the
   mentions are still lost.
 
+## Checking what an instance can use: `.tgcaps`
+
+`.tgcaps` is an admin-only command in `uniborg/_core.py`, so every instance has
+it. Only the logged-in account itself and the admins in `uniborg/util.py` can
+use it. It replies with one `name: value` line per capability, then a
+`safety_nets:` line holding `borg.safety_stats.summary()` when the safety nets
+were installed. Each call makes one fresh `get_me()`, because BotFather
+settings such as Guest Mode change without a restart.
+
+There are two kinds of capability:
+
+- **Schema flags** say which generated TL types this Telethon has. A true flag
+  means the request can be built, not that Telegram accepts it for this
+  account or chat.
+  - `telethon_version`, `layer` and `button_schema` (`per_kind` or `typed`).
+  - `button_styles`: `KeyboardButtonStyle` exists.
+  - `draft_text`: the draft action exists (layer 224 has the old form).
+  - `draft_stop`: the draft action takes `can_stop` and
+    `SendMessageStopDraftAction` exists, so users can stop a live draft.
+  - `rich_messages`: `InputRichMessageMarkdown` exists and sends, edits and
+    inline edits all take `rich_message`. `rich_drafts` is the rich draft
+    action.
+  - `guest_types`: `UpdateBotGuestChatQuery` and
+    `SetBotGuestChatResultRequest` exist.
+  - `ephemeral` and `formatted_dates` (the Bot API `date_time` entity).
+- **Account flags** come from `get_me()`.
+  - `is_bot`.
+  - `guest_enabled`: BotFather Guest Mode is on (`bot_guestchat`). It reads
+    `unknown` on 1.43.2, whose `User` has no such field.
+  - `private_topics` (`bot_forum_view`), `business` (`bot_business`) and
+    `inline_mode` (an inline placeholder is set).
+
+In code, `await tg_compat.capabilities_of(borg)` probes once and caches the
+result on the client, `refresh=True` probes again, and
+`tg_compat.cached_capabilities(borg)` returns the cached value (or None)
+without awaiting. Gate new paths on these flags, not on a version number.
+
 ## Related files
 
 - `uniborg/telethon_safety.py`: the safety nets.
 - `uniborg/uniborg.py`: installs them in `Uniborg.create` and sends alerts.
+- `uniborg/_core.py`: the `.tgcaps` command.
 - `uniborg/telethon_compat.py`: the `0x95ef6f2b` shim.
+- `uniborg/tg_compat.py`: the button helpers and `TgCapabilities`.
 - `tests/test_telethon_safety.py`: synthesized containers and fallback paths.
   Run it under both versions:
   `python3 -m pytest tests/test_telethon_safety.py` and the same command with
   the canary venv's interpreter.
+- `tests/test_tg_compat.py`: every button helper and capability flag,
+  including `build_reply_markup` on a never-connected client. Run it under
+  both versions too.
