@@ -47,16 +47,11 @@ from telethon.tl.functions.messages import GetMessagesReactionsRequest
 from telethon.tl.types import (
     BotCommand,
     BotCommandScopeDefault,
-    KeyboardButton,
-    KeyboardButtonCallback,
-    KeyboardButtonRequestPeer,
-    KeyboardButtonRow,
     Message,
     MessageActionRequestedPeerSentMe,
     MessageMediaUnsupported,
     MessageService,
     ReplyKeyboardHide,
-    ReplyKeyboardMarkup,
     RequestPeerTypeUser,
     RequestedPeerUser,
     UpdateNewMessage,
@@ -157,6 +152,7 @@ from uniborg import tts_util
 from uniborg import history_util
 from uniborg.history_util import LAST_N_MAX
 from uniborg import bot_util
+from uniborg import tg_compat
 from uniborg.storage import UserStorage
 from uniborg.constants import (
     BOT_META_INFO_PREFIX,
@@ -1946,7 +1942,7 @@ def _build_context_mode_buttons(
 ) -> list:
     """Build context mode option buttons plus the Include Reply Chain toggle button."""
     buttons = [
-        KeyboardButtonCallback(
+        tg_compat.callback_button(
             f"✅ {name}" if key == current_mode else name,
             data=f"{mode_callback_prefix}{bot_util.sanitize_callback_data(key)}",
         )
@@ -1957,7 +1953,7 @@ def _build_context_mode_buttons(
         if include_reply_chain
         else "❌ Include Reply Chain: OFF"
     )
-    buttons.append(KeyboardButtonCallback(rc_label, data=reply_chain_callback))
+    buttons.append(tg_compat.callback_button(rc_label, data=reply_chain_callback))
     return buttons
 
 
@@ -1970,14 +1966,14 @@ def _build_last_n_limit_buttons(
 ) -> list:
     """Build quick-pick buttons for Last-N message limits."""
     buttons = [
-        KeyboardButtonCallback(
+        tg_compat.callback_button(
             f"{'✅ ' if limit == current_limit else ''}Last N: {limit}",
             data=f"{callback_prefix}{limit}",
         )
         for limit in LAST_N_QUICK_PICK_LIMITS
     ]
     if reset_callback:
-        buttons.append(KeyboardButtonCallback(reset_label, data=reset_callback))
+        buttons.append(tg_compat.callback_button(reset_label, data=reset_callback))
     return buttons
 
 
@@ -2312,7 +2308,7 @@ def _model_menu_buttons(
     *,
     callback_data: Callable[[str], str],
     model_label: Optional[Callable[[str, str], str]] = None,
-) -> list[KeyboardButtonCallback]:
+) -> list[tg_compat.CallbackButton]:
     """Render a model+reasoning menu with caller-specific labels and callbacks."""
     buttons = []
     for key, display in menu.options.items():
@@ -2324,9 +2320,7 @@ def _model_menu_buttons(
         )
         if key == menu.current_value:
             label = f"✅ {label}"
-        data = callback_data(key)
-        assert len(data.encode("utf-8")) <= TELEGRAM_CALLBACK_BYTES_LIMIT
-        buttons.append(KeyboardButtonCallback(label, data=data))
+        buttons.append(tg_compat.callback_button(label, data=callback_data(key)))
     return buttons
 
 
@@ -6186,7 +6180,6 @@ CODEX_USERS_CALLBACK_PREFIX = "cu:"
 CODEX_USERS_ADD_PENDING = {}
 TELEGRAM_SIGNED_ID_MAX = 2**63 - 1
 TELEGRAM_TEXT_UTF16_LIMIT = 4096
-TELEGRAM_CALLBACK_BYTES_LIMIT = 64
 CODEX_USERS_PAYLOAD_MARGIN = 32
 
 
@@ -6204,19 +6197,17 @@ class CodexUserRequestedPeer(events.NewMessage):
 
 
 def _codex_user_picker_markup(button_id: int):
-    return ReplyKeyboardMarkup(
-        rows=[
-            KeyboardButtonRow(
-                [
-                    KeyboardButtonRequestPeer(
-                        "Choose user",
-                        button_id=button_id,
-                        peer_type=RequestPeerTypeUser(bot=False),
-                        max_quantity=1,
-                    )
-                ]
-            ),
-            KeyboardButtonRow([KeyboardButton("Cancel")]),
+    return tg_compat.reply_keyboard(
+        [
+            [
+                tg_compat.request_peer_button(
+                    "Choose user",
+                    button_id=button_id,
+                    peer_type=RequestPeerTypeUser(bot=False),
+                    max_quantity=1,
+                )
+            ],
+            [tg_compat.text_button("Cancel")],
         ],
         resize=True,
         single_use=True,
@@ -6687,7 +6678,7 @@ def _codex_users_user_buttons(users, page: int, *, pages=None):
     page_count = len(pages)
     page = min(max(page, 0), page_count - 1)
     buttons = [
-        KeyboardButtonCallback(
+        tg_compat.callback_button(
             _truncate_utf16(f"{name} ({configured_user.id})", 48),
             data=f"cu:u:{configured_user.id}",
         )
@@ -6695,18 +6686,13 @@ def _codex_users_user_buttons(users, page: int, *, pages=None):
     ]
     if page_count > 1:
         if page:
-            buttons.append(KeyboardButtonCallback("⬅️", data=f"cu:p:{page - 1}"))
+            buttons.append(tg_compat.callback_button("⬅️", data=f"cu:p:{page - 1}"))
         buttons.append(
-            KeyboardButtonCallback(f"{page + 1}/{page_count}", data=b"cu:no")
+            tg_compat.callback_button(f"{page + 1}/{page_count}", data=b"cu:no")
         )
         if page + 1 < page_count:
-            buttons.append(KeyboardButtonCallback("➡️", data=f"cu:p:{page + 1}"))
-    buttons.append(KeyboardButtonCallback("＋ Add user", data="cu:add"))
-    assert all(
-        len((button.data if isinstance(button.data, bytes) else button.data.encode()))
-        <= TELEGRAM_CALLBACK_BYTES_LIMIT
-        for button in buttons
-    )
+            buttons.append(tg_compat.callback_button("➡️", data=f"cu:p:{page + 1}"))
+    buttons.append(tg_compat.callback_button("＋ Add user", data="cu:add"))
     return util.build_menu(buttons, n_cols=2), page, page_count
 
 
@@ -6774,16 +6760,16 @@ async def _show_codex_user_detail(
     image_action = "Disable" if configured_user.imagegen_enabled else "Enable"
     buttons = util.build_menu(
         [
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"{codex_action} Codex",
                 data=f"cu:a:{target_id}:c:{int(not configured_user.codex_enabled)}",
             ),
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"{image_action} images",
                 data=f"cu:a:{target_id}:i:{int(not configured_user.imagegen_enabled)}",
             ),
-            KeyboardButtonCallback("Model / effort", data=f"cu:models:{target_id}"),
-            KeyboardButtonCallback("⬅ Users", data="cu:p:0"),
+            tg_compat.callback_button("Model / effort", data=f"cu:models:{target_id}"),
+            tg_compat.callback_button("⬅ Users", data="cu:p:0"),
         ],
         n_cols=2,
     )
@@ -6877,7 +6863,9 @@ async def _show_codex_user_models(event, target_id: int, *, edit: bool = False):
         callback_data=lambda key: _codex_users_model_callback_data(target_id, key),
         model_label=lambda model_id, _: _truncate_utf16(model_id, 78),
     )
-    buttons.append(KeyboardButtonCallback("⬅️ Back to user", data=f"cu:u:{target_id}"))
+    buttons.append(
+        tg_compat.callback_button("⬅️ Back to user", data=f"cu:u:{target_id}")
+    )
     name = configured_user.name or _codex_user_name(target_id, entity)
     text = (
         f"{_bold_dynamic(name)} ({target_id})\n"
@@ -6914,7 +6902,7 @@ async def _start_codex_user_add(event):
     buttons = (
         _codex_user_picker_markup(request_id)
         if private
-        else [[KeyboardButtonCallback("Cancel", data=f"cu:add:cancel:{token}")]]
+        else [[tg_compat.callback_button("Cancel", data=f"cu:add:cancel:{token}")]]
     )
     pending = {
         "token": token,
@@ -7110,8 +7098,8 @@ async def _finish_codex_add_resolution(
     token = pending["token"]
     buttons = [
         [
-            KeyboardButtonCallback("Add user", data=f"cu:add:yes:{token}"),
-            KeyboardButtonCallback("Cancel", data=f"cu:add:cancel:{token}"),
+            tg_compat.callback_button("Add user", data=f"cu:add:yes:{token}"),
+            tg_compat.callback_button("Cancel", data=f"cu:add:cancel:{token}"),
         ]
     ]
     await send_info_message(
@@ -7469,7 +7457,7 @@ def _codex_quota_switch_buttons(
             #: dropped from the list entirely, which left the switch rule in
             #: force visible nowhere among the switches.
             buttons.append(
-                KeyboardButtonCallback(
+                tg_compat.callback_button(
                     _truncate_utf16(
                         f"{CODEX_QUOTA_ICON_ACTIVE} Using"
                         f" {_model_display_name(candidate.model)} {window}",
@@ -7483,14 +7471,13 @@ def _codex_quota_switch_buttons(
             f"{CODEX_QUOTA_CALLBACK_PREFIX}s:{owner_id}:{candidate.token}"
             f":{int(deadline.timestamp())}"
         )
-        assert len(data.encode("utf-8")) <= TELEGRAM_CALLBACK_BYTES_LIMIT
         label = (
             f"{CODEX_QUOTA_ICON_SWITCH} Use"
             f" {_model_display_name(candidate.model)} {window}"
         )
         if recommended_model is not None and candidate.model == recommended_model:
             label = f"{label} {CODEX_QUOTA_ICON_RECOMMENDED}"
-        buttons.append(KeyboardButtonCallback(_truncate_utf16(label, 48), data=data))
+        buttons.append(tg_compat.callback_button(_truncate_utf16(label, 48), data=data))
     return buttons
 
 
@@ -7513,7 +7500,7 @@ def _codex_quota_reserve_buttons(usage, *, owner_id, source_message_id) -> list:
         return []
 
     return [
-        KeyboardButtonCallback(
+        tg_compat.callback_button(
             f"{CODEX_QUOTA_ICON_RESERVE} Answer this from the Luna Reserve",
             data=(f"{CODEX_QUOTA_CALLBACK_PREFIX}r:{owner_id}:{source_message_id}"),
         )
@@ -7638,7 +7625,7 @@ def _codex_quota_panel(
         lines.append("")
         lines.extend(_codex_quota_scope_lines())
         buttons = [
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"{CODEX_QUOTA_ICON_UNDO} Switch back to Codex now",
                 data=f"{CODEX_QUOTA_CALLBACK_PREFIX}u:{user_id}",
             )
@@ -7736,7 +7723,7 @@ def _codex_quota_panel(
         #: armed: the undo has to come with it, or the panel names a rule it
         #: gives no way to lift.
         buttons.append(
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"{CODEX_QUOTA_ICON_UNDO} Switch back to Codex now",
                 data=f"{CODEX_QUOTA_CALLBACK_PREFIX}u:{user_id}",
             )
@@ -8425,7 +8412,7 @@ async def tools_handler(event):
     # For this one, the current value is a list, so we handle it differently
     if IS_BOT:
         buttons = [
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"{'✅' if tool in prefs.enabled_tools else '❌'} {tool}",
                 data=f"tool_{tool}",
             )
@@ -9008,7 +8995,7 @@ async def callback_handler(event):
         )
         state = _think_menu_state(event.chat_id, user_id, scope=scope)
         buttons = [
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"✅ {display}" if state.current_value == key else display,
                 data=f"{REASONING_SCOPE_CALLBACK_PREFIXES[scope]}{key}",
             )
@@ -9022,7 +9009,7 @@ async def callback_handler(event):
         user_manager.set_tool_state(user_id, tool_name, enabled=is_enabled)
         prefs = user_manager.get_prefs(user_id)  # update prefs
         buttons = [
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"{'✅' if tool in prefs.enabled_tools else '❌'} {tool}",
                 data=f"tool_{tool}",
             )
@@ -9145,7 +9132,7 @@ async def callback_handler(event):
         user_manager.set_metadata_mode(user_id, mode)
         prefs = user_manager.get_prefs(user_id)
         buttons = [
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"✅ {name}" if key == prefs.metadata_mode else name,
                 data=f"metadata_{key}",
             )
@@ -9158,7 +9145,7 @@ async def callback_handler(event):
         user_manager.set_group_metadata_mode(user_id, mode)
         prefs = user_manager.get_prefs(user_id)
         buttons = [
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"✅ {name}" if key == prefs.group_metadata_mode else name,
                 data=f"groupmetadata_{key}",
             )
@@ -9171,7 +9158,7 @@ async def callback_handler(event):
         user_manager.set_group_activation_mode(user_id, mode)
         prefs = user_manager.get_prefs(user_id)  # update prefs
         buttons = [
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"✅ {name}" if key == prefs.group_activation_mode else name,
                 data=f"groupactivation_{key}",
             )
@@ -9183,7 +9170,7 @@ async def callback_handler(event):
         model = data_str.split("_", 1)[1]
         chat_manager.set_tts_model(event.chat_id, model)
         buttons = [
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"✅ {name}" if key == model else name,
                 data=f"tts_{key}",
             )
@@ -9195,7 +9182,7 @@ async def callback_handler(event):
         voice = data_str.split("_", 1)[1]
         user_manager.set_tts_global_voice(user_id, voice)
         buttons = [
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"✅ {name}: {desc}" if name == voice else f"{name}: {desc}",
                 data=f"voice_{name}",
             )
@@ -9223,7 +9210,7 @@ async def callback_handler(event):
         )
 
         buttons = [
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"✅ {display}" if key == voice else display,
                 data=f"voicehere_{key}",
             )
@@ -9247,7 +9234,7 @@ async def callback_handler(event):
         }
 
         buttons = [
-            KeyboardButtonCallback(
+            tg_compat.callback_button(
                 f"✅ {display}" if key == prefs.live_model else display,
                 data=f"livemodel_{bot_util.sanitize_callback_data(key)}",
             )
