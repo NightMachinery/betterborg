@@ -5,7 +5,8 @@
 import asyncio
 import traceback
 
-from uniborg import util
+from uniborg import tg_compat, util
+from uniborg.constants import BOT_META_INFO_PREFIX
 from telethon import events
 
 DELETE_TIMEOUT = 2
@@ -35,3 +36,15 @@ async def remove(event):
 
     # await asyncio.sleep(DELETE_TIMEOUT)
     # await borg.delete_messages(msg.to_id, msg)
+
+
+@borg.on(util.admin_cmd(r"^\.tgcaps$"))
+async def tgcaps(event):
+    #: Re-probed on every call, since BotFather toggles such as Guest Mode
+    #: change the account flags without a restart.
+    capabilities = await tg_compat.capabilities_of(borg, refresh=True)
+    report = tg_compat.capabilities_report(
+        capabilities,
+        safety_stats=getattr(borg, "safety_stats", None),
+    )
+    await event.reply(f"{BOT_META_INFO_PREFIX}{report}", parse_mode=None)

@@ -1272,6 +1272,7 @@ KNOWN_STRICT_COMMANDS = {
     ##
     "..",
     ".rot",  # Undocumented admin-only command; do not add to help.
+    ".tgcaps",  # _core's admin-only capability report.
     CODEX_USERS_COMMAND,
 }
 
