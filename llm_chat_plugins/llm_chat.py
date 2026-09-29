@@ -194,6 +194,7 @@ from uniborg.llm_models import DEFAULT_REASONING_EFFORT, ModelSpec
 # Redis utilities for smart context state persistence
 from uniborg import redis_util
 from uniborg import common_util
+from uniborg import topics
 
 # --- Constants and Configuration ---
 GEMINI_NATIVE_FILE_MODE = os.getenv(
@@ -1432,6 +1433,80 @@ async def set_smart_context_mode(user_id: int, mode: str):
 def cancel_input_flow(user_id: int):
     """Cancels any pending input requests for a user."""
     AWAITING_INPUT_FROM_USERS.pop(user_id, None)
+
+
+#: The flow key holding the `InputTopic` a flow's prompt was issued in. A flow
+#: issued outside private topics has no such key.
+INPUT_TOPIC_KEY = "topic"
+
+
+@dataclass(frozen=True)
+class InputTopic:
+    """A private topic, as the place a pending input flow takes its answer from."""
+
+    chat_id: int
+    topic_id: int
+
+
+def _input_topic(event) -> Optional[InputTopic]:
+    """The private topic EVENT's message sits in, or None outside topics."""
+    if not getattr(event, "is_private", False):
+        return None
+    topic_id = topics.private_topic_id(getattr(event, "message", event))
+    if topic_id is None:
+        return None
+    return InputTopic(chat_id=event.chat_id, topic_id=topic_id)
+
+
+def start_input_flow(
+    event, flow: dict, *, pending_inputs: Optional[dict] = None
+) -> dict:
+    """Make the next message from EVENT's sender answer FLOW, and return it.
+
+    EVENT is the message that asked for the flow. When it sits in a private
+    topic, the flow records that topic, and `pending_input_flow` then takes
+    the answer from that topic only. The prompt lands there too, because
+    Uniborg's topic placement puts a reply in its parent's topic.
+    PENDING_INPUTS defaults to `AWAITING_INPUT_FROM_USERS`.
+    """
+    if pending_inputs is None:
+        pending_inputs = AWAITING_INPUT_FROM_USERS
+    topic = _input_topic(event)
+    if topic is not None:
+        flow = {**flow, INPUT_TOPIC_KEY: topic}
+    pending_inputs[event.sender_id] = flow
+    return flow
+
+
+def pending_input_flow(
+    event, *, pending_inputs: Optional[dict] = None
+) -> Optional[dict]:
+    """The pending input flow EVENT answers, or None.
+
+    That is the flow of EVENT's sender, unless the flow was started in a
+    private topic and EVENT sits anywhere else: in another topic, outside
+    topics, or in another chat. Such a message leaves the flow pending and is
+    handled as if no flow were pending. A flow started outside private topics
+    takes its answer from anywhere, as before topics existed.
+    PENDING_INPUTS defaults to `AWAITING_INPUT_FROM_USERS`.
+    """
+    if pending_inputs is None:
+        pending_inputs = AWAITING_INPUT_FROM_USERS
+    flow = pending_inputs.get(event.sender_id)
+    if flow is None:
+        return None
+    origin = flow.get(INPUT_TOPIC_KEY)
+    #: A message from elsewhere leaves the flow pending rather than cancelling
+    #: it, because each topic is its own conversation. The prompt stays the
+    #: last word in its topic, so the user can still answer it there after a
+    #: detour, and a message typed in "All" opens a new topic: a new
+    #: conversation, not an answer to a prompt in another one. Cancelling on
+    #: the detour would turn that later answer into a chat message. Commands
+    #: that reset pending input, such as /start and /help, still reset it in
+    #: every topic.
+    if origin is not None and _input_topic(event) != origin:
+        return None
+    return flow
 
 
 def add_active_llm_task(user_id: int, task: asyncio.Task):
@@ -3230,6 +3305,13 @@ def _is_pending_input_message(event, *, awaiting: bool) -> bool:
         and event.text
         and not event.text.startswith("/")
         and not _is_known_command(event.text)
+    )
+
+
+def _answers_pending_input_flow(event) -> bool:
+    """Whether `generic_input_handler` should consume EVENT."""
+    return _is_pending_input_message(
+        event, awaiting=pending_input_flow(event) is not None
     )
 
 
@@ -5581,6 +5663,12 @@ def register_handlers():
     )(as_file_handler)
 
     # Func-based Handlers
+    #: API key flows stay chat-wide, unlike `pending_input_flow`.
+    #: `llm_db.request_api_key_message` sends its prompt without a reply
+    #: target, so the prompt lands in "All", outside every topic, and in
+    #: threaded mode an answer typed under it opens a new topic. There is no
+    #: topic to bind the flow to. A stray message such as "Hi" fails the
+    #: service's key format, so it is refused, never stored as a key.
     borg.on(
         events.NewMessage(
             func=lambda e: _is_pending_input_message(
@@ -5588,13 +5676,7 @@ def register_handlers():
             )
         )
     )(key_submission_handler)
-    borg.on(
-        events.NewMessage(
-            func=lambda e: _is_pending_input_message(
-                e, awaiting=e.sender_id in AWAITING_INPUT_FROM_USERS
-            )
-        )
-    )(generic_input_handler)
+    borg.on(events.NewMessage(func=_answers_pending_input_flow))(generic_input_handler)
     borg.on(events.NewMessage(func=is_valid_chat_message))(chat_handler)
 
     # Other Event Handlers
@@ -7864,7 +7946,10 @@ async def codex_status_handler(event):
         awaiting_users_dict=AWAITING_INPUT_FROM_USERS,
         is_bot=False,
     )
-    AWAITING_INPUT_FROM_USERS[user_id]["deadline"] = int(deadline.timestamp())
+    start_input_flow(
+        event,
+        {**AWAITING_INPUT_FROM_USERS[user_id], "deadline": int(deadline.timestamp())},
+    )
 
 
 async def key_submission_handler(event):
@@ -7913,7 +7998,7 @@ async def set_model_handler(event):
             f"{BOT_META_INFO_PREFIX}Or, send a custom model ID below."
             "\n(Type `cancel` to stop.)"
         )
-        AWAITING_INPUT_FROM_USERS[user_id] = {"type": "model"}
+        start_input_flow(event, {"type": "model"})
 
 
 async def set_system_prompt_handler(event):
@@ -7936,7 +8021,7 @@ async def set_system_prompt_handler(event):
                 f"{BOT_META_INFO_PREFIX}Your new system prompt has been saved."
             )
     else:
-        AWAITING_INPUT_FROM_USERS[user_id] = {"type": "system_prompt"}
+        start_input_flow(event, {"type": "system_prompt"})
         current_prompt = (
             user_manager.get_prefs(user_id).system_prompt or DEFAULT_SYSTEM_PROMPT
         )
@@ -8059,7 +8144,7 @@ async def set_model_here_handler(event):
             f"{BOT_META_INFO_PREFIX}Or, send a custom model ID below."
             "\n(Type `cancel` or `not set` to stop/clear.)"
         )
-        AWAITING_INPUT_FROM_USERS[user_id] = {"type": "chatmodel", "chat_id": chat_id}
+        start_input_flow(event, {"type": "chatmodel", "chat_id": chat_id})
 
 
 async def get_model_here_handler(event):
@@ -8452,10 +8537,7 @@ async def tools_handler(event):
             prefix = "✅" if tool in prefs.enabled_tools else "❌"
             menu_text.append(f"{i + 1}. {prefix} {tool}")
         menu_text.append("\nReply with a number to toggle that tool.")
-        AWAITING_INPUT_FROM_USERS[event.sender_id] = {
-            "type": "tool_selection",
-            "keys": AVAILABLE_TOOLS,
-        }
+        start_input_flow(event, {"type": "tool_selection", "keys": AVAILABLE_TOOLS})
         await send_info_message(event, "\n".join(menu_text))
 
 
@@ -9272,7 +9354,7 @@ async def generic_input_handler(event):
     """Handles plain-text submissions for interactive commands."""
     user_id = event.sender_id
     text = event.text.strip()
-    flow_data = AWAITING_INPUT_FROM_USERS.get(user_id)
+    flow_data = pending_input_flow(event)
     if not flow_data:
         return
 
@@ -10353,7 +10435,7 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
     cleanup_completed_tasks(user_id)
 
     # Intercept if user is in any waiting state first.
-    if llm_db.is_awaiting_key(user_id) or user_id in AWAITING_INPUT_FROM_USERS:
+    if llm_db.is_awaiting_key(user_id) or pending_input_flow(event) is not None:
         return
 
     #: Before any mode or context transition, so the message has no side effect

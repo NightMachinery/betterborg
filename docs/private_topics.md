@@ -150,9 +150,26 @@ changes nothing.
   the registry too.
 - **Chat history is not topic-aware.** `history_util` records messages per
   chat, so "last N messages" context mixes topics.
-- **Pending input is not topic-aware.** A prompt that waits for the user's
-  next message (a custom model id after `/setmodel`, for example) takes the
-  next message in the chat, even when it opened a new topic from "All".
+- **Pending input follows its topic.** A *pending input flow* is a prompt
+  that waits for the user's next message: a custom model id after
+  `/setmodel` or `/setmodelhere`, a new system prompt, or a numbered menu on a
+  user account. `llm_chat.start_input_flow` records the private topic of the
+  command that asked, and `pending_input_flow` accepts an answer from that
+  topic only. A message anywhere else, including one typed in "All" (which
+  opens a new topic), is handled as a normal message and leaves the prompt
+  pending. Commands that reset pending input, such as `/start` and `/help`,
+  reset it everywhere. A prompt asked for outside topics takes its answer
+  from anywhere, as before.
+- **The cost of that choice.** A user who stays in "All" cannot answer a
+  prompt by typing there: each such message opens a new topic. They have to
+  open the prompt's topic (or, untested, reply to the prompt). The flow also
+  has no expiry, so it can wait in its topic until a much later message there
+  is taken as the answer.
+- **API key prompts stay chat-wide.** `llm_db.request_api_key_message` sends
+  its prompt without a reply target, so it lands in "All", outside every
+  topic, and the next text message in any topic is taken as the key. A
+  message that does not match the service's key format is refused and never
+  stored.
 
 ## Related files
 
@@ -161,10 +178,13 @@ changes nothing.
 - `uniborg/uniborg.py`: composes the mixin into `Uniborg` and attaches a
   `TopicPlacement` in `Uniborg.create`.
 - `uniborg/telethon_safety.py`: the difference fallback the mixin stacks on.
+- `llm_chat_plugins/llm_chat.py`: `start_input_flow` and
+  `pending_input_flow`, which bind pending input to its topic.
 - `tests/test_topics.py`: placement per request type, the registry, the
   result shapes, refusals, the composed client on a fake transport, and
   golden sends that must go out byte for byte outside private topics. Run it
   under both Telethon versions.
 - `tests/test_llm_chat_topics.py`: reply detection as `llm_chat` uses it.
+- `tests/test_llm_chat_awaited_input.py`: pending input in topics.
 - `docs/telegram_ai_apis.md`, section 2.4: the Bot API side of private
   topics.
