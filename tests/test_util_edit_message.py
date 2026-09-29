@@ -347,13 +347,96 @@ class EditMessageTests(_EditChainCase):
 
         self.assertEqual(self.chat.ops()[-1], ("edit", child_b.id, "X" * 10))
 
-    async def test_repeated_text_is_compared_against_the_stale_placeholder(self):
+
+class EditMessageLastSentTests(_EditChainCase):
+    """Edits are skipped by comparing against the chunk last sent, not `.text`."""
+
+    def head_edits(self):
+        return [
+            call[2] for call in self.chat.calls if call[:2] == ("edit", self.head.id)
+        ]
+
+    async def test_repeated_text_skips_the_head_edit(self):
         await self.edit("same")
         await self.edit("same")
 
+        self.assertEqual(self.head_edits(), ["same"])
+
+    async def test_text_equal_to_the_original_placeholder_is_still_sent(self):
+        await self.edit("answer")
+        await self.edit("...")
+
+        self.assertEqual(self.head_edits(), ["answer", "..."])
+
+    async def test_first_edit_still_compares_the_placeholder_text(self):
+        await self.edit("...")
+
+        self.assertEqual(self.chat.calls, [])
+
+    async def test_parse_mode_change_is_sent(self):
+        await self.edit("same", parse_mode="md")
+        await self.edit("same", parse_mode="html")
+
+        self.assertEqual(self.head_edits(), ["same", "same"])
+
+    async def test_unchanged_child_is_skipped_even_when_its_text_differs(self):
+        await self.edit(_blocks("A", "B"))
+        (child_b,) = self.state().children
+        #: What `.text` holds after Telethon unparses the entities it parsed.
+        child_b.text = "unparsed"
+        self.chat.calls.clear()
+
+        await self.edit(_blocks("A", "B"))
+
+        self.assertEqual(self.chat.calls, [])
+
+    async def test_failed_head_edit_is_retried(self):
+        self.head.edit_errors.append(RuntimeError("boom"))
+
+        await self.edit("answer")
+        await self.edit("answer")
+
+        self.assertEqual(self.head_edits(), ["answer", "answer"])
+
+    async def test_not_modified_head_is_recorded(self):
+        self.head.edit_errors.append(errors.MessageNotModifiedError(request=None))
+
+        await self.edit("answer")
+        await self.edit("answer")
+
+        self.assertEqual(self.head_edits(), ["answer"])
+
+    async def test_empty_placeholder_is_sent_once(self):
+        await self.edit("answer")
+        await self.edit("")
+        await self.edit("  ")
+        await self.edit("answer")
+
+        self.assertEqual(self.head_edits(), ["answer", "__[empty]__", "answer"])
+
+    async def test_sent_as_file_placeholder_is_sent_once(self):
+        file_mode = {
+            "send_file_mode": util.SendFileMode.ONLY,
+            "file_length_threshold": 5,
+        }
+        await self.edit("x" * 9, **file_mode)
+        await self.edit("y" * 9, **file_mode)
+        await self.edit("short")
+
+        self.assertEqual(self.head_edits(), ["__[sent as file]__", "short"])
+        self.assertEqual(self.send_file.await_count, 2)
+
+    async def test_records_follow_the_chain(self):
+        await self.edit(_blocks("A", "B", "C"))
         self.assertEqual(
-            self.chat.ops(),
-            [("edit", self.head.id, "same"), ("edit", self.head.id, "same")],
+            {chunk.text for chunk in self.state().sent.values()},
+            {"A" * 10, "B" * 10, "C" * 10},
+        )
+
+        await self.edit("A" * 10)
+
+        self.assertEqual(
+            self.state().sent, {self.head.id: util.SentChunk("A" * 10, "md")}
         )
 
 

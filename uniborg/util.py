@@ -916,16 +916,37 @@ async def discreet_send(
     return last_msg
 
 
+@dataclass(frozen=True)
+class SentChunk:
+    """The chunk one message of an edit chain shows, as we last sent it."""
+
+    text: str
+    parse_mode: typing.Any = None
+
+
 @dataclass
 class EditChainState:
     """Stores the state of an edit chain including children and last computed text."""
 
     children: list = None
     last_text: str = ""
+    #: Message id -> the `SentChunk` that message shows, for the head and each child.
+    #: Telethon's `Message.edit` returns a new object and leaves `.text` stale,
+    #: so only this record can tell whether an edit would change anything.
+    sent: dict = None
 
     def __post_init__(self):
         if self.children is None:
             self.children = []
+        if self.sent is None:
+            self.sent = {}
+
+    def forget_sent_except(self, messages):
+        """Drop the records of messages that are no longer in the chain."""
+        keep = {message.id for message in messages}
+        self.sent = {
+            msg_id: chunk for msg_id, chunk in self.sent.items() if msg_id in keep
+        }
 
 
 @dataclass
@@ -1012,16 +1033,51 @@ async def _safe_delete_message(message):
         pass  # Ignore if deletion fails
 
 
-async def _cleanup_message_chain(edit_state, message_id):
-    """Clean up an existing message chain by deleting all child messages."""
-    existing_children = edit_state.children
+def _chain_message_shows(edit_state, message, chunk: SentChunk) -> bool:
+    """Whether `message` already shows `chunk`, going by what we last sent it.
 
-    # Delete all child messages
-    for child in existing_children:
+    A message we have never edited (the placeholder, on the first call) has no
+    record, and its own `.text` is still accurate, so it is compared instead.
+    """
+    shown = edit_state.sent.get(message.id)
+    if shown is None:
+        return message.text == chunk.text
+    return shown == chunk
+
+
+async def _edit_chain_message(edit_state, message, *, chunk, link_preview=None):
+    """Edit `message` to show `chunk` unless it already does, and record it.
+
+    `link_preview=None` leaves Telethon's default (the message's current
+    preview state). Errors other than "not modified" propagate unrecorded.
+    """
+    if not _chain_message_shows(edit_state, message, chunk):
+        edit_kwargs = {"parse_mode": chunk.parse_mode}
+        if link_preview is not None:
+            edit_kwargs["link_preview"] = link_preview
+        try:
+            await message.edit(chunk.text, **edit_kwargs)
+        except telethon.errors.rpcerrorlist.MessageNotModifiedError:
+            #: Telegram says it already shows this, e.g. markdown that renders
+            #: the same, or a placeholder whose stale `.text` we compared.
+            pass
+    edit_state.sent[message.id] = chunk
+
+
+async def _collapse_chain(edit_state, *, message_id, head, placeholder):
+    """Delete the children and leave only `placeholder` on the head, best-effort."""
+    for child in edit_state.children:
         await _safe_delete_message(child)
-
-    # Remove from edit chains tracking
-    EDIT_CHAINS.pop(message_id, None)
+    edit_state.children = []
+    edit_state.last_text = ""
+    edit_state.forget_sent_except([head])
+    try:
+        await _edit_chain_message(
+            edit_state, head, chunk=SentChunk(placeholder, parse_mode="md")
+        )
+    except Exception:
+        pass
+    EDIT_CHAINS[message_id] = edit_state
 
 
 def _log_file_sending_error(context_name):
@@ -1055,7 +1111,12 @@ async def edit_message(
     Intelligently edits a message chain to reflect new text content,
     avoiding redundant API calls.
 
-    - Compares text content before sending an edit request.
+    - Skips the edit of any message that already shows its chunk, going by the
+      chunk and parse mode this function last sent it (`EditChainState.sent`),
+      since Telethon never updates a message's `.text` in place. This assumes
+      edit_message is the only writer of the chain: after a direct `.edit()` of
+      one of its messages, re-sending the text edit_message last sent there is
+      skipped.
     - Edits existing messages in the chain to match the new text.
     - Creates new messages if the new text is longer than the old chain.
     - Deletes surplus messages if the new text is shorter.
@@ -1116,18 +1177,12 @@ async def edit_message(
 
     # If we should skip text editing, clean up message chain and send file
     if only_send_file:
-        # Clean up existing message chain since we're only sending file
-        edit_state = EDIT_CHAINS.get(message_id, EditChainState())
-        await _cleanup_message_chain(edit_state, message_id)
-
-        # Clear the original message or replace with placeholder
-        try:
-            await message_obj.edit(
-                "__[sent as file]__",
-                parse_mode="md",
-            )
-        except Exception:
-            pass
+        await _collapse_chain(
+            edit_state,
+            message_id=message_id,
+            head=message_obj,
+            placeholder="__[sent as file]__",
+        )
 
         # Send the file
         try:
@@ -1161,31 +1216,22 @@ async def edit_message(
 
         # Case 1: The new text is empty, delete the entire chain.
         if not chunks:
-            for child in existing_children:
-                await _safe_delete_message(child)
-            EDIT_CHAINS.pop(message_id, None)
-            try:
-                # Edit the original message to be empty or show a placeholder
-                if message_obj.text != "__[empty]__":
-                    await message_obj.edit(
-                        "__[empty]__",
-                        parse_mode="md",
-                    )
-            except Exception:
-                pass
+            await _collapse_chain(
+                edit_state,
+                message_id=message_id,
+                head=message_obj,
+                placeholder="__[empty]__",
+            )
             return
 
         # Edit the primary message (the one the user replied to)
         try:
-            # --- OPTIMIZATION: Check text before editing ---
-            if message_obj.text != chunks[0]:
-                await message_obj.edit(
-                    chunks[0],
-                    parse_mode=parse_mode,
-                    link_preview=link_preview,
-                )
-        except telethon.errors.rpcerrorlist.MessageNotModifiedError:
-            pass  # Fallback for safety, though the check above should prevent this.
+            await _edit_chain_message(
+                edit_state,
+                message_obj,
+                chunk=SentChunk(chunks[0], parse_mode=parse_mode),
+                link_preview=link_preview,
+            )
         except Exception as e:
             print(f"Error editing original message {message_id}: {e}")
             return  # If the head of the chain fails, abort
@@ -1199,25 +1245,18 @@ async def edit_message(
             # --- Edit existing messages if we have a chunk for them ---
             if i < num_new_chunks and i < num_existing_children:
                 child_to_edit = existing_children[i]
-                new_chunk = chunks[i + 1]
                 try:
-                    # --- OPTIMIZATION: Check text before editing ---
-                    if child_to_edit.text != new_chunk:
-                        await child_to_edit.edit(
-                            new_chunk,
-                            parse_mode=parse_mode,
-                            link_preview=link_preview,
-                        )
-
-                    new_children.append(child_to_edit)
-                    last_message_in_chain = child_to_edit
-                except telethon.errors.rpcerrorlist.MessageNotModifiedError:
-                    # This is a fallback, but the check above should prevent it.
-                    new_children.append(child_to_edit)
-                    last_message_in_chain = child_to_edit
+                    await _edit_chain_message(
+                        edit_state,
+                        child_to_edit,
+                        chunk=SentChunk(chunks[i + 1], parse_mode=parse_mode),
+                        link_preview=link_preview,
+                    )
                 except Exception:
                     # If editing a child fails, stop processing the chain to avoid errors.
                     break
+                new_children.append(child_to_edit)
+                last_message_in_chain = child_to_edit
 
             # --- Create new messages if new text is longer ---
             elif i < num_new_chunks:
@@ -1225,10 +1264,13 @@ async def edit_message(
                     new_child = await last_message_in_chain.reply(
                         chunks[i + 1], parse_mode=parse_mode
                     )
-                    new_children.append(new_child)
-                    last_message_in_chain = new_child
                 except Exception:
                     break  # Stop if we can't send a new reply
+                edit_state.sent[new_child.id] = SentChunk(
+                    chunks[i + 1], parse_mode=parse_mode
+                )
+                new_children.append(new_child)
+                last_message_in_chain = new_child
 
             # --- Delete surplus messages if new text is shorter ---
             elif i < num_existing_children:
@@ -1237,6 +1279,7 @@ async def edit_message(
 
         # Update the global state with the new chain configuration
         edit_state.children = new_children
+        edit_state.forget_sent_except([message_obj, *new_children])
         edit_state.last_text = (
             new_text  # Store the last text for future append operations
         )
