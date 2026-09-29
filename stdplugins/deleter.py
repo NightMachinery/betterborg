@@ -62,10 +62,14 @@ class DeleteParticipantReactionsRequest(TLRequest):
     def to_dict(self):
         return {
             "_": "DeleteParticipantReactionsRequest",
-            "peer": self.peer.to_dict() if isinstance(self.peer, TLObject) else self.peer,
-            "participant": self.participant.to_dict()
-            if isinstance(self.participant, TLObject)
-            else self.participant,
+            "peer": (
+                self.peer.to_dict() if isinstance(self.peer, TLObject) else self.peer
+            ),
+            "participant": (
+                self.participant.to_dict()
+                if isinstance(self.participant, TLObject)
+                else self.participant
+            ),
         }
 
     def _bytes(self):
@@ -209,9 +213,13 @@ async def _export_deleted_message(session, msg):
         file_name = _message_file_name(msg) or f"message_{msg.id}.txt"
         file_path = files_dir / f"{msg.id}_{sanitize_path_part(file_name)}"
         try:
-            downloaded_path = await borg.download_media(message=msg, file=str(file_path))
+            downloaded_path = await borg.download_media(
+                message=msg, file=str(file_path)
+            )
             if downloaded_path:
-                row["file"] = str(Path(downloaded_path).relative_to(session["output_dir"]))
+                row["file"] = str(
+                    Path(downloaded_path).relative_to(session["output_dir"])
+                )
         except Exception as e:
             row["file_export_error"] = str(e)
             print(f"failed to export text file for message {msg.id}: {e}", flush=True)
@@ -308,7 +316,9 @@ async def _delete_participant_reactions(peer, participant, command_name):
             )
         except FloodWaitError as e:
             wait_seconds = _flood_wait_seconds(e)
-            print(f"{command_name} reactions flood wait for {wait_seconds}s", flush=True)
+            print(
+                f"{command_name} reactions flood wait for {wait_seconds}s", flush=True
+            )
             await asyncio.sleep(wait_seconds)
             continue
         except Exception as e:
@@ -352,7 +362,10 @@ async def _(event):
                     await _clear_own_reaction(chat, msg)
                     reaction_delete_count += 1
                 except Exception as e:
-                    print(f"failed to delete reaction on message {msg.id}: {e}", flush=True)
+                    print(
+                        f"failed to delete reaction on message {msg.id}: {e}",
+                        flush=True,
+                    )
             elif not delete_msg and _has_min_reactions(msg):
                 min_reaction_messages[msg.id] = msg
 
