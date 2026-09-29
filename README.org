@@ -133,6 +133,13 @@ getDifference, and alerts the log chat when that happens. Disable it with
 1.45 and the rollback steps are in
 [[file:docs/telethon_upgrade.md][docs/telethon_upgrade.md]].
 
+** Private-chat topics
+With threaded mode on in BotFather, a bot's DM holds topics, and a message
+typed in "All" opens a new one. Uniborg adds the topic to every reply to a
+message inside a private topic, so answers land next to their question, and
+llm_chat's pending prompts only take an answer from the topic that asked. See
+[[file:docs/private_topics.md][docs/private_topics.md]].
+
 ** all mentions
 =stdplugins/all.py= adds admin-only =.all=/=@all=, =.allf=/=@allf=, and
 =.allIDs=/=@allIDs= commands for mentioning or listing chat participants. These

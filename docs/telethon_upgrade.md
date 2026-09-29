@@ -154,6 +154,14 @@ internals. Check them on any new version: the private `Button._is_inline` in
 `build_reply_markup` in `client/buttons.py`, which drops button objects it
 does not recognize.
 
+`uniborg/topics.py` overrides the private `TelegramClient._dispatch_update` to
+file each incoming message's private topic before any handler runs (see
+[private_topics.md](private_topics.md)). Check on any new version that
+`_update_loop` still hands every update to `self._dispatch_update`, and that
+`send_message` and `send_file` still end in `await self(request)` with an
+`InputReplyToMessage`. A test in `tests/test_topics.py` fails if the first
+stops being true.
+
 ### What they do not fix
 
 - An unknown object in a pushed message outside a container is still dropped

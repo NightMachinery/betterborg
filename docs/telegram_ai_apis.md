@@ -378,8 +378,14 @@ Media:
 - MTProto: `user.bot_forum_view`, `bot_forum_can_manage_topics`,
   `messages.createForumTopic(peer: InputPeer)` and `top_msg_id`. All exist in
   layer 224 already.
-- Decision: do not enable topics until chat history is topic-aware; history
-  items carry no topic today.
+- Seen live on the canary: a message typed in the All view opens a new topic;
+  a bot reply lands in the topic only when it carries `top_msg_id` set to the
+  topic id from the replied message's header (the root's own message id does
+  not work, and neither does a reply to the root).
+- Status: bot replies are placed in their topic and pending inputs are bound
+  to the topic that asked for them, see [private_topics.md](private_topics.md).
+  Chat history is still not topic-aware: history items carry no topic, so
+  the topics of one DM share one conversation.
 
 ### 2.5 Button styles
 
