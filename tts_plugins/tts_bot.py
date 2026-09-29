@@ -12,7 +12,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from telethon import events
 
-from uniborg import bot_util, llm_db, llm_util, tg_compat, tts_util, util
+from uniborg import bot_util, llm_db, llm_util, tts_util, util
 from uniborg.storage import UserStorage
 
 # --- Bot Configuration ---
@@ -305,6 +305,15 @@ def _voice_options() -> dict[str, str]:
     return {name: f"{name}: {desc}" for name, desc in tts_util.GEMINI_VOICES.items()}
 
 
+def _menu_choice(event) -> str:
+    """The option key a menu button sent, after its `prefix_`."""
+    #: `present_options` and `option_buttons` sanitize the key, and hash any
+    #: long one such as `gemini-2.5-flash-preview-tts`.
+    return bot_util.unsanitize_callback_data(
+        event.data.decode("utf-8").split("_", 1)[1]
+    )
+
+
 async def gemini_voice_handler(event):
     """Presents the voice selection menu."""
     current_voice = user_manager.get_prefs(event.sender_id).voice
@@ -322,11 +331,10 @@ async def gemini_voice_handler(event):
 async def gemini_model_handler(event):
     """Presents the TTS model selection menu."""
     current_model = user_manager.get_prefs(event.sender_id).model
-    model_options = {model: desc for model, desc in tts_util.TTS_MODELS.items()}
     await bot_util.present_options(
         event,
         title="**Choose a TTS Model**",
-        options=model_options,
+        options=tts_util.TTS_MODELS,
         current_value=current_model,
         callback_prefix="model_",
         awaiting_key="model_selection",
@@ -336,7 +344,12 @@ async def gemini_model_handler(event):
 
 async def voice_callback_handler(event):
     """Handles the user's voice selection from the inline keyboard."""
-    voice = event.data.decode("utf-8").split("_", 1)[1]
+    voice = _menu_choice(event)
+    if voice not in tts_util.GEMINI_VOICES:
+        await event.answer(
+            "That voice is no longer offered. Send /geminivoice again.", alert=True
+        )
+        return
     user_manager.set_voice(event.sender_id, voice)
     buttons = bot_util.option_buttons(
         _voice_options(),
@@ -352,15 +365,18 @@ async def voice_callback_handler(event):
 
 async def model_callback_handler(event):
     """Handles the user's model selection from the inline keyboard."""
-    model = event.data.decode("utf-8").split("_", 1)[1]
-    user_manager.set_model(event.sender_id, model)
-    buttons = [
-        tg_compat.callback_button(
-            f"✅ {model}: {desc}" if model == model else f"{model}: {desc}",
-            f"model_{model}",
+    model = _menu_choice(event)
+    if model not in tts_util.TTS_MODELS:
+        await event.answer(
+            "That model is no longer offered. Send /model again.", alert=True
         )
-        for model, desc in tts_util.TTS_MODELS.items()
-    ]
+        return
+    user_manager.set_model(event.sender_id, model)
+    buttons = bot_util.option_buttons(
+        tts_util.TTS_MODELS,
+        current_value=model,
+        callback_prefix="model_",
+    )
     try:
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
     except Exception:
@@ -428,6 +444,8 @@ def register_handlers():
 
 async def initialize_tts_bot():
     """Initializes the bot by registering commands and handlers."""
+    #: Lets model menus sent before a restart still resolve their hashed keys.
+    bot_util.populate_callback_hash_map(tts_util.TTS_MODELS)
     await bot_util.register_bot_commands(borg, BOT_COMMANDS)
     register_handlers()
 
