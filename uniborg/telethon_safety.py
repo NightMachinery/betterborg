@@ -6,8 +6,14 @@
 Telegram sometimes sends a constructor from a newer layer than the session
 declared (see docs/telethon_upgrade.md). TL objects carry no length prefix, so
 Telethon cannot skip an object it does not know, and one unknown object costs
-everything around it. Inside ``getDifference`` or ``getChannelDifference``,
-the update loop disconnects the client, which ends the bot.
+everything around it:
+
+- inside a pushed ``msg_container``, the whole container is dropped without an
+  acknowledgement, siblings included;
+- inside a ``gzip_packed`` container entry, the entries after it are never
+  processed;
+- inside ``getDifference`` or ``getChannelDifference``, the update loop
+  disconnects the client, which ends the bot.
 
 The nets below shrink the loss to the one object and count every event in
 `SafetyStats`. This module imports only the standard library and Telethon, so
@@ -17,6 +23,7 @@ import asyncio
 from collections import Counter
 from dataclasses import dataclass, field
 import enum
+import functools
 import logging
 import os
 import time
@@ -25,7 +32,18 @@ from typing import Any, Awaitable, Callable, Optional
 import telethon
 from telethon import errors
 
+#: Loaded so `_patch_telethon` can reach them as attributes of the package.
+import telethon.network.mtprotosender
+import telethon.tl.core.messagecontainer
+import telethon.tl.core.tlmessage
+from telethon.tl.tlobject import TLObject
+
 SAFETY_NETS_ENV = "borg_tg_safety_nets"
+
+#: The container patches replace private Telethon internals. Both versions ship
+#: byte-identical `MessageContainer.from_reader` and `MTProtoSender`'s
+#: `_process_message`/`_handle_container`/`_handle_gzip_packed`/`_handle_update`.
+SUPPORTED_TELETHON_VERSIONS = frozenset({"1.43.2", "1.45.0"})
 
 _ENABLED_VALUES = frozenset({"", "1", "true", "yes", "on"})
 _DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
@@ -38,6 +56,8 @@ ReportFn = Callable[..., None]
 class SafetyKind(enum.Enum):
     """Where an unparseable object was caught, and what that cost."""
 
+    CONTAINER_ENTRY = "container_entry"
+    PROCESSING = "processing"
     DIFFERENCE = "difference"
     CHANNEL_DIFFERENCE = "channel_difference"
     RPC_RESULT = "rpc_result"
@@ -48,6 +68,14 @@ class SafetyKind(enum.Enum):
 
 
 _KIND_DESCRIPTIONS = {
+    SafetyKind.CONTAINER_ENTRY: (
+        "skipped an unknown object inside a message container; "
+        "it was acknowledged and its siblings were kept"
+    ),
+    SafetyKind.PROCESSING: (
+        "an unknown object surfaced while a received message was processed "
+        "(usually gzip-packed); that message is lost"
+    ),
     SafetyKind.DIFFERENCE: (
         "skipped an unparseable getDifference window; account updates in it are lost"
     ),
@@ -65,7 +93,12 @@ _KIND_DESCRIPTIONS = {
 class SafetyNet(enum.Enum):
     """The individual nets `install_safety_nets` can put in place."""
 
+    CONTAINER_SKIP = "container_skip"
+    MESSAGE_GUARD = "message_guard"
     DIFFERENCE_FALLBACK = "difference_fallback"
+
+
+_PATCH_NETS = frozenset({SafetyNet.CONTAINER_SKIP, SafetyNet.MESSAGE_GUARD})
 
 
 def _format_constructor(constructor_id: Optional[int]) -> str:
@@ -141,6 +174,119 @@ class SafetyMonitor:
             f"; {detail}" if detail else "",
             count,
         )
+
+
+class SkippedObject(TLObject):
+    """Stands in for a container entry whose body could not be parsed.
+
+    `MTProtoSender._process_message` still acknowledges its msg_id, then hands
+    it to `_handle_update`, which logs that it is not an update and drops it.
+    """
+
+    #: None matches no `MTProtoSender._handlers` key, and is not the Updates
+    #: SUBCLASS_OF_ID (0x8af52aac), so nothing reads the missing fields.
+    CONSTRUCTOR_ID = None
+    SUBCLASS_OF_ID = None
+
+    def __init__(
+        self,
+        *,
+        outer_constructor_id: int,
+        invalid_constructor_id: int,
+        length: int,
+    ):
+        self.outer_constructor_id = outer_constructor_id
+        self.invalid_constructor_id = invalid_constructor_id
+        self.length = length
+
+    def to_dict(self):
+        return {
+            "_": "SkippedObject",
+            "outer_constructor_id": _format_constructor(self.outer_constructor_id),
+            "invalid_constructor_id": _format_constructor(self.invalid_constructor_id),
+            "length": self.length,
+        }
+
+
+def _skipping_container_reader(
+    *,
+    container_cls: type,
+    message_cls: type,
+    not_found_error: type,
+    report: ReportFn,
+):
+    """A `MessageContainer.from_reader` that skips unknown entries by length.
+
+    Mirrors Telethon's own reader, plus one step: an entry whose body raises
+    `TypeNotFoundError` becomes a `SkippedObject`, and reading resumes at the
+    next entry, which the entry's length prefix locates exactly.
+    """
+
+    def from_reader(cls, reader):
+        messages = []
+        for _ in range(reader.read_int()):
+            msg_id = reader.read_long()
+            seq_no = reader.read_int()
+            length = reader.read_int()
+            before = reader.tell_position()
+            try:
+                #: May over-read, e.g. RpcResult; the seek below corrects it.
+                obj = reader.tgread_object()
+            except not_found_error as e:
+                reader.set_position(before)
+                outer_constructor_id = reader.read_int(signed=False)
+                obj = SkippedObject(
+                    outer_constructor_id=outer_constructor_id,
+                    invalid_constructor_id=e.invalid_constructor_id,
+                    length=length,
+                )
+                report(
+                    SafetyKind.CONTAINER_ENTRY,
+                    constructor_id=e.invalid_constructor_id,
+                    detail=(
+                        f"entry {_format_constructor(outer_constructor_id)}, "
+                        f"{length} bytes, msg_id {msg_id}"
+                    ),
+                )
+            reader.set_position(before + length)
+            messages.append(message_cls(msg_id, seq_no, obj))
+        return container_cls(messages)
+
+    return classmethod(from_reader)
+
+
+def _guarded_process_message(
+    *,
+    original: Callable,
+    not_found_error: type,
+    report: ReportFn,
+):
+    """Wraps `MTProtoSender._process_message` so one message cannot sink others.
+
+    `_handle_container` calls `_process_message` once per entry, so guarding
+    it here is the same as guarding each turn of that loop. `_handle_container`
+    itself cannot be patched usefully: `MTProtoSender.__init__` binds it into
+    `_handlers`, so a sender built before the patch keeps the original.
+    `_process_message` acknowledges the msg_id before dispatching, so a
+    swallowed failure is still acked. At the top level, Telethon's
+    `_recv_loop` only logs an escaping exception and carries on, which is what
+    this does too.
+    """
+
+    @functools.wraps(original)
+    async def _process_message(self, message):
+        try:
+            await original(self, message)
+        except not_found_error as e:
+            report(
+                SafetyKind.PROCESSING,
+                constructor_id=e.invalid_constructor_id,
+                detail=f"msg_id {message.msg_id}",
+            )
+        except Exception:
+            self._log.exception("Unhandled error while processing msgs")
+
+    return _process_message
 
 
 @dataclass
@@ -314,9 +460,26 @@ def safety_nets_enabled(*, environ=None) -> bool:
 
 
 @dataclass
+class _Patch:
+    owner: Any
+    name: str
+    original: Any
+
+    @classmethod
+    def apply(cls, owner: Any, name: str, *, replacement: Any) -> "_Patch":
+        patch = cls(owner=owner, name=name, original=owner.__dict__[name])
+        setattr(owner, name, replacement)
+        return patch
+
+    def restore(self) -> None:
+        setattr(self.owner, self.name, self.original)
+
+
+@dataclass
 class _Installation:
     module: Any
     monitor: SafetyMonitor
+    patches: list
 
 
 #: Keyed by id() of the Telethon module; the entry keeps the module alive, so
@@ -324,8 +487,50 @@ class _Installation:
 _INSTALLATIONS = {}
 
 
+def _patch_telethon(module: Any, *, report: ReportFn) -> list:
+    not_found_error = module.errors.TypeNotFoundError
+    container_cls = module.tl.core.messagecontainer.MessageContainer
+    sender_cls = module.network.mtprotosender.MTProtoSender
+    return [
+        _Patch.apply(
+            container_cls,
+            "from_reader",
+            replacement=_skipping_container_reader(
+                container_cls=container_cls,
+                message_cls=module.tl.core.tlmessage.TLMessage,
+                not_found_error=not_found_error,
+                report=report,
+            ),
+        ),
+        _Patch.apply(
+            sender_cls,
+            "_process_message",
+            replacement=_guarded_process_message(
+                original=sender_cls.__dict__["_process_message"],
+                not_found_error=not_found_error,
+                report=report,
+            ),
+        ),
+    ]
+
+
 def _install(module: Any, *, stats: Optional[SafetyStats]) -> _Installation:
-    return _Installation(module=module, monitor=SafetyMonitor(stats=stats))
+    version = getattr(module, "__version__", None)
+    monitor = SafetyMonitor(stats=stats)
+
+    patches = []
+    if version in SUPPORTED_TELETHON_VERSIONS:
+        patches = _patch_telethon(module, report=monitor.report)
+        monitor.stats.installed.update(_PATCH_NETS)
+    else:
+        _log.warning(
+            "Telethon %s is not one of the versions the container patches were "
+            "checked against (%s); not installing them",
+            version,
+            ", ".join(sorted(SUPPORTED_TELETHON_VERSIONS)),
+        )
+
+    return _Installation(module=module, monitor=monitor, patches=patches)
 
 
 def install_safety_nets(
@@ -339,11 +544,13 @@ def install_safety_nets(
 ) -> SafetyStats:
     """Installs the Telegram safety nets and returns their shared stats.
 
-    `client`, which must use `DifferenceFallbackMixin`, gets a
-    `DifferenceFallback` reporting into the same stats.
+    - The container skip and the message guard patch Telethon's classes, so
+      they apply process-wide, only on `SUPPORTED_TELETHON_VERSIONS`.
+    - `client`, which must use `DifferenceFallbackMixin`, gets a
+      `DifferenceFallback` reporting into the same stats.
 
     Idempotent per Telethon module: a repeat call keeps the first call's stats
-    and attaches `client` if it has no fallback yet. `SAFETY_NETS_ENV` switches all of it off; an
+    and patches, and attaches `client` if it has no fallback yet. `SAFETY_NETS_ENV` switches all of it off; an
     unrecognised value raises `ValueError`.
     """
     if not safety_nets_enabled(environ=environ):
@@ -376,11 +583,18 @@ def install_safety_nets(
 
 
 def uninstall_safety_nets(*, telethon_module: Any = None) -> bool:
-    """Forgets the installation for `telethon_module`.
+    """Restores Telethon's classes.
 
     Clients keep any `DifferenceFallback` already attached; set their
     `difference_fallback` to None to drop it. Returns whether anything was
     installed.
     """
     module = telethon_module or telethon
-    return _INSTALLATIONS.pop(id(module), None) is not None
+    installation = _INSTALLATIONS.pop(id(module), None)
+    if installation is None:
+        return False
+
+    for patch in reversed(installation.patches):
+        patch.restore()
+    installation.monitor.stats.installed -= _PATCH_NETS
+    return True

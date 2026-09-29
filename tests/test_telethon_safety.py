@@ -3,12 +3,18 @@ import datetime
 import importlib.util
 import logging
 from pathlib import Path
+import struct
 import sys
+from types import SimpleNamespace
 import unittest
 
+import telethon
 from telethon import errors, functions, types
 from telethon._updates import EntityCache, MessageBox
 from telethon._updates.messagebox import ENTRY_ACCOUNT
+from telethon.extensions import BinaryReader
+from telethon.network.mtprotosender import MTProtoSender
+from telethon.tl.core import GzipPacked, MessageContainer, TLMessage
 
 #: Loaded from its file so the `uniborg` package __init__ (which pulls in
 #: uniborg.util and, on Telethon 1.45, fails at import) never runs.
@@ -26,6 +32,35 @@ SafetyNet = telethon_safety.SafetyNet
 UNKNOWN_ID = 0xDEADBEEF
 
 
+def _entry(msg_id, body, *, seq_no=0):
+    return struct.pack("<qii", msg_id, seq_no, len(body)) + body
+
+
+def _container(*entries):
+    return struct.pack("<Ii", MessageContainer.CONSTRUCTOR_ID, len(entries)) + b"".join(
+        entries
+    )
+
+
+def _update_short_with_unknown_update():
+    #: updateShort#78d4dec1 update:Update date:int, where the Update is a
+    #: constructor Telethon does not know, followed by bytes it cannot size.
+    return struct.pack("<II", types.UpdateShort.CONSTRUCTOR_ID, UNKNOWN_ID) + bytes(12)
+
+
+def _gzip_packed_unknown():
+    return bytes(GzipPacked(struct.pack("<I", UNKNOWN_ID) + bytes(8)))
+
+
+def _pong(*, msg_id, ping_id=7):
+    return bytes(types.Pong(msg_id=msg_id, ping_id=ping_id))
+
+
+class _Loggers(dict):
+    def __missing__(self, key):
+        return logging.getLogger(key)
+
+
 def _no_env():
     return {}
 
@@ -36,6 +71,121 @@ class _InstalledTestCase(unittest.TestCase):
         self.addCleanup(telethon_safety.uninstall_safety_nets)
         kwargs.setdefault("environ", _no_env())
         return telethon_safety.install_safety_nets(**kwargs)
+
+
+class ContainerSkipTests(_InstalledTestCase):
+    def test_without_the_patch_one_unknown_entry_sinks_the_container(self):
+        telethon_safety.uninstall_safety_nets()
+        data = _container(
+            _entry(101, _update_short_with_unknown_update()),
+            _entry(103, _pong(msg_id=55)),
+        )
+
+        with self.assertRaises(errors.TypeNotFoundError):
+            BinaryReader(data).tgread_object()
+
+    def test_unknown_entry_becomes_a_placeholder_and_the_pong_survives(self):
+        stats = self.install()
+        data = _container(
+            _entry(101, _update_short_with_unknown_update()),
+            _entry(103, _pong(msg_id=55)),
+        )
+        reader = BinaryReader(data)
+
+        container = reader.tgread_object()
+
+        self.assertIsInstance(container, MessageContainer)
+        self.assertEqual([m.msg_id for m in container.messages], [101, 103])
+        skipped, pong = (m.obj for m in container.messages)
+        self.assertIsInstance(skipped, telethon_safety.SkippedObject)
+        self.assertEqual(skipped.outer_constructor_id, types.UpdateShort.CONSTRUCTOR_ID)
+        self.assertEqual(skipped.invalid_constructor_id, UNKNOWN_ID)
+        self.assertNotEqual(skipped.SUBCLASS_OF_ID, 0x8AF52AAC)
+        self.assertIsInstance(pong, types.Pong)
+        self.assertEqual(pong.msg_id, 55)
+        self.assertEqual(reader.tell_position(), len(data))
+        self.assertEqual(stats.by_kind[SafetyKind.CONTAINER_ENTRY], 1)
+        self.assertEqual(stats.by_constructor[UNKNOWN_ID], 1)
+
+    def test_sender_acks_every_entry_and_keeps_siblings_after_a_gzip_failure(self):
+        stats = self.install()
+        data = _container(
+            _entry(101, _update_short_with_unknown_update()),
+            _entry(103, _gzip_packed_unknown()),
+            _entry(105, _pong(msg_id=55)),
+        )
+        container = BinaryReader(data).tgread_object()
+
+        async def process():
+            queue = asyncio.Queue()
+            sender = MTProtoSender(None, loggers=_Loggers(), updates_queue=queue)
+            pong_future = asyncio.get_running_loop().create_future()
+            sender._pending_state[55] = SimpleNamespace(future=pong_future)
+            await sender._process_message(TLMessage(99, 0, container))
+            return sender, queue, pong_future
+
+        sender, queue, pong_future = asyncio.run(process())
+
+        self.assertEqual(sender._pending_ack, {99, 101, 103, 105})
+        self.assertTrue(pong_future.done())
+        self.assertIsInstance(pong_future.result(), types.Pong)
+        self.assertTrue(queue.empty())
+        self.assertEqual(stats.by_kind[SafetyKind.CONTAINER_ENTRY], 1)
+        self.assertEqual(stats.by_kind[SafetyKind.PROCESSING], 1)
+        self.assertEqual(stats.by_constructor[UNKNOWN_ID], 2)
+
+    def test_install_is_idempotent_and_uninstall_restores_telethon(self):
+        original_reader = MessageContainer.__dict__["from_reader"]
+        original_process = MTProtoSender.__dict__["_process_message"]
+        stats = self.install()
+        patched_reader = MessageContainer.__dict__["from_reader"]
+
+        again = telethon_safety.install_safety_nets(environ=_no_env())
+
+        self.assertIs(again, stats)
+        self.assertIs(MessageContainer.__dict__["from_reader"], patched_reader)
+        self.assertIsNot(patched_reader, original_reader)
+        self.assertEqual(
+            stats.installed,
+            {SafetyNet.CONTAINER_SKIP, SafetyNet.MESSAGE_GUARD},
+        )
+        self.assertTrue(telethon_safety.uninstall_safety_nets())
+
+        self.assertIs(MessageContainer.__dict__["from_reader"], original_reader)
+        self.assertIs(MTProtoSender.__dict__["_process_message"], original_process)
+
+
+class VersionGuardTests(unittest.TestCase):
+    def test_unknown_version_skips_the_patches_with_a_warning(self):
+        container_cls = type("FakeContainer", (), {"from_reader": classmethod(id)})
+        sender_cls = type("FakeSender", (), {"_process_message": id})
+        fake = SimpleNamespace(
+            __name__="fake_telethon",
+            __version__="1.99.0",
+            errors=errors,
+            tl=SimpleNamespace(
+                core=SimpleNamespace(
+                    messagecontainer=SimpleNamespace(MessageContainer=container_cls)
+                )
+            ),
+            network=SimpleNamespace(
+                mtprotosender=SimpleNamespace(MTProtoSender=sender_cls)
+            ),
+        )
+        self.addCleanup(telethon_safety.uninstall_safety_nets, telethon_module=fake)
+
+        with self.assertLogs(telethon_safety.__name__, logging.WARNING) as logs:
+            stats = telethon_safety.install_safety_nets(
+                telethon_module=fake, environ=_no_env()
+            )
+
+        self.assertIn("1.99.0", "\n".join(logs.output))
+        self.assertEqual(stats.installed, set())
+        self.assertIs(container_cls.__dict__["from_reader"].__func__, id)
+        self.assertIs(sender_cls.__dict__["_process_message"], id)
+
+    def test_supported_versions_include_the_installed_telethon(self):
+        self.assertIn(telethon.__version__, telethon_safety.SUPPORTED_TELETHON_VERSIONS)
 
 
 class EnvSwitchTests(unittest.TestCase):
@@ -67,6 +217,7 @@ class EnvSwitchTests(unittest.TestCase):
 
     def test_disabled_install_changes_nothing(self):
         telethon_safety.uninstall_safety_nets()
+        original_reader = MessageContainer.__dict__["from_reader"]
         client = _FakeClient({})
 
         stats = telethon_safety.install_safety_nets(
@@ -75,6 +226,7 @@ class EnvSwitchTests(unittest.TestCase):
 
         self.assertEqual(stats.installed, set())
         self.assertIsNone(client.difference_fallback)
+        self.assertIs(MessageContainer.__dict__["from_reader"], original_reader)
         self.assertFalse(telethon_safety.uninstall_safety_nets())
 
 
