@@ -125,6 +125,14 @@ MTProto and Telethon versions are summarized in
 [[file:docs/telegram_ai_apis.md][docs/telegram_ai_apis.md]], along with the
 workarounds considered and why this repo upgrades Telethon instead.
 
+** Telegram layers and safety nets
+=uniborg/telethon_safety.py= stops one object Telethon cannot parse from
+dropping a whole message container or disconnecting the bot during
+getDifference, and alerts the log chat when that happens. Disable it with
+=borg_tg_safety_nets=0=. How layers work here, the upgrade path to Telethon
+1.45 and the rollback steps are in
+[[file:docs/telethon_upgrade.md][docs/telethon_upgrade.md]].
+
 ** all mentions
 =stdplugins/all.py= adds admin-only =.all=/=@all=, =.allf=/=@allf=, and
 =.allIDs=/=@allIDs= commands for mentioning or listing chat participants. These
