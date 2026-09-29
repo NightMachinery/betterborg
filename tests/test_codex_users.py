@@ -11,7 +11,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from telethon.tl.types import (
     Channel,
-    KeyboardButtonRequestPeer,
     MessageActionRequestedPeerSentMe,
     MessageReplyHeader,
     MessageService,
@@ -33,7 +32,7 @@ os.path.expanduser = lambda path: (
 )
 Path.home = classmethod(lambda cls: Path(_TEST_HOME.name))
 
-from uniborg import llm_chat_config
+from uniborg import llm_chat_config, tg_compat
 from uniborg.constants import (
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_GPT_5_6_SOL,
@@ -570,9 +569,10 @@ class CodexUsersTests(unittest.TestCase):
         buttons, page, page_count = llm_chat._codex_users_user_buttons(users, 1)
         flat = [button for row in buttons for button in row]
         self.assertEqual((page, page_count), (1, 3))
-        self.assertTrue(all(len(button.data) <= 64 for button in flat))
-        self.assertTrue(any(button.data in (b"cu:p:0", "cu:p:0") for button in flat))
-        self.assertTrue(any(button.data in (b"cu:p:2", "cu:p:2") for button in flat))
+        payloads = [tg_compat.button_data(button) for button in flat]
+        self.assertTrue(all(len(data) <= 64 for data in payloads))
+        self.assertIn(b"cu:p:0", payloads)
+        self.assertIn(b"cu:p:2", payloads)
 
     def test_picker_model_callback_payloads_fit_telegram_limit(self):
         prefs = SimpleNamespace(model="unknown/current", thinking_by_model={})
@@ -591,8 +591,14 @@ class CodexUsersTests(unittest.TestCase):
         ) as send:
             asyncio.run(llm_chat._show_codex_user_models(event, 123))
         rows = send.await_args.kwargs["buttons"]
-        self.assertTrue(all(len(button.data) <= 64 for row in rows for button in row))
-        labels = [button.text for row in rows for button in row]
+        self.assertTrue(
+            all(
+                len(tg_compat.button_data(button)) <= 64
+                for row in rows
+                for button in row
+            )
+        )
+        labels = [tg_compat.button_text(button) for row in rows for button in row]
         self.assertTrue(any(OPENAI_CODEX_GPT_5_6_SOL in label for label in labels))
 
     def test_picker_shows_full_model_ids_and_current_model_effort(self):
@@ -616,11 +622,8 @@ class CodexUsersTests(unittest.TestCase):
             asyncio.run(llm_chat._show_codex_user_models(event, 123))
 
         flat = [button for row in send.await_args.kwargs["buttons"] for button in row]
-        labels = [button.text for button in flat]
-        callbacks = [
-            button.data.decode() if isinstance(button.data, bytes) else button.data
-            for button in flat
-        ]
+        labels = [tg_compat.button_text(button) for button in flat]
+        callbacks = [tg_compat.button_data_text(button) for button in flat]
         self.assertIn("🧠 buttons set personal reasoning", send.await_args.args[1])
         self.assertIn(f"✅ {OPENAI_CODEX_GPT_5_6_SOL}", labels)
         self.assertEqual(labels.count("✅ 🧠 High"), 1)
@@ -656,7 +659,9 @@ class CodexUsersTests(unittest.TestCase):
             asyncio.run(llm_chat._show_codex_user_models(event, 123))
 
         labels = [
-            button.text for row in send.await_args.kwargs["buttons"] for button in row
+            tg_compat.button_text(button)
+            for row in send.await_args.kwargs["buttons"]
+            for button in row
         ]
         self.assertEqual(labels.count("✅ 🧠 Default (medium)"), 1)
 
@@ -687,11 +692,8 @@ class CodexUsersTests(unittest.TestCase):
         flat = [
             button for row in event.edit.await_args.kwargs["buttons"] for button in row
         ]
-        labels = [button.text for button in flat]
-        callbacks = [
-            button.data.decode() if isinstance(button.data, bytes) else button.data
-            for button in flat
-        ]
+        labels = [tg_compat.button_text(button) for button in flat]
+        callbacks = [tg_compat.button_data_text(button) for button in flat]
         self.assertIn(f"✅ {OPENAI_CODEX_ASTRA}", labels)
         self.assertIn("cu:r:123:max", callbacks)
         self.assertNotIn("cu:r:123:none", callbacks)
@@ -811,7 +813,9 @@ class CodexUsersTests(unittest.TestCase):
 
         self.assertIn("Personal reasoning: High", send.await_args.args[1])
         labels = [
-            button.text for row in send.await_args.kwargs["buttons"] for button in row
+            tg_compat.button_text(button)
+            for row in send.await_args.kwargs["buttons"]
+            for button in row
         ]
         self.assertIn("Model / effort", labels)
 
@@ -839,14 +843,12 @@ class CodexUsersTests(unittest.TestCase):
 
         self.assertNotIn("Personal reasoning:", detail_text)
         flat = [button for row in send.await_args.kwargs["buttons"] for button in row]
-        self.assertFalse(any(button.text.startswith("🧠") for button in flat))
+        self.assertFalse(
+            any(tg_compat.button_text(button).startswith("🧠") for button in flat)
+        )
         self.assertFalse(
             any(
-                (
-                    button.data.decode()
-                    if isinstance(button.data, bytes)
-                    else button.data
-                ).startswith("cu:r:")
+                tg_compat.button_data_text(button).startswith("cu:r:")
                 for button in flat
             )
         )
@@ -882,7 +884,7 @@ class CodexUsersTests(unittest.TestCase):
         )
         for row in send.await_args.kwargs["buttons"]:
             for button in row:
-                self.assertLessEqual(len(button.data), 64)
+                self.assertLessEqual(len(tg_compat.button_data(button)), 64)
 
     def test_overview_omits_unknown_contact_and_empty_key_metadata(self):
         roster = llm_chat_config.CodexUser(123, None, False, False)
@@ -1050,11 +1052,7 @@ class CodexUsersTests(unittest.TestCase):
             button_ids = []
             for row in send.await_args.kwargs["buttons"]:
                 for button in row:
-                    data = (
-                        button.data.decode()
-                        if isinstance(button.data, bytes)
-                        else button.data
-                    )
+                    data = tg_compat.button_data_text(button)
                     if data.startswith("cu:u:"):
                         button_ids.append(int(data.removeprefix("cu:u:")))
             self.assertEqual(text_ids, expected_ids)
@@ -1295,8 +1293,9 @@ class CodexUsersTests(unittest.TestCase):
     def test_add_user_button_is_present(self):
         users = [(llm_chat_config.CodexUser(123, None, True, False), "Ada", "model")]
         rows, _, _ = llm_chat._codex_users_user_buttons(users, 0)
-        self.assertTrue(
-            any(button.data in (b"cu:add", "cu:add") for row in rows for button in row)
+        self.assertIn(
+            b"cu:add",
+            [tg_compat.button_data(button) for row in rows for button in row],
         )
 
     def test_private_picker_markup_requests_one_nonbot_user_and_serializes(self):
@@ -1305,11 +1304,13 @@ class CodexUsersTests(unittest.TestCase):
         self.assertTrue(markup.resize)
         self.assertTrue(markup.single_use)
         choose = markup.rows[0].buttons[0]
-        self.assertIsInstance(choose, KeyboardButtonRequestPeer)
-        self.assertEqual(choose.button_id, -123)
-        self.assertIsInstance(choose.peer_type, RequestPeerTypeUser)
-        self.assertFalse(choose.peer_type.bot)
-        self.assertEqual(choose.max_quantity, 1)
+        self.assertFalse(tg_compat.is_inline_button(choose))
+        spec = tg_compat.request_peer_spec(choose)
+        self.assertIsNotNone(spec)
+        self.assertEqual(spec.button_id, -123)
+        self.assertIsInstance(spec.peer_type, RequestPeerTypeUser)
+        self.assertFalse(spec.peer_type.bot)
+        self.assertEqual(spec.max_quantity, 1)
         self.assertGreater(len(bytes(markup)), 0)
 
     def test_private_prompt_has_picker_while_group_keeps_inline_cancel(self):

@@ -6,7 +6,7 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from uniborg import codex_util, llm_models
+from uniborg import codex_util, llm_models, tg_compat
 from uniborg.constants import (
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_GPT_5_6_LUNA,
@@ -260,8 +260,8 @@ class LunaReserveButtonTests(unittest.TestCase):
     def test_offered_when_a_message_and_an_available_reserve_both_exist(self):
         buttons = self.buttons(usage=_usage_with_reserve())
         self.assertEqual(len(buttons), 1)
-        self.assertIn("Luna Reserve", buttons[0].text)
-        self.assertEqual(_as_text(buttons[0].data), "cq:r:123:99")
+        self.assertIn("Luna Reserve", tg_compat.button_text(buttons[0]))
+        self.assertEqual(tg_compat.button_data_text(buttons[0]), "cq:r:123:99")
 
     def test_not_offered_without_a_message_to_answer(self):
         #: `/codexStatus` has no failed request behind it.
@@ -313,11 +313,6 @@ class LunaReserveButtonTests(unittest.TestCase):
 
         handler.assert_not_awaited()
         self.assertTrue(event.answer.await_args.kwargs["show_alert"])
-
-
-def _as_text(data) -> str:
-    """Callback payloads are bytes in Telethon and str under the test stub."""
-    return data.decode("utf-8") if isinstance(data, bytes) else data
 
 
 def _usage_with_reserve(*, allowed=True):

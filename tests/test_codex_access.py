@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from uniborg import llm_chat_config
+from uniborg import llm_chat_config, tg_compat
 from uniborg.constants import (
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_GPT_5_6_SOL,
@@ -91,11 +91,8 @@ class CodexAccessIntegrationTests(unittest.TestCase):
                 f"model_{llm_chat.bot_util.sanitize_callback_data(key)}"
             ),
         )
-        labels = [button.text for button in buttons]
-        callbacks = [
-            button.data.decode() if isinstance(button.data, bytes) else button.data
-            for button in buttons
-        ]
+        labels = [tg_compat.button_text(button) for button in buttons]
+        callbacks = [tg_compat.button_data_text(button) for button in buttons]
         self.assertIn(
             f"✅ {llm_chat._model_display_name(OPENAI_CODEX_GPT_5_6_SOL)}",
             labels,

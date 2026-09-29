@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from uniborg import tg_compat
 from uniborg.constants import (
     GEMINI_FLASH_LATEST,
     OPENAI_CODEX_ASTRA,
@@ -245,9 +246,9 @@ class MissingFallbackKeyTests(unittest.TestCase):
         self.assertIn(plugin.CODEX_SETTINGS_UNCHANGED, info.await_args.args[1])
 
 
-def _as_text(data) -> str:
-    """Callback payloads are bytes in Telethon and str under the test stub."""
-    return data.decode("utf-8") if isinstance(data, bytes) else data
+def _labels(rows) -> list:
+    """The label of every button in ``rows``, row by row."""
+    return [tg_compat.button_text(button) for row in rows for button in row]
 
 
 def _usage(*, reserve=True, reserve_allowed=False, primary_allowed=False):
@@ -320,24 +321,23 @@ class QuotaPanelTests(unittest.TestCase):
             usage=_usage(reserve_allowed=True),
             source_message_id=99,
         )
-        labels = [button.text for row in panel.buttons for button in row]
+        labels = _labels(panel.buttons)
         self.assertIn("🌙 Answer this from the Luna Reserve", labels)
 
         #: A spent Reserve has nothing to offer, so the button stays away.
         spent = self.panel(quota=self.quota, usage=_usage(), source_message_id=99)
-        spent_labels = [button.text for row in spent.buttons for button in row]
+        spent_labels = _labels(spent.buttons)
         self.assertNotIn("🌙 Answer this from the Luna Reserve", spent_labels)
 
     def test_only_an_active_rule_wears_the_active_icon(self):
         #: `🔁` is a state, not an offer: a button wearing it while nothing had
         #: switched is what made the panel read as though it already had.
         offers = self.panel(quota=self.quota, usage=_usage())
-        for row in offers.buttons:
-            for button in row:
-                self.assertNotIn("🔁", button.text)
+        for label in _labels(offers.buttons):
+            self.assertNotIn("🔁", label)
 
         fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
-        labels = [b.text for row in self.panel(fallback=fallback).buttons for b in row]
+        labels = _labels(self.panel(fallback=fallback).buttons)
         active = [label for label in labels if "🔁" in label]
         self.assertEqual(len(active), 1)
         self.assertIn(plugin._model_display_name(GEMINI_FLASH_LATEST), active[0])
@@ -347,11 +347,11 @@ class QuotaPanelTests(unittest.TestCase):
         #: visible nowhere among the switches.
         fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
         buttons = [b for row in self.panel(fallback=fallback).buttons for b in row]
-        self.assertIn("cq:a:123", [_as_text(b.data) for b in buttons])
+        self.assertIn("cq:a:123", [tg_compat.button_data_text(b) for b in buttons])
 
     def test_the_luna_reserve_is_offered_beside_the_vendor_stand_ins(self):
         panel = self.panel(quota=self.quota, usage=_usage(reserve_allowed=True))
-        labels = [b.text for row in panel.buttons for b in row]
+        labels = _labels(panel.buttons)
         self.assertTrue(
             any("Luna Reserve" in label and "until reset" in label for label in labels),
             labels,
@@ -361,7 +361,7 @@ class QuotaPanelTests(unittest.TestCase):
         for usage in (_usage(), _usage(reserve=False)):
             with self.subTest(usage=usage):
                 panel = self.panel(quota=self.quota, usage=usage)
-                labels = [b.text for row in panel.buttons for b in row]
+                labels = _labels(panel.buttons)
                 self.assertFalse(
                     any("Luna Reserve" in label for label in labels), labels
                 )
@@ -372,8 +372,8 @@ class QuotaPanelTests(unittest.TestCase):
         fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
         panel = self.panel(fallback=fallback)
         flat = [button for row in panel.buttons for button in row]
-        self.assertIn("Switch back", flat[0].text)
-        self.assertEqual(flat[0].data, "cq:u:123")
+        self.assertIn("Switch back", tg_compat.button_text(flat[0]))
+        self.assertEqual(tg_compat.button_data_text(flat[0]), "cq:u:123")
         self.assertIn("Temporary Codex Stand-in Active", panel.text)
 
     def test_idle_panel_reports_meters_without_a_limit(self):
@@ -443,7 +443,7 @@ class QuotaPanelTests(unittest.TestCase):
         self.assertIn("Codex Usage Limit Reached", panel.text)
         self.assertIn("temporarily switched to", panel.text)
 
-        labels = [b.text for row in panel.buttons for b in row]
+        labels = _labels(panel.buttons)
         self.assertTrue(any("Switch back" in label for label in labels), labels)
         self.assertTrue(any("🔁" in label for label in labels), labels)
 
@@ -453,9 +453,7 @@ class QuotaPanelTests(unittest.TestCase):
 
     def recommended_label(self, **kwargs):
         panel = self.panel(**kwargs)
-        starred = [
-            b.text for row in (panel.buttons or []) for b in row if "⭐" in b.text
-        ]
+        starred = [label for label in _labels(panel.buttons or []) if "⭐" in label]
         return panel.text, starred
 
     def test_the_reserve_is_recommended_and_named_in_a_tldr(self):
@@ -511,10 +509,10 @@ class QuotaPanelTests(unittest.TestCase):
         for row in panel.buttons:
             for button in row:
                 self.assertLessEqual(
-                    len(button.data.encode("utf-8")),
-                    plugin.TELEGRAM_CALLBACK_BYTES_LIMIT,
+                    len(tg_compat.button_data(button)),
+                    tg_compat.CALLBACK_DATA_MAX_BYTES,
                 )
-                self.assertIn(":123:", button.data)
+                self.assertIn(":123:", tg_compat.button_data_text(button))
 
     def test_panel_stays_within_the_telegram_message_limit(self):
         panel = self.panel(quota=self.quota, usage=_usage())

@@ -5,7 +5,7 @@ import re
 import unittest
 from unittest.mock import patch
 
-from uniborg import codex_util
+from uniborg import codex_util, tg_compat
 from uniborg.constants import (
     GEMINI_FLASH_LATEST,
     GEMINI_FLASH_LITE_LATEST,
@@ -261,15 +261,8 @@ class LastNContextLimitTests(unittest.TestCase):
             callback_prefix="lastnhere_",
             reset_callback="lastnhere_reset",
         )
-        labels = [button.text for button in buttons]
-        data = [
-            (
-                button.data.decode("utf-8")
-                if isinstance(button.data, bytes)
-                else button.data
-            )
-            for button in buttons
-        ]
+        labels = [tg_compat.button_text(button) for button in buttons]
+        data = [tg_compat.button_data_text(button) for button in buttons]
 
         self.assertIn("✅ Last N: 200", labels)
         self.assertIn("Last N: 800", labels)
