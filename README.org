@@ -118,6 +118,13 @@ Each plugin gets the =borg=, =logger= and =storage= magical [[https://github.com
 ** internals
 The core features offered by the custom =TelegramClient= live under the [[https://github.com/uniborg/uniborg/tree/master/uniborg][=uniborg/=]] directory, with some utilities, enhancements and the core plugin.
 
+** Telegram AI-bot APIs
+Telegram's newer bot features (draft streaming, rich Markdown messages, guest
+mentions in chats the bot is not in, private-chat topics) and how they map onto
+MTProto and Telethon versions are summarized in
+[[file:docs/telegram_ai_apis.md][docs/telegram_ai_apis.md]], along with the
+workarounds considered and why this repo upgrades Telethon instead.
+
 ** all mentions
 =stdplugins/all.py= adds admin-only =.all=/=@all=, =.allf=/=@allf=, and
 =.allIDs=/=@allIDs= commands for mentioning or listing chat participants. These
