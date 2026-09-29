@@ -12,10 +12,7 @@ from typing import Optional, Dict
 
 import google.genai as genai
 from telethon import events
-from telethon.tl.types import (
-    KeyboardButtonCallback,
-    Message,
-)
+from telethon.tl.types import Message
 from pydantic import BaseModel, Field
 
 # Import uniborg utilities
@@ -359,13 +356,11 @@ async def callback_handler(event):
 
         # Update button display
         prefs = user_manager.get_prefs(user_id)
-        buttons = [
-            KeyboardButtonCallback(
-                f"✅ {name}" if key == prefs.model else name,
-                data=f"model_{bot_util.sanitize_callback_data(key)}",
-            )
-            for key, name in MODEL_CHOICES.items()
-        ]
+        buttons = bot_util.option_buttons(
+            MODEL_CHOICES,
+            current_value=prefs.model,
+            callback_prefix="model_",
+        )
         await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer(f"Model set to {MODEL_CHOICES[model_id]}")
 
@@ -374,13 +369,11 @@ async def callback_handler(event):
         user_manager.set_size(user_id, size)
 
         prefs = user_manager.get_prefs(user_id)
-        buttons = [
-            KeyboardButtonCallback(
-                f"✅ {name}" if key == prefs.size else name,
-                data=f"size_{bot_util.sanitize_callback_data(key)}",
-            )
-            for key, name in SIZE_CHOICES.items()
-        ]
+        buttons = bot_util.option_buttons(
+            SIZE_CHOICES,
+            current_value=prefs.size,
+            callback_prefix="size_",
+        )
         await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer(f"Size set to {size}")
 
@@ -389,43 +382,37 @@ async def callback_handler(event):
         user_manager.set_aspect_ratio(user_id, ratio)
 
         prefs = user_manager.get_prefs(user_id)
-        buttons = [
-            KeyboardButtonCallback(
-                f"✅ {name}" if key == prefs.aspect_ratio else name,
-                data=f"ratio_{bot_util.sanitize_callback_data(key)}",
-            )
-            for key, name in ASPECT_RATIO_CHOICES.items()
-        ]
+        buttons = bot_util.option_buttons(
+            ASPECT_RATIO_CHOICES,
+            current_value=prefs.aspect_ratio,
+            callback_prefix="ratio_",
+        )
         await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer(f"Aspect ratio set to {ratio}")
 
     elif data_str.startswith("quality_"):
-        quality = data_str.split("_", 1)[1]
+        quality = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
         user_manager.set_quality(user_id, quality)
 
         prefs = user_manager.get_prefs(user_id)
-        buttons = [
-            KeyboardButtonCallback(
-                f"✅ {name}" if key == prefs.quality else name,
-                data=f"quality_{key}",
-            )
-            for key, name in QUALITY_CHOICES.items()
-        ]
+        buttons = bot_util.option_buttons(
+            QUALITY_CHOICES,
+            current_value=prefs.quality,
+            callback_prefix="quality_",
+        )
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
         await event.answer(f"Quality set to {quality}")
 
     elif data_str.startswith("number_"):
-        number = int(data_str.split("_", 1)[1])
+        number = int(bot_util.unsanitize_callback_data(data_str.split("_", 1)[1]))
         user_manager.set_number(user_id, number)
 
         prefs = user_manager.get_prefs(user_id)
-        buttons = [
-            KeyboardButtonCallback(
-                f"✅ {name}" if key == str(prefs.number) else name,
-                data=f"number_{key}",
-            )
-            for key, name in NUMBER_CHOICES.items()
-        ]
+        buttons = bot_util.option_buttons(
+            NUMBER_CHOICES,
+            current_value=str(prefs.number),
+            callback_prefix="number_",
+        )
         await event.edit(buttons=util.build_menu(buttons, n_cols=2))
         await event.answer(f"Number of images set to {number}")
 

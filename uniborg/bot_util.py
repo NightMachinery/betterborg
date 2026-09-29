@@ -11,9 +11,9 @@ from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.types import BotCommand, BotCommandScopeDefault
 
 from typing import Optional, Dict
-from telethon.tl.types import KeyboardButtonCallback
 
 from uniborg import llm_db
+from uniborg import tg_compat
 from uniborg import util
 from uniborg.constants import BOT_META_INFO_PREFIX
 
@@ -166,6 +166,32 @@ def populate_callback_hash_map(*model_choices_dicts):
 # --- Shared UI Components ---
 
 
+def option_buttons(
+    options: Dict[str, str],
+    *,
+    current_value: str,
+    callback_prefix: str,
+) -> list[tg_compat.CallbackButton]:
+    """
+    One callback button per option, with the current option checked.
+
+    Each button sends `callback_prefix` followed by the sanitized option key;
+    `unsanitize_callback_data` turns the part after the prefix back into the key.
+
+    Args:
+        options: Dict of {value: display_name}
+        current_value: Currently selected value
+        callback_prefix: Prefix for callback data
+    """
+    return [
+        tg_compat.callback_button(
+            f"✅ {display_name}" if key == current_value else display_name,
+            f"{callback_prefix}{sanitize_callback_data(key)}",
+        )
+        for key, display_name in options.items()
+    ]
+
+
 async def present_options(
     event,
     *,
@@ -201,13 +227,11 @@ async def present_options(
 
     if is_bot:
         # Bot mode: show buttons
-        buttons = [
-            KeyboardButtonCallback(
-                f"✅ {display_name}" if key == current_value else display_name,
-                data=f"{callback_prefix}{sanitize_callback_data(key)}",
-            )
-            for key, display_name in options.items()
-        ]
+        buttons = option_buttons(
+            options,
+            current_value=current_value,
+            callback_prefix=callback_prefix,
+        )
 
         title_bold = title if title.startswith("**") else f"**{title}**"
         await event.reply(

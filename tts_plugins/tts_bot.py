@@ -11,9 +11,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 from telethon import events
-from telethon.tl.types import KeyboardButtonCallback
 
-from uniborg import bot_util, llm_db, llm_util, tts_util, util
+from uniborg import bot_util, llm_db, llm_util, tg_compat, tts_util, util
 from uniborg.storage import UserStorage
 
 # --- Bot Configuration ---
@@ -302,16 +301,17 @@ async def key_submission_handler(event):
     )
 
 
+def _voice_options() -> dict[str, str]:
+    return {name: f"{name}: {desc}" for name, desc in tts_util.GEMINI_VOICES.items()}
+
+
 async def gemini_voice_handler(event):
     """Presents the voice selection menu."""
     current_voice = user_manager.get_prefs(event.sender_id).voice
-    voice_options = {
-        name: f"{name}: {desc}" for name, desc in tts_util.GEMINI_VOICES.items()
-    }
     await bot_util.present_options(
         event,
         title="**Choose a TTS Voice**",
-        options=voice_options,
+        options=_voice_options(),
         current_value=current_voice,
         callback_prefix="voice_",
         awaiting_key="voice_selection",
@@ -338,13 +338,11 @@ async def voice_callback_handler(event):
     """Handles the user's voice selection from the inline keyboard."""
     voice = event.data.decode("utf-8").split("_", 1)[1]
     user_manager.set_voice(event.sender_id, voice)
-    buttons = [
-        KeyboardButtonCallback(
-            f"✅ {name}: {desc}" if name == voice else f"{name}: {desc}",
-            data=f"voice_{name}",
-        )
-        for name, desc in tts_util.GEMINI_VOICES.items()
-    ]
+    buttons = bot_util.option_buttons(
+        _voice_options(),
+        current_value=voice,
+        callback_prefix="voice_",
+    )
     try:
         await event.edit(buttons=util.build_menu(buttons, n_cols=3))
     except Exception:
@@ -357,9 +355,9 @@ async def model_callback_handler(event):
     model = event.data.decode("utf-8").split("_", 1)[1]
     user_manager.set_model(event.sender_id, model)
     buttons = [
-        KeyboardButtonCallback(
+        tg_compat.callback_button(
             f"✅ {model}: {desc}" if model == model else f"{model}: {desc}",
-            data=f"model_{model}",
+            f"model_{model}",
         )
         for model, desc in tts_util.TTS_MODELS.items()
     ]
