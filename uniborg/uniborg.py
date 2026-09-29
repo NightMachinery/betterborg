@@ -23,6 +23,7 @@ from uniborg import (
     tts_util,
     llm_db,
     telethon_compat,
+    telethon_safety,
 )
 from .storage import Storage
 from . import hacks
@@ -42,9 +43,12 @@ def _get_env(name, default=None, cast=None):
     return cast(value) if cast else value
 
 
-class Uniborg(TelegramClient):
+class Uniborg(telethon_safety.DifferenceFallbackMixin, TelegramClient):
     # @warn this var can be None in which case send_message will fail and potentially crash the whole program
     log_chat = -1001179162919  # alicization
+
+    #: What the Telegram safety nets have caught; set by `create`.
+    safety_stats = None
 
     @classmethod
     async def create(
@@ -84,6 +88,11 @@ class Uniborg(TelegramClient):
         # We want this in order for the most recently added handler to take
         # precedence
         self._event_builders = hacks.ReverseList()
+
+        #: Here rather than at import: the difference fallback needs this
+        #: client, and importing uniborg (tests, tools) must not patch
+        #: Telethon. It still runs before `_async_init` first connects.
+        self.safety_stats = telethon_safety.install_safety_nets(client=self)
 
         await self._async_init(bot_token=bot_token)
         if log_chat:
