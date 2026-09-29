@@ -24,6 +24,7 @@ from uniborg import (
     llm_db,
     telethon_compat,
     telethon_safety,
+    topics,
 )
 from .storage import Storage
 from . import hacks
@@ -43,7 +44,11 @@ def _get_env(name, default=None, cast=None):
     return cast(value) if cast else value
 
 
-class Uniborg(telethon_safety.DifferenceFallbackMixin, TelegramClient):
+class Uniborg(
+    topics.TopicPlacementMixin,
+    telethon_safety.DifferenceFallbackMixin,
+    TelegramClient,
+):
     # @warn this var can be None in which case send_message will fail and potentially crash the whole program
     log_chat = -1001179162919  # alicization
 
@@ -59,6 +64,7 @@ class Uniborg(telethon_safety.DifferenceFallbackMixin, TelegramClient):
         storage=None,
         bot_token=None,
         log_chat=None,
+        topic_placement=None,
         **kwargs,
     ):
         kwargs = {
@@ -96,6 +102,8 @@ class Uniborg(telethon_safety.DifferenceFallbackMixin, TelegramClient):
             client=self,
             alert=self.send_safety_alert,
         )
+        #: Also before the first connect, so the first updates are filed too.
+        self.topic_placement = topic_placement or topics.TopicPlacement()
 
         await self._async_init(bot_token=bot_token)
         if log_chat:
