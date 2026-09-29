@@ -53,6 +53,7 @@ from telethon.tl.types import (
     KeyboardButtonRow,
     Message,
     MessageActionRequestedPeerSentMe,
+    MessageMediaUnsupported,
     MessageService,
     ReplyKeyboardHide,
     ReplyKeyboardMarkup,
@@ -4424,6 +4425,34 @@ async def _get_forward_metadata_prefix(message: Message) -> str:
     return ""
 
 
+#: Stands in for an unreadable rich message in the LLM's history.
+UNREADABLE_RICH_MESSAGE_PLACEHOLDER = (
+    "[Unreadable message: sent in a rich format this bot cannot read yet]"
+)
+UNREADABLE_RICH_MESSAGE_NOTICE = (
+    "I can't read that message: it was sent in Telegram's rich format "
+    "(for example from the rich text editor), which I can't read yet. "
+    "Please resend it as plain text."
+)
+
+
+def _is_unreadable_rich_message(message) -> bool:
+    """Whether MESSAGE is a Telegram rich message we cannot read the text of.
+
+    Telethon 1.43 (layer 224) receives one as empty text plus
+    `MessageMediaUnsupported`, so it must not be treated as media. Layer 227+
+    carries the content in `rich_message`, which nothing flattens to text yet.
+    MESSAGE may be None or any message-like object.
+    """
+    if getattr(message, "text", None):
+        return False
+
+    return (
+        isinstance(getattr(message, "media", None), MessageMediaUnsupported)
+        or getattr(message, "rich_message", None) is not None
+    )
+
+
 async def _build_reply_quote(
     message: Message, context_messages_by_id: Optional[Dict[int, Message]]
 ) -> str:
@@ -4452,7 +4481,10 @@ async def _build_reply_quote(
         or "Unknown"
     )
     ts = parent.date.isoformat() if parent.date else ""
-    media_id_part = f", Media-ID: {parent.id}" if parent.media else ""
+    parent_unreadable_p = _is_unreadable_rich_message(parent)
+    media_id_part = (
+        f", Media-ID: {parent.id}" if parent.media and not parent_unreadable_p else ""
+    )
     attribution = (
         f"@{sender_name} ({ts}{media_id_part})"
         if ts
@@ -4461,6 +4493,10 @@ async def _build_reply_quote(
 
     parent_text = (parent.text or "").strip()
     if not parent_text:
+        if parent_unreadable_p:
+            return (
+                f"[Replying to {attribution}]:\n> {UNREADABLE_RICH_MESSAGE_PLACEHOLDER}"
+            )
         if parent.media:
             return f"[Replying to {attribution} — media message]"
         return ""
@@ -4705,8 +4741,13 @@ async def _process_message_content(
                 #: By default, `re.sub` replaces all occurrences of the pattern in the string.
             )
 
+    unreadable_rich_p = _is_unreadable_rich_message(message)
+    if unreadable_rich_p:
+        processed_text = UNREADABLE_RICH_MESSAGE_PLACEHOLDER
+    has_media_p = bool(message.media) and not unreadable_rich_p
+
     reply_quote = await _build_reply_quote(message, context_messages_by_id)
-    media_id_tag = f"[Media-ID: {message.id}]" if message.media else ""
+    media_id_tag = f"[Media-ID: {message.id}]" if has_media_p else ""
 
     parts = []
     if metadata_prefix:
@@ -4722,13 +4763,12 @@ async def _process_message_content(
     if processed_text:
         text_buffer.append(processed_text)
 
-    if export_mode:
+    if has_media_p and export_mode:
         # Export mode: create file references without processing
-        if message.media:
-            file_ref = await _create_export_file_reference(message)
-            if file_ref:
-                media_parts.append(file_ref)
-    else:
+        file_ref = await _create_export_file_reference(message)
+        if file_ref:
+            media_parts.append(file_ref)
+    elif has_media_p:
         # Normal mode: process media fully
         media_result = await _process_media(
             message,
@@ -4933,7 +4973,12 @@ async def _process_turns_to_history(
             all_warnings.extend(content_result.warnings)
 
             # Skip messages that have no original text and no processable media.
-            if not message.text and not content_result.media_parts:
+            #: An unreadable rich message keeps its placeholder turn.
+            if (
+                not message.text
+                and not content_result.media_parts
+                and not _is_unreadable_rich_message(message)
+            ):
                 continue
 
             if not content_result.text_parts and not content_result.media_parts:
@@ -9940,7 +9985,11 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     processed by the main chat handler.
     """
     # Universal filters
-    if not (event.text or event.media):
+    if not (
+        event.text
+        or event.media
+        or _is_unreadable_rich_message(getattr(event, "message", None))
+    ):
         return False
     if event.forward:
         return False
@@ -10292,6 +10341,12 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
 
     # Intercept if user is in any waiting state first.
     if llm_db.is_awaiting_key(user_id) or user_id in AWAITING_INPUT_FROM_USERS:
+        return
+
+    #: Before any mode or context transition, so the message has no side effect
+    #: beyond asking for a plain-text resend.
+    if _is_unreadable_rich_message(getattr(event, "message", None)):
+        await send_info_message(event, UNREADABLE_RICH_MESSAGE_NOTICE)
         return
 
     # Intercept for live mode if active

@@ -24,7 +24,12 @@ from datetime import datetime
 from pathlib import Path
 from telethon import events
 from telethon.tl.functions.bots import SetBotCommandsRequest
-from telethon.tl.types import BotCommand, BotCommandScopeDefault
+from telethon.tl.types import (
+    BotCommand,
+    BotCommandScopeDefault,
+    MessageMediaUnsupported,
+    MessageMediaWebPage,
+)
 from pydantic import BaseModel, Field
 from typing import Optional
 
@@ -548,7 +553,22 @@ async def key_submission_handler(event):
     await llm_db.handle_key_submission(event)
 
 
-@borg.on(events.NewMessage(func=lambda e: e.media is not None and e.sender))
+#: Media with nothing to transcribe. On layer 224 a rich message arrives as
+#: empty text plus `MessageMediaUnsupported`, and a link preview would have its
+#: preview photo downloaded and OCR'd.
+NON_TRANSCRIBABLE_MEDIA_TYPES = (MessageMediaUnsupported, MessageMediaWebPage)
+
+
+def is_transcribable_media_event(event) -> bool:
+    """Whether EVENT carries media `media_handler` should transcribe."""
+    return (
+        event.media is not None
+        and not isinstance(event.media, NON_TRANSCRIBABLE_MEDIA_TYPES)
+        and bool(event.sender)
+    )
+
+
+@borg.on(events.NewMessage(func=is_transcribable_media_event))
 async def media_handler(event):
     """
     Handles incoming messages with media. If the user is being prompted for an
