@@ -373,7 +373,7 @@ async def llm_stt(*, cwd, event, model_name=STT_MODELS[0], log=True):
 
         final_output_message = (
             final_output_message
-            or "{italics_marker}No content was generated.{italics_marker}"
+            or f"{italics_marker}No content was generated.{italics_marker}"
         )
         await util.edit_message(
             status_message,
@@ -510,7 +510,9 @@ Here's how to use me:
     await event.reply(help_text, link_preview=False)
 
 
-@borg.on(events.NewMessage(func=lambda e: e.text and e.text.strip() in KNOWN_STRICT_COMMANDS))
+@borg.on(
+    events.NewMessage(func=lambda e: e.text and e.text.strip() in KNOWN_STRICT_COMMANDS)
+)
 async def rotate_keys_handler(event):
     """Toggle Gemini API key rotation (admin-only, undocumented)."""
     user_id = event.sender_id
