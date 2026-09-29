@@ -3134,7 +3134,9 @@ async def _retry_on_no_response_with_reasons(
 
             # Check if we got a meaningful response
             if response_text.strip() or has_image:
-                # Success! Set has_image on the response and return
+                #: The text without the images already sent, so their data URLs
+                #: never reach the placeholder.
+                llm_response.text = response_text
                 llm_response.has_image = has_image
                 return llm_response
 

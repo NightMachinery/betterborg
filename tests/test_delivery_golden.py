@@ -347,6 +347,31 @@ def _serve_from_litellm(stack: ExitStack, stream):
     )
 
 
+def _litellm_completion(content, *, finish_reason=None):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=content), finish_reason=finish_reason
+            )
+        ]
+    )
+
+
+def _serve_litellm_completion(stack: ExitStack, stream):
+    """Serve the timeline's text as one completion, as litellm does with
+    `stream=False`. The scripted clock never moves, since nothing streams."""
+    chunks = [event for _, event in stream.timed_events]
+    completion = _litellm_completion(
+        "".join(chunk.choices[0].delta.content or "" for chunk in chunks),
+        finish_reason=chunks[-1].choices[0].finish_reason if chunks else None,
+    )
+    stack.enter_context(
+        patch.object(
+            plugin.litellm, "acompletion", new=AsyncMock(return_value=completion)
+        )
+    )
+
+
 def _serve_from_client_of(module):
     def serve(stack: ExitStack, stream):
         stack.enter_context(
@@ -370,6 +395,8 @@ class _Backend:
     delta: Callable[[Optional[str]], object]
     done: Callable[[], object]
     serve: Callable[[ExitStack, object], None]
+    #: An image model is called without streaming.
+    image_generation: bool = False
 
 
 LITELLM = _Backend(
@@ -379,6 +406,17 @@ LITELLM = _Backend(
     delta=_litellm_chunk,
     done=lambda: _litellm_chunk(None, finish_reason="stop"),
     serve=_serve_from_litellm,
+)
+#: A litellm image model: the answer's images arrive as `data:image/...` URLs
+#: in the text.
+LITELLM_IMAGE = _Backend(
+    model=_LITELLM_MODEL,
+    service="openrouter",
+    admin=False,
+    delta=_litellm_chunk,
+    done=lambda: _litellm_chunk(None, finish_reason="stop"),
+    serve=_serve_litellm_completion,
+    image_generation=True,
 )
 CODEX = _Backend(
     model=OPENAI_CODEX_GPT_5_6_SOL,
@@ -458,14 +496,15 @@ def _png_b64() -> str:
 # --- Driving chat_handler ---
 
 
-def _text_only_capabilities():
+def _text_only_capabilities(*, image_generation: bool = False):
+    """Text is the only input; images are an output with IMAGE_GENERATION."""
     return {
         "vision": False,
         "audio_input": False,
         "video_input": False,
         "audio_output": False,
         "pdf_input": False,
-        "image_generation": False,
+        "image_generation": image_generation,
     }
 
 
@@ -546,12 +585,14 @@ def _run_chat(
             )
         )
         #: Keeps litellm's model map out of the goldens; text-only means the
-        #: litellm branch streams.
+        #: litellm branch streams, unless the backend generates images.
         enter(
             patch.object(
                 plugin,
                 "get_model_capabilities",
-                return_value=_text_only_capabilities(),
+                return_value=_text_only_capabilities(
+                    image_generation=backend.image_generation
+                ),
             )
         )
         enter(
@@ -707,10 +748,21 @@ class FinalDeliveryGoldenTests(unittest.TestCase):
             ],
         )
 
+    #: A litellm image model's picture, sent before the text is delivered.
+    LITELLM_IMAGE_SENT = (
+        "send_file",
+        _CHAT_ID,
+        {"file": "generated_image.png", "reply_to": _EVENT_ID},
+    )
+
+    def run_litellm_image_answer(self, *texts):
+        timeline = [(0.1 * (i + 1), text) for i, text in enumerate(texts)]
+        return _run_chat(
+            LITELLM_IMAGE, timed_events=_timed_events(LITELLM_IMAGE, timeline)
+        )
+
     def test_image_only_answer_deletes_the_placeholder(self):
-        #: Codex's `.i` image generation, because a litellm image model never
-        #: reaches this branch today: its data URL stays in the answer text
-        #: and is edited into the placeholder.
+        #: Codex's `.i` image generation.
         item = _image_item("image-a", _png_b64())
         calls = _run_chat(
             CODEX,
@@ -732,6 +784,22 @@ class FinalDeliveryGoldenTests(unittest.TestCase):
                 ),
                 PLACEHOLDER_DELETED,
             ],
+        )
+
+    def test_litellm_image_only_answer_deletes_the_placeholder(self):
+        #: The data URL is sent as a file and never edited into the placeholder.
+        calls = self.run_litellm_image_answer(f"data:image/png;base64,{_png_b64()}")
+        self.assertEqual(
+            calls, [PLACEHOLDER_SENT, self.LITELLM_IMAGE_SENT, PLACEHOLDER_DELETED]
+        )
+
+    def test_litellm_image_with_text_edits_in_the_text_alone(self):
+        calls = self.run_litellm_image_answer(
+            "Here it is: ", f"data:image/png;base64,{_png_b64()}"
+        )
+        self.assertEqual(
+            calls,
+            [PLACEHOLDER_SENT, self.LITELLM_IMAGE_SENT, final_edit("Here it is:")],
         )
 
     def test_empty_pioneer_answer_deletes_the_placeholder(self):
