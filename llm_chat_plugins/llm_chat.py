@@ -1407,6 +1407,7 @@ async def load_smart_context_states():
             print(f"LLM_Chat: Loaded {len(keys)} smart context states from Redis")
     except Exception as e:
         print(f"LLM_Chat: Failed to load smart context states from Redis: {e}")
+        redis_util.note_error(e)
 
 
 def get_smart_context_mode(user_id: int) -> str:

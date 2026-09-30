@@ -412,6 +412,7 @@ async def _mark_deleted_redis(chat_id: int, message_ids: List[int]):
         return True
     except Exception as e:
         print(f"HistoryUtil: Redis mark_deleted failed: {e}")
+        redis_util.note_error(e)
         return False
 
 
@@ -484,6 +485,7 @@ async def _write_history_items_redis(chat_id: int, items: List[HistoryItem]) -> 
         return True
     except Exception as e:
         print(f"HistoryUtil: Redis write history failed: {e}")
+        redis_util.note_error(e)
         return False
 
 

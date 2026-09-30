@@ -10,8 +10,11 @@ used across different plugins and utilities.
 """
 
 from pynight.common_icecream import ic
+import asyncio
 import os
-from typing import Optional
+import time
+from typing import Callable, Optional
+import weakref
 from datetime import datetime
 
 try:
@@ -22,8 +25,12 @@ except ImportError:
     redis = None
     REDIS_AVAILABLE = False
 
+from . import redis_auth
+
 # --- Configuration ---
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+#: Kept for compatibility. Connecting reads the environment afresh through
+#: `redis_auth.settings_from_env`; see docs/redis.md.
+REDIS_URL = os.environ.get("REDIS_URL", redis_auth.DEFAULT_REDIS_URL)
 REDIS_EXPIRE_DURATION = int(
     os.environ.get("BORG_REDIS_EXPIRE_DURATION", "3600")
 )  # 1 hour default
@@ -34,29 +41,109 @@ REDIS_VERY_LONG_EXPIRE_DURATION = int(
     os.environ.get("BORG_REDIS_VERY_LONG_EXPIRE_DURATION", "15552000")
 )  # 6 months default
 FALLBACK_TO_MEMORY = True  # Fallback to in-memory storage if Redis fails
+#: After a failed connection attempt, `get_redis` returns None for this many
+#: seconds without trying again, so an unreachable Redis costs one attempt per
+#: window rather than one per call.
+RECONNECT_BACKOFF_SECONDS = float(os.environ.get("BORG_REDIS_RECONNECT_BACKOFF", "30"))
 
 # --- Connection Management ---
-_redis_client: Optional[redis.Redis] = None
+_redis_client: Optional["redis.Redis"] = None
+_last_failure_at: Optional[float] = None
+#: One lock per event loop: an asyncio.Lock belongs to the loop it first
+#: waits on, and the tests run many loops.
+_connect_locks: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_background_tasks: set = set()
 
 
-async def get_redis() -> Optional[redis.Redis]:
-    """Get or create Redis connection."""
-    global _redis_client
+def _connect_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _connect_locks.get(loop)
+    if lock is None:
+        lock = _connect_locks[loop] = asyncio.Lock()
+    return lock
+
+
+def _in_backoff(now: float) -> bool:
+    return (
+        _last_failure_at is not None
+        and now - _last_failure_at < RECONNECT_BACKOFF_SECONDS
+    )
+
+
+async def get_redis(
+    *,
+    settings: Optional["redis_auth.RedisAuthSettings"] = None,
+    from_url: Optional[Callable] = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> Optional["redis.Redis"]:
+    """Get or create the shared Redis connection.
+
+    `settings` defaults to `redis_auth.settings_from_env()`, and `from_url` to
+    `redis.asyncio.from_url`. The client is cached only once it has answered
+    PING, so a failed attempt leaves nothing behind for later calls to trip on.
+    """
+    global _redis_client, _last_failure_at
     if not REDIS_AVAILABLE:
         return None
+    if _redis_client is not None:
+        return _redis_client
+    if _in_backoff(clock()):
+        return None
 
-    if _redis_client is None:
+    async with _connect_lock():
+        #: Whoever held the lock before us may have connected, or failed.
+        if _redis_client is not None:
+            return _redis_client
+        if _in_backoff(clock()):
+            return None
+
         try:
-            _redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-            # Test connection
-            await _redis_client.ping()
+            connection = await redis_auth.connect(
+                redis_auth.settings_from_env() if settings is None else settings,
+                from_url=from_url or redis.from_url,
+            )
         except Exception as e:
+            _last_failure_at = clock()
             print(f"RedisUtil: Failed to connect to Redis: {e}")
             if not FALLBACK_TO_MEMORY:
                 raise
             return None
 
-    return _redis_client
+        _redis_client = connection.client
+        _last_failure_at = None
+        print(f"RedisUtil: Connected to Redis via {connection.source}")
+        if connection.warning:
+            print(f"RedisUtil: Warning: {connection.warning}")
+        return _redis_client
+
+
+def note_error(e: BaseException) -> None:
+    """Drop the shared client if `e` says Redis rejected its credentials.
+
+    Redis forgets the bots' ACL user when it restarts, since nothing persists
+    it, and from then on every reconnect fails authentication. Dropping the
+    client makes the next `get_redis` connect afresh, which provisions the
+    user again. Call this from every `except` around a Redis command.
+    """
+    global _redis_client
+    if not isinstance(e, redis_auth.AuthenticationError):
+        return
+    client, _redis_client = _redis_client, None
+    if client is None:
+        return
+    print("RedisUtil: Redis rejected our credentials; reconnecting on next use")
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    task = loop.create_task(redis_auth.close_quietly(client))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+def _report_failure(what: str, e: Exception) -> None:
+    print(f"RedisUtil: {what}: {e}")
+    note_error(e)
 
 
 async def close_redis():
@@ -117,7 +204,7 @@ async def set_with_expiry(key: str, value: str, *, expire_seconds: int = None) -
         await redis_client.set(key, value, ex=expire_seconds or REDIS_EXPIRE_DURATION)
         return True
     except Exception as e:
-        print(f"RedisUtil: Failed to set key {key}: {e}")
+        _report_failure(f"Failed to set key {key}", e)
         return False
 
 
@@ -136,7 +223,7 @@ async def get_and_renew(
             await redis_client.expire(key, expire_seconds or REDIS_EXPIRE_DURATION)
         return value
     except Exception as e:
-        print(f"RedisUtil: Failed to get key {key}: {e}")
+        _report_failure(f"Failed to get key {key}", e)
         return None
 
 
@@ -150,7 +237,7 @@ async def delete_key(key: str) -> bool:
         await redis_client.delete(key)
         return True
     except Exception as e:
-        print(f"RedisUtil: Failed to delete key {key}: {e}")
+        _report_failure(f"Failed to delete key {key}", e)
         return False
 
 
@@ -164,7 +251,7 @@ async def expire_key(key: str, *, expire_seconds: int = None) -> bool:
         await redis_client.expire(key, expire_seconds or REDIS_EXPIRE_DURATION)
         return True
     except Exception as e:
-        print(f"RedisUtil: Failed to set expiry for key {key}: {e}")
+        _report_failure(f"Failed to set expiry for key {key}", e)
         return False
 
 
@@ -187,7 +274,7 @@ async def hset_with_expiry(
         await pipe.execute()
         return True
     except Exception as e:
-        print(f"RedisUtil: Failed to set hash {key}: {e}")
+        _report_failure(f"Failed to set hash {key}", e)
         return False
 
 
@@ -206,7 +293,7 @@ async def hgetall_and_renew(
             await redis_client.expire(key, expire_seconds or REDIS_EXPIRE_DURATION)
         return data if data else None
     except Exception as e:
-        print(f"RedisUtil: Failed to get hash {key}: {e}")
+        _report_failure(f"Failed to get hash {key}", e)
         return None
 
 
@@ -233,7 +320,7 @@ async def zadd_with_limit_and_expiry(
         await pipe.execute()
         return True
     except Exception as e:
-        print(f"RedisUtil: Failed to add to sorted set {key}: {e}")
+        _report_failure(f"Failed to add to sorted set {key}", e)
         return False
 
 
@@ -251,7 +338,7 @@ async def zrange_and_renew(
             await redis_client.expire(key, expire_seconds or REDIS_EXPIRE_DURATION)
         return data
     except Exception as e:
-        print(f"RedisUtil: Failed to get sorted set range {key}: {e}")
+        _report_failure(f"Failed to get sorted set range {key}", e)
         return []
 
 

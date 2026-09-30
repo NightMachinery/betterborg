@@ -149,6 +149,14 @@ recent activities with their zones. A database recorded without zones can be
 migrated with =python3 uniborg/timetracker_tz.py migrate=. See
 [[file:docs/timetracker.md][docs/timetracker.md]].
 
+** Redis
+The bots keep history and caches in Redis under =borg:*= keys, as their own
+ACL user =borg=, which may touch only those keys and no dangerous commands.
+When the admin secret is available (=REDISCLI_AUTH= or =~/.redis-auth=), the
+first bot start creates the user and its secret file =~/.borg/redis-auth=,
+and the bots recreate the user whenever a Redis restart has forgotten it, so
+a fresh server needs no manual steps. See [[file:docs/redis.md][docs/redis.md]].
+
 ** all mentions
 =stdplugins/all.py= adds admin-only =.all=/=@all=, =.allf=/=@allf=, and
 =.allIDs=/=@allIDs= commands for mentioning or listing chat participants. These
