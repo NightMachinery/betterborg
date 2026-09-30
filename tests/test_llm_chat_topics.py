@@ -633,9 +633,22 @@ class ThreadContextTests(_BotChatCase):
         )
         self.assertEqual(self.context_of(CONVERSATION[-1])[1], THREAD_IDS)
 
-    def test_the_last_n_limit_caps_the_thread(self):
-        self.prefs.last_n_messages_limit = 3
+    def test_the_topic_limit_caps_the_thread(self):
+        self.prefs.thread_last_n_messages_limit = 3
         self.assertEqual(self.context_of(CONVERSATION[-1])[1], [334, 335, 336])
+
+    def test_the_last_n_limit_does_not_cap_the_thread(self):
+        self.prefs.last_n_messages_limit = 2
+        self.assertEqual(self.context_of(CONVERSATION[-1])[1], THREAD_IDS)
+
+    def test_the_topic_limit_defaults_to_its_own_default(self):
+        self.assertEqual(
+            plugin._get_effective_thread_last_n_limit(USER_ID),
+            plugin.THREAD_LAST_N_MESSAGES_LIMIT,
+        )
+        self.assertEqual(plugin.THREAD_LAST_N_MESSAGES_LIMIT, 200)
+        self.prefs.last_n_messages_limit = 50
+        self.assertEqual(plugin._get_effective_thread_last_n_limit(USER_ID), 200)
 
     def test_an_explicit_reply_in_the_topic_still_gets_the_whole_thread(self):
         reply = _said(337, "Back to chaining?", parent=331)
@@ -643,14 +656,14 @@ class ThreadContextTests(_BotChatCase):
         self.assertEqual(self.context_of(reply)[1], THREAD_IDS + [337])
 
     def test_an_explicit_reply_beyond_the_cap_brings_its_chain(self):
-        self.prefs.last_n_messages_limit = 2
+        self.prefs.thread_last_n_messages_limit = 2
         reply = _said(337, "Back to chaining?", parent=331)
         self.see(reply)
         self.assertEqual(self.context_of(reply)[1], [330, 331, 336, 337])
 
-    def test_a_separator_starts_the_thread_afresh(self):
+    def test_a_separator_does_not_cut_the_thread(self):
         self.see(_said(337, "---"), _said(338, "New question."))
-        self.assertEqual(self.context_of(self.chat.by_id[338])[1], [338])
+        self.assertEqual(self.context_of(self.chat.by_id[338])[1], THREAD_IDS + [338])
 
     def test_messages_recorded_before_topics_were_are_left_out(self):
         #: A legacy item: in the topic by its header, recorded without a topic.
@@ -682,7 +695,7 @@ class ThreadContextModeTests(_BotChatCase):
         self.assertEqual(self.smart_state, {USER_ID: "until_separator"})
         self.info.assert_not_awaited()
 
-    def test_a_separator_in_a_topic_clears_it_and_is_not_answered(self):
+    def test_a_separator_in_a_topic_is_explained_and_not_answered(self):
         self.prefs.context_mode = "smart"
         self.smart_state[USER_ID] = "reply_chain"
         self.assertIsNone(self.mode_for(_said(330, "---")))
@@ -735,7 +748,7 @@ class OutsideTopicsContextTests(_BotChatCase):
 
 class ThreadStatusTests(_BotChatCase):
     IN_TOPIC_STATUS = (
-        "∙ **Current Mode:** `Topic Thread (Limit: 100)`\n"
+        "∙ **Current Mode:** `Topic Thread (Limit: 200)`\n"
         "∙ **Source:** This is a private topic, and inside private topics I "
         "always use the topic's own messages.\n"
         "∙ **Outside Topics:** `Reply Chain`, from your **personal default** "
@@ -798,6 +811,11 @@ class ThreadStatusTests(_BotChatCase):
         )
         return menu.text
 
+    def menu(self, message, *, kind="private"):
+        return asyncio.run(
+            plugin._personal_context_mode_menu(self.event(message), kind)
+        )
+
     def test_the_private_menu_notes_the_thread_only_in_a_topic(self):
         in_topic = self.menu_text(_said(330, "/contextMode"))
         outside = self.menu_text(_said(330, "/contextMode", top_id=None, parent=None))
@@ -808,7 +826,25 @@ class ThreadStatusTests(_BotChatCase):
             f"{plugin._format_personal_last_n_menu_text(USER_ID, USER_ID)}",
         )
         self.assertEqual(
-            in_topic.replace(f"{plugin.THREAD_CONTEXT_MENU_NOTE}\n\n", ""), outside
+            in_topic.replace(f"{plugin.THREAD_CONTEXT_MENU_NOTE}\n\n", "").replace(
+                f"\n\n{plugin._format_thread_last_n_menu_text(USER_ID)}", ""
+            ),
+            outside,
+        )
+
+    def test_the_private_menu_offers_the_topic_limit_only_in_a_topic(self):
+        def labels(menu):
+            return [button.text for row in menu.buttons for button in row]
+
+        in_topic = labels(self.menu(_said(330, "/contextMode")))
+        outside = labels(
+            self.menu(_said(330, "/contextMode", top_id=None, parent=None))
+        )
+        topic_picks = [label for label in in_topic if "Topic N" in label]
+        self.assertIn("✅ Topic N: 200", topic_picks)
+        self.assertEqual(len(topic_picks), len(plugin.LAST_N_QUICK_PICK_LIMITS))
+        self.assertEqual(
+            [label for label in in_topic if label not in topic_picks], outside
         )
 
     def test_the_group_menu_has_no_note(self):
@@ -839,7 +875,7 @@ class ThreadStatusTests(_BotChatCase):
         return self.info.await_args.args[1]
 
     def test_status_shows_the_thread_only_in_a_topic(self):
-        line = "• **In This Topic:** `Topic Thread (Limit: 100)`"
+        line = "• **In This Topic:** `Topic Thread (Limit: 200)`"
         in_topic = self.status_message(_said(330, "/status"))
         outside = self.status_message(_said(330, "/status", top_id=None, parent=None))
         self.assertIn(line, in_topic)
@@ -848,6 +884,44 @@ class ThreadStatusTests(_BotChatCase):
             part for part in in_topic.splitlines(True) if "In This Topic" not in part
         )
         self.assertEqual(without_line, outside)
+
+
+class ThreadLimitCommandTests(_BotChatCase):
+    def setUp(self):
+        super().setUp()
+        save = patch.object(plugin.user_manager, "_save_prefs")
+        self.save = save.start()
+        self.addCleanup(save.stop)
+
+    def command(self, handler, argument=None):
+        event = SimpleNamespace(
+            sender_id=USER_ID,
+            pattern_match=SimpleNamespace(group=lambda i: argument),
+            reply=AsyncMock(),
+        )
+        asyncio.run(handler(event))
+        return event.reply.await_args.args[0]
+
+    def test_set_get_and_reset(self):
+        self.command(plugin.set_thread_last_n_handler, "300")
+        self.assertEqual(self.prefs.thread_last_n_messages_limit, 300)
+        self.assertIsNone(self.prefs.last_n_messages_limit)
+        self.assertIn("300", self.command(plugin.get_thread_last_n_handler))
+        self.command(plugin.set_thread_last_n_handler, "reset")
+        self.assertIsNone(self.prefs.thread_last_n_messages_limit)
+        self.assertIn("200", self.command(plugin.get_thread_last_n_handler))
+
+    def test_bad_limits_are_refused(self):
+        for argument in ("1", "abc", str(plugin.LAST_N_MAX + 1)):
+            with self.subTest(argument=argument):
+                reply = self.command(plugin.set_thread_last_n_handler, argument)
+                self.assertIn("valid number", reply)
+                self.assertIsNone(self.prefs.thread_last_n_messages_limit)
+        self.assertIn("Usage", self.command(plugin.set_thread_last_n_handler))
+
+    def test_the_commands_are_registered_with_telegram(self):
+        commands = {c["command"] for c in plugin.BOT_COMMANDS}
+        self.assertLessEqual({"setthreadlastn", "getthreadlastn"}, commands)
 
 
 if __name__ == "__main__":

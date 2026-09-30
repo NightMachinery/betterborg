@@ -146,12 +146,18 @@ What the thread holds:
 
 - The topic's own messages, the user's and the bot's, oldest first: the
   latest N the recorded history holds for that topic, plus the message being
-  answered. N is the Last N limit (`/setLastN`, `/setLastNHere` or the menu
-  buttons, 100 by default; see `docs/llm_chat_last_n_context.md`).
-- A message whose text is only `---` starts the thread afresh. The bot
-  answers it with "Context cleared", and later messages in that topic see
-  only what came after it. Smart mode's per-user state is neither switched
-  nor used inside a topic.
+  answered. N is the *topic limit*, 200 by default. It is separate from the
+  Last N limit (`docs/llm_chat_last_n_context.md`), which only applies
+  outside topics: `/setThreadLastN N` sets a personal topic limit,
+  `/setThreadLastN reset` clears it, `/getThreadLastN` shows it, and the
+  `/contextMode` menu offers quick picks when opened inside a topic. There is
+  no per-chat override, since private topics only exist in the user's own
+  chat with the bot.
+- A separator does nothing inside a topic. The topic is one conversation, so
+  a message whose text is only `---` does not cut the thread, is not sent to
+  the model, and is left out of the thread; the bot answers that it does
+  nothing there and that a new topic starts fresh. Smart mode's per-user
+  state is neither switched nor used inside a topic.
 - An explicit reply brings its reply chain when "Include Reply Chain" is on,
   as in the other modes. A reply to a message inside the thread adds
   nothing; a reply to one older than the cap brings that message back.
@@ -175,10 +181,10 @@ the topic, would also cover history recorded before topics were, but it
 costs up to 50 `getMessages` calls per answer (5000 ids, 100 per call).
 Recording costs nothing per answer.
 
-Where it shows. `/status` adds an "In This Topic" line. `/contextModeHere`
+Where it shows. `/status` adds an "In This Topic" line with the topic limit. `/contextModeHere`
 and `/getContextModeHere` report `Topic Thread` and name the mode that
 applies outside topics, and the `/contextMode` menu notes that its choice
-applies outside topics. A button pressed on such a menu carries no header, so
+applies outside topics and adds the topic limit's quick picks. A button pressed on such a menu carries no header, so
 the menu's topic comes from the registry, or from loading the menu message
 once after a restart.
 
@@ -209,7 +215,7 @@ once after a restart.
   never received or sent through the recorded paths is missing. Items
   recorded before topics were recorded have no topic, so a topic already
   running when this shipped starts its thread at the first message after
-  that. The thread is also capped twice: at the Last N limit, and by the
+  that. The thread is also capped twice: at the topic limit, and by the
   5000 items the recorded history keeps per chat across all its topics.
 - **Without Redis, threads do not survive a restart.** The recorded history
   then lives in memory, so a restart empties every thread; the next message

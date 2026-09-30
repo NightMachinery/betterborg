@@ -1103,6 +1103,10 @@ CANCEL_KEYWORDS = ["cancel"]
 RESET_KEYWORDS = ["not set", "none", "clear", "remove", "reset"]
 
 LAST_N_MESSAGES_LIMIT = 100
+#: The default limit of thread context, which a private topic uses instead of
+#: the context mode. It is separate from the Last N limit: `/setThreadLastN`
+#: sets a personal one.
+THREAD_LAST_N_MESSAGES_LIMIT = 200
 LAST_N_QUICK_PICK_LIMITS = (50, 100, 200, 400, 800)
 HISTORY_MESSAGE_LIMIT = 1000
 REPLY_QUOTE_MAX_CHARS = 120
@@ -1129,19 +1133,22 @@ CONTEXT_MODE_NAMES = {
 CONTEXT_MODES = list(CONTEXT_MODE_NAMES.keys())
 #: *Thread context*: what a bot uses for a message in a private topic,
 #: whatever the context mode. It is the topic's own recorded messages, oldest
-#: first, up to the Last N limit and after the topic's last separator. It is
-#: not in CONTEXT_MODES, since nobody chooses it.
+#: first, up to the topic limit (`_get_effective_thread_last_n_limit`). A
+#: separator does not cut it: a topic is one conversation. It is not in
+#: CONTEXT_MODES, since nobody chooses it.
 THREAD_CONTEXT_MODE = "thread"
 THREAD_CONTEXT_MODE_NAME = "Topic Thread"
 THREAD_CONTEXT_MENU_NOTE = (
     f"**In private topics:** I always use the topic's own messages "
-    f"(`{THREAD_CONTEXT_MODE_NAME}`), up to the Last N limit below. "
+    f"(`{THREAD_CONTEXT_MODE_NAME}`), up to the topic limit below. "
     "The mode you pick here applies outside topics."
 )
 THREAD_SEPARATOR_REPLY = (
-    "Context cleared. The conversation in this topic will start fresh "
-    "from your next message."
+    f"`{CONTEXT_SEPARATOR}` does nothing inside a topic: I always use this "
+    "topic's own messages, up to your topic limit (/setThreadLastN). "
+    "To start fresh, open a new topic."
 )
+THREAD_LAST_N_CALLBACK_PREFIX = "lastn_thread_"
 GROUP_ACTIVATION_MODES = {
     "mention_only": "Mention Only",
     "mention_and_reply": "Mention and Replies",
@@ -1234,6 +1241,14 @@ BOT_COMMANDS = [
     {
         "command": "setlastnhere",
         "description": "Set 'Last N' message limit for this chat",
+    },
+    {
+        "command": "setthreadlastn",
+        "description": "Set how many messages of a private topic I read",
+    },
+    {
+        "command": "getthreadlastn",
+        "description": "View your private-topic message limit",
     },
     {
         "command": "getlastnhere",
@@ -1645,6 +1660,7 @@ class UserPrefs(BaseModel):
     tts_global_voice: str = Field(default=tts_util.DEFAULT_VOICE)
     live_model: str = Field(default="gemini-2.5-flash-preview-native-audio-dialog")
     last_n_messages_limit: Optional[int] = Field(default=None)
+    thread_last_n_messages_limit: Optional[int] = Field(default=None)
     include_reply_chain: bool = Field(default=True)
     #: A temporary, per-user redirect away from saved Codex defaults while both
     #: the plan allowance and the Luna Reserve are spent. Epoch seconds, not a
@@ -1797,6 +1813,14 @@ class UserManager:
     def set_last_n_messages_limit(self, user_id: int, limit: Optional[int]):
         prefs = self.get_prefs(user_id)
         prefs.last_n_messages_limit = limit
+        self._save_prefs(user_id, prefs)
+
+    def get_thread_last_n_messages_limit(self, user_id: int) -> Optional[int]:
+        return self.get_prefs(user_id).thread_last_n_messages_limit
+
+    def set_thread_last_n_messages_limit(self, user_id: int, limit: Optional[int]):
+        prefs = self.get_prefs(user_id)
+        prefs.thread_last_n_messages_limit = limit
         self._save_prefs(user_id, prefs)
 
     def toggle_include_reply_chain(self, user_id: int) -> bool:
@@ -2033,6 +2057,26 @@ def _get_effective_last_n_limit(chat_id: int, user_id: int) -> int:
     return LAST_N_MESSAGES_LIMIT
 
 
+def _get_effective_thread_last_n_limit(user_id: int) -> int:
+    """The topic limit: the user's own, else `THREAD_LAST_N_MESSAGES_LIMIT`.
+
+    There is no chat override, since private topics live only in the user's
+    own chat with the bot.
+    """
+    user_limit = user_manager.get_thread_last_n_messages_limit(user_id)
+    if user_limit is not None:
+        return user_limit
+    return THREAD_LAST_N_MESSAGES_LIMIT
+
+
+def _parse_last_n_limit(text: str) -> int:
+    """TEXT as a limit; ValueError unless it is an integer from 2 to LAST_N_MAX."""
+    limit = int(text)
+    if not (1 < limit <= LAST_N_MAX):
+        raise ValueError("Limit out of range.")
+    return limit
+
+
 def _get_last_n_limit_status(chat_id: int, user_id: int) -> dict:
     """Return Last-N chat/user/effective values plus a human-readable source."""
     chat_limit = chat_manager.get_last_n_messages_limit(chat_id)
@@ -2072,6 +2116,14 @@ def _format_personal_last_n_menu_text(chat_id: int, user_id: int) -> str:
         f"• **Personal default:** {personal}\n"
         f"• **Effective here:** `{status['effective_limit']}` ({status['source']})"
     )
+
+
+def _format_thread_last_n_menu_text(user_id: int) -> str:
+    personal = _format_last_n_optional_limit(
+        user_manager.get_thread_last_n_messages_limit(user_id),
+        default_label=f"Default (`{THREAD_LAST_N_MESSAGES_LIMIT}`)",
+    )
+    return f"**Topic Limit**\n• **Personal:** {personal}"
 
 
 def _format_chat_last_n_menu_text(chat_id: int, user_id: int) -> str:
@@ -2117,11 +2169,12 @@ def _build_last_n_limit_buttons(
     callback_prefix: str,
     reset_callback: Optional[str] = None,
     reset_label: str = "Reset Last N",
+    label: str = "Last N",
 ) -> list:
     """Build quick-pick buttons for Last-N message limits."""
     buttons = [
         tg_compat.callback_button(
-            f"{'✅ ' if limit == current_limit else ''}Last N: {limit}",
+            f"{'✅ ' if limit == current_limit else ''}{label}: {limit}",
             data=f"{callback_prefix}{limit}",
         )
         for limit in LAST_N_QUICK_PICK_LIMITS
@@ -2159,6 +2212,25 @@ def _build_personal_context_mode_menu(
     )
     return [[button] for button in context_buttons] + util.build_menu(
         last_n_buttons, n_cols=3
+    )
+
+
+def _build_thread_last_n_buttons(user_id: int) -> list:
+    """Quick picks for the topic limit, three to a row."""
+    user_limit = user_manager.get_thread_last_n_messages_limit(user_id)
+    return util.build_menu(
+        _build_last_n_limit_buttons(
+            current_limit=_get_effective_thread_last_n_limit(user_id),
+            callback_prefix=THREAD_LAST_N_CALLBACK_PREFIX,
+            reset_callback=(
+                f"{THREAD_LAST_N_CALLBACK_PREFIX}reset"
+                if user_limit is not None
+                else None
+            ),
+            reset_label=f"Reset Topic N (Default {THREAD_LAST_N_MESSAGES_LIMIT})",
+            label="Topic N",
+        ),
+        n_cols=3,
     )
 
 
@@ -2205,7 +2277,7 @@ async def _personal_context_mode_menu(event, kind: str) -> MenuContent:
     """The /contextMode (KIND "private") or /groupContextMode ("group") menu.
 
     Inside a private topic the private menu says that the topic thread
-    replaces the mode chosen there.
+    replaces the mode chosen there, and offers the topic limit.
     """
     prefs = user_manager.get_prefs(event.sender_id)
     if kind == "group":
@@ -2233,9 +2305,15 @@ async def _personal_context_mode_menu(event, kind: str) -> MenuContent:
         last_n_callback_prefix=last_n_callback_prefix,
     )
     text = f"{BOT_META_INFO_PREFIX}**{title}**\n\n"
-    if kind == "private" and await _thread_topic_id_for_display(event) is not None:
+    in_topic = (
+        kind == "private" and await _thread_topic_id_for_display(event) is not None
+    )
+    if in_topic:
         text += f"{THREAD_CONTEXT_MENU_NOTE}\n\n"
     text += _format_personal_last_n_menu_text(event.chat_id, event.sender_id)
+    if in_topic:
+        text += f"\n\n{_format_thread_last_n_menu_text(event.sender_id)}"
+        buttons = buttons + _build_thread_last_n_buttons(event.sender_id)
     return MenuContent(text=text, buttons=buttons)
 
 
@@ -4161,7 +4239,7 @@ async def _get_context_mode_status_text(event) -> str:
         return "\n".join(
             [
                 "∙ **Current Mode:** "
-                f"`{_thread_mode_display_name(effective_last_n_limit)}`",
+                f"`{_thread_mode_display_name(_get_effective_thread_last_n_limit(user_id))}`",
                 "∙ **Source:** This is a private topic, and inside private "
                 "topics I always use the topic's own messages.",
                 f"∙ **Outside Topics:** `{mode_name}`, from {source_text}.",
@@ -5241,14 +5319,15 @@ def _thread_messages(messages: List[Message], *, topic_id: int) -> List[Message]
     """The MESSAGES that are content of private topic TOPIC_ID.
 
     The history filed each message under a topic, but a loaded message's own
-    header has the last word. Service messages, such as the topic's root,
-    are not content.
+    header has the last word. Service messages, such as the topic's root, are
+    not content, and neither are separators, which do nothing in a topic.
     """
     return [
         message
         for message in messages
         if not isinstance(message, MessageService)
         and topics.private_message_topic_id(message) == topic_id
+        and not (message.text and message.text.strip() == CONTEXT_SEPARATOR)
     ]
 
 
@@ -5356,7 +5435,9 @@ async def build_conversation_history(
             if thread_topic_id is None:
                 raise ValueError("Thread context needs a message in a private topic")
             message_ids = await history_util.get_last_n_topic_ids(
-                chat_id, thread_topic_id, n=effective_last_n_limit
+                chat_id,
+                thread_topic_id,
+                n=_get_effective_thread_last_n_limit(user_id),
             )
         elif context_mode == "recent":
             now = datetime.now(timezone.utc)
@@ -5376,8 +5457,8 @@ async def build_conversation_history(
                 if context_mode == "until_separator":
                     messages_to_process = _after_last_separator(fetched_messages)
                 elif context_mode == THREAD_CONTEXT_MODE:
-                    messages_to_process = _after_last_separator(
-                        _thread_messages(fetched_messages, topic_id=thread_topic_id)
+                    messages_to_process = _thread_messages(
+                        fetched_messages, topic_id=thread_topic_id
                     )
                 else:  # last_N and recent
                     messages_to_process = fetched_messages
@@ -5690,6 +5771,18 @@ def register_handlers():
     )(get_last_n_here_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^/setthreadlastn{bot_username_suffix_re}(?:\s+(.*))?$",
+            func=lambda e: e.is_private,
+        )
+    )(set_thread_last_n_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/getthreadlastn{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(get_thread_last_n_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/contextmode{bot_username_suffix_re}\s*$",
             func=lambda e: e.is_private,
         )
@@ -5986,7 +6079,7 @@ I remember our conversations based on your chosen settings. You can configure th
   - `Reply Chain (Default)`: Only messages in the current reply thread.
   - `Until Separator`: The reply chain up to a message containing only `{CONTEXT_SEPARATOR}`.
   - `Last N Messages`: The most recent messages in the chat. The default limit is `{LAST_N_MESSAGES_LIMIT}`, and `/contextMode`, `/groupContextMode`, and `/contextModeHere` include quick buttons for `{", ".join(map(str, LAST_N_QUICK_PICK_LIMITS))}`.
-  - `{THREAD_CONTEXT_MODE_NAME}`: Used inside a private topic, whatever the mode: the topic's own messages since its last `{CONTEXT_SEPARATOR}`, up to the Last N limit.
+  - `{THREAD_CONTEXT_MODE_NAME}`: Used inside a private topic, whatever the mode: the topic's own messages, up to the topic limit (default `{THREAD_LAST_N_MESSAGES_LIMIT}`, set with /setThreadLastN). `{CONTEXT_SEPARATOR}` does nothing there; open a new topic to start fresh.
 
 - **Metadata Mode:** This controls *how* messages are formatted for the AI.
   - `No Metadata`: Merges consecutive messages and adds no extra info.
@@ -6013,6 +6106,8 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /getLastN: View your default 'Last N' message limit.
 - /setLastNHere: Set 'Last N' message limit for this chat (overrides personal/default).
 - /getLastNHere: View this chat's effective 'Last N' limit.
+- /setThreadLastN: Set how many messages of a private topic I read (default: `{THREAD_LAST_N_MESSAGES_LIMIT}`).
+- /getThreadLastN: View your private-topic message limit.
 - /contextMode: Change how **private** chat history is gathered.
 - /groupContextMode: Change how **group** chat history is gathered.
 - /metadataMode: Change how **private** chat metadata is handled.
@@ -6230,8 +6325,9 @@ async def status_handler(event):
     if _thread_topic_id(event) is not None:
         thread_status_line = (
             "• **In This Topic:** "
-            f"`{_thread_mode_display_name(effective_last_n_limit)}`, "
-            "which replaces the context mode inside private topics\n"
+            f"`{_thread_mode_display_name(_get_effective_thread_last_n_limit(user_id))}`, "
+            "which replaces the context mode inside private topics "
+            "(limit: /setThreadLastN)\n"
         )
 
     group_context_mode_name = CONTEXT_MODE_NAMES.get(
@@ -8399,9 +8495,7 @@ async def set_last_n_handler(event):
         return
 
     try:
-        limit = int(limit_str)
-        if not (1 < limit <= LAST_N_MAX):
-            raise ValueError("Limit out of range.")
+        limit = _parse_last_n_limit(limit_str)
         user_manager.set_last_n_messages_limit(user_id, limit)
         await event.reply(
             f"{BOT_META_INFO_PREFIX}✅ Your personal default for 'Last N Messages' is now **{limit}**."
@@ -8426,6 +8520,52 @@ async def get_last_n_handler(event):
             f"{BOT_META_INFO_PREFIX}You have not set a personal 'Last N Messages' limit. "
             f"The global default is **{LAST_N_MESSAGES_LIMIT}**."
         )
+
+
+async def set_thread_last_n_handler(event):
+    """Sets a user's limit for thread context, used inside private topics."""
+    user_id = event.sender_id
+    limit_match = event.pattern_match.group(1)
+
+    if not limit_match or not limit_match.strip():
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}**Usage:** `/setThreadLastN <number>` or `/setThreadLastN reset`"
+        )
+        return
+
+    limit_str = limit_match.strip()
+    if limit_str.lower() in RESET_KEYWORDS:
+        user_manager.set_thread_last_n_messages_limit(user_id, None)
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}✅ Your private-topic limit has been reset. "
+            f"The default of `{THREAD_LAST_N_MESSAGES_LIMIT}` will be used."
+        )
+        return
+
+    try:
+        limit = _parse_last_n_limit(limit_str)
+    except ValueError:
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}❌ Please provide a valid number between 2 and {LAST_N_MAX}."
+        )
+        return
+    user_manager.set_thread_last_n_messages_limit(user_id, limit)
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}✅ Inside private topics I will now read up to the last **{limit}** messages of the topic."
+    )
+
+
+async def get_thread_last_n_handler(event):
+    """Gets the user's limit for thread context, used inside private topics."""
+    user_limit = user_manager.get_thread_last_n_messages_limit(event.sender_id)
+    if user_limit is not None:
+        text = f"Your private-topic limit is set to **{user_limit}** messages."
+    else:
+        text = (
+            "You have not set a private-topic limit. "
+            f"The default is **{THREAD_LAST_N_MESSAGES_LIMIT}** messages."
+        )
+    await event.reply(f"{BOT_META_INFO_PREFIX}{text}")
 
 
 async def set_last_n_here_handler(event):
@@ -8456,9 +8596,7 @@ async def set_last_n_here_handler(event):
         return
 
     try:
-        limit = int(limit_str)
-        if not (1 < limit <= LAST_N_MAX):
-            raise ValueError("Limit out of range.")
+        limit = _parse_last_n_limit(limit_str)
         chat_manager.set_last_n_messages_limit(event.chat_id, limit)
         await event.reply(
             f"{BOT_META_INFO_PREFIX}✅ This chat will now use the last **{limit}** messages for context when in 'Last N' mode."
@@ -9284,6 +9422,20 @@ async def callback_handler(event):
         except errors.rpcerrorlist.MessageNotModifiedError:
             pass
         await event.answer(feedback)
+    elif data_str.startswith(THREAD_LAST_N_CALLBACK_PREFIX):
+        value = data_str[len(THREAD_LAST_N_CALLBACK_PREFIX) :]
+        if value == "reset":
+            user_manager.set_thread_last_n_messages_limit(user_id, None)
+            feedback = f"Topic limit reset to default {THREAD_LAST_N_MESSAGES_LIMIT}."
+        else:
+            limit = _parse_last_n_limit(value)
+            user_manager.set_thread_last_n_messages_limit(user_id, limit)
+            feedback = f"Topic limit set to {limit}."
+        try:
+            await _edit_personal_context_mode_menu(event, "private")
+        except errors.rpcerrorlist.MessageNotModifiedError:
+            pass
+        await event.answer(feedback)
     elif data_str.startswith("lastnhere_"):
         is_bot_admin = await util.isAdmin(event)
         is_group_admin = await util.is_group_admin(event)
@@ -9921,7 +10073,7 @@ async def _determine_context_mode_and_handle_transitions(
     elif _thread_topic_id(event) is not None:
         #: Thread context replaces every context mode inside a private topic,
         #: so smart mode's per-user state neither switches nor applies here.
-        #: A separator starts the topic's thread afresh.
+        #: A separator does nothing to the thread; the reply says so.
         if event.text and event.text.strip() == CONTEXT_SEPARATOR:
             await send_info_message(event, THREAD_SEPARATOR_REPLY)
             return None
