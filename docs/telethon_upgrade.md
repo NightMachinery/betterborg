@@ -173,8 +173,9 @@ stops being true.
 
 ## Upgrade path to 1.45.0
 
-1. **Pin 1.43.2** in `requirements.txt`. This is done. An unpinned install
-   pulls 1.45.0, which breaks at import.
+1. **Pin 1.43.2** in `requirements.txt` until the button refactor lands. An
+   unpinned install pulls 1.45.0, which breaks at import on pre-refactor code.
+   The pin is now `telethon==1.45.0`.
 2. **Refactor buttons first.** 1.45.0 removes `KeyboardButtonCallback`,
    `KeyboardButtonRequestPeer` and the other per-kind keyboard classes, and
    `KeyboardButton` gains a required `type`. `uniborg/bot_util.py` imports one
@@ -195,6 +196,11 @@ stops being true.
 5. **Upgrade the shared env** to the pinned 1.45.0. Every instance picks it up
    at its next restart, so restart them deliberately, one at a time, and watch
    the log chat.
+   Stop every instance before `git pull`: plugins hot-reload when their files
+   change, so a pull under running instances loads new plugin code onto the
+   old core and the old Telethon still in memory. Production was upgraded
+   this way on 2026-09-30: stop all, back up the sessions, pull, install
+   1.45.0, start llm_chat alone and check it, then start the rest.
 6. **Drop the `0x95ef6f2b` shim** once a day of unknown-constructor counts is
    clean. A layer-229 session receives `message#7600b9d3`, so the shim is dead
    code there.
@@ -267,7 +273,9 @@ changes what the button sends.
 ## Rollback
 
 After the button refactor the code runs on both versions, so rolling back is
-installing the 1.43.2 pin into the shared env and restarting. The session
+running `pip install telethon==1.43.2` in the shared env and restarting. The
+tests pass on 1.43.2 too, so the pin in `requirements.txt` can stay at 1.45.0
+for a short rollback. The session
 format is the same in both versions, and the next connect declares layer 224
 again. Restore a `.session` backup only if a session was damaged, and never
 run a backup and its live copy at the same time.
@@ -354,3 +362,10 @@ without awaiting. Gate new paths on these flags, not on a version number.
 - `tests/test_tg_compat.py`: every button helper and capability flag,
   including `build_reply_markup` on a never-connected client. Run it under
   both versions too.
+
+To check a new version against a server's own packages without touching its
+shared env, install the wheel into a `python -m venv --system-site-packages`
+venv and run the suite with that interpreter. Run it in a tmux pane, and pass
+`--foreground` if you wrap it in `timeout`: importing `uniborg.util` starts a
+Brish zsh server, and a plain `timeout` runs the suite in a background process
+group, so that server is stopped by SIGTTIN and collection hangs silently.
