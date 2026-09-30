@@ -1020,6 +1020,67 @@ async def discreet_send(
     return last_msg
 
 
+def _utf16_units(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def split_paragraphs(text: str, *, max_units: int = 4000) -> list[str]:
+    """Packs whole paragraphs (blank-line separated) into chunks of `max_units`.
+
+    Units are UTF-16 code units of the source text, an upper bound on what
+    Telegram counts after parsing Markdown. A paragraph too long on its own is
+    split by `_split_message_smart`.
+    """
+    chunks = []
+    current = ""
+    for paragraph in re.split(r"\n\s*\n", text.strip()):
+        paragraph = paragraph.strip("\n")
+        if not paragraph:
+            continue
+        candidate = f"{current}\n\n{paragraph}" if current else paragraph
+        if _utf16_units(candidate) <= max_units:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        if _utf16_units(paragraph) <= max_units:
+            current = paragraph
+        else:
+            #: Code points bound UTF-16 units from below, so halve for safety.
+            *parts, current = _split_message_smart(
+                paragraph, max_chunk_size=max_units // 2
+            )
+            chunks.extend(parts)
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+async def reply_in_chunks(
+    event,
+    text: str,
+    *,
+    prefix: str = "",
+    parse_mode=None,
+    link_preview=False,
+    max_units: int = 4000,
+) -> list:
+    """Replies with `text` as a chain of messages that each fit Telegram's limit.
+
+    The first message replies to `event`, each later one to the one before.
+    Every message starts with `prefix`, so a marker such as
+    `BOT_META_INFO_PREFIX` holds for all of them. Returns the sent messages.
+    """
+    sent = []
+    target = event
+    for chunk in split_paragraphs(text, max_units=max_units - _utf16_units(prefix)):
+        target = await target.reply(
+            f"{prefix}{chunk}", parse_mode=parse_mode, link_preview=link_preview
+        )
+        sent.append(target)
+    return sent
+
+
 @dataclass(frozen=True)
 class SentChunk:
     """The chunk one message of an edit chain shows, as we last sent it."""

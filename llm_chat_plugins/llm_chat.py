@@ -6139,8 +6139,10 @@ model shortcut in either order, e.g. `.f .th your question`.
 Levels a model does not support are ignored. Use /setThink or /setThinkHere to
 make a level stick.
 """
-    await event.reply(
-        f"{BOT_META_INFO_PREFIX}{help_text}", link_preview=False, parse_mode="md"
+    #: Longer than one message allows; each part keeps the prefix that keeps
+    #: it out of conversation history.
+    await util.reply_in_chunks(
+        event, help_text, prefix=BOT_META_INFO_PREFIX, parse_mode="md"
     )
 
 
@@ -6213,10 +6215,8 @@ async def help_magics_handler(event):
     help_text += "• `.teach` + topic → Socratic learning session\n"
     help_text += "• `.res` + question → Deep research analysis\n"
 
-    await event.reply(
-        f"{BOT_META_INFO_PREFIX}{help_text}",
-        parse_mode="md",
-        link_preview=False,
+    await util.reply_in_chunks(
+        event, help_text, prefix=BOT_META_INFO_PREFIX, parse_mode="md"
     )
 
 
