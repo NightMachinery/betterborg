@@ -132,6 +132,35 @@ Each rule is enforced in code; this is why.
   edit. `reply`, `respond`, `get_chat` and `delete` raise, so text past the
   first 4096 UTF-16 units is dropped, never posted elsewhere.
 
+## The guest shell (`stdplugins/advanced_get.py`)
+
+`@<bot> .a CMD`, sent to the bot of the `stdplugins` instance (julia), runs `CMD` the way `.a` does in a chat with the bot, with
+the same flags (`.aa` without Brish, `.af` without forking, `.ad` without
+albums, `.an` with `noglob`). The handler keeps queries for at most 60
+seconds; a later one is dropped, never run late.
+
+- **Only a strict trigger runs.** The text must start with the bot's mention,
+  followed directly by `.a`, and no code block may cover the mention. The
+  caller must be an admin by user id (`util.is_admin_by_id`).
+- **Every explicit call is answered.** A non-admin who mentions the bot gets
+  "Not available here."; an admin whose text is not a strict trigger gets the
+  usage line. A reply to the answer without a mention (an implicit call) gets
+  nothing.
+- **No answer, no execution.** The handler posts "⏳ Running…" first. If that
+  fails, including `DeliveryUnknownError`, the command does not run: it must
+  not run unseen, or twice.
+- **Media**: the trigger's and the reference's files are downloaded into the
+  command's working directory, as with `.a` on a reply.
+- **The answer** is the output in a `pre` block, cut to fit one message,
+  followed by the exit code when it is not 0. Empty output reads "The process
+  exited N.". An exception becomes the traceback.
+- **Files go to the caller's DM**, after a header message naming the command:
+  the files the command left in its working directory, plus `output.txt` with
+  the whole output when it was cut. The answer says how many were sent. They
+  never go to the guest chat, whose id in a private chat is the other person.
+  The caller must have started the bot for the DM to work; the answer says so
+  when it does not.
+
 ## Enabling guest mode for a bot
 
 1. Run the instance on Telethon 1.45.0 (`.tgcaps`: `layer: 229`,
