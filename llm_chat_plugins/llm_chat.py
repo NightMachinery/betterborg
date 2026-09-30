@@ -1384,9 +1384,10 @@ async def load_smart_context_states():
         if not redis_client:
             return
 
-        # Get all smart context keys
+        #: SCAN, not KEYS: KEYS blocks Redis for the whole keyspace, and the
+        #: bots' ACL user may not run it. SCAN can repeat a key, hence the set.
         pattern = "borg:smart_context:*"
-        keys = await redis_client.keys(pattern)
+        keys = {key async for key in redis_client.scan_iter(match=pattern, count=500)}
 
         for key in keys:
             try:
