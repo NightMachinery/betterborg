@@ -160,6 +160,10 @@ seconds; a later one is dropped, never run late.
   never go to the guest chat, whose id in a private chat is the other person.
   The caller must have started the bot for the DM to work; the answer says so
   when it does not.
+- **A single file is also attached to the answer.** An inline edit cannot
+  upload, so the answer reuses the DM copy, with the output as its caption
+  (1024 UTF-16 units, so less of it shows than in a text answer). If Telegram
+  refuses, the answer stays text. Several files are only in the DM.
 
 ## Enabling guest mode for a bot
 

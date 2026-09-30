@@ -1,4 +1,4 @@
-from telethon import TelegramClient, events, Button
+from telethon import TelegramClient, events, Button, utils
 from telethon.tl import types
 import itertools
 import os
@@ -80,6 +80,7 @@ GUEST_TITLE = "Shell"
 #: A late command should not run; Telegram also rejects late answers.
 GUEST_MAX_AGE_SECONDS = 60
 GUEST_TEXT_LIMIT = 4096
+GUEST_CAPTION_LIMIT = 1024
 #: Room left for the footer after the output block.
 GUEST_FOOTER_RESERVE = 300
 GUEST_OUTPUT_FILE = "output.txt"
@@ -123,10 +124,10 @@ async def _answer_note(query, text):
         logger.exception("Could not answer guest query %s", query.query_id)
 
 
-def _pre_answer(output, *, footer_lines):
+def _pre_answer(output, *, footer_lines, limit=GUEST_TEXT_LIMIT):
     """The answer text: `output` in a pre block, then the footer lines."""
     footer = "\n".join(footer_lines)
-    budget = GUEST_TEXT_LIMIT - (tg_format.utf16_len(footer) + 2 if footer else 0)
+    budget = limit - (tg_format.utf16_len(footer) + 2 if footer else 0)
     block = tg_format.truncate_utf16(output, budget)
     text = f"{block}\n\n{footer}" if footer else block
     entities = [
@@ -168,6 +169,24 @@ async def _send_files_to_dm(caller_id, *, request, files):
     return sent, error
 
 
+async def _finalize_with_attachment(answer, dm_message, *, output, footer_lines):
+    """Shows the one file sent to the DM in the guest answer too.
+
+    An inline edit cannot upload, so this reuses the DM copy, with the output
+    as a caption. Returns False when that fails; the caller then edits in text.
+    """
+    try:
+        media = utils.get_input_media(dm_message.media)
+        caption, entities = _pre_answer(
+            output, footer_lines=footer_lines, limit=GUEST_CAPTION_LIMIT
+        )
+        await answer.finalize(text=caption, entities=entities, media=media)
+        return True
+    except Exception:
+        logger.warning("Could not attach the file to the guest answer", exc_info=True)
+        return False
+
+
 async def _run_guest_shell(query, request, answer):
     results = []
 
@@ -193,6 +212,7 @@ async def _run_guest_shell(query, request, answer):
         files = sorted(p for p in Path(cwd).glob("*") if not p.is_dir())
 
         footer_lines = []
+        sent = []
         if result.retcode != 0:
             footer_lines.append(f"exit {result.retcode}")
         if files:
@@ -206,6 +226,10 @@ async def _run_guest_shell(query, request, answer):
         if truncated:
             footer_lines.append("✂️ Output truncated; the full output is a file.")
 
+        if len(sent) == 1 and await _finalize_with_attachment(
+            answer, sent[0], output=output, footer_lines=footer_lines
+        ):
+            return
         text, entities = _pre_answer(output, footer_lines=footer_lines)
         await answer.finalize(text=text, entities=entities)
     finally:

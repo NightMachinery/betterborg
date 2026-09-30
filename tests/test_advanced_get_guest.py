@@ -80,8 +80,24 @@ def _query(text, *, caller=ADMIN, entities=None):
     return guest_util.guest_query_from_update(update, client=client)
 
 
+def _document_media(i):
+    return types.MessageMediaDocument(
+        document=types.Document(
+            id=100 + i,
+            access_hash=7,
+            file_reference=b"ref",
+            date=NOW,
+            mime_type="application/octet-stream",
+            size=4,
+            dc_id=2,
+            attributes=[],
+        )
+    )
+
+
 class _FakeEditor:
     edits = None
+    fail_media = False
 
     def __init__(self, client, inline_id):
         self.inline_id = inline_id
@@ -94,6 +110,8 @@ class _FakeEditor:
 
     async def edit(self, **kwargs):
         type(self).edits.append(kwargs)
+        if kwargs.get("media") is not None and self.fail_media:
+            raise RuntimeError("MEDIA_INVALID")
         return True
 
 
@@ -104,6 +122,8 @@ class GuestShellTests(unittest.TestCase):
         self.answers = []
         self.uploads = []
         _FakeEditor.edits = self.edits = []
+        _FakeEditor.fail_media = False
+        self.dm_media = False
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.dl_base = tmp.name + "/"
@@ -115,7 +135,12 @@ class GuestShellTests(unittest.TestCase):
         async def upload_output_files(chat, files, *, album_mode, reply_to, on_error):
             files = list(files)
             self.uploads.append((chat, sorted(Path(f).name for f in files)))
-            return [SimpleNamespace(id=i) for i, _ in enumerate(files)]
+            return [
+                SimpleNamespace(
+                    id=i, media=_document_media(i) if self.dm_media else None
+                )
+                for i, _ in enumerate(files)
+            ]
 
         self.answer_guest = AsyncMock(side_effect=answer_guest)
         for target, name, value in (
@@ -162,6 +187,38 @@ class GuestShellTests(unittest.TestCase):
         self.assertEqual(self.uploads, [(ADMIN, ["out.bin"])])
         self.assertEqual([chat for chat, _text in self.borg.sent], [ADMIN])
         self.assertIn("1 file(s) sent to your DM", self.edits[-1]["text"])
+
+    def test_a_single_file_is_attached_to_the_answer_with_a_caption(self):
+        self.dm_media = True
+
+        self._run(_query(f"@{BOT_USERNAME} .aa printf 'y%.0s' $(seq 2000); : > f"))
+
+        (final,) = self.edits
+        self.assertIsInstance(final["media"], types.InputMediaDocument)
+        self.assertEqual(final["media"].id.id, 100)
+        self.assertLessEqual(len(final["text"].encode("utf-16-le")) // 2, 1024)
+        self.assertIsInstance(final["entities"][0], types.MessageEntityPre)
+        self.assertTrue(final["text"].startswith("yyy"))
+
+    def test_a_failed_attachment_falls_back_to_the_text_answer(self):
+        self.dm_media = True
+        _FakeEditor.fail_media = True
+
+        self._run(_query(f"@{BOT_USERNAME} .aa printf done > f; printf done"))
+
+        attach, final = self.edits
+        self.assertIsNotNone(attach["media"])
+        self.assertNotIn("media", final)
+        self.assertTrue(final["text"].startswith("done"))
+
+    def test_several_files_are_not_attached(self):
+        self.dm_media = True
+
+        self._run(_query(f"@{BOT_USERNAME} .aa printf a > a; printf b > b; printf ok"))
+
+        (final,) = self.edits
+        self.assertNotIn("media", final)
+        self.assertIn("2 file(s) sent to your DM", final["text"])
 
     def test_long_output_is_truncated_and_sent_whole_as_a_file(self):
         self._run(_query(f"@{BOT_USERNAME} .aa printf 'x%.0s' $(seq 5000)"))
