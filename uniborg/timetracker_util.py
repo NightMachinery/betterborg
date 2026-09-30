@@ -53,6 +53,9 @@ def timedelta_dur(end, start):
     return end - start
 
 
+from uniborg import timetracker_tz
+
+
 # Path.home().joinpath(Path("cellar"))
 timetracker_db_path = Path(
     z('print -r -- "${{timetracker_dir:-$HOME/tmp}}/timetracker.db"').outrs
@@ -69,14 +72,142 @@ class BaseModel(Model):
         database = db
 
 
+class Setting(BaseModel):
+    key = CharField(primary_key=True)
+    value = TextField()
+
+    class Meta:
+        table_name = timetracker_tz.SETTING_TABLE
+
+
+_current_zone_cache = None
+
+
+def current_zone_name() -> str:
+    """The zone new activities are recorded in: the `.tz` setting, else the default."""
+    global _current_zone_cache
+    if _current_zone_cache is None:
+        row = Setting.get_or_none(Setting.key == timetracker_tz.TZ_SETTING)
+        _current_zone_cache = row.value if row else timetracker_tz.default_zone_name()
+    return _current_zone_cache
+
+
+def set_current_zone_name(name: str) -> str:
+    """Persist NAME as the current zone. Raises ValueError for an unknown zone."""
+    global _current_zone_cache
+    timetracker_tz.zone(name)
+    Setting.replace(key=timetracker_tz.TZ_SETTING, value=name).execute()
+    _current_zone_cache = name
+    return name
+
+
+def tt_now() -> datetime.datetime:
+    """Now, as wall-clock time in the current zone."""
+    return timetracker_tz.local_now(current_zone_name())
+
+
+def to_current_local(moment: datetime.datetime) -> datetime.datetime:
+    """MOMENT in the current zone; a naive MOMENT is taken to be in it already."""
+    if moment.tzinfo is None:
+        return moment
+    return timetracker_tz.to_local(moment, current_zone_name())
+
+
+def current_to_utc(local: datetime.datetime) -> datetime.datetime:
+    """LOCAL, a wall-clock time in the current zone, as naive UTC."""
+    return timetracker_tz.to_utc(local, current_zone_name())
+
+
 class Activity(BaseModel):
+    #: `start` and `end` are wall-clock times in `tz`; `start_utc` and
+    #: `end_utc` are derived from them in `save`, for ordering only.
     name = CharField()
     start = DateTimeField()
     end = DateTimeField()
+    tz = CharField(null=True)
+    start_utc = DateTimeField(null=True)
+    end_utc = DateTimeField(null=True)
+
+    @property
+    def zone_name(self) -> str:
+        return self.tz or current_zone_name()
+
+    @property
+    def duration(self) -> timedelta:
+        return timetracker_tz.elapsed(self.start, self.end, self.zone_name)
+
+    def in_current_zone(self, local: datetime.datetime) -> datetime.datetime:
+        """LOCAL, a wall-clock time in this activity's zone, in the current zone."""
+        return timetracker_tz.convert(
+            local, from_zone=self.zone_name, to_zone=current_zone_name()
+        )
+
+    def from_current_zone(self, local: datetime.datetime) -> datetime.datetime:
+        """LOCAL, a wall-clock time in the current zone, in this activity's zone."""
+        return timetracker_tz.convert(
+            local, from_zone=current_zone_name(), to_zone=self.zone_name
+        )
+
+    def save(self, *args, **kwargs):
+        self.tz = self.zone_name
+        self.start_utc = timetracker_tz.to_utc(self.start, self.tz)
+        self.end_utc = timetracker_tz.to_utc(self.end, self.tz)
+        return super().save(*args, **kwargs)
 
     def __str__(self):
-        dur = timedelta_dur(self.end, self.start)
-        return f"""{self.name} {timedelta_str(dur)}"""
+        return f"""{self.name} {timedelta_str(self.duration)}"""
+
+
+def clipped_duration(act: Activity, low, high) -> timedelta:
+    """The real time ACT spent inside [LOW, HIGH], both wall-clock times."""
+    return timetracker_tz.elapsed(
+        max(act.start, low), min(act.end, high), act.zone_name
+    )
+
+
+def _format_local(local, zone_name: str) -> str:
+    moment = timetracker_tz.localize(local, zone_name)
+    return moment.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def zone_status_text(*, last_act: Activity = None) -> str:
+    """What `.tz` reports: the current zone, where it comes from, and the clocks."""
+    setting = Setting.get_or_none(Setting.key == timetracker_tz.TZ_SETTING)
+    current = current_zone_name()
+    if setting:
+        source = "set with .tz"
+    elif os.environ.get(timetracker_tz.TZ_ENV):
+        source = f"from ${timetracker_tz.TZ_ENV}"
+    else:
+        source = "the host's zone, since none was set with .tz"
+    now = timetracker_tz.localize(tt_now(), current)
+    lines = [
+        f"Current zone: {current} ({source})",
+        f"Now: {now:%Y-%m-%d %H:%M:%S %Z (UTC%z)}",
+        f"Host zone: {timetracker_tz.host_zone_name() or 'unknown'}",
+    ]
+    if last_act is not None:
+        lines.append(
+            f"Last activity: {last_act.name}, recorded in {last_act.zone_name}"
+        )
+    lines.append("Change it with `.tz ZONE`, for example `.tz America/New_York`.")
+    return "\n".join(lines)
+
+
+def recent_activities_text(*, count: int = 10) -> str:
+    """What `..` shows: the latest COUNT activities, newest first, with zones."""
+    current = current_zone_name()
+    blocks = []
+    for act in Activity.select().order_by(Activity.id.desc()).limit(count):
+        title = act.name
+        if act.zone_name != current:
+            title += f"  [{act.zone_name}]"
+        blocks.append(
+            f"{title}\n"
+            f"    {_format_local(act.start, act.zone_name)}\n"
+            f"    {_format_local(act.end, act.zone_name)}"
+        )
+    return "\n\n".join(blocks) or "No activities yet."
 
 
 ## indexes: add manually via Datagrip (right-click on table, modify table)(adding it via peewee is not necesseray https://github.com/coleifer/peewee/issues/2360 )
@@ -84,11 +215,31 @@ class Activity(BaseModel):
 #     on activity (end desc);
 # create index activity_start_end_index
 #     on activity (start desc, end desc);
+#: The zone columns and their indexes are added by `timetracker_tz.ensure_schema`.
 ##
 
 db.close()
 db.connect()  # @todo? db.close()
-db.create_tables([Activity])
+db.create_tables([Activity, Setting])
+
+
+def _prepare_zone_columns():
+    """Add the zone columns, and zone any legacy rows as the current zone.
+
+    A database migrated with `python3 uniborg/timetracker_tz.py migrate` has
+    no legacy rows left, so this only acts on a fresh or unmigrated one.
+    """
+    conn = db.connection()
+    with db.atomic():
+        added = timetracker_tz.ensure_schema(conn)
+        count = timetracker_tz.backfill_legacy_rows(conn, zone_name=current_zone_name())
+    if added or count:
+        logger.warning(
+            f"timetracker: added zone columns {added}; zoned {count} legacy rows as {current_zone_name()}"
+        )
+
+
+_prepare_zone_columns()
 ##
 
 import textwrap
@@ -270,7 +421,7 @@ def activity_list_to_str_now(
     received_at=None,
     **kwargs,
 ):
-    now = received_at or datetime.datetime.today()
+    now = received_at or tt_now()
     low = now - delta
     return activity_list_to_str(
         low,
@@ -295,9 +446,7 @@ def activity_list_to_str(
     acts_skipped = ActivityDuration("Skipped")
     for act in acts:
         act_name = act.name
-        act_start = max(act.start, low)
-        act_end = min(act.end, high)
-        dur = timedelta_dur(act_end, act_start)
+        dur = clipped_duration(act, low, high)
         path = list(reversed(act_name.split(activity_child_separator)))
         if should_skip_act_p(
             act,
@@ -330,7 +479,7 @@ def activity_list_habit_get_now(
         names = [names]
 
     ##
-    high = high or (received_at or datetime.datetime.today())
+    high = high or (received_at or tt_now())
     low = low or (high - delta)
     low = low.replace(hour=day_start, minute=0, second=0, microsecond=0)
     if adjust_high:
@@ -419,7 +568,7 @@ def stacked_area_get_act_roots(
     delta = delta or interval * repeat
 
     # high = high or (datetime.datetime.today() - datetime.timedelta(days=1))
-    high = high or (received_at or datetime.datetime.today())
+    high = high or (received_at or tt_now())
     low = low or (high - delta)
     low = low.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
     high = high.replace(
@@ -441,7 +590,7 @@ def stacked_area_get_act_roots(
             (Activity.start.between(low, mid)) | (Activity.end.between(low, mid))
         )
         for act in acts:
-            dur = timedelta_dur(min(act.end, mid), max(act.start, low))
+            dur = clipped_duration(act, low, mid)
             bucket.add(dur, list(reversed(act.name.split(activity_child_separator))))
 
         low = mid
@@ -475,7 +624,7 @@ def activity_list_buckets_get(low, high, which_bucket, mode=0, correct_overlap=T
             continue
         if mode == 0:
             bucket = buckets.setdefault(bucket_key, ActivityDuration("Total"))
-            dur = timedelta_dur(act.end, act.start)
+            dur = act.duration
             bucket.add(dur, list(reversed(act.name.split(activity_child_separator))))
         elif mode == 1:  # count mode
             bucket = buckets.setdefault(bucket_key, 0)

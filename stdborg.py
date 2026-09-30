@@ -121,11 +121,11 @@ async def tt_mark(mark: TTMark, request: Request):
     m0 = await borg.send_message(tt.timetracker_chat, command)
     received_at = getattr(mark, "received_at", None)
     if received_at:
-        received_at = email.utils.parsedate_to_datetime(received_at)
-        # the resulting datetime includes the timezone info if present in the source
-        received_at = received_at.replace(
-            tzinfo=None
-        )  # we currently don't support timezones
+        #: An offset in the date is honoured by converting to the current zone;
+        #: a date without one is read as the current zone's wall-clock time.
+        received_at = tt.to_current_local(
+            email.utils.parsedate_to_datetime(received_at)
+        )
 
     # print(f"tt_mark: received_at={received_at}, command={command}")
     res = await tt.process_msg(m0, received_at=received_at)

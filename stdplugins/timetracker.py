@@ -17,6 +17,7 @@ from icecream import ic
 from uniborg.util import embed2, send_files, za
 import uniborg.timetracker_util as timetracker_util
 from uniborg.timetracker_util import *
+from uniborg import timetracker_tz
 import json
 import yaml
 
@@ -674,6 +675,7 @@ def chooseAct(fuzzyChoice: str):
 # @todo migrate patterns to a grammar: /Users/evar/Base/_Code/uni/stochastic/lark_playground/lp1.py
 del_pat = re.compile(r"^\.\.?del\s*(\d*\.?\d*)$")
 rename_pat = re.compile(r"^\.\.?re(?:name)?\s+(.+)$")
+tz_pat = re.compile(r"^\.tz(?:\s+(?P<zone>\S+))?$")
 out_pat = re.compile(
     r"^(?:\.\.?)?o(?:ut)?\s*(?P<t>\d*\.?\d*)?\s*(?:m=(?P<mode>\d+))?\s*(?:include=(?P<include_acts>\S*))?(?:exclude=(?P<skip_acts>\S*))?\s*(?:r=(?P<repeat>\d+))?\s*(?:cmap=(?P<cmap>\S+))?\s*(?:treemap=(?P<treemap>\d+))?\s*(?:(?:h(?:ours?)?=)?(?P<hours>\d+\.?\d*))?\s*$"
 )
@@ -924,7 +926,7 @@ async def _process_msg(
                     if (
                         not received_at
                     ):  # the first command of a replied_to message will not have this set, but the subsequent commands will reuse the one we set for the first.
-                        received_at = copy.copy(act_replied_to.end)
+                        received_at = act_replied_to.in_current_zone(act_replied_to.end)
 
                         # last_act = act_replied_to # the last_act will be set correctly by received_at; We can't set it explicitly, as it can't be passed through 'multi_commands'.
                 else:
@@ -1007,7 +1009,7 @@ async def _process_msg(
             return out
 
         if not received_at:  # None, "" are both acceptable as null
-            received_at = datetime.datetime.today()
+            received_at = tt_now()
         else:
             print(f"_process_msg: received_at={received_at}")
             pass
@@ -1019,8 +1021,8 @@ async def _process_msg(
             # last_act_query = Activity.select().order_by(Activity.end.desc())
             last_act_query = (
                 Activity.select()
-                .where(Activity.end <= received_at)
-                .order_by(Activity.end.desc())
+                .where(Activity.end_utc <= current_to_utc(received_at))
+                .order_by(Activity.end_utc.desc())
             )
             last_act = None
             if last_act_query.exists():
@@ -1028,6 +1030,24 @@ async def _process_msg(
 
         if m0_text in (".show", ".sh"):
             out_add(f"last_act: {last_act}")
+            await edit(out)
+            return out
+
+        #: Matched on the raw text: `text_sub` strips suffixes, and a zone
+        #: name such as `Etc/GMT+3` could end in one.
+        m = tz_pat.match(text_input.strip())
+        if m:
+            if m.group("zone"):
+                try:
+                    zone_name = set_current_zone_name(
+                        timetracker_tz.canonical_zone_name(m.group("zone"))
+                    )
+                except ValueError as e:
+                    out_add(str(e))
+                    await edit(out)
+                    return out
+                out_add(f"Current zone set to {zone_name}.")
+            out_add(zone_status_text(last_act=last_act))
             await edit(out)
             return out
 
@@ -1045,7 +1065,8 @@ async def _process_msg(
                 # (Activity.end > cutoff) |
                 del_count = (
                     Activity.delete().where(
-                        (Activity.start > cutoff) & (Activity.start <= received_at)
+                        (Activity.start_utc > current_to_utc(cutoff))
+                        & (Activity.start_utc <= current_to_utc(received_at))
                     )
                     # .where((Activity.start > cutoff))
                     .execute()
@@ -1454,8 +1475,9 @@ async def _process_msg(
                 return
 
         async def update_to_now():
-            amount = received_at - last_act.end
-            last_act.end = received_at
+            new_end = last_act.from_current_zone(received_at)
+            amount = timetracker_tz.elapsed(last_act.end, new_end, last_act.zone_name)
+            last_act.end = new_end
             last_act.save()
             set_msg_act(last_act)
             out_add(
@@ -1473,8 +1495,7 @@ async def _process_msg(
                 return
 
         if m0_text == "..":
-            # @perf @todo2 this is slow, do it natively
-            out_add(z("borg-tt-last 10").outerr)
+            out_add(recent_activities_text(count=10))
             await edit(out)
             return out
 
@@ -1495,7 +1516,7 @@ async def _process_msg(
                     )
                     return
                 else:
-                    start = last_act.end
+                    start = last_act.in_current_zone(last_act.end)
             else:
                 start = starting_anchor
                 starting_anchor = None
