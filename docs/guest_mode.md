@@ -63,6 +63,22 @@ Each rule is enforced in code; this is why.
   placeholder, then do the slow part and edit.
 - **Echoes are not commands and not admins.** `is_guest_answer` recognises an
   echo (`guestchat_via_from` set on an outgoing message).
+- **Admin checks look at the caller only.** `util.isAdmin` treats an echo as
+  never admin, and in a guest context counts only the caller's user id or
+  username: a private trigger arrives with `out` set, and its "chat" is the
+  other participant. Outside guest mode, chat-level trust (`adminChats`, a
+  chat's username) now applies only to groups and channels, and to a private
+  chat that is the sender's own.
+- **Automation does not summon the shell.** Telegram finds the mention in
+  plain text, so any message sent from the owner's account that starts with
+  `@somebot .a …` would run as the owner, including a userbot's LLM answer
+  steered by someone else, or command output echoing untrusted text.
+  `guest_util.OutgoingTriggerGuardMixin` (first in `Uniborg`'s bases) replaces
+  that "@" with "＠" (U+FF20) in outgoing messages, captions and edits of user
+  accounts, and drops a mention entity there. Text typed in a Telegram app
+  never passes through it. `borg_guest_trigger_guard=0` turns it off; an
+  unknown value stops startup. Other tools logged in as the owner are not
+  covered.
 - **Guest queries survive gaps.** Telethon drops qts updates that
   `getDifference` recovers; the qts re-dispatch net hands them on (see
   [telethon_upgrade.md](telethon_upgrade.md)). Recovered queries can be old,

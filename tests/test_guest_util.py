@@ -441,5 +441,102 @@ class GuestAnswerMessageTests(unittest.TestCase):
             asyncio.run(answer.reply("y"))
 
 
+class TriggerGuardTests(unittest.TestCase):
+    def test_a_leading_bot_mention_before_dot_a_is_defanged(self):
+        mention = types.MessageEntityMention(0, 10)
+        bold = types.MessageEntityBold(11, 5)
+
+        text, entities = guest_util.defang_guest_trigger(
+            "@julia_bot .a ls", [mention, bold]
+        )
+
+        self.assertEqual(text, "\uff20julia_bot .a ls")
+        self.assertEqual(entities, [bold])
+        self.assertEqual(
+            guest_util.defang_guest_trigger("  @X_BOT\n.af rm x")[0],
+            "  \uff20X_BOT\n.af rm x",
+        )
+
+    def test_other_text_is_untouched(self):
+        for text in (
+            "@julia_bot hi",
+            "hi @julia_bot .a ls",
+            "@julia .a ls",
+            ".a ls @julia_bot",
+            None,
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    guest_util.defang_guest_trigger(text, None), (text, None)
+                )
+
+    def _client(self, *, is_bot, guard=True):
+        class _Base:
+            async def __call__(
+                self, request, ordered=False, flood_sleep_threshold=None
+            ):
+                self.sent = request
+                return "ok"
+
+        class _Client(guest_util.OutgoingTriggerGuardMixin, _Base):
+            pass
+
+        client = _Client()
+        client._is_bot = is_bot
+        client.trigger_guard = guard
+        return client
+
+    def _send(self, client, text):
+        from telethon import functions
+
+        request = functions.messages.SendMessageRequest(
+            peer=types.InputPeerSelf(), message=text
+        )
+        asyncio.run(client(request))
+        return client.sent.message
+
+    def test_userbots_defang_and_bots_do_not(self):
+        self.assertEqual(
+            self._send(self._client(is_bot=False), "@x_bot .a ls"), "\uff20x_bot .a ls"
+        )
+        self.assertEqual(
+            self._send(self._client(is_bot=True), "@x_bot .a ls"), "@x_bot .a ls"
+        )
+        self.assertEqual(
+            self._send(self._client(is_bot=False, guard=False), "@x_bot .a ls"),
+            "@x_bot .a ls",
+        )
+
+    def test_album_captions_are_defanged_too(self):
+        from telethon import functions
+
+        media = types.InputSingleMedia(
+            media=types.InputMediaEmpty(), message="@x_bot .a ls", random_id=1
+        )
+        request = functions.messages.SendMultiMediaRequest(
+            peer=types.InputPeerSelf(), multi_media=[media]
+        )
+
+        self.assertTrue(guest_util.defang_request(request))
+        self.assertEqual(media.message, "\uff20x_bot .a ls")
+        self.assertFalse(
+            guest_util.defang_request(
+                SimpleNamespace(message="@x_bot .a ls", entities=None)
+            )
+        )
+
+    def test_the_switch_parses_strictly(self):
+        self.assertTrue(guest_util.trigger_guard_enabled(environ={}))
+        self.assertFalse(
+            guest_util.trigger_guard_enabled(
+                environ={"borg_guest_trigger_guard": "off"}
+            )
+        )
+        with self.assertRaises(ValueError):
+            guest_util.trigger_guard_enabled(
+                environ={"borg_guest_trigger_guard": "maybe"}
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

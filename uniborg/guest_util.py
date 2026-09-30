@@ -16,6 +16,9 @@ this module enforces:
   in Redis when available, so a redelivered query is dropped after a restart.
 - **Echoes are not commands.** In groups the bot receives its own guest answer
   back as a new outgoing message; `is_guest_answer` recognises it.
+- **Automation does not summon the shell.** Telegram finds mentions in plain
+  text, so a userbot relaying text that starts with ``@somebot .a …`` would run
+  it as its owner; `OutgoingTriggerGuardMixin` defangs such text on its way out.
 
 This module imports only the standard library, Telethon and `tg_format`,
 never ``uniborg.util``, so ``util`` can import it.
@@ -25,11 +28,12 @@ from dataclasses import dataclass, field
 import enum
 import itertools
 import logging
+import os
 import re
 import time
 from typing import Any, Awaitable, Callable, Optional
 
-from telethon import errors, events, types, utils
+from telethon import errors, events, functions, types, utils
 
 from uniborg import tg_format
 
@@ -637,3 +641,107 @@ class GuestAnswerMessage:
                 self.text = kwargs.get("markdown") or kwargs.get("text") or ""
                 return changed
         raise AssertionError("unreachable")
+
+
+TRIGGER_GUARD_ENV = "borg_guest_trigger_guard"
+
+_ENABLED_VALUES = frozenset({"", "1", "true", "yes", "on"})
+_DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
+
+#: A leading bot mention followed by `.a`: the guest shell's trigger shape.
+#: Every bot username ends in "bot".
+_SHELL_TRIGGER = re.compile(r"^(\s*)@(\w*bot)(?=\s+\.a)", re.IGNORECASE)
+
+#: U+FF20 FULLWIDTH COMMERCIAL AT: looks like "@", is not a mention, and is one
+#: UTF-16 unit, so no entity moves.
+FULLWIDTH_AT = "\uff20"
+
+_MENTION_ENTITIES = (types.MessageEntityMention, types.InputMessageEntityMentionName)
+
+
+def trigger_guard_enabled(*, environ=None) -> bool:
+    """Reads `TRIGGER_GUARD_ENV`; unset means on. Unknown values raise."""
+    environ = os.environ if environ is None else environ
+    raw = environ.get(TRIGGER_GUARD_ENV, "")
+    value = raw.strip().lower()
+    if value in _ENABLED_VALUES:
+        return True
+    if value in _DISABLED_VALUES:
+        return False
+    raise ValueError(
+        f"{TRIGGER_GUARD_ENV}={raw!r} is not a recognised switch; "
+        "use 1/true/yes/on or 0/false/no/off"
+    )
+
+
+def defang_guest_trigger(text: Optional[str], entities: Optional[list] = None):
+    """Returns (text, entities) with a leading ``@…bot .a`` made inert.
+
+    The "@" becomes `FULLWIDTH_AT`, and a mention entity starting there is
+    dropped. Other text is returned unchanged.
+    """
+    match = _SHELL_TRIGGER.match(text or "")
+    if match is None:
+        return text, entities
+    at = match.start(2) - 1
+    offset = tg_format.utf16_len(text[:at])
+    kept = [
+        entity
+        for entity in entities or []
+        if not (isinstance(entity, _MENTION_ENTITIES) and entity.offset == offset)
+    ]
+    return text[:at] + FULLWIDTH_AT + text[at + 1 :], (kept if entities else entities)
+
+
+_GUARDED_REQUESTS = (
+    functions.messages.SendMessageRequest,
+    functions.messages.EditMessageRequest,
+    functions.messages.SendMediaRequest,
+    functions.messages.SendMultiMediaRequest,
+)
+
+
+def defang_request(request: Any) -> bool:
+    """Defangs the text of an outgoing message request in place.
+
+    Returns whether anything changed. Other requests are left alone.
+    """
+    if not isinstance(request, _GUARDED_REQUESTS):
+        return False
+    changed = False
+    parts = [request, *(getattr(request, "multi_media", None) or [])]
+    for part in parts:
+        text = getattr(part, "message", None)
+        if not isinstance(text, str):
+            continue
+        new_text, new_entities = defang_guest_trigger(text, part.entities)
+        if new_text != text:
+            part.message, part.entities = new_text, new_entities
+            changed = True
+    return changed
+
+
+class OutgoingTriggerGuardMixin:
+    """Keeps a user account's automation from summoning a guest shell.
+
+    Put it first in the client's bases. Everything a userbot process sends is
+    automation (its owner types in a Telegram app, which bypasses it), yet
+    Telegram would run text such as an LLM answer or command output starting
+    with ``@shellbot .a …`` as a guest query from the owner, who is admin. The
+    guard only acts on user accounts, and only on that trigger shape.
+    """
+
+    #: `Uniborg.create` sets it from `trigger_guard_enabled()`.
+    trigger_guard = True
+
+    async def __call__(self, request, ordered=False, flood_sleep_threshold=None):
+        if self.trigger_guard and getattr(self, "_is_bot", None) is False:
+            for part in request if utils.is_list_like(request) else [request]:
+                if defang_request(part):
+                    _log.info(
+                        "Defanged a guest shell trigger in an outgoing %s",
+                        type(part).__name__,
+                    )
+        return await super().__call__(
+            request, ordered=ordered, flood_sleep_threshold=flood_sleep_threshold
+        )

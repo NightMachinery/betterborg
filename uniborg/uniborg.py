@@ -22,6 +22,7 @@ from uniborg import (
     llm_util,
     tts_util,
     llm_db,
+    guest_util,
     telethon_compat,
     telethon_safety,
     topics,
@@ -45,6 +46,7 @@ def _get_env(name, default=None, cast=None):
 
 
 class Uniborg(
+    guest_util.OutgoingTriggerGuardMixin,
     topics.TopicPlacementMixin,
     telethon_safety.DifferenceFallbackMixin,
     TelegramClient,
@@ -104,6 +106,8 @@ class Uniborg(
         )
         #: Also before the first connect, so the first updates are filed too.
         self.topic_placement = topic_placement or topics.TopicPlacement()
+        #: Read here so a typo in the switch stops startup, not a send.
+        self.trigger_guard = guest_util.trigger_guard_enabled()
 
         await self._async_init(bot_token=bot_token)
         if log_chat:
