@@ -16,9 +16,18 @@ everything around it:
   disconnects the client, which ends the bot.
 
 The nets below shrink the loss to the one object, count every event in
-`SafetyStats`, and send rate-limited alerts through an injected callable. This
-module imports only the standard library and Telethon, so tests and tools can
-load it without ``uniborg.util``.
+`SafetyStats`, and send rate-limited alerts through an injected callable.
+
+Two more nets fix Telethon behaviour that loses or repeats updates and
+requests rather than failing to parse them:
+
+- the qts re-dispatch hands on the qts updates (guest queries, bot stops) that
+  ``getDifference`` recovers after a gap, which Telethon drops;
+- the at-most-once guard keeps a reconnect from re-sending requests marked
+  with `mark_at_most_once`, such as a guest answer.
+
+This module imports only the standard library and Telethon, so tests and tools
+can load it without ``uniborg.util``.
 """
 import asyncio
 from collections import Counter
@@ -28,12 +37,14 @@ import functools
 import logging
 import os
 import time
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Iterable, Optional
+import weakref
 
 import telethon
 from telethon import errors
 
 #: Loaded so `_patch_telethon` can reach them as attributes of the package.
+import telethon._updates.messagebox
 import telethon.network.mtprotosender
 import telethon.tl.core.messagecontainer
 import telethon.tl.core.tlmessage
@@ -41,10 +52,18 @@ from telethon.tl.tlobject import TLObject
 
 SAFETY_NETS_ENV = "borg_tg_safety_nets"
 
-#: The container patches replace private Telethon internals. Both versions ship
-#: byte-identical `MessageContainer.from_reader` and `MTProtoSender`'s
-#: `_process_message`/`_handle_container`/`_handle_gzip_packed`/`_handle_update`.
+#: The patches replace private Telethon internals. Both versions ship
+#: byte-identical `MessageContainer.from_reader`, `MTProtoSender`'s
+#: `_process_message`/`_handle_container`/`_handle_gzip_packed`/`_handle_update`,
+#: the re-queueing step of `MTProtoSender._reconnect`, and `_updates/messagebox.py`.
 SUPPORTED_TELETHON_VERSIONS = frozenset({"1.43.2", "1.45.0"})
+
+#: The qts updates the re-dispatch hands on. Only idempotent consumers belong
+#: here: session state is saved about once a minute, so after a hard stop the
+#: next difference can repeat updates that were already dispatched. Guest
+#: queries are deduplicated by query id; reaction updates are not listed
+#: because `history_util` merges their counts.
+REDISPATCH_UPDATE_NAMES = ("UpdateBotGuestChatQuery", "UpdateBotStopped")
 
 ALERT_INTERVAL_SECONDS = 10 * 60
 
@@ -109,9 +128,18 @@ class SafetyNet(enum.Enum):
     MESSAGE_GUARD = "message_guard"
     LOG_COUNTER = "log_counter"
     DIFFERENCE_FALLBACK = "difference_fallback"
+    QTS_REDISPATCH = "qts_redispatch"
+    AT_MOST_ONCE = "at_most_once"
 
 
-_PATCH_NETS = frozenset({SafetyNet.CONTAINER_SKIP, SafetyNet.MESSAGE_GUARD})
+_PATCH_NETS = frozenset(
+    {
+        SafetyNet.CONTAINER_SKIP,
+        SafetyNet.MESSAGE_GUARD,
+        SafetyNet.QTS_REDISPATCH,
+        SafetyNet.AT_MOST_ONCE,
+    }
+)
 
 
 def _format_constructor(constructor_id: Optional[int]) -> str:
@@ -127,6 +155,9 @@ class SafetyStats:
     by_kind: Counter = field(default_factory=Counter)
     by_constructor: Counter = field(default_factory=Counter)
     installed: set = field(default_factory=set)
+    #: Updates the qts re-dispatch recovered, by type name. They are
+    #: recoveries, not failures, so they stay out of `by_kind` and `total`.
+    recovered: Counter = field(default_factory=Counter)
 
     def record(self, kind: SafetyKind, *, constructor_id: Optional[int] = None) -> int:
         self.by_kind[kind] += 1
@@ -156,7 +187,16 @@ class SafetyStats:
             )
             or "none"
         )
-        return f"nets: {nets}; events: {kinds}; constructors: {constructors}"
+        recovered = (
+            ", ".join(
+                f"{name}={count}" for name, count in sorted(self.recovered.items())
+            )
+            or "none"
+        )
+        return (
+            f"nets: {nets}; events: {kinds}; constructors: {constructors}; "
+            f"recovered: {recovered}"
+        )
 
 
 class SafetyMonitor:
@@ -204,6 +244,18 @@ class SafetyMonitor:
             count,
         )
         self._maybe_alert(kind, constructor_id=constructor_id, count=count)
+
+    def record_recovered(self, updates: Iterable[Any]) -> None:
+        """Counts and logs updates the qts re-dispatch handed on. No alert."""
+        names = [type(update).__name__ for update in updates]
+        self.stats.recovered.update(names)
+        self._log.info(
+            "Telegram safety net (%s): re-dispatched %d qts update(s) that "
+            "getDifference recovered: %s",
+            SafetyNet.QTS_REDISPATCH.value,
+            len(names),
+            ", ".join(names),
+        )
 
     def _maybe_alert(
         self, kind: SafetyKind, *, constructor_id: Optional[int], count: int
@@ -416,6 +468,183 @@ def _guarded_process_message(
     return _process_message
 
 
+def _recovered_qts_updates(
+    box: Any,
+    other_updates: list,
+    *,
+    pts_info_cls: type,
+    secret_entry: Any,
+    update_types: tuple,
+) -> tuple:
+    """Splits a difference's `other_updates` into (re-dispatch, rest).
+
+    An update is re-dispatched when it carries a qts, is newer than the qts the
+    box held before the difference, and is one of `update_types`. Without a
+    known qts nothing can be shown to be new, so nothing is re-dispatched.
+    """
+    state = box.map.get(secret_entry)
+    if state is None or not update_types:
+        return [], list(other_updates)
+
+    recovered, rest = [], []
+    for update in other_updates:
+        info = pts_info_cls.from_update(update)
+        if (
+            info is not None
+            and info.entry is secret_entry
+            and info.pts > state.pts
+            and isinstance(update, update_types)
+        ):
+            recovered.append(update)
+        else:
+            rest.append(update)
+    recovered.sort(key=lambda update: pts_info_cls.from_update(update).pts)
+    return recovered, rest
+
+
+def _redispatching_apply_difference_type(
+    *,
+    original: Callable,
+    pts_info_cls: type,
+    secret_entry: Any,
+    update_types: tuple,
+    on_recovered: Callable[[list], None],
+):
+    """Wraps `MessageBox.apply_difference_type` to keep recovered qts updates.
+
+    Telethon applies the difference's final state first, then runs
+    `other_updates` through `process_updates`, which then sees every qts
+    update as already handled (or skips it while the secret entry is still
+    being fetched) and drops it. TDLib applies them. The wrapper runs the
+    original on the other updates only, then appends the recovered qts
+    updates, which `_update_loop` dispatches like any other. If the split
+    itself fails, the original runs unchanged: an exception here would make
+    `_update_loop` disconnect the client.
+    """
+
+    @functools.wraps(original)
+    def apply_difference_type(self, diff, chat_hashes):
+        try:
+            recovered, rest = _recovered_qts_updates(
+                self,
+                diff.other_updates,
+                pts_info_cls=pts_info_cls,
+                secret_entry=secret_entry,
+                update_types=update_types,
+            )
+        except Exception:
+            _log.exception(
+                "Telegram safety net (%s) could not split a difference; "
+                "applying it unchanged",
+                SafetyNet.QTS_REDISPATCH.value,
+            )
+            return original(self, diff, chat_hashes)
+
+        if not recovered:
+            return original(self, diff, chat_hashes)
+
+        other_updates = diff.other_updates
+        diff.other_updates = rest
+        try:
+            updates, users, chats = original(self, diff, chat_hashes)
+        finally:
+            diff.other_updates = other_updates
+
+        for update in recovered:
+            #: `process_updates` sets this on everything it sees; the loop
+            #: that reads it has already run, but keep the attribute uniform.
+            update._self_outgoing = False
+        updates.extend(recovered)
+        try:
+            on_recovered(recovered)
+        except Exception:
+            _log.exception("Could not record re-dispatched updates")
+        return updates, users, chats
+
+    return apply_difference_type
+
+
+class DeliveryUnknownError(ConnectionError):
+    """An at-most-once request was in flight when the connection dropped.
+
+    Telegram may or may not have executed it, and it was not re-sent.
+    """
+
+
+#: Futures of requests that must never be sent twice. Weak, so a finished
+#: request leaves no trace.
+_AT_MOST_ONCE_FUTURES = weakref.WeakSet()
+
+
+def mark_at_most_once(future: asyncio.Future) -> None:
+    """Marks the future `MTProtoSender.send` returned as at-most-once.
+
+    Call it before awaiting, while the request can at most be queued. A
+    reconnect then fails the future with `DeliveryUnknownError` instead of
+    re-sending the request, once it has gone out unanswered.
+    """
+    _AT_MOST_ONCE_FUTURES.add(future)
+
+
+def at_most_once_installed(*, telethon_module: Any = None) -> bool:
+    """Whether the at-most-once guard is active for this Telethon module."""
+    installation = _INSTALLATIONS.get(id(telethon_module or telethon))
+    return (
+        installation is not None
+        and SafetyNet.AT_MOST_ONCE in installation.monitor.stats.installed
+    )
+
+
+def drop_at_most_once_requests(sender: Any) -> int:
+    """Removes sent, unanswered at-most-once requests from `sender`.
+
+    `MTProtoSender._reconnect` re-queues every pending request under a fresh
+    session, which Telegram treats as a new call. Requests still in the send
+    queue were never sent, so they stay. Returns how many were dropped.
+    """
+    dropped = 0
+    for msg_id, state in list(sender._pending_state.items()):
+        if state.future not in _AT_MOST_ONCE_FUTURES:
+            continue
+        del sender._pending_state[msg_id]
+        if not state.future.done():
+            state.future.set_exception(
+                DeliveryUnknownError(
+                    f"{type(state.request).__name__} was in flight when the "
+                    "connection dropped; it may or may not have been executed, "
+                    "and it was not re-sent"
+                )
+            )
+        dropped += 1
+    return dropped
+
+
+def _at_most_once_reconnect(*, original: Callable):
+    """Wraps `MTProtoSender._reconnect` to drop at-most-once requests first.
+
+    Dropping them before the original runs means a late answer on the old
+    connection finds no state and is ignored; the caller has already been told
+    the delivery is unknown, which is the safe reading.
+    """
+
+    @functools.wraps(original)
+    async def _reconnect(self, last_error):
+        try:
+            dropped = drop_at_most_once_requests(self)
+            if dropped:
+                self._log.warning(
+                    "Telegram safety net (%s): not re-sending %d request(s) "
+                    "after the connection dropped",
+                    SafetyNet.AT_MOST_ONCE.value,
+                    dropped,
+                )
+        except Exception:
+            self._log.exception("Could not drop at-most-once requests")
+        return await original(self, last_error)
+
+    return _reconnect
+
+
 @dataclass
 class Backoff:
     """Exponential delay for a fallback that keeps firing.
@@ -623,10 +852,21 @@ def _telethon_layer(module: Any) -> Optional[int]:
         return None
 
 
-def _patch_telethon(module: Any, *, report: ReportFn) -> list:
+def _redispatch_update_types(module: Any) -> tuple:
+    return tuple(
+        getattr(module.types, name)
+        for name in REDISPATCH_UPDATE_NAMES
+        if hasattr(module.types, name)
+    )
+
+
+def _patch_telethon(
+    module: Any, *, report: ReportFn, on_recovered: Callable[[list], None]
+) -> list:
     not_found_error = module.errors.TypeNotFoundError
     container_cls = module.tl.core.messagecontainer.MessageContainer
     sender_cls = module.network.mtprotosender.MTProtoSender
+    messagebox = module._updates.messagebox
     return [
         _Patch.apply(
             container_cls,
@@ -645,6 +885,24 @@ def _patch_telethon(module: Any, *, report: ReportFn) -> list:
                 original=sender_cls.__dict__["_process_message"],
                 not_found_error=not_found_error,
                 report=report,
+            ),
+        ),
+        _Patch.apply(
+            sender_cls,
+            "_reconnect",
+            replacement=_at_most_once_reconnect(
+                original=sender_cls.__dict__["_reconnect"]
+            ),
+        ),
+        _Patch.apply(
+            messagebox.MessageBox,
+            "apply_difference_type",
+            replacement=_redispatching_apply_difference_type(
+                original=messagebox.MessageBox.__dict__["apply_difference_type"],
+                pts_info_cls=messagebox.PtsInfo,
+                secret_entry=messagebox.ENTRY_SECRET,
+                update_types=_redispatch_update_types(module),
+                on_recovered=on_recovered,
             ),
         ),
     ]
@@ -667,11 +925,13 @@ def _install(
 
     patches = []
     if version in SUPPORTED_TELETHON_VERSIONS:
-        patches = _patch_telethon(module, report=monitor.report)
+        patches = _patch_telethon(
+            module, report=monitor.report, on_recovered=monitor.record_recovered
+        )
         monitor.stats.installed.update(_PATCH_NETS)
     else:
         _log.warning(
-            "Telethon %s is not one of the versions the container patches were "
+            "Telethon %s is not one of the versions the Telethon patches were "
             "checked against (%s); not installing them",
             version,
             ", ".join(sorted(SUPPORTED_TELETHON_VERSIONS)),
@@ -706,8 +966,9 @@ def install_safety_nets(
 ) -> SafetyStats:
     """Installs the Telegram safety nets and returns their shared stats.
 
-    - The container skip and the message guard patch Telethon's classes, so
-      they apply process-wide, only on `SUPPORTED_TELETHON_VERSIONS`.
+    - The container skip, the message guard, the qts re-dispatch and the
+      at-most-once guard patch Telethon's classes, so they apply process-wide,
+      only on `SUPPORTED_TELETHON_VERSIONS`.
     - The log counter is a handler on Telethon's sender logger.
     - `client`, which must use `DifferenceFallbackMixin`, gets a
       `DifferenceFallback` reporting into the same stats.

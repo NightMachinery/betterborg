@@ -11,7 +11,8 @@ import unittest
 import telethon
 from telethon import errors, functions, types
 from telethon._updates import EntityCache, MessageBox
-from telethon._updates.messagebox import ENTRY_ACCOUNT
+from telethon._updates.messagebox import ENTRY_ACCOUNT, ENTRY_SECRET
+from telethon.network.requeststate import RequestState
 from telethon.extensions import BinaryReader
 from telethon.network.mtprotosender import MTProtoSender
 from telethon.tl.core import GzipPacked, MessageContainer, TLMessage
@@ -138,6 +139,8 @@ class ContainerSkipTests(_InstalledTestCase):
     def test_install_is_idempotent_and_uninstall_restores_telethon(self):
         original_reader = MessageContainer.__dict__["from_reader"]
         original_process = MTProtoSender.__dict__["_process_message"]
+        original_reconnect = MTProtoSender.__dict__["_reconnect"]
+        original_apply = MessageBox.__dict__["apply_difference_type"]
         stats = self.install()
         patched_reader = MessageContainer.__dict__["from_reader"]
 
@@ -148,7 +151,13 @@ class ContainerSkipTests(_InstalledTestCase):
         self.assertIsNot(patched_reader, original_reader)
         self.assertEqual(
             stats.installed,
-            {SafetyNet.CONTAINER_SKIP, SafetyNet.MESSAGE_GUARD, SafetyNet.LOG_COUNTER},
+            {
+                SafetyNet.CONTAINER_SKIP,
+                SafetyNet.MESSAGE_GUARD,
+                SafetyNet.QTS_REDISPATCH,
+                SafetyNet.AT_MOST_ONCE,
+                SafetyNet.LOG_COUNTER,
+            },
         )
         handlers = logging.getLogger(SENDER_LOGGER).handlers
         self.assertEqual(
@@ -162,6 +171,8 @@ class ContainerSkipTests(_InstalledTestCase):
 
         self.assertIs(MessageContainer.__dict__["from_reader"], original_reader)
         self.assertIs(MTProtoSender.__dict__["_process_message"], original_process)
+        self.assertIs(MTProtoSender.__dict__["_reconnect"], original_reconnect)
+        self.assertIs(MessageBox.__dict__["apply_difference_type"], original_apply)
         self.assertFalse(
             any(
                 isinstance(h, telethon_safety.TypeNotFoundLogHandler)
@@ -537,6 +548,253 @@ class LogCounterTests(_InstalledTestCase):
         self.assertEqual(stats.by_kind[SafetyKind.PROCESSING], 1)
         self.assertEqual(stats.total, 1)
         self.assertEqual(stats.by_constructor[0x5678], 1)
+
+
+def _qts_state(*, pts=100, qts=9):
+    return types.updates.State(
+        pts=pts,
+        qts=qts,
+        date=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        seq=3,
+        unread_count=0,
+    )
+
+
+def _bot_stopped(qts, *, user_id=42):
+    return types.UpdateBotStopped(
+        user_id=user_id,
+        date=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        stopped=True,
+        qts=qts,
+    )
+
+
+def _difference(other_updates, *, qts, slice_p=False):
+    kwargs = dict(
+        new_messages=[],
+        new_encrypted_messages=[],
+        other_updates=list(other_updates),
+        chats=[],
+        users=[],
+    )
+    if slice_p:
+        return types.updates.DifferenceSlice(
+            intermediate_state=_qts_state(qts=qts), **kwargs
+        )
+    return types.updates.Difference(state=_qts_state(qts=qts), **kwargs)
+
+
+def _apply_difference(diff, *, entries=(ENTRY_SECRET,), local_qts=9):
+    box = MessageBox(logging.getLogger("test.messagebox"))
+
+    async def run():
+        #: MessageBox deadlines read the running loop, so stay inside one.
+        box.set_state(_qts_state(qts=local_qts))
+        for entry in entries:
+            box.try_begin_get_diff(entry, "test gap")
+        return box.apply_difference(diff, EntityCache())
+
+    updates, _users, _chats = asyncio.run(run())
+    return box, updates
+
+
+def _of_type(updates, cls):
+    #: With every entry of `other_updates` taken out, Telethon's
+    #: `process_updates` treats the empty `Updates` batch as one update and
+    #: returns it, as it does for any empty difference; ignore it.
+    return [update for update in updates if isinstance(update, cls)]
+
+
+class QtsRedispatchTests(_InstalledTestCase):
+    def test_without_the_net_recovered_qts_updates_are_dropped(self):
+        telethon_safety.uninstall_safety_nets()
+
+        _box, updates = _apply_difference(
+            _difference([_bot_stopped(10), _bot_stopped(11)], qts=11)
+        )
+
+        self.assertEqual(_of_type(updates, types.UpdateBotStopped), [])
+
+    def test_recovered_qts_updates_are_dispatched_once_in_qts_order(self):
+        stats = self.install()
+
+        box, updates = _apply_difference(
+            _difference([_bot_stopped(11), _bot_stopped(10)], qts=11)
+        )
+
+        self.assertEqual(
+            [u.qts for u in _of_type(updates, types.UpdateBotStopped)], [10, 11]
+        )
+        self.assertEqual(box.map[ENTRY_SECRET].pts, 11)
+        self.assertEqual(stats.recovered["UpdateBotStopped"], 2)
+        self.assertEqual(stats.total, 0)
+
+    def test_works_while_both_entries_are_being_fetched(self):
+        self.install()
+
+        _box, updates = _apply_difference(
+            _difference([_bot_stopped(10)], qts=10),
+            entries=(ENTRY_ACCOUNT, ENTRY_SECRET),
+        )
+
+        self.assertEqual(len(_of_type(updates, types.UpdateBotStopped)), 1)
+
+    def test_a_difference_slice_is_handled_too(self):
+        self.install()
+
+        box, updates = _apply_difference(
+            _difference([_bot_stopped(10)], qts=10, slice_p=True)
+        )
+
+        self.assertEqual(len(_of_type(updates, types.UpdateBotStopped)), 1)
+        self.assertEqual(box.map[ENTRY_SECRET].pts, 10)
+
+    def test_updates_at_or_below_the_local_qts_are_not_repeated(self):
+        self.install()
+
+        _box, updates = _apply_difference(
+            _difference([_bot_stopped(8), _bot_stopped(9), _bot_stopped(10)], qts=10),
+            local_qts=9,
+        )
+
+        self.assertEqual(
+            [u.qts for u in _of_type(updates, types.UpdateBotStopped)], [10]
+        )
+
+    def test_qts_types_outside_the_allow_list_stay_dropped(self):
+        self.install()
+        purchase = types.UpdateBotPurchasedPaidMedia(user_id=1, payload="p", qts=10)
+
+        _box, updates = _apply_difference(_difference([purchase], qts=10))
+
+        self.assertEqual(_of_type(updates, types.UpdateBotPurchasedPaidMedia), [])
+
+    def test_updates_without_pts_or_qts_pass_through_unchanged(self):
+        self.install()
+        config = types.UpdateConfig()
+
+        _box, updates = _apply_difference(
+            _difference([config, _bot_stopped(10)], qts=10)
+        )
+
+        self.assertIn(config, updates)
+        self.assertEqual(len(_of_type(updates, types.UpdateBotStopped)), 1)
+
+    def test_nothing_is_redispatched_without_a_known_qts(self):
+        box = MessageBox(logging.getLogger("test.messagebox"))
+
+        recovered, rest = telethon_safety._recovered_qts_updates(
+            box,
+            [_bot_stopped(10)],
+            pts_info_cls=telethon._updates.messagebox.PtsInfo,
+            secret_entry=ENTRY_SECRET,
+            update_types=(types.UpdateBotStopped,),
+        )
+
+        self.assertEqual(recovered, [])
+        self.assertEqual(len(rest), 1)
+
+    def test_a_failing_split_falls_back_to_the_original(self):
+        class _BrokenPtsInfo:
+            @classmethod
+            def from_update(cls, update):
+                raise RuntimeError("boom")
+
+        calls = []
+
+        def original(box, diff, chat_hashes):
+            calls.append(diff)
+            return ["from the original"], [], []
+
+        apply = telethon_safety._redispatching_apply_difference_type(
+            original=original,
+            pts_info_cls=_BrokenPtsInfo,
+            secret_entry=ENTRY_SECRET,
+            update_types=(types.UpdateBotStopped,),
+            on_recovered=lambda updates: None,
+        )
+        box = SimpleNamespace(map={ENTRY_SECRET: SimpleNamespace(pts=9)})
+        diff = _difference([_bot_stopped(10)], qts=10)
+
+        with self.assertLogs(telethon_safety.__name__, logging.ERROR):
+            result = apply(box, diff, None)
+
+        self.assertEqual(result, (["from the original"], [], []))
+        self.assertEqual(len(calls[0].other_updates), 1)
+
+    def test_the_allow_list_names_real_types(self):
+        names = {
+            cls.__name__ for cls in telethon_safety._redispatch_update_types(telethon)
+        }
+
+        self.assertIn("UpdateBotStopped", names)
+        if hasattr(types, "UpdateBotGuestChatQuery"):
+            self.assertIn("UpdateBotGuestChatQuery", names)
+
+
+class _FakeReconnectSender:
+    def __init__(self, pending):
+        self._pending_state = dict(pending)
+        self._log = logging.getLogger("test.sender")
+        self.requeued = None
+
+    async def original_reconnect(self, last_error):
+        #: What Telethon's `_reconnect` does once it is connected again.
+        self.requeued = list(self._pending_state.values())
+        self._pending_state.clear()
+
+
+class AtMostOnceTests(_InstalledTestCase):
+    def test_a_reconnect_fails_marked_requests_instead_of_resending_them(self):
+        async def run():
+            marked = RequestState(functions.PingRequest(ping_id=1))
+            plain = RequestState(functions.PingRequest(ping_id=2))
+            telethon_safety.mark_at_most_once(marked.future)
+            sender = _FakeReconnectSender({1: marked, 2: plain})
+            reconnect = telethon_safety._at_most_once_reconnect(
+                original=_FakeReconnectSender.original_reconnect
+            )
+
+            await reconnect(sender, ConnectionError("dropped"))
+
+            return sender, marked, plain
+
+        sender, marked, plain = asyncio.run(run())
+
+        self.assertEqual(sender.requeued, [plain])
+        self.assertIsInstance(
+            marked.future.exception(), telethon_safety.DeliveryUnknownError
+        )
+        self.assertFalse(plain.future.done())
+
+    def test_only_sent_requests_are_dropped(self):
+        async def run():
+            queued = RequestState(functions.PingRequest(ping_id=3))
+            telethon_safety.mark_at_most_once(queued.future)
+            sender = _FakeReconnectSender({})
+            dropped = telethon_safety.drop_at_most_once_requests(sender)
+            return dropped, queued
+
+        dropped, queued = asyncio.run(run())
+
+        self.assertEqual(dropped, 0)
+        self.assertFalse(queued.future.done())
+
+    def test_install_state_is_reported(self):
+        self.install()
+        self.assertTrue(telethon_safety.at_most_once_installed())
+
+        telethon_safety.uninstall_safety_nets()
+        self.assertFalse(telethon_safety.at_most_once_installed())
+
+    def test_the_patched_reconnect_wraps_telethons(self):
+        original = MTProtoSender.__dict__["_reconnect"]
+        self.install()
+
+        patched = MTProtoSender.__dict__["_reconnect"]
+
+        self.assertIsNot(patched, original)
+        self.assertIs(patched.__wrapped__, original)
 
 
 if __name__ == "__main__":

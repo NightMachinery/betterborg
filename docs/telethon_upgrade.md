@@ -115,6 +115,35 @@ first connect. The nets, and the event kind each one records:
     its own streak: when many channels fail in one sweep, none of them waits
     behind the others.
 
+Two more nets fix Telethon behaviour that loses or repeats things without any
+parsing error. Guest mode depends on both (see [guest_mode.md](guest_mode.md)):
+
+- **qts re-dispatch** (counted in `recovered`, not as an event): wraps
+  `MessageBox.apply_difference_type`. Telethon applies a difference's final
+  state before it runs `other_updates` through `process_updates`, so every
+  qts update that `getDifference` recovered after a gap looks already handled
+  and is dropped. TDLib applies them. The net hands on the qts updates that
+  are newer than the qts held before the difference and whose type is in
+  `REDISPATCH_UPDATE_NAMES` (`UpdateBotGuestChatQuery`, `UpdateBotStopped`),
+  in qts order, after the rest of the difference.
+  - The list is an allow-list because redelivery can repeat updates: session
+    state is saved about once a minute, so after a hard stop the next
+    difference may contain updates that were already dispatched. Only
+    consumers that deduplicate belong on it. Reaction updates stay off it,
+    since `history_util` merges their counts.
+  - If the split itself fails, the difference is applied unchanged. An
+    exception there would make `_update_loop` disconnect the client.
+  - Re-dispatched updates are logged at INFO and counted in
+    `SafetyStats.recovered`, which `summary()` prints. They send no alert.
+- **At-most-once guard** (logged, not counted): wraps `MTProtoSender._reconnect`,
+  which re-queues every sent but unanswered request under a fresh session.
+  Telegram treats the re-sent copy as a new call, so a guest answer caught by
+  a dropped connection would post twice. A request whose future was passed to
+  `mark_at_most_once` (as `tg_raw.send_once` does) is removed first, and its
+  future fails with `DeliveryUnknownError`: it may or may not have run, and it
+  was not re-sent. Requests still in the send queue were never sent and are
+  left alone. `at_most_once_installed()` says whether the guard is active.
+
 Every event is logged as a warning starting with `Telegram safety net`, counted
 per kind and per constructor in `borg.safety_stats` (a `SafetyStats`, whose
 `summary()` gives one line), and alerted to the log chat. Alerts go out at
@@ -131,9 +160,10 @@ silently disable them.
 
 ### Version guard
 
-The container skip and the message guard replace private Telethon code, so
-they install only on the versions they were checked against: 1.43.2 and
-1.45.0. On any other version they are skipped with a warning. The log counter
+The container skip, the message guard, the qts re-dispatch and the
+at-most-once guard replace private Telethon code, so they install only on the
+versions they were checked against: 1.43.2 and 1.45.0. On any other version
+they are skipped with a warning. The log counter
 and the difference fallback install everywhere. The fallback only substitutes
 answers Telegram itself could give (an empty difference, a private channel),
 so it is safe on any version. If a future Telethon rewords its log line, the
@@ -146,7 +176,14 @@ counter simply stops matching. Before adding a version to
   `network/mtprotosender.py`. The placeholder relies on `_handle_update`
   dropping anything that is not an `Updates`;
 - `_update_loop` in `client/updates.py`, whose handling of
-  `ChannelPrivateError` the channel fallback relies on.
+  `ChannelPrivateError` the channel fallback relies on, and which must still
+  dispatch everything `apply_difference` returns;
+- `_updates/messagebox.py`: `apply_difference_type`, `process_updates`,
+  `apply_pts_info`, `set_state` and `PtsInfo.from_update`, which the qts
+  re-dispatch mirrors;
+- `_reconnect` in `network/mtprotosender.py` (it must still re-queue
+  `_pending_state`), `MTProtoSender.send` (it must still return the request's
+  future) and `network/requeststate.py`, for the at-most-once guard.
 
 `uniborg/tg_compat.py` has no version guard, but it also leans on Telethon
 internals. Check them on any new version: the private `Button._is_inline` in
@@ -168,8 +205,13 @@ stops being true.
   unacknowledged. It is only counted.
 - Skipping a difference window loses the updates in it. That is why every
   skip alerts.
-- Telethon's `MessageBox` drops `pts`/`qts` updates that `getDifference`
-  recovered after a gap. That is a separate problem, planned as its own patch.
+- The qts re-dispatch only covers the types on its allow-list. Account `pts`
+  updates (edits, deletions, read receipts) that `getDifference` recovers are
+  still dropped, deliberately: re-dispatching them would change what every
+  plugin sees after a reconnect. Channel differences have the same flaw
+  (`apply_channel_difference`), which guest mode does not need.
+- The at-most-once guard cannot tell whether an interrupted request ran. The
+  caller only learns that the delivery is unknown.
 
 ## Upgrade path to 1.45.0
 
