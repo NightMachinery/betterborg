@@ -172,6 +172,24 @@ def private_topic_id(message) -> Optional[int]:
     return None
 
 
+def private_message_topic_id(message) -> Optional[int]:
+    """The private topic MESSAGE sits in, or None outside topics.
+
+    Unlike `private_topic_id`, this checks the chat first, so it is safe on a
+    message from any chat: outside private chats with users it gives None. It
+    also reads the message Telethon builds itself for an
+    `UpdateShortSentMessage`, whose `reply_to` is the request's
+    `InputReplyToMessage` rather than a header; there `top_msg_id` is the
+    topic the send was placed in.
+    """
+    if private_chat_id(getattr(message, "peer_id", None)) is None:
+        return None
+    reply_to = getattr(message, "reply_to", None)
+    if isinstance(reply_to, types.InputReplyToMessage):
+        return reply_to.top_msg_id
+    return private_topic_id(message)
+
+
 async def resolve_reply_target(
     message,
     *,

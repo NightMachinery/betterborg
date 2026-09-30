@@ -31,6 +31,7 @@ from dataclasses import dataclass, replace
 
 # Redis utilities
 from . import redis_util
+from . import topics
 
 # --- Configuration ---
 HISTORY_LIMIT = 5000  # Max number of message IDs to store per chat
@@ -58,15 +59,25 @@ class HistoryItem:
     timestamp: datetime
     deleted: bool = False
     reactions: Optional[dict] = None
+    #: The private topic the message sits in (`topics.private_message_topic_id`).
+    #: None outside topics, and for items recorded before topics were.
+    topic_id: Optional[int] = None
 
     def to_dict(self) -> dict:
-        """Convert to dictionary for Redis storage."""
-        return {
+        """Convert to dictionary for Redis storage.
+
+        `topic_id` is written only when set, so an item outside topics is
+        stored exactly as before topics were recorded.
+        """
+        data = {
             "message_id": self.message_id,
             "timestamp": self.timestamp.isoformat(),
             "deleted": self.deleted,
             "reactions": self.reactions,
         }
+        if self.topic_id is not None:
+            data["topic_id"] = self.topic_id
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "HistoryItem":
@@ -76,6 +87,7 @@ class HistoryItem:
             timestamp=datetime.fromisoformat(data["timestamp"]),
             deleted=data.get("deleted", False),
             reactions=data.get("reactions"),
+            topic_id=data.get("topic_id"),
         )
 
 
@@ -366,18 +378,31 @@ borg: TelegramClient = None
 # --- Storage Backend Functions ---
 
 
-async def _add_message_redis(chat_id: int, message_id: int, timestamp: datetime):
+async def _add_message_redis(
+    chat_id: int,
+    message_id: int,
+    timestamp: datetime,
+    *,
+    topic_id: Optional[int] = None,
+):
     """Add message to Redis storage, preserving any cached metadata."""
     existing_reactions = await _get_message_reactions_redis(chat_id, message_id)
     item = HistoryItem(
         message_id=message_id,
         timestamp=timestamp,
         reactions=existing_reactions,
+        topic_id=topic_id,
     )
     await _upsert_history_item_redis(chat_id, item)
 
 
-def _add_message_memory(chat_id: int, message_id: int, timestamp: datetime):
+def _add_message_memory(
+    chat_id: int,
+    message_id: int,
+    timestamp: datetime,
+    *,
+    topic_id: Optional[int] = None,
+):
     """Add message to in-memory storage (fallback), preserving metadata."""
     existing_reactions = _get_message_reactions_memory(chat_id, message_id)
     _upsert_history_item_memory(
@@ -386,6 +411,7 @@ def _add_message_memory(chat_id: int, message_id: int, timestamp: datetime):
             message_id=message_id,
             timestamp=timestamp,
             reactions=existing_reactions,
+            topic_id=topic_id,
         ),
     )
 
@@ -549,18 +575,75 @@ async def _get_message_reactions_redis(chat_id: int, message_id: int) -> Optiona
 # --- Public API ---
 
 
-async def add_message(chat_id: int, message_id: int, timestamp: datetime):
-    """Adds a new message to the history storage."""
+async def add_message(
+    chat_id: int,
+    message_id: int,
+    timestamp: datetime,
+    *,
+    topic_id: Optional[int] = None,
+):
+    """Adds a new message to the history storage.
+
+    TOPIC_ID is the private topic the message sits in, or None outside topics.
+    """
     if redis_util.is_redis_available():
         try:
-            await _add_message_redis(chat_id, message_id, timestamp)
+            await _add_message_redis(chat_id, message_id, timestamp, topic_id=topic_id)
             return
         except Exception as e:
             print(f"HistoryUtil: Redis add_message failed, falling back to memory: {e}")
 
     # Fallback to memory storage
     if redis_util.FALLBACK_TO_MEMORY:
-        _add_message_memory(chat_id, message_id, timestamp)
+        _add_message_memory(chat_id, message_id, timestamp, topic_id=topic_id)
+
+
+async def record_message(message: Message):
+    """Adds MESSAGE to the history storage, under the private topic it sits in."""
+    await add_message(
+        message.chat_id,
+        message.id,
+        message.date,
+        topic_id=topics.private_message_topic_id(message),
+    )
+
+
+async def _load_history_items(chat_id: int, *, operation: str) -> List[HistoryItem]:
+    """The chat's history items, oldest first, from Redis or else from memory.
+
+    OPERATION names the caller in the message logged when Redis fails.
+    """
+    if redis_util.is_redis_available():
+        try:
+            return await _get_history_items_redis(chat_id)
+        except Exception as e:
+            print(f"HistoryUtil: Redis {operation} failed, falling back to memory: {e}")
+
+    if redis_util.FALLBACK_TO_MEMORY:
+        return _get_history_items_memory(chat_id)
+
+    return []
+
+
+async def get_last_n_topic_ids(
+    chat_id: int,
+    topic_id: int,
+    *,
+    n: int,
+    skip_deleted_p: bool = True,
+) -> List[int]:
+    """The ids of the last N messages recorded in private topic TOPIC_ID, oldest first.
+
+    Only items that carry TOPIC_ID count, so messages recorded before topics
+    were recorded are never part of a topic.
+    """
+    items = await _load_history_items(chat_id, operation="get_last_n_topic_ids")
+    ids = [
+        item.message_id
+        for item in items
+        if item.topic_id == topic_id and not (skip_deleted_p and item.deleted)
+    ]
+    return ids[-n:] if n > 0 else []
 
 
 async def mark_as_deleted(chat_id: int, message_ids: List[int]):
@@ -795,6 +878,19 @@ def _merge_aggregate_reaction_update(existing, update):
     )
 
 
+def _item_with_reactions(
+    existing: Optional[HistoryItem],
+    *,
+    message_id: int,
+    reactions: Optional[dict],
+    updated_at: datetime,
+) -> HistoryItem:
+    """EXISTING with REACTIONS, or a new item for MESSAGE_ID when there is none."""
+    if existing is not None:
+        return replace(existing, reactions=reactions)
+    return HistoryItem(message_id=message_id, timestamp=updated_at, reactions=reactions)
+
+
 async def record_message_reactions(
     chat_id: int, message_id: int, reactions, updated_at: Optional[datetime] = None
 ):
@@ -809,11 +905,11 @@ async def record_message_reactions(
             existing = next(
                 (item for item in items if item.message_id == message_id), None
             )
-            item = HistoryItem(
+            item = _item_with_reactions(
+                existing,
                 message_id=message_id,
-                timestamp=existing.timestamp if existing else updated_at,
-                deleted=existing.deleted if existing else False,
                 reactions=reactions_data,
+                updated_at=updated_at,
             )
             if await _upsert_history_item_redis(chat_id, item):
                 return True
@@ -833,11 +929,11 @@ async def record_message_reactions(
         )
         _upsert_history_item_memory(
             chat_id,
-            HistoryItem(
+            _item_with_reactions(
+                existing,
                 message_id=message_id,
-                timestamp=existing.timestamp if existing else updated_at,
-                deleted=existing.deleted if existing else False,
                 reactions=reactions_data,
+                updated_at=updated_at,
             ),
         )
         return True
@@ -1089,7 +1185,7 @@ async def initialize_history_handler():
     async def incoming_message_recorder(event: events.NewMessage.Event):
         # print(f"History: new message in {event.chat_id}: {event.id}, text (truncated):\n{event.text[:100]}")
 
-        await add_message(event.chat_id, event.id, event.date)
+        await record_message(event.message)
 
     # --- 2. Handler for Deleted Messages ---
     @borg.on(events.MessageDeleted)
@@ -1130,9 +1226,7 @@ async def initialize_history_handler():
             sent_message: Message = await original_send_message(*args, **kwargs)
             # After the message is sent, log its ID
             if sent_message:
-                await add_message(
-                    sent_message.chat_id, sent_message.id, sent_message.date
-                )
+                await record_message(sent_message)
             return sent_message
 
         async def patched_send_file(*args, **kwargs):
@@ -1143,9 +1237,7 @@ async def initialize_history_handler():
                 messages = result if isinstance(result, list) else [result]
                 for sent_message in messages:
                     if sent_message:
-                        await add_message(
-                            sent_message.chat_id, sent_message.id, sent_message.date
-                        )
+                        await record_message(sent_message)
             return result
 
         # Replace the methods on the live client instance with our new versions
@@ -1161,7 +1253,7 @@ async def initialize_history_handler():
         @borg.on(events.NewMessage(outgoing=True))
         async def outgoing_message_recorder(event: events.NewMessage.Event):
             """Records every outgoing message ID to the history cache."""
-            await add_message(event.chat_id, event.id, event.date)
+            await record_message(event.message)
 
         print(
             "HistoryUtil (User Mode): Incoming and outgoing message recorders have been activated."
