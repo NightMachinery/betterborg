@@ -1,4 +1,4 @@
-"""Reply detection inside forum and private-chat topics.
+"""Reply detection and thread context inside forum and private-chat topics.
 
 Terms used below:
 
@@ -6,6 +6,8 @@ Terms used below:
   opens a topic.
 - A *plain* topic message is one the user sent without replying to anything.
   Telegram still gives it a reply header, pointing at the topic root.
+- *Thread context* is what a bot uses for a message in a private topic: the
+  topic's own recorded messages (`llm_chat.THREAD_CONTEXT_MODE`).
 - The shapes are the ones a canary bot observed live (Telethon 1.45, layer
   229; layer 224 carries the same `MessageReplyHeader` fields):
   - private chat: the root is message 322 in the bot's box, the topic id
@@ -19,7 +21,10 @@ Terms used below:
 
 import asyncio
 import builtins
+from datetime import datetime, timedelta, timezone
 import importlib
+from pathlib import Path
+import tempfile
 import unittest
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -34,7 +39,7 @@ from telethon.tl.types import (
     PeerUser,
 )
 
-from uniborg import topics
+from uniborg import history_util, topics
 
 
 class _FakeLoop:
@@ -119,11 +124,16 @@ def _outside_topics(msg_id, *, parent=None):
 
 
 class _Chat:
-    """The messages of one chat, and a log of the ones loaded by id."""
+    """The messages of one chat, and a log of the ones loaded by id.
+
+    `fetched` logs single loads; `batches` logs the lists of ids loaded at
+    once, as `build_conversation_history` loads the history.
+    """
 
     def __init__(self, *messages):
         self.by_id = {m.id: m for m in messages}
         self.fetched = []
+        self.batches = []
         self.client = SimpleNamespace(get_messages=self.get_messages)
 
     async def fetch(self, msg_id):
@@ -131,6 +141,9 @@ class _Chat:
         return self.by_id.get(msg_id)
 
     async def get_messages(self, chat_id, *, ids):
+        if isinstance(ids, list):
+            self.batches.append(list(ids))
+            return [self.by_id.get(msg_id) for msg_id in ids]
         return await self.fetch(ids)
 
 
@@ -360,6 +373,9 @@ class SmartModeTests(unittest.TestCase):
         state = {USER_ID: "until_separator"}
         with ExitStack() as stack:
             enter = stack.enter_context
+            #: A bot uses thread context inside private topics instead
+            #: (ThreadContextModeTests); a user account still switches.
+            enter(patch.object(plugin, "IS_BOT", False))
             enter(patch.object(plugin, "override_chat_context_mode", {}))
             enter(patch.object(plugin, "SMART_CONTEXT_STATE", state))
             enter(patch.object(topics, "TOPIC_ROOTS", topics.TopicRootCache()))
@@ -434,6 +450,404 @@ class GroupReplyActivationTests(unittest.TestCase):
     def test_an_explicit_reply_to_the_bot_in_a_topic_is_answered(self):
         message = _forum(50, parent=45, top_id=FORUM_TOPIC_ID)
         self.assertEqual(self.is_valid(message), (True, 1))
+
+
+T0 = datetime(2026, 9, 29, tzinfo=timezone.utc)
+
+
+def _said(msg_id, text, *, top_id=TOPIC_ID, parent=ROOT_ID, bot=False):
+    """A message saying TEXT in private topic TOP_ID, or outside topics for None.
+
+    PARENT is what it replies to; the default makes a plain topic message.
+    """
+    header = None
+    if top_id is not None:
+        header = MessageReplyHeader(
+            forum_topic=True, reply_to_msg_id=parent, reply_to_top_id=top_id
+        )
+    elif parent is not None:
+        header = MessageReplyHeader(reply_to_msg_id=parent)
+    message = Message(
+        id=msg_id,
+        peer_id=PeerUser(USER_ID),
+        date=T0 + timedelta(seconds=msg_id),
+        message=text,
+        out=bot,
+        reply_to=header,
+    )
+    #: Telethon renders `text` through its client's parse mode; without a
+    #: client it is None. A client with no parse mode gives the raw text.
+    message._client = SimpleNamespace(parse_mode=None)
+    return message
+
+
+#: A conversation in topic TOPIC_ID with no explicit replies, interleaved
+#: with a message in another topic and one outside topics ("All").
+CONVERSATION = (
+    _said(330, "What is a monad?"),
+    _said(331, "A way to chain computations.", parent=330, bot=True),
+    _said(332, "unrelated", parent=OTHER_ROOT_ID, top_id=OTHER_TOPIC_ID),
+    _said(333, "Send your API key.", top_id=None, parent=None, bot=True),
+    _said(334, "Give an example."),
+    _said(335, "Maybe is one.", parent=334, bot=True),
+    _said(336, "And lists?"),
+)
+THREAD_IDS = [330, 331, 334, 335, 336]
+
+
+class _BotChatCase(unittest.TestCase):
+    """A bot's private chat with topics, and the history the bot recorded.
+
+    The context built for a message is read off the message list
+    `build_conversation_history` hands to `_process_turns_to_history`, which
+    is where every mode's messages become the prompt.
+    """
+
+    def setUp(self):
+        self.chat = _Chat(
+            _topic_root(), _topic_root(OTHER_ROOT_ID, top_id=OTHER_TOPIC_ID)
+        )
+        self.prefs = plugin.UserPrefs()
+        self.smart_state = {}
+        self.chat_mode = None
+        self.info = AsyncMock()
+        history_util._history_cache.clear()
+        history_util._message_id_to_chat_id_map.clear()
+        self.addCleanup(history_util._history_cache.clear)
+        self.addCleanup(history_util._message_id_to_chat_id_map.clear)
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        enter = stack.enter_context
+        enter(patch.object(plugin, "IS_BOT", True))
+        enter(patch.object(plugin, "override_chat_context_mode", {}))
+        enter(patch.object(plugin, "SMART_CONTEXT_STATE", self.smart_state))
+        enter(patch.object(plugin, "send_info_message", new=self.info))
+        enter(patch.object(plugin, "_refresh_message_reactions", new=AsyncMock()))
+        enter(patch.object(topics, "TOPIC_ROOTS", topics.TopicRootCache()))
+        enter(patch.object(plugin.redis_util, "is_redis_available", return_value=False))
+        enter(patch.object(plugin.user_manager, "get_prefs", return_value=self.prefs))
+        enter(
+            patch.object(
+                plugin.chat_manager,
+                "get_context_mode",
+                side_effect=lambda chat_id: self.chat_mode,
+            )
+        )
+        enter(
+            patch.object(
+                plugin.chat_manager, "get_last_n_messages_limit", return_value=None
+            )
+        )
+        enter(
+            patch.object(
+                plugin.chat_manager, "get_include_reply_chain", return_value=None
+            )
+        )
+        self.temp_dir = Path(enter(tempfile.TemporaryDirectory()))
+
+    def see(self, *messages):
+        """The bot receives or sends MESSAGES, and records them."""
+        for message in messages:
+            self.chat.by_id[message.id] = message
+            asyncio.run(history_util.record_message(message))
+
+    def event(self, message):
+        return _Event(
+            message,
+            client=self.chat.client,
+            chat_id=USER_ID,
+            sender_id=USER_ID,
+            is_private=True,
+        )
+
+    def mode_for(self, message):
+        return asyncio.run(
+            plugin._determine_context_mode_and_handle_transitions(
+                self.event(message),
+                prefs=self.prefs,
+                user_id=USER_ID,
+                is_private=True,
+                group_id=None,
+            )
+        )
+
+    def context_of(self, message, *, mode=None):
+        """The mode used for MESSAGE, and the ids of its context, in order."""
+        mode = mode or self.mode_for(message)
+        processed = []
+
+        async def capture(event, messages, *args, **kwargs):
+            processed.extend(messages)
+            return [], []
+
+        with patch.object(plugin, "_process_turns_to_history", new=capture):
+            asyncio.run(
+                plugin.build_conversation_history(
+                    self.event(message),
+                    mode,
+                    self.temp_dir,
+                    {},
+                    "api-key",
+                    "model",
+                    is_private=True,
+                    include_system_prompt_p=False,
+                )
+            )
+        return mode, [m.id for m in processed]
+
+
+class ThreadContextTests(_BotChatCase):
+    def setUp(self):
+        super().setUp()
+        self.see(*CONVERSATION)
+
+    def test_a_conversation_without_replies_is_the_whole_thread(self):
+        self.assertEqual(
+            self.context_of(CONVERSATION[-1]),
+            (plugin.THREAD_CONTEXT_MODE, THREAD_IDS),
+        )
+
+    def test_the_thread_is_loaded_in_one_batch(self):
+        self.context_of(CONVERSATION[-1])
+        self.assertEqual(self.chat.batches, [THREAD_IDS])
+        #: The root, once, to tell the plain message from a reply.
+        self.assertEqual(self.chat.fetched, [ROOT_ID])
+
+    def test_the_other_topic_has_its_own_thread(self):
+        later = _said(
+            337, "still unrelated", parent=OTHER_ROOT_ID, top_id=OTHER_TOPIC_ID
+        )
+        self.see(later)
+        self.assertEqual(self.context_of(later)[1], [332, 337])
+
+    def test_the_topic_root_is_not_content(self):
+        #: As if something had recorded the root under its topic.
+        asyncio.run(history_util.add_message(USER_ID, ROOT_ID, T0, topic_id=TOPIC_ID))
+        self.assertEqual(self.context_of(CONVERSATION[-1])[1], THREAD_IDS)
+
+    def test_a_loaded_messages_own_header_has_the_last_word(self):
+        stray = _said(337, "filed wrongly", parent=OTHER_ROOT_ID, top_id=OTHER_TOPIC_ID)
+        self.chat.by_id[337] = stray
+        asyncio.run(
+            history_util.add_message(USER_ID, 337, stray.date, topic_id=TOPIC_ID)
+        )
+        self.assertEqual(self.context_of(CONVERSATION[-1])[1], THREAD_IDS)
+
+    def test_the_last_n_limit_caps_the_thread(self):
+        self.prefs.last_n_messages_limit = 3
+        self.assertEqual(self.context_of(CONVERSATION[-1])[1], [334, 335, 336])
+
+    def test_an_explicit_reply_in_the_topic_still_gets_the_whole_thread(self):
+        reply = _said(337, "Back to chaining?", parent=331)
+        self.see(reply)
+        self.assertEqual(self.context_of(reply)[1], THREAD_IDS + [337])
+
+    def test_an_explicit_reply_beyond_the_cap_brings_its_chain(self):
+        self.prefs.last_n_messages_limit = 2
+        reply = _said(337, "Back to chaining?", parent=331)
+        self.see(reply)
+        self.assertEqual(self.context_of(reply)[1], [330, 331, 336, 337])
+
+    def test_a_separator_starts_the_thread_afresh(self):
+        self.see(_said(337, "---"), _said(338, "New question."))
+        self.assertEqual(self.context_of(self.chat.by_id[338])[1], [338])
+
+    def test_messages_recorded_before_topics_were_are_left_out(self):
+        #: A legacy item: in the topic by its header, recorded without a topic.
+        early = _said(329, "Hello")
+        self.chat.by_id[329] = early
+        asyncio.run(history_util.add_message(USER_ID, 329, early.date))
+        self.assertEqual(self.context_of(CONVERSATION[-1])[1], THREAD_IDS)
+
+
+class ThreadContextModeTests(_BotChatCase):
+    def test_every_context_mode_gives_way_in_a_topic(self):
+        for mode in plugin.CONTEXT_MODES:
+            with self.subTest(mode=mode):
+                self.prefs.context_mode = mode
+                self.assertEqual(
+                    self.mode_for(_said(330, "hi")), plugin.THREAD_CONTEXT_MODE
+                )
+
+    def test_a_chat_setting_gives_way_too(self):
+        self.chat_mode = "last_N"
+        self.assertEqual(self.mode_for(_said(330, "hi")), plugin.THREAD_CONTEXT_MODE)
+
+    def test_smart_mode_neither_switches_nor_applies(self):
+        self.prefs.context_mode = "smart"
+        self.smart_state[USER_ID] = "until_separator"
+        self.see(_said(330, "hi"))
+        reply = _said(331, "a real reply", parent=330)
+        self.assertEqual(self.mode_for(reply), plugin.THREAD_CONTEXT_MODE)
+        self.assertEqual(self.smart_state, {USER_ID: "until_separator"})
+        self.info.assert_not_awaited()
+
+    def test_a_separator_in_a_topic_clears_it_and_is_not_answered(self):
+        self.prefs.context_mode = "smart"
+        self.smart_state[USER_ID] = "reply_chain"
+        self.assertIsNone(self.mode_for(_said(330, "---")))
+        self.assertEqual(self.info.await_args.args[1], plugin.THREAD_SEPARATOR_REPLY)
+        self.assertEqual(self.smart_state, {USER_ID: "reply_chain"})
+
+    def test_outside_topics_the_context_mode_applies(self):
+        for mode in ("reply_chain", "last_N", "until_separator"):
+            with self.subTest(mode=mode):
+                self.prefs.context_mode = mode
+                outside = _said(330, "hi", top_id=None, parent=None)
+                self.assertEqual(self.mode_for(outside), mode)
+
+    def test_a_user_account_keeps_its_context_mode_in_a_topic(self):
+        self.prefs.context_mode = "last_N"
+        with patch.object(plugin, "IS_BOT", False):
+            self.assertEqual(self.mode_for(_said(330, "hi")), "last_N")
+
+
+class OutsideTopicsContextTests(_BotChatCase):
+    """Outside topics, each mode builds the context it built before."""
+
+    def setUp(self):
+        super().setUp()
+        self.see(*CONVERSATION)
+        self.chain = (
+            _said(340, "one", top_id=None, parent=None),
+            _said(341, "two", top_id=None, parent=340, bot=True),
+            _said(342, "three", top_id=None, parent=341),
+        )
+        self.see(*self.chain)
+
+    def test_the_reply_chain_is_unchanged(self):
+        self.assertEqual(
+            self.context_of(self.chain[-1]), ("reply_chain", [340, 341, 342])
+        )
+        #: Loaded one by one up the chain, and no history is read.
+        self.assertEqual(self.chat.fetched, [341, 340])
+        self.assertEqual(self.chat.batches, [])
+
+    def test_last_n_still_spans_the_whole_chat(self):
+        self.prefs.context_mode = "last_N"
+        everything = sorted(m.id for m in CONVERSATION + self.chain)
+        self.assertEqual(self.context_of(self.chain[-1]), ("last_N", everything))
+
+    def test_thread_context_needs_a_topic(self):
+        with self.assertRaises(ValueError):
+            self.context_of(self.chain[-1], mode=plugin.THREAD_CONTEXT_MODE)
+
+
+class ThreadStatusTests(_BotChatCase):
+    IN_TOPIC_STATUS = (
+        "∙ **Current Mode:** `Topic Thread (Limit: 100)`\n"
+        "∙ **Source:** This is a private topic, and inside private topics I "
+        "always use the topic's own messages.\n"
+        "∙ **Outside Topics:** `Reply Chain`, from your **personal default** "
+        "for private chats."
+    )
+    OUTSIDE_STATUS = (
+        "∙ **Current Mode:** `Reply Chain`\n"
+        "∙ **Source:** This is using your **personal default** for private chats."
+    )
+
+    def status_text(self, event):
+        return asyncio.run(plugin._get_context_mode_status_text(event))
+
+    def press(self, *, placement, message):
+        """A press on a button of MESSAGE, as Telethon's CallbackQuery gives it."""
+        return SimpleNamespace(
+            is_private=True,
+            chat_id=USER_ID,
+            sender_id=USER_ID,
+            message_id=message.id,
+            client=SimpleNamespace(topic_placement=placement),
+            get_message=AsyncMock(return_value=message),
+        )
+
+    def test_in_a_topic_the_status_names_the_thread(self):
+        self.assertEqual(
+            self.status_text(self.event(_said(330, "/contextModeHere"))),
+            self.IN_TOPIC_STATUS,
+        )
+
+    def test_outside_topics_the_status_is_unchanged(self):
+        outside = _said(330, "/contextModeHere", top_id=None, parent=None)
+        self.assertEqual(self.status_text(self.event(outside)), self.OUTSIDE_STATUS)
+
+    def test_a_press_in_a_topic_is_placed_by_the_registry(self):
+        placement = topics.TopicPlacement()
+        menu = _said(331, "menu", parent=330, bot=True)
+        placement.registry.record(USER_ID, menu.id, topic_id=TOPIC_ID)
+        press = self.press(placement=placement, message=menu)
+        self.assertEqual(self.status_text(press), self.IN_TOPIC_STATUS)
+        press.get_message.assert_not_awaited()
+
+    def test_a_press_the_registry_has_not_seen_loads_its_message_once(self):
+        placement = topics.TopicPlacement()
+        menu = _said(331, "menu", parent=330, bot=True)
+        press = self.press(placement=placement, message=menu)
+        self.assertEqual(self.status_text(press), self.IN_TOPIC_STATUS)
+        self.assertEqual(placement.registry.get(USER_ID, menu.id), TOPIC_ID)
+        self.assertEqual(self.status_text(press), self.IN_TOPIC_STATUS)
+        press.get_message.assert_awaited_once()
+
+    def test_a_press_outside_topics_is_unchanged(self):
+        menu = _said(331, "menu", top_id=None, parent=330, bot=True)
+        press = self.press(placement=None, message=menu)
+        self.assertEqual(self.status_text(press), self.OUTSIDE_STATUS)
+
+    def menu_text(self, message, *, kind="private"):
+        menu = asyncio.run(
+            plugin._personal_context_mode_menu(self.event(message), kind)
+        )
+        return menu.text
+
+    def test_the_private_menu_notes_the_thread_only_in_a_topic(self):
+        in_topic = self.menu_text(_said(330, "/contextMode"))
+        outside = self.menu_text(_said(330, "/contextMode", top_id=None, parent=None))
+        self.assertIn(plugin.THREAD_CONTEXT_MENU_NOTE, in_topic)
+        self.assertEqual(
+            outside,
+            f"{plugin.BOT_META_INFO_PREFIX}**Set Private Chat Context Mode**\n\n"
+            f"{plugin._format_personal_last_n_menu_text(USER_ID, USER_ID)}",
+        )
+        self.assertEqual(
+            in_topic.replace(f"{plugin.THREAD_CONTEXT_MENU_NOTE}\n\n", ""), outside
+        )
+
+    def test_the_group_menu_has_no_note(self):
+        text = self.menu_text(_said(330, "/groupContextMode"), kind="group")
+        self.assertNotIn(plugin.THREAD_CONTEXT_MENU_NOTE, text)
+
+    def status_message(self, message):
+        with ExitStack() as stack:
+            enter = stack.enter_context
+            enter(
+                patch.object(
+                    plugin.chat_manager, "get_prefs", return_value=plugin.ChatPrefs()
+                )
+            )
+            enter(patch.object(plugin.chat_manager, "get_model", return_value=None))
+            enter(
+                patch.object(
+                    plugin.user_manager, "get_codex_quota_fallback", return_value=None
+                )
+            )
+            enter(
+                patch.object(
+                    plugin, "_can_user_access_model", new=AsyncMock(return_value=True)
+                )
+            )
+            enter(patch.object(plugin.llm_chat_config, "load_config"))
+            asyncio.run(plugin.status_handler(self.event(message)))
+        return self.info.await_args.args[1]
+
+    def test_status_shows_the_thread_only_in_a_topic(self):
+        line = "• **In This Topic:** `Topic Thread (Limit: 100)`"
+        in_topic = self.status_message(_said(330, "/status"))
+        outside = self.status_message(_said(330, "/status", top_id=None, parent=None))
+        self.assertIn(line, in_topic)
+        self.assertNotIn("In This Topic", outside)
+        without_line = "".join(
+            part for part in in_topic.splitlines(True) if "In This Topic" not in part
+        )
+        self.assertEqual(without_line, outside)
 
 
 if __name__ == "__main__":

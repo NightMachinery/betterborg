@@ -137,8 +137,10 @@ getDifference, and alerts the log chat when that happens. Disable it with
 With threaded mode on in BotFather, a bot's DM holds topics, and a message
 typed in "All" opens a new one. Uniborg adds the topic to every reply to a
 message inside a private topic, so answers land next to their question, and
-llm_chat's pending prompts only take an answer from the topic that asked. See
-[[file:docs/private_topics.md][docs/private_topics.md]].
+llm_chat's pending prompts only take an answer from the topic that asked.
+Inside a topic, llm_chat always uses that topic's own earlier messages as the
+conversation (thread context), whatever the context mode, up to the Last N
+limit. See [[file:docs/private_topics.md][docs/private_topics.md]].
 
 ** timetracker time zones
 The timetracker stores each activity's local times together with its IANA

@@ -1,8 +1,9 @@
 # Topics in Private Chats
 
 What a bot's private-chat topics look like over MTProto, how uniborg keeps
-its replies inside the right topic, and where that stops. The code is in
-`uniborg/topics.py`.
+its replies inside the right topic, how llm_chat gives each topic its own
+conversation, and where that stops. The code is in `uniborg/topics.py`,
+`uniborg/history_util.py` and `llm_chat_plugins/llm_chat.py`.
 
 ## Terms
 
@@ -19,6 +20,13 @@ its replies inside the right topic, and where that stops. The code is in
 - **Placement**: choosing the topic a sent message lands in.
 - **Registry**: `TopicRegistry`, a bounded in-memory map from (chat, message
   id) to the topic that message sits in, or to "outside every topic".
+- **Recorded history**: what `history_util` stores for each chat in bot mode,
+  one item per message the bot received or sent. It lives in Redis, or in
+  memory when Redis is unavailable, and keeps at most 5000 items per chat
+  (`HISTORY_LIMIT`).
+- **Thread context**: the conversation context llm_chat uses for a message
+  in a private topic, built from that topic's recorded history. See
+  "Thread context" below.
 
 ## What private topics look like on the wire
 
@@ -125,6 +133,55 @@ logged as a warning, later ones at DEBUG, and all of them are counted in
 `client.topic_placement = None` switches placement off; the mixin then
 changes nothing.
 
+## Thread context
+
+Each topic is meant to be its own conversation, and a message in a topic
+usually replies to nothing, so the reply chain would give it almost no
+context. So inside a private topic a bot's llm_chat always uses thread
+context, whatever the context mode: reply chain, until separator, last N,
+smart mode and a chat's `/contextModeHere` setting all give way to it there.
+Outside topics every mode works exactly as before.
+
+What the thread holds:
+
+- The topic's own messages, the user's and the bot's, oldest first: the
+  latest N the recorded history holds for that topic, plus the message being
+  answered. N is the Last N limit (`/setLastN`, `/setLastNHere` or the menu
+  buttons, 100 by default; see `docs/llm_chat_last_n_context.md`).
+- A message whose text is only `---` starts the thread afresh. The bot
+  answers it with "Context cleared", and later messages in that topic see
+  only what came after it. Smart mode's per-user state is neither switched
+  nor used inside a topic.
+- An explicit reply brings its reply chain when "Include Reply Chain" is on,
+  as in the other modes. A reply to a message inside the thread adds
+  nothing; a reply to one older than the cap brings that message back.
+- Files, media, albums, reactions and metadata go through the same code as
+  in every other mode.
+
+Where it comes from. Bots cannot read history (see above), so the thread
+comes from the recorded history. Each item carries `topic_id`, which
+`topics.private_message_topic_id` reads from the message's header. For the
+bot's own sends it reads the message Telegram echoes back, or, when Telegram
+answers with a bare `UpdateShortSentMessage`, the `top_msg_id` that placement
+gave the request. Items outside topics are stored byte for byte as before,
+without the field. The thread's ids are loaded in one batch by id, and each
+loaded message's own header has the last word: a message that turns out to
+sit elsewhere is dropped, and so are service messages such as the topic
+root.
+
+Recording the topic was chosen over filtering at read time. The alternative,
+loading every recorded id of the chat and keeping those whose header names
+the topic, would also cover history recorded before topics were, but it
+costs up to 50 `getMessages` calls per answer (5000 ids, 100 per call).
+Recording costs nothing per answer.
+
+Where it shows. `/status` adds an "In This Topic" line. `/contextModeHere`
+and `/getContextModeHere` report `Topic Thread` and name the mode that
+applies outside topics, and the `/contextMode` menu notes that its choice
+applies outside topics. A button pressed on such a menu carries no header, so
+the menu's topic comes from the registry, or from loading the menu message
+once after a restart.
+
 ## Limits
 
 - **Sends without a reply stay in "All".** `event.respond(text)` and
@@ -148,8 +205,26 @@ changes nothing.
   `random_id`, the chat and `top_msg_id` (see `docs/telegram_ai_apis.md`,
   section 2.1); when draft streaming is adopted it should take the topic from
   the registry too.
-- **Chat history is not topic-aware.** `history_util` records messages per
-  chat, so "last N messages" context mixes topics.
+- **Thread context holds only what the bot recorded.** A message the bot
+  never received or sent through the recorded paths is missing. Items
+  recorded before topics were recorded have no topic, so a topic already
+  running when this shipped starts its thread at the first message after
+  that. The thread is also capped twice: at the Last N limit, and by the
+  5000 items the recorded history keeps per chat across all its topics.
+- **Without Redis, threads do not survive a restart.** The recorded history
+  then lives in memory, so a restart empties every thread; the next message
+  in a topic starts with no earlier context.
+- **Deleted messages.** A message Telegram reports as deleted is skipped. One
+  deleted without the bot being told fails to load and is dropped.
+- **Bots and private topics only.** A user account keeps its context mode.
+  Topics in forum supergroups keep the chat's group context mode: their
+  header differs (a plain message there has no `reply_to_top_id`), and a bot
+  with privacy mode on does not see every message there, so a recorded
+  thread would have gaps.
+- **Outside topics, history still spans the chat.** Last N, until separator
+  and the `.s` prefix's recent mode read the whole chat's recorded history,
+  topic messages included, exactly as before. Only thread context filters by
+  topic, and `.s` sent inside a topic still uses its recent mode.
 - **Pending input follows its topic.** A *pending input flow* is a prompt
   that waits for the user's next message: a custom model id after
   `/setmodel` or `/setmodelhere`, a new system prompt, or a numbered menu on a
@@ -178,13 +253,21 @@ changes nothing.
 - `uniborg/uniborg.py`: composes the mixin into `Uniborg` and attaches a
   `TopicPlacement` in `Uniborg.create`.
 - `uniborg/telethon_safety.py`: the difference fallback the mixin stacks on.
+- `uniborg/history_util.py`: the recorded history, its `topic_id` field,
+  `record_message` and `get_last_n_topic_ids`.
 - `llm_chat_plugins/llm_chat.py`: `start_input_flow` and
-  `pending_input_flow`, which bind pending input to its topic.
+  `pending_input_flow`, which bind pending input to its topic; and thread
+  context (`THREAD_CONTEXT_MODE`, `_thread_topic_id`, and its branch in
+  `build_conversation_history`).
 - `tests/test_topics.py`: placement per request type, the registry, the
   result shapes, refusals, the composed client on a fake transport, and
   golden sends that must go out byte for byte outside private topics. Run it
   under both Telethon versions.
-- `tests/test_llm_chat_topics.py`: reply detection as `llm_chat` uses it.
+- `tests/test_history_topics.py`: topic recording, old items without a
+  topic, and the stored form through a fake Redis.
+- `tests/test_llm_chat_topics.py`: reply detection as `llm_chat` uses it,
+  and thread context: what a thread holds, the mode it replaces, the status
+  texts, and the modes outside topics.
 - `tests/test_llm_chat_awaited_input.py`: pending input in topics.
 - `docs/telegram_ai_apis.md`, section 2.4: the Bot API side of private
   topics.
