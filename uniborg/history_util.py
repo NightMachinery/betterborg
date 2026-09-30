@@ -207,7 +207,9 @@ def message_reactions_to_dict(reactions) -> Optional[dict]:
         "recent_reactions": [
             {
                 "peer_id": _peer_to_dict(getattr(entry, "peer_id", None)),
-                "date": entry.date.isoformat() if getattr(entry, "date", None) else None,
+                "date": (
+                    entry.date.isoformat() if getattr(entry, "date", None) else None
+                ),
                 "reaction": _reaction_to_dict(getattr(entry, "reaction", None)),
                 "big": getattr(entry, "big", None),
                 "unread": getattr(entry, "unread", None),
@@ -310,13 +312,23 @@ def _message_reactions_summary(reactions):
 def _reaction_update_summary(update, chat_id=None, reactions=None):
     return {
         "update_type": type(update).__name__,
-        "cache_key": [chat_id, getattr(update, "msg_id", None)] if chat_id is not None else None,
+        "cache_key": (
+            [chat_id, getattr(update, "msg_id", None)] if chat_id is not None else None
+        ),
         "peer": _peer_to_dict(getattr(update, "peer", None)),
         "msg_id": getattr(update, "msg_id", None),
         "actor": _peer_to_dict(getattr(update, "actor", None)),
-        "old_reactions": [_reaction_summary_value(r) for r in (getattr(update, "old_reactions", None) or [])],
-        "new_reactions": [_reaction_summary_value(r) for r in (getattr(update, "new_reactions", None) or [])],
-        "aggregate_update_reactions": _reaction_count_summary(getattr(update, "reactions", None)),
+        "old_reactions": [
+            _reaction_summary_value(r)
+            for r in (getattr(update, "old_reactions", None) or [])
+        ],
+        "new_reactions": [
+            _reaction_summary_value(r)
+            for r in (getattr(update, "new_reactions", None) or [])
+        ],
+        "aggregate_update_reactions": _reaction_count_summary(
+            getattr(update, "reactions", None)
+        ),
         "cached_reactions": _message_reactions_summary(reactions),
     }
 
@@ -756,7 +768,9 @@ def _merge_individual_reaction_update(existing, update):
             )
 
     if existing is not None and getattr(existing, "results", None):
-        reactions_by_key, counts_by_key = _reaction_counts_from_results(existing.results)
+        reactions_by_key, counts_by_key = _reaction_counts_from_results(
+            existing.results
+        )
         for reaction in getattr(update, "old_reactions", None) or []:
             key = _reaction_key_to_reaction(reactions_by_key, reaction)
             counts_by_key[key] = counts_by_key.get(key, 0) - 1
