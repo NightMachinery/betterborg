@@ -484,7 +484,18 @@ async def run_and_get(
     cwd=None,
     *,
     delete_p=True,
+    messages=None,
 ):
+    """Downloads the media of a request into `cwd`, then awaits `to_await(cwd=, event=)`.
+
+    By default the media come from `event.message`, the message it replies to,
+    and their album siblings, fetched from the chat. With `messages`, exactly
+    those are downloaded and nothing is fetched: a guest query's messages
+    cannot be looked up in their chat. `event` may then be None.
+
+    Downloads that `to_await` left unmodified are deleted afterwards when
+    `delete_p`. Returns `cwd`.
+    """
     if cwd is None:
         cwd = dl_base + str(uuid.uuid4()) + "/"
     Path(cwd).mkdir(parents=True, exist_ok=True)
@@ -493,13 +504,39 @@ async def run_and_get(
 
     async def dl(z):
         if z is not None and getattr(z, "file", None) is not None:
-            dled_file_name = getattr(z.file, "name", "")
+            #: The name comes from the sender; keep only its last component.
+            dled_file_name = Path(getattr(z.file, "name", "") or "").name
             dled_file_name = dled_file_name or f"some_file_{uuid.uuid4().hex}"
             dled_path = f"{cwd}{z.id}_{dled_file_name}"
             dled_path = await a.download_media(message=z, file=dled_path)
             mdate = os.path.getmtime(dled_path)
             dled_files.append((dled_path, mdate, dled_file_name))
 
+    if messages is not None:
+        todl_map = {m.id: m for m in messages if m is not None}
+    else:
+        todl_map = await _messages_to_download(event)
+
+    #: Iterate over the values of the dictionary to get the unique Message objects.
+    todl_messages = list(todl_map.values())
+    todl_messages.sort(key=lambda msg: msg.id)  #: sorts inplace
+    for msg in todl_messages:
+        await dl(msg)
+
+    # ic(cwd, dled_files)
+
+    await to_await(cwd=cwd, event=event)
+
+    if delete_p:
+        for dled_path, mdate, _ in dled_files:
+            if os.path.exists(dled_path) and mdate == os.path.getmtime(dled_path):
+                await remove_potential_file(dled_path, event)
+    return cwd
+
+
+async def _messages_to_download(event) -> dict:
+    """`event.message`, its replied-to message, and their album siblings, by id."""
+    a = borg
     #: Use a dictionary to store unique messages, with message.id as the key.
     todl_map = {event.message.id: event.message}
     inspection_list = [event.message]
@@ -531,21 +568,7 @@ async def run_and_get(
 
             processed_group_ids.add(group_id)
 
-    #: Iterate over the values of the dictionary to get the unique Message objects.
-    todl_messages = list(todl_map.values())
-    todl_messages.sort(key=lambda msg: msg.id)  #: sorts inplace
-    for msg in todl_messages:
-        await dl(msg)
-
-    # ic(cwd, dled_files)
-
-    await to_await(cwd=cwd, event=event)
-
-    if delete_p:
-        for dled_path, mdate, _ in dled_files:
-            if os.path.exists(dled_path) and mdate == os.path.getmtime(dled_path):
-                await remove_potential_file(dled_path, event)
-    return cwd
+    return todl_map
 
 
 async def handle_exc(event, reply_exc=True):
