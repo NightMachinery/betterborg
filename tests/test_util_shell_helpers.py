@@ -58,5 +58,105 @@ class RunAndGetMessagesTests(_BorgTestCase):
         self.assertEqual(os.listdir(self.cwd), ["5_voice.ogg"])
 
 
+class _Action:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _UploadingBorg:
+    def __init__(self):
+        self.sends = []
+        self.fail_names = set()
+
+    def action(self, chat, kind):
+        return _Action()
+
+    async def send_file(self, chat, file, **kwargs):
+        names = (
+            [Path(f).name for f in file] if isinstance(file, list) else Path(file).name
+        )
+        self.sends.append((chat, names, kwargs))
+        if isinstance(names, str) and names in self.fail_names:
+            raise RuntimeError("upload failed")
+        if isinstance(file, list):
+            return [SimpleNamespace(name=n) for n in names]
+        return SimpleNamespace(name=names)
+
+
+class UploadOutputFilesTests(_BorgTestCase):
+    make_borg = _UploadingBorg
+
+    def _files(self, *names):
+        for name in names:
+            Path(self.cwd, name).write_text(name)
+        Path(self.cwd, "subdir").mkdir()
+        return sorted(Path(self.cwd).glob("*"))
+
+    def test_album_mode_groups_by_extension_and_returns_the_messages(self):
+        files = self._files("a.txt", "b.txt", "c.png")
+
+        sent = asyncio.run(
+            util.upload_output_files(42, files, album_mode=True, on_error=None)
+        )
+
+        self.assertEqual(
+            [(chat, names) for chat, names, _ in self.borg.sends],
+            [(42, ["c.png"]), (42, ["a.txt", "b.txt"])],
+        )
+        self.assertEqual([m.name for m in sent], ["c.png", "a.txt", "b.txt"])
+
+    def test_one_by_one_uses_name_prefixes_and_reports_failures(self):
+        files = self._files("voicenote-x.ogg", "fdoc-y.pdf")
+        self.borg.fail_names = {"fdoc-y.pdf"}
+        errors = []
+
+        async def on_error():
+            errors.append("failed")
+
+        sent = asyncio.run(
+            util.upload_output_files(
+                42, files, album_mode=False, reply_to=9, on_error=on_error
+            )
+        )
+
+        kwargs = {names: kw for _chat, names, kw in self.borg.sends}
+        self.assertTrue(kwargs["voicenote-x.ogg"]["voice_note"])
+        self.assertTrue(kwargs["fdoc-y.pdf"]["force_document"])
+        self.assertEqual(kwargs["voicenote-x.ogg"]["reply_to"], 9)
+        self.assertEqual([m.name for m in sent], ["voicenote-x.ogg"])
+        self.assertEqual(errors, ["failed"])
+
+
+class CaptureTests(unittest.TestCase):
+    def test_simple_run_capture_merges_stderr_and_keeps_the_exit_code(self):
+        with tempfile.TemporaryDirectory() as cwd:
+            result = asyncio.run(
+                util.simple_run_capture(
+                    cwd=cwd, command="printf out; printf err >&2; exit 3"
+                )
+            )
+
+        self.assertEqual(result, util.CommandResult(output="outerr", retcode=3))
+
+    def test_brishz_capture_reads_the_brish_result(self):
+        calls = []
+
+        async def fake_helper(brish, cwd, cmd, fork=True, server_index=None):
+            calls.append((cwd, cmd, fork, server_index))
+            return SimpleNamespace(outerr="done", retcode=0)
+
+        original = util.brishz_helper
+        util.brishz_helper = fake_helper
+        self.addCleanup(setattr, util, "brishz_helper", original)
+
+        result = asyncio.run(util.brishz_capture(cwd="/w/", cmd="ls", fork=False))
+
+        self.assertEqual(result, util.CommandResult(output="done", retcode=0))
+        self.assertEqual(calls, [("/w/", "ls", False, 0)])
+
+
 if __name__ == "__main__":
     unittest.main()

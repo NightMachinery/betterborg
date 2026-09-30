@@ -584,13 +584,24 @@ async def handle_exc_chat(chat, reply_exc=True):
     await borg.send_message(chat, exc)
 
 
+def _sent_messages(result) -> list:
+    """`borg.send_file` returns one message, or a list for an album."""
+    if result is None:
+        return []
+    return list(result) if isinstance(result, list) else [result]
+
+
 async def send_files(chat, files, **kwargs):
+    """Sends `files` to `chat`, in one album per extension. Returns what was sent."""
+    sent = []
     if isinstance(files, str) or not isinstance(files, Iterable):
         try:
-            await borg.send_file(chat, files, allow_cache=False, **kwargs)
+            sent += _sent_messages(
+                await borg.send_file(chat, files, allow_cache=False, **kwargs)
+            )
         except:
             await handle_exc_chat(chat)
-        return
+        return sent
 
     f2ext = lambda p: p.suffix
     files = [Path(f) for f in files]  # idempotent
@@ -607,7 +618,9 @@ async def send_files(chat, files, **kwargs):
                 use_no_album = ext == ".gif"
                 if not use_no_album:
                     try:
-                        await borg.send_file(chat, fs, allow_cache=False, **kwargs)
+                        sent += _sent_messages(
+                            await borg.send_file(chat, fs, allow_cache=False, **kwargs)
+                        )
                     except PhotoExtInvalidError:
                         print(
                             f"Album sending failed, using no-album workaround. Files: {fs}"
@@ -616,13 +629,61 @@ async def send_files(chat, files, **kwargs):
 
                 if use_no_album:
                     for f in fs:
-                        await borg.send_file(chat, f, allow_cache=False, **kwargs)
+                        sent += _sent_messages(
+                            await borg.send_file(chat, f, allow_cache=False, **kwargs)
+                        )
             except:
                 await handle_exc_chat(chat)
+    return sent
+
+
+async def upload_output_files(chat, files, *, album_mode, reply_to=None, on_error):
+    """Uploads the files a command left behind to `chat`. Returns the sent messages.
+
+    With `album_mode`, and unless there is exactly one file, the files go out
+    in one album per extension (`send_files`). Otherwise they go one at a time
+    as replies to `reply_to`, and a name prefix picks how: `voicenote-`,
+    `videonote-`, `fdoc-` (as a document) or `streaming-`. Directories are
+    skipped. `on_error()` is awaited, inside the `except`, for each failed send.
+    """
+    files = list(files)
+    if album_mode and len(files) != 1:
+        files = [p.absolute() for p in files if not p.is_dir()]
+        return await send_files(chat, files)
+
+    sent = []
+    files.sort()
+    for p in files:
+        if p.is_dir():  # and not any(s in p.name for s in ('.torrent', '.aria2')):
+            continue
+        file_add = p.absolute()
+        base_name = str(await os_aio.path.basename(file_add))
+        voice_note = base_name.startswith("voicenote-")
+        video_note = base_name.startswith("videonote-")
+        force_doc = base_name.startswith("fdoc-")
+        supports_streaming = base_name.startswith("streaming-")
+        async with borg.action(chat, "document") as action:
+            try:
+                sent += _sent_messages(
+                    await borg.send_file(
+                        chat,
+                        file_add,
+                        voice_note=voice_note,
+                        video_note=video_note,
+                        supports_streaming=supports_streaming,
+                        force_document=force_doc,
+                        reply_to=reply_to,
+                        allow_cache=False,
+                    )
+                )
+                #                            progress_callback=action.progress)
+                # caption=base_name)
+            except:
+                await on_error()
+    return sent
 
 
 async def run_and_upload(event, to_await, quiet=True, reply_exc=True, album_mode=True):
-    file_add = ""
     cwd = ""
     # util.interact(locals())
     try:
@@ -635,45 +696,13 @@ async def run_and_upload(event, to_await, quiet=True, reply_exc=True, album_mode
             event, "Julia is processing your request ...", event.message, quiet
         )
         cwd = await run_and_get(event=event, to_await=to_await)
-        # client = borg
-        files = list(Path(cwd).glob("*"))
-        if album_mode and len(files) != 1:
-            files = [p.absolute() for p in files if not p.is_dir()]
-            await send_files(chat, files)
-        else:
-            files.sort()
-            for p in files:
-                if (
-                    not p.is_dir()
-                ):  # and not any(s in p.name for s in ('.torrent', '.aria2')):
-                    file_add = p.absolute()
-                    base_name = str(await os_aio.path.basename(file_add))
-                    # trying_to_upload_msg = await util.discreet_send(
-                    # event, "Julia is trying to upload \"" + base_name +
-                    # "\".\nPlease wait ...", trying_to_dl, quiet)
-                    voice_note = base_name.startswith("voicenote-")
-                    video_note = base_name.startswith("videonote-")
-                    force_doc = base_name.startswith("fdoc-")
-                    supports_streaming = base_name.startswith("streaming-")
-                    if False:
-                        att, mime = telethon.utils.get_attributes(file_add)
-                        print(f"File attributes: {att.__dict__}")
-                    async with borg.action(chat, "document") as action:
-                        try:
-                            await borg.send_file(
-                                chat,
-                                file_add,
-                                voice_note=voice_note,
-                                video_note=video_note,
-                                supports_streaming=supports_streaming,
-                                force_document=force_doc,
-                                reply_to=event.message,
-                                allow_cache=False,
-                            )
-                            #                            progress_callback=action.progress)
-                            # caption=base_name)
-                        except:
-                            await handle_exc(event, reply_exc)
+        await upload_output_files(
+            chat,
+            Path(cwd).glob("*"),
+            album_mode=album_mode,
+            reply_to=event.message,
+            on_error=partial(handle_exc, event, reply_exc),
+        )
     except:
         await handle_exc(event, reply_exc)
     finally:
@@ -686,7 +715,16 @@ async def safe_run(event, cwd, command):
     await subprocess_aio.run(command, cwd=cwd)
 
 
-async def simple_run(event, cwd, command, shell=True):
+@dataclass
+class CommandResult:
+    """What a command printed (stdout and stderr together) and its exit code."""
+
+    output: str
+    retcode: int
+
+
+async def simple_run_capture(*, cwd, command, shell=True) -> CommandResult:
+    """Runs `command` (through zsh when `shell`) in `cwd` and captures it."""
     sp = await subprocess_aio.run(
         command,
         shell=shell,
@@ -696,8 +734,12 @@ async def simple_run(event, cwd, command, shell=True):
         stderr=subprocess.STDOUT,
         stdout=subprocess.PIPE,
     )
-    output = sp.stdout
-    await send_output(event, output, retcode=sp.returncode, shell=shell)
+    return CommandResult(output=sp.stdout, retcode=sp.returncode)
+
+
+async def simple_run(event, cwd, command, shell=True):
+    result = await simple_run_capture(cwd=cwd, command=command, shell=shell)
+    await send_output(event, result.output, retcode=result.retcode, shell=shell)
 
 
 async def send_output(event, output: str, retcode=-1, shell=True):
@@ -1666,18 +1708,26 @@ def brishz_helper(myBrish, cwd, cmd, fork=True, server_index=None, **kwargs):
         lock.release()
 
 
-async def brishz(event, cwd, cmd, fork=True, shell=True, **kwargs):
-    # print(f"entering brishz with cwd: '{cwd}', cmd: '{cmd}'")
-    res = None
+async def brishz_capture(*, cwd, cmd, fork=True) -> CommandResult:
+    """Runs `cmd` on the persistent Brish in `cwd` and captures it.
+
+    `fork=False` runs it on server 0 itself, which keeps its state between
+    commands (a persistent REPL).
+    """
     server_index = None
     if fork == False:
-        server_index = 0  # to have a persistent REPL
+        server_index = 0
 
     res = await brishz_helper(
         persistent_brish, cwd, cmd, fork=fork, server_index=server_index
     )
+    return CommandResult(output=res.outerr, retcode=res.retcode)
 
-    await send_output(event, res.outerr, retcode=res.retcode, shell=shell)
+
+async def brishz(event, cwd, cmd, fork=True, shell=True, **kwargs):
+    # print(f"entering brishz with cwd: '{cwd}', cmd: '{cmd}'")
+    result = await brishz_capture(cwd=cwd, cmd=cmd, fork=fork)
+    await send_output(event, result.output, retcode=result.retcode, shell=shell)
 
 
 def humanbytes(size):
