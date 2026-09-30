@@ -30,6 +30,7 @@ import re
 import itertools
 import shutil
 from uniborg import util
+from uniborg import guest_util
 import telethon
 from telethon import TelegramClient, events
 import telethon.utils
@@ -252,7 +253,27 @@ def admin_cmd(pattern, outgoing="Ignored", additional_admins=[]):
         from_users=([borg.me] + admins + additional_admins),
         forwards=False,
         pattern=re.compile(pattern),
+        #: A bot's own guest answer comes back as an outgoing message from
+        #: `borg.me`, with text the caller may have steered.
+        func=_is_not_guest_answer,
     )
+
+
+def _is_not_guest_answer(event) -> bool:
+    return not guest_util.is_guest_answer(getattr(event, "message", None))
+
+
+def _chat_may_grant_admin(chat, *, sender_id) -> bool:
+    """Whether `chat` may vouch for its members through `adminChats` or its username.
+
+    Groups and channels may. A private chat's "chat" is the other party: the
+    sender itself in a bot's DM, where vouching changes nothing, but someone
+    else in a userbot's DM or in a private guest chat, who must not vouch for
+    the sender.
+    """
+    if isinstance(chat, telethon.tl.types.User):
+        return chat.id == sender_id
+    return True
 
 
 def interact(local=None):
@@ -372,11 +393,29 @@ async def isAdmin(
             admins = admins + additional_admins
 
         msg = msg or getattr(event, "message", None)
+        if guest_util.is_guest_answer(msg):
+            #: Our own guest answer, echoed back into a group: it is outgoing
+            #: and sent by us, but its text may be the caller's doing.
+            return False
+
         sender = getattr(msg, "sender", None) if msg else None
         sender = sender or getattr(event, "sender", None)
+        sender_username = getattr(sender, "username", None)
+
+        if guest_util.is_guest_message(msg) or guest_util.is_guest_event(event):
+            #: A guest query's trigger: only its sender counts. A private
+            #: trigger arrives with `out` set, and its chat is the other
+            #: participant, so neither says anything about the caller.
+            caller_id = (
+                guest_util.caller_id_of(msg)
+                if msg is not None
+                else getattr(event, "sender_id", None)
+            )
+            return caller_id in admins or (
+                sender_username is not None and sender_username in admins
+            )
 
         sender_id = getattr(sender, "id", None) or getattr(event, "sender_id", None)
-        sender_username = getattr(sender, "username", None)
         sender_is_admin = (
             getattr(sender, "is_self", False)
             or sender_id in admins
@@ -394,7 +433,7 @@ async def isAdmin(
             except:
                 pass
 
-            if chat:
+            if chat and _chat_may_grant_admin(chat, sender_id=sender_id):
                 #: Doesnt work with private channels' links
                 res = (
                     res
