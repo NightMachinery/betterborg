@@ -118,6 +118,32 @@ def current_to_utc(local: datetime.datetime) -> datetime.datetime:
     return timetracker_tz.to_utc(local, current_zone_name())
 
 
+def message_time(message, *, now_utc=None) -> Optional[datetime.datetime]:
+    """When MESSAGE was sent, as wall-clock time in the current zone.
+
+    Nudged to just after the latest activity that has ended, when the message
+    is not later than it; see `timetracker_tz.message_stamp`. None when
+    MESSAGE has no date.
+    """
+    sent = getattr(message, "date", None)
+    if sent is None:
+        return None
+    if now_utc is None:
+        now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    latest = (
+        Activity.select(Activity.end_utc)
+        .where(Activity.end_utc <= now_utc)
+        .order_by(Activity.end_utc.desc())
+        .first()
+    )
+    stamp = timetracker_tz.message_stamp(
+        sent,
+        latest_end=None if latest is None else latest.end_utc,
+        now=now_utc,
+    )
+    return to_current_local(stamp.replace(tzinfo=datetime.timezone.utc))
+
+
 class Activity(BaseModel):
     #: `start` and `end` are wall-clock times in `tz`; `start_utc` and
     #: `end_utc` are derived from them in `save`, for ordering only.
@@ -246,7 +272,7 @@ import textwrap
 import dataclasses
 from dataclasses import dataclass
 from functools import total_ordering
-from typing import Dict, List
+from typing import Dict, List, Optional
 import datetime
 
 

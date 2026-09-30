@@ -147,8 +147,10 @@ The timetracker stores each activity's local times together with its IANA
 zone, plus UTC copies that keep ordering right across daylight saving and
 travel. =.tz= reports the current zone and =.tz ZONE= changes it; the setting
 lives in the database, so it follows you rather than the server. =..= lists
-recent activities with their zones. A database recorded without zones can be
-migrated with =python3 uniborg/timetracker_tz.py migrate=. See
+recent activities with their zones. Each message counts from when it was
+sent, so messages sent while the bot was down still land where they belong. A
+database recorded without zones can be migrated with
+=python3 uniborg/timetracker_tz.py migrate=. See
 [[file:docs/timetracker.md][docs/timetracker.md]].
 
 ** Redis

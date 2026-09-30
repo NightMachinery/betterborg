@@ -88,6 +88,43 @@ class ZoneHelpersTest(unittest.TestCase):
             tz.local_now("Europe/Lisbon", clock=clock), dt.datetime(2025, 6, 11, 9, 0)
         )
 
+    def test_message_stamp_is_the_send_time(self):
+        #: Handled an hour late, a message still counts from when it was sent.
+        sent = dt.datetime(2025, 6, 11, 9, 0, tzinfo=UTC)
+        self.assertEqual(
+            tz.message_stamp(
+                sent,
+                latest_end=dt.datetime(2025, 6, 11, 8, 30),
+                now=dt.datetime(2025, 6, 11, 10, 0),
+            ),
+            dt.datetime(2025, 6, 11, 9, 0),
+        )
+        self.assertEqual(
+            tz.message_stamp(sent, latest_end=None, now=dt.datetime(2025, 6, 11, 10)),
+            dt.datetime(2025, 6, 11, 9, 0),
+        )
+
+    def test_message_stamp_stays_after_the_latest_end(self):
+        #: Sent in the second the previous activity ended in, or while the bot
+        #: was still handling it.
+        sent = dt.datetime(2025, 6, 11, 9, 0, tzinfo=UTC)
+        now = dt.datetime(2025, 6, 11, 9, 0, 5)
+        for latest_end in (
+            dt.datetime(2025, 6, 11, 9, 0),
+            dt.datetime(2025, 6, 11, 9, 0, 0, 400000),
+        ):
+            self.assertEqual(
+                tz.message_stamp(sent, latest_end=latest_end, now=now),
+                latest_end + tz.STAMP_STEP,
+            )
+
+    def test_message_stamp_is_never_in_the_future(self):
+        sent = dt.datetime(2025, 6, 11, 9, 0, 2, tzinfo=UTC)
+        now = dt.datetime(2025, 6, 11, 9, 0, 1)
+        self.assertEqual(tz.message_stamp(sent, latest_end=None, now=now), now)
+        with self.assertRaises(ValueError):
+            tz.message_stamp(dt.datetime(2025, 6, 11), latest_end=None, now=now)
+
     def test_naive_and_aware_inputs_are_checked(self):
         with self.assertRaises(ValueError):
             tz.localize(dt.datetime(2025, 1, 1, tzinfo=UTC), "UTC")

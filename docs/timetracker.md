@@ -21,6 +21,20 @@ which `.`, `b` and new entries all depend on, is chosen by `end_utc`. Choosing
 it by local time once picked the wrong activity: activities recorded on one
 zone's clock looked like they were in the future on another's.
 
+A message is stamped with the time it was sent, not the time the bot handled
+it, so messages sent while the bot was down or busy still land where they
+belong. Two corrections keep the chain in order:
+
+- Telegram dates messages to the second, so a message that is not later than
+  the latest recorded end, such as a second message sent in the same second,
+  is stamped one microsecond after that end instead.
+- A date ahead of the server's clock is capped at the server's now, so no
+  activity ends in the future.
+
+When two activities end at the same instant, the one that started first
+counts as the latest. That is the activity a zero-length `+` marker was
+recorded after.
+
 Durations are real elapsed time, computed from the instants. A night that
 spans the end of daylight saving counts the repeated hour.
 

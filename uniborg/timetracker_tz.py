@@ -155,6 +155,35 @@ def elapsed(start: dt.datetime, end: dt.datetime, zone_name: str) -> dt.timedelt
     ).astimezone(UTC)
 
 
+#: How far past the latest activity's end a message's stamp moves when the
+#: message's date is not after that end. Telegram dates messages to the
+#: second, so two messages sent within one second share a date.
+STAMP_STEP = dt.timedelta(microseconds=1)
+
+
+def message_stamp(
+    sent: dt.datetime,
+    *,
+    latest_end: Optional[dt.datetime],
+    now: dt.datetime,
+) -> dt.datetime:
+    """When a message SENT at an aware moment happened, as naive UTC.
+
+    That is SENT, so a message the bot handles late still counts from when it
+    was sent. But never after NOW, since a host clock behind Telegram's would
+    otherwise record an activity ending in the future, and always after
+    LATEST_END, the latest end of an activity already recorded, so messages
+    stay in the order they are processed in. LATEST_END (None when there is
+    none) and NOW are naive UTC.
+    """
+    if sent.tzinfo is None:
+        raise ValueError(f"expected an aware datetime, got {sent!r}")
+    stamp = min(sent.astimezone(UTC).replace(tzinfo=None), now)
+    if latest_end is not None and stamp <= latest_end:
+        stamp = latest_end + STAMP_STEP
+    return stamp
+
+
 def db_datetime(value: dt.datetime) -> str:
     """VALUE as the text peewee's DateTimeField stores and parses."""
     return value.isoformat(" ", timespec="microseconds")

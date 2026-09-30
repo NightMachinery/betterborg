@@ -1009,7 +1009,7 @@ async def _process_msg(
             return out
 
         if not received_at:  # None, "" are both acceptable as null
-            received_at = tt_now()
+            received_at = message_time(m0) or tt_now()
         else:
             print(f"_process_msg: received_at={received_at}")
             pass
@@ -1019,10 +1019,12 @@ async def _process_msg(
             pass
         else:
             # last_act_query = Activity.select().order_by(Activity.end.desc())
+            #: On a tie, the activity that started first: a "+" marker starts
+            #: and ends where the activity before it ends.
             last_act_query = (
                 Activity.select()
                 .where(Activity.end_utc <= current_to_utc(received_at))
-                .order_by(Activity.end_utc.desc())
+                .order_by(Activity.end_utc.desc(), Activity.start_utc.asc())
             )
             last_act = None
             if last_act_query.exists():
@@ -1504,7 +1506,7 @@ async def _process_msg(
         start: datetime.datetime
         if "+" in delayed_actions_special:
             start = received_at
-            # @warn unless we update last_act_query to also sort by start date, or add an epsilon to either the new act or last_act, the next call to last_act_query might return either of them (theoretically). In practice, it seems last_act is always returned and this zero-timed new act gets ignored. This is pretty much what we want, except it makes it hard to correct errors with `.del` etc.
+            # last_act_query breaks the tie between last_act and this zero-timed new act by start, so last_act stays the last act and this one gets ignored. This is pretty much what we want, except it makes it hard to correct errors with `.del` etc.
             if last_act != None:
                 await update_to_now()
 
