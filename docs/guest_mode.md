@@ -49,7 +49,9 @@ Each rule is enforced in code; this is why.
   allow-list proxy (downloads, entity lookups and parse modes only) that
   raises `GuestContextError` for anything else. That includes Telethon's
   `_reload_message`, which it would otherwise use to find a "min" sender;
-  guest messages get a no-op instead.
+  guest messages get a no-op instead. Downloads are handed the message's
+  media, not the message (`guest_util.download_target`), since Telethon
+  refetches a message by (chat, id) when a file reference expires mid-download.
 - **The caller is `from_id`, and only a user can be a caller.** `caller_id`
   is None when the trigger was posted as a channel.
 - **One answer, sent once.** `setBotGuestChatResult` has been seen posting

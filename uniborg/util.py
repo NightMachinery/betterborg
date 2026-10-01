@@ -509,7 +509,9 @@ async def run_and_get(
             dled_file_name = Path(getattr(z.file, "name", "") or "").name
             dled_file_name = dled_file_name or f"some_file_{uuid.uuid4().hex}"
             dled_path = f"{cwd}{z.id}_{dled_file_name}"
-            dled_path = await a.download_media(message=z, file=dled_path)
+            dled_path = await a.download_media(
+                message=guest_util.download_target(z), file=dled_path
+            )
             mdate = os.path.getmtime(dled_path)
             dled_files.append((dled_path, mdate, dled_file_name))
 

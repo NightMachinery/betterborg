@@ -132,7 +132,31 @@ class GuestQueryTests(unittest.TestCase):
         self.assertTrue(issubclass(GuestContextError, ValueError))
 
         asyncio.run(query.trigger.download_media(file="/tmp/x"))
-        self.assertEqual(query.client.wrapped.downloads, [query.trigger])
+        self.assertEqual(
+            query.client.wrapped.downloads, [guest_util.download_target(query.trigger)]
+        )
+
+    def test_guest_media_is_downloaded_by_media_never_by_message(self):
+        media = types.MessageMediaDocument(
+            document=types.Document(
+                id=9,
+                access_hash=1,
+                file_reference=b"",
+                date=NOW,
+                mime_type="audio/ogg",
+                size=3,
+                dc_id=2,
+                attributes=[],
+            )
+        )
+        query = _query(_message("@SugarBot", media=media))
+        plain = _message("not a guest message", media=media)
+
+        asyncio.run(query.trigger.download_media(file="/tmp/x"))
+
+        self.assertEqual(query.client.wrapped.downloads, [media])
+        self.assertIs(guest_util.download_target(query.trigger), media)
+        self.assertIs(guest_util.download_target(plain), plain)
 
 
 class MentionTests(unittest.TestCase):

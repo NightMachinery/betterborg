@@ -78,6 +78,19 @@ def is_guest_message(message: Any) -> bool:
     return getattr(message, GUEST_MESSAGE_ATTR, None) is not None
 
 
+def download_target(message: Any) -> Any:
+    """What to hand `download_media` for MESSAGE: a guest message's media.
+
+    Given a Message, Telethon refetches it by (chat, id) when a file reference
+    expires mid-download; a guest message's chat is the wrong one (in a
+    private chat, the bot's own DM with the other participant). Given only the
+    media, it has nothing to refetch, and the download fails cleanly instead.
+    """
+    if is_guest_message(message) and getattr(message, "media", None) is not None:
+        return message.media
+    return message
+
+
 def is_guest_answer(message: Any) -> bool:
     """Whether `message` is this account's own guest answer, echoed back.
 
@@ -138,6 +151,11 @@ class GuestClient:
 
     def __init__(self, client: Any):
         object.__setattr__(self, "_guest_wrapped", client)
+
+    async def download_media(self, message: Any, *args: Any, **kwargs: Any) -> Any:
+        return await self.wrapped.download_media(
+            download_target(message), *args, **kwargs
+        )
 
     @property
     def wrapped(self) -> Any:
