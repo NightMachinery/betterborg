@@ -213,6 +213,7 @@ GEMINI_NATIVE_FILE_MODE = os.getenv(
 # DEFAULT_CHECK_GEMINI_CACHED_FILES_P = True
 DEFAULT_CHECK_GEMINI_CACHED_FILES_P = False
 NOT_SET_HERE_DISPLAY_NAME = "Not Set for This Chat Specifically"
+NOT_SET_IN_TOPIC_DISPLAY_NAME = "Not Set for This Topic"
 
 # Use the litellm model naming convention.
 # See https://docs.litellm.ai/docs/providers/gemini
@@ -1038,6 +1039,12 @@ def _chat_model_options_for_access(*, admin_p: bool, codex_p: bool) -> dict:
     return choices
 
 
+def _topic_model_options_for_access(*, admin_p: bool, codex_p: bool) -> dict:
+    choices = {"": "Not Set (Use Chat or Personal Default)"}
+    choices.update(_model_choices_for_access(admin_p=admin_p, codex_p=codex_p))
+    return choices
+
+
 def is_pioneer_model(model: str) -> bool:
     return pioneer_util.is_pioneer_model(model)
 
@@ -1213,15 +1220,15 @@ BOT_COMMANDS = [
     },
     {
         "command": "setsystemprompthere",
-        "description": "Set a system prompt for the current chat only",
+        "description": "Set a system prompt for this chat, or this topic",
     },
     {
         "command": "resetsystemprompthere",
-        "description": "Reset the system prompt for the current chat",
+        "description": "Reset the system prompt of this chat, or this topic",
     },
     {
         "command": "getsystemprompthere",
-        "description": "View the effective system prompt for the current chat",
+        "description": "View the effective system prompt here",
     },
     {
         "command": "setthink",
@@ -1229,7 +1236,7 @@ BOT_COMMANDS = [
     },
     {
         "command": "setthinkhere",
-        "description": "Adjust the current model's reasoning effort for this chat",
+        "description": "Adjust the reasoning effort for this chat, or this topic",
     },
     {
         "command": "contextmode",
@@ -1300,11 +1307,11 @@ BOT_COMMANDS = [
     {"command": "testlive", "description": "Test live session connection (admin only)"},
     {
         "command": "setmodelhere",
-        "description": "Set the model for the current chat only",
+        "description": "Set the model for this chat, or this topic",
     },
     {
         "command": "getmodelhere",
-        "description": "View the effective model for the current chat",
+        "description": "View the effective model here",
     },
     {
         "command": "helpmagics",
@@ -1520,14 +1527,34 @@ def cancel_menu_input_flows(
     """
     if pending_inputs is None:
         pending_inputs = AWAITING_INPUT_FROM_USERS
-    owners = [
+    owners = _menu_flow_owners(menu, pending_inputs)
+    for user_id in owners:
+        pending_inputs.pop(user_id, None)
+    return owners
+
+
+def retarget_menu_input_flows(
+    menu: InputMenu, update: dict, *, pending_inputs: Optional[dict] = None
+) -> list:
+    """Applies UPDATE to the pending flows MENU armed; returns their owners.
+
+    An Apply-to press moves a menu to another layer, and the answer the menu
+    asked for has to follow it there.
+    """
+    if pending_inputs is None:
+        pending_inputs = AWAITING_INPUT_FROM_USERS
+    owners = _menu_flow_owners(menu, pending_inputs)
+    for user_id in owners:
+        pending_inputs[user_id] = {**pending_inputs[user_id], **update}
+    return owners
+
+
+def _menu_flow_owners(menu: InputMenu, pending_inputs: dict) -> list:
+    return [
         user_id
         for user_id, flow in pending_inputs.items()
         if flow.get(INPUT_MENU_KEY) == menu
     ]
-    for user_id in owners:
-        pending_inputs.pop(user_id, None)
-    return owners
 
 
 def _input_topic(event) -> Optional[InputTopic]:
@@ -2542,14 +2569,18 @@ def _reasoning_level_display(level: str) -> str:
 
 
 def _build_think_options(
-    spec: ModelSpec, *, include_not_set_here: bool = False
+    spec: ModelSpec, *, not_set_label: Optional[str] = None
 ) -> Dict[str, str]:
-    """Menu entries for a model's reasoning levels, plus a reset entry."""
+    """Menu entries for a model's reasoning levels, plus a reset entry.
+
+    The reset entry is NOT_SET_LABEL for a layer that inherits (a chat or a
+    topic), else the model's default.
+    """
     options = {
         level: _reasoning_level_display(level) for level in spec.reasoning_levels
     }
-    if include_not_set_here:
-        options[REASONING_CLEAR_KEY] = NOT_SET_HERE_DISPLAY_NAME
+    if not_set_label is not None:
+        options[REASONING_CLEAR_KEY] = not_set_label
     else:
         default_level = spec.effective_default_reasoning() or "provider default"
         options[REASONING_CLEAR_KEY] = f"Default ({default_level})"
@@ -2558,13 +2589,23 @@ def _build_think_options(
 
 REASONING_SCOPE_PERSONAL = "personal"
 REASONING_SCOPE_CHAT = "chat"
+#: One private topic of the chat. The "Here" menus write it by default inside
+#: a topic, and their Apply-to row switches them to the chat.
+REASONING_SCOPE_TOPIC = "topic"
 REASONING_SCOPE_CALLBACK_PREFIXES = {
     REASONING_SCOPE_PERSONAL: "think_",
     REASONING_SCOPE_CHAT: "thinkhere_",
+    REASONING_SCOPE_TOPIC: "thinktopic_",
 }
 REASONING_SCOPE_AWAITING_KEYS = {
     REASONING_SCOPE_PERSONAL: "think_selection",
     REASONING_SCOPE_CHAT: "think_here_selection",
+    #: Unused: topics need a bot, and only a user account awaits a number.
+    REASONING_SCOPE_TOPIC: "think_topic_selection",
+}
+NOT_SET_LABELS = {
+    REASONING_SCOPE_CHAT: NOT_SET_HERE_DISPLAY_NAME,
+    REASONING_SCOPE_TOPIC: NOT_SET_IN_TOPIC_DISPLAY_NAME,
 }
 
 
@@ -2578,8 +2619,24 @@ class ThinkMenuState:
     current_value: str
 
 
-def _scope_selected_model(chat_id: int, user_id: int, *, scope: str) -> str:
-    """The model a scope's picker currently has selected."""
+def _topic_key(chat_id: int, topic_id: Optional[int]) -> str:
+    """The topic store's key; a topic scope without a topic is a bug."""
+    if topic_id is None:
+        raise ValueError("The topic scope needs a topic id")
+    return TopicManager.key(chat_id, topic_id)
+
+
+def _scope_selected_model(
+    chat_id: int, user_id: int, *, scope: str, topic_id: Optional[int] = None
+) -> str:
+    """The model a scope's picker currently has selected.
+
+    TOPIC_ID is where the picker is. The chat scope looks past the topic, since
+    it sets what every topic inherits.
+    """
+    if scope == REASONING_SCOPE_TOPIC:
+        _topic_key(chat_id, topic_id)  #: Raises without a topic.
+        return _get_effective_model_and_service(chat_id, user_id, topic_id=topic_id)[0]
     if scope == REASONING_SCOPE_CHAT:
         return (
             chat_manager.get_model(chat_id)
@@ -2591,14 +2648,26 @@ def _scope_selected_model(chat_id: int, user_id: int, *, scope: str) -> str:
 
 
 def _think_menu_state(
-    chat_id: int, user_id: int, *, scope: str, model: Optional[str] = None
+    chat_id: int,
+    user_id: int,
+    *,
+    scope: str,
+    model: Optional[str] = None,
+    topic_id: Optional[int] = None,
 ) -> ThinkMenuState:
-    """State for a reasoning menu. `model` defaults to the effective model."""
+    """State for a reasoning menu. `model` defaults to the effective model
+    where the menu is (TOPIC_ID), or to the chat's for the chat scope."""
     if model is None:
-        model, _ = _get_effective_model_and_service(chat_id, user_id)
+        model, _ = _get_effective_model_and_service(
+            chat_id,
+            user_id,
+            topic_id=None if scope == REASONING_SCOPE_CHAT else topic_id,
+        )
     spec = llm_models.spec_for_model(model)
 
-    if scope == REASONING_SCOPE_CHAT:
+    if scope == REASONING_SCOPE_TOPIC:
+        stored = topic_manager.get_thinking(_topic_key(chat_id, topic_id), model=model)
+    elif scope == REASONING_SCOPE_CHAT:
         stored = chat_manager.get_thinking(chat_id, model=model)
     elif scope == REASONING_SCOPE_PERSONAL:
         stored = user_manager.get_thinking(user_id, model=model)
@@ -2608,9 +2677,7 @@ def _think_menu_state(
     return ThinkMenuState(
         model=model,
         spec=spec,
-        options=_build_think_options(
-            spec, include_not_set_here=(scope == REASONING_SCOPE_CHAT)
-        ),
+        options=_build_think_options(spec, not_set_label=NOT_SET_LABELS.get(scope)),
         current_value=(
             stored if spec.supports_level_p(stored) else REASONING_CLEAR_KEY
         ),
@@ -2618,9 +2685,19 @@ def _think_menu_state(
 
 
 def _set_reasoning_level(
-    chat_id: int, user_id: int, *, scope: str, model: str, level: Optional[str]
+    chat_id: int,
+    user_id: int,
+    *,
+    scope: str,
+    model: str,
+    level: Optional[str],
+    topic_id: Optional[int] = None,
 ) -> None:
-    if scope == REASONING_SCOPE_CHAT:
+    if scope == REASONING_SCOPE_TOPIC:
+        topic_manager.set_thinking(
+            _topic_key(chat_id, topic_id), model=model, level=level
+        )
+    elif scope == REASONING_SCOPE_CHAT:
         chat_manager.set_thinking(chat_id, model=model, level=level)
     elif scope == REASONING_SCOPE_PERSONAL:
         user_manager.set_thinking(user_id, model=model, level=level)
@@ -2737,10 +2814,22 @@ async def _schedule_topic_title(
 
 
 def _build_model_menu(
-    chat_id: int, user_id: int, *, scope: str, admin_p: bool, codex_p: bool
+    chat_id: int,
+    user_id: int,
+    *,
+    scope: str,
+    admin_p: bool,
+    codex_p: bool,
+    topic_id: Optional[int] = None,
 ) -> ModelMenu:
-    """Model choices for `scope`, followed by reasoning levels for its model."""
-    if scope == REASONING_SCOPE_CHAT:
+    """Model choices for `scope`, followed by reasoning levels for its model.
+
+    TOPIC_ID is the private topic the menu is in, if any.
+    """
+    if scope == REASONING_SCOPE_TOPIC:
+        options = _topic_model_options_for_access(admin_p=admin_p, codex_p=codex_p)
+        current_value = topic_manager.get_model(_topic_key(chat_id, topic_id)) or ""
+    elif scope == REASONING_SCOPE_CHAT:
         options = _chat_model_options_for_access(admin_p=admin_p, codex_p=codex_p)
         current_value = chat_manager.get_model(chat_id) or ""
     elif scope == REASONING_SCOPE_PERSONAL:
@@ -2753,7 +2842,8 @@ def _build_model_menu(
         chat_id,
         user_id,
         scope=scope,
-        model=_scope_selected_model(chat_id, user_id, scope=scope),
+        model=_scope_selected_model(chat_id, user_id, scope=scope, topic_id=topic_id),
+        topic_id=topic_id,
     )
 
     options = dict(options)
@@ -2793,6 +2883,7 @@ def _model_menu_buttons(
 MODEL_MENU_CALLBACK_PREFIXES = {
     REASONING_SCOPE_PERSONAL: "model_",
     REASONING_SCOPE_CHAT: "chatmodel_",
+    REASONING_SCOPE_TOPIC: "topicmodel_",
     MODEL_MENU_SCOPE_TITLE: "titlemodel_",
 }
 #: Followed by the scope. It must not start like a model callback prefix.
@@ -2800,6 +2891,7 @@ MODEL_MENU_CANCEL_PREFIX = "mm:cancel:"
 MODEL_MENU_TITLES = {
     REASONING_SCOPE_PERSONAL: "**Set Chat Model**",
     REASONING_SCOPE_CHAT: "**Set Chat Model**",
+    REASONING_SCOPE_TOPIC: "**Set Model for This Topic**",
     MODEL_MENU_SCOPE_TITLE: (
         "**Set Title Model**\n\nIt writes the titles and summaries of files, "
         "and the names of new topics."
@@ -2808,6 +2900,10 @@ MODEL_MENU_TITLES = {
 MODEL_MENU_CUSTOM_ID_HINTS = {
     REASONING_SCOPE_PERSONAL: "Or, send a custom model ID below.\n(Type `cancel` to stop.)",
     REASONING_SCOPE_CHAT: (
+        "Or, send a custom model ID below."
+        "\n(Type `cancel` or `not set` to stop/clear.)"
+    ),
+    REASONING_SCOPE_TOPIC: (
         "Or, send a custom model ID below."
         "\n(Type `cancel` or `not set` to stop/clear.)"
     ),
@@ -2823,20 +2919,53 @@ MODEL_MENU_GROUP_CUSTOM_ID_HINT = (
 )
 
 
-def _model_menu_rows(menu: ModelMenu, *, scope: str) -> list:
-    """The keyboard of a bot's model menu: its choices, then a Cancel row."""
+#: The "Apply to" row of a "Here" menu inside a private topic, which picks
+#: the layer the menu writes. Followed by `<kind>:<scope>`.
+APPLY_TO_CALLBACK_PREFIX = "applyto:"
+APPLY_TO_KIND_MODEL = "model"
+APPLY_TO_KIND_THINK = "think"
+APPLY_TO_KIND_PROMPT = "prompt"
+APPLY_TO_TARGETS = {
+    REASONING_SCOPE_TOPIC: "📍 This Topic",
+    REASONING_SCOPE_CHAT: "💬 Whole Chat",
+}
+#: A press whose menu's topic cannot be found must not write the chat instead.
+MENU_TOPIC_UNKNOWN = (
+    "I can't tell which topic this menu is in. Send the command again inside "
+    "the topic."
+)
+
+
+def _apply_to_row(kind: str, *, scope: str) -> list:
+    """The Apply-to row of a KIND menu that currently writes SCOPE."""
+    return [
+        tg_compat.callback_button(
+            f"✅ {label}" if target == scope else label,
+            data=f"{APPLY_TO_CALLBACK_PREFIX}{kind}:{target}",
+        )
+        for target, label in APPLY_TO_TARGETS.items()
+    ]
+
+
+def _model_menu_rows(menu: ModelMenu, *, scope: str, apply_to_p: bool = False) -> list:
+    """The keyboard of a bot's model menu: its choices, the Apply-to row when
+    APPLY_TO_P (the menu is in a private topic), then a Cancel row."""
     prefix = MODEL_MENU_CALLBACK_PREFIXES[scope]
     buttons = _model_menu_buttons(
         menu,
         callback_data=lambda key: f"{prefix}{bot_util.sanitize_callback_data(key)}",
     )
-    return util.build_menu(buttons, n_cols=2) + [
+    rows = util.build_menu(buttons, n_cols=2)
+    if apply_to_p:
+        rows.append(_apply_to_row(APPLY_TO_KIND_MODEL, scope=scope))
+    rows.append(
         [
             tg_compat.callback_button(
                 "❌ Cancel", data=f"{MODEL_MENU_CANCEL_PREFIX}{scope}"
             )
         ]
-    ]
+    )
+    return rows
 
 
 def _model_menu_text(*, scope: str, prompt_p: bool = True) -> str:
@@ -2849,9 +2978,18 @@ def _model_menu_text(*, scope: str, prompt_p: bool = True) -> str:
     return f"{BOT_META_INFO_PREFIX}{MODEL_MENU_TITLES[scope]}\n\n{hint}"
 
 
-def _model_menu_closed_text(*, scope: str, chat_id, user_id: int) -> str:
+def _model_menu_closed_text(
+    *, scope: str, chat_id, user_id: int, topic_id: Optional[int] = None
+) -> str:
     """A closed model menu's text: it says the model that is now in effect."""
-    if scope == REASONING_SCOPE_PERSONAL:
+    if scope == REASONING_SCOPE_TOPIC:
+        topic_model = _topic_setting(chat_id, topic_id, topic_manager.get_model)
+        current = (
+            f"`{topic_model}`"
+            if topic_model
+            else "not set (the chat's or your personal model applies)"
+        )
+    elif scope == REASONING_SCOPE_PERSONAL:
         current = f"`{user_manager.get_prefs(user_id).model}`"
     elif scope == REASONING_SCOPE_CHAT:
         chat_model = chat_manager.get_model(chat_id)
@@ -2866,17 +3004,22 @@ def _model_menu_closed_text(*, scope: str, chat_id, user_id: int) -> str:
 
 
 async def _present_model_menu(
-    event, *, scope: str, menu: ModelMenu, flow: Optional[dict]
+    event,
+    *,
+    scope: str,
+    menu: ModelMenu,
+    flow: Optional[dict],
+    apply_to_p: bool = False,
 ):
     """Sends a bot's model menu, and arms FLOW for a custom model ID.
 
     The menu message carries the custom-ID hint and a Cancel row, and the flow
     records that message, so Cancel drops exactly the flow it armed. With FLOW
-    None, the menu asks for no next message.
+    None, the menu asks for no next message. APPLY_TO_P adds the Apply-to row.
     """
     message = await event.reply(
         _model_menu_text(scope=scope, prompt_p=flow is not None),
-        buttons=_model_menu_rows(menu, scope=scope),
+        buttons=_model_menu_rows(menu, scope=scope, apply_to_p=apply_to_p),
         parse_mode="md",
     )
     if flow is None:
@@ -2905,7 +3048,11 @@ async def _model_menu_cancel_handler(event, *, scope: str):
                 alert=True,
             )
             return
-    elif scope in (REASONING_SCOPE_PERSONAL, MODEL_MENU_SCOPE_TITLE):
+    elif scope in (
+        REASONING_SCOPE_PERSONAL,
+        REASONING_SCOPE_TOPIC,
+        MODEL_MENU_SCOPE_TITLE,
+    ):
         pass
     else:
         #: Wire input from a button: an unknown scope is answered, not raised.
@@ -2915,13 +3062,21 @@ async def _model_menu_cancel_handler(event, *, scope: str):
     cancel_menu_input_flows(
         InputMenu(chat_id=event.chat_id, message_id=event.message_id)
     )
+    topic_id = (
+        await _thread_topic_id_for_display(event)
+        if scope == REASONING_SCOPE_TOPIC
+        else None
+    )
     #: Before the edit: `edit` answers the press itself, which would swallow
     #: this answer.
     await event.answer("Cancelled.")
     try:
         await event.edit(
             _model_menu_closed_text(
-                scope=scope, chat_id=event.chat_id, user_id=event.sender_id
+                scope=scope,
+                chat_id=event.chat_id,
+                user_id=event.sender_id,
+                topic_id=topic_id,
             ),
             buttons=None,
             parse_mode="md",
@@ -2930,34 +3085,45 @@ async def _model_menu_cancel_handler(event, *, scope: str):
         pass
 
 
-async def _close_model_menu_of(event, flow: dict):
-    """Best-effort: close the menu that armed FLOW, after a typed cancel."""
+def _flow_topic_id(flow: dict) -> Optional[int]:
+    """The private topic FLOW was started in, or None."""
+    topic = flow.get(INPUT_TOPIC_KEY)
+    return None if topic is None else topic.topic_id
+
+
+async def _close_menu_of(event, flow: dict, *, outcome: str = "Cancelled.") -> None:
+    """Best-effort: close the menu that armed FLOW, after a typed cancel or
+    answer. OUTCOME says how it ended; only the prompt menu shows it."""
     menu = flow.get(INPUT_MENU_KEY)
     if menu is None:
         return
     flow_type = flow.get("type")
-    if flow_type == "model":
-        scope = REASONING_SCOPE_PERSONAL
-    elif flow_type == "chatmodel":
-        scope = REASONING_SCOPE_CHAT
-    elif flow_type == "titlemodel":
-        scope = MODEL_MENU_SCOPE_TITLE
+    chat_id = flow.get("chat_id", menu.chat_id)
+    topic_id = _flow_topic_id(flow)
+    if flow_type == "systemprompthere":
+        text = _prompt_menu_closed_text(
+            chat_id, scope=flow["scope"], topic_id=topic_id, outcome=outcome
+        )
     else:
-        raise ValueError(f"A menu armed an unknown flow: {flow_type}")
+        if flow_type == "model":
+            scope = REASONING_SCOPE_PERSONAL
+        elif flow_type == "chatmodel":
+            scope = REASONING_SCOPE_CHAT
+        elif flow_type == "topicmodel":
+            scope = REASONING_SCOPE_TOPIC
+        elif flow_type == "titlemodel":
+            scope = MODEL_MENU_SCOPE_TITLE
+        else:
+            raise ValueError(f"A menu armed an unknown flow: {flow_type}")
+        text = _model_menu_closed_text(
+            scope=scope, chat_id=chat_id, user_id=event.sender_id, topic_id=topic_id
+        )
     try:
         await event.client.edit_message(
-            menu.chat_id,
-            menu.message_id,
-            _model_menu_closed_text(
-                scope=scope,
-                chat_id=flow.get("chat_id", menu.chat_id),
-                user_id=event.sender_id,
-            ),
-            buttons=None,
-            parse_mode="md",
+            menu.chat_id, menu.message_id, text, buttons=None, parse_mode="md"
         )
     except Exception:
-        print(f"Could not close model menu {menu}: {traceback.format_exc()}")
+        print(f"Could not close menu {menu}: {traceback.format_exc()}")
 
 
 def _apply_reasoning_choice(
@@ -2967,16 +3133,21 @@ def _apply_reasoning_choice(
     scope: str,
     model: str,
     level_key: str,
+    topic_id: Optional[int] = None,
 ) -> Optional[str]:
     """Validate and store one model-specific reasoning choice."""
-    state = _think_menu_state(chat_id, user_id, scope=scope, model=model)
+    state = _think_menu_state(
+        chat_id, user_id, scope=scope, model=model, topic_id=topic_id
+    )
     if not state.spec.supports_reasoning_p() or (
         level_key != REASONING_CLEAR_KEY and not state.spec.supports_level_p(level_key)
     ):
         return None
 
     level = None if level_key == REASONING_CLEAR_KEY else level_key
-    _set_reasoning_level(chat_id, user_id, scope=scope, model=model, level=level)
+    _set_reasoning_level(
+        chat_id, user_id, scope=scope, model=model, level=level, topic_id=topic_id
+    )
     display = (
         _reasoning_level_display(level) if level else state.options[REASONING_CLEAR_KEY]
     )
@@ -2984,7 +3155,7 @@ def _apply_reasoning_choice(
 
 
 async def _apply_reasoning_menu_choice(
-    event, *, scope: str, level_key: str
+    event, *, scope: str, level_key: str, topic_id: Optional[int] = None
 ) -> Optional[str]:
     """Store a `think:` picker choice. Returns feedback text, or None if invalid."""
     chat_id = event.chat_id
@@ -2993,14 +3164,239 @@ async def _apply_reasoning_menu_choice(
         chat_id,
         user_id,
         scope=scope,
-        model=_scope_selected_model(chat_id, user_id, scope=scope),
+        model=_scope_selected_model(chat_id, user_id, scope=scope, topic_id=topic_id),
         level_key=level_key,
+        topic_id=topic_id,
     )
 
 
+THINK_MENU_WHERE = {
+    REASONING_SCOPE_PERSONAL: "You",
+    REASONING_SCOPE_CHAT: "This Chat",
+    REASONING_SCOPE_TOPIC: "This Topic",
+}
+
+
 def _think_menu_title(state: ThinkMenuState, *, scope: str) -> str:
-    where = "This Chat" if scope == REASONING_SCOPE_CHAT else "You"
+    where = THINK_MENU_WHERE[scope]
     return f"Reasoning Effort for {_model_display_name(state.model)} ({where})"
+
+
+def _think_menu_text(state: ThinkMenuState, *, scope: str) -> str:
+    """A bot's reasoning menu text, as `bot_util.present_options` writes it."""
+    return f"{BOT_META_INFO_PREFIX}**{_think_menu_title(state, scope=scope)}**"
+
+
+def _think_menu_rows(
+    state: ThinkMenuState, *, scope: str, apply_to_p: bool = False
+) -> list:
+    """A bot's reasoning menu: its levels, then the Apply-to row when
+    APPLY_TO_P (the menu is in a private topic)."""
+    rows = util.build_menu(
+        bot_util.option_buttons(
+            state.options,
+            current_value=state.current_value,
+            callback_prefix=REASONING_SCOPE_CALLBACK_PREFIXES[scope],
+        ),
+        n_cols=2,
+    )
+    if apply_to_p:
+        rows.append(_apply_to_row(APPLY_TO_KIND_THINK, scope=scope))
+    return rows
+
+
+#: The prompt menu's own buttons, followed by `<action>:<scope>`.
+PROMPT_MENU_CALLBACK_PREFIX = "prompthere:"
+PROMPT_MENU_CLEAR = "clear"
+PROMPT_MENU_CANCEL = "cancel"
+PROMPT_MENU_TITLES = {
+    REASONING_SCOPE_TOPIC: "**System Prompt for This Topic**",
+    REASONING_SCOPE_CHAT: "**System Prompt for This Chat**",
+}
+#: What a prompt menu's layer falls back to when it has no prompt.
+PROMPT_MENU_INHERITS = {
+    REASONING_SCOPE_TOPIC: "the chat's prompt, or else your personal one, applies",
+    REASONING_SCOPE_CHAT: "your personal prompt, or else the default, applies",
+}
+#: Where a topic command's reply points for the whole chat.
+WHOLE_CHAT_HINTS = {
+    APPLY_TO_KIND_MODEL: "send /setModelHere alone and press 💬 Whole Chat",
+    APPLY_TO_KIND_THINK: "send /setThinkHere alone and press 💬 Whole Chat",
+    APPLY_TO_KIND_PROMPT: "send /setSystemPromptHere alone and press 💬 Whole Chat",
+}
+
+
+def _whole_chat_hint(kind: str) -> str:
+    return f"\n\nFor the whole chat instead, {WHOLE_CHAT_HINTS[kind]}."
+
+
+#: Long prompts are cut in the menu; the stored prompt is whole.
+PROMPT_MENU_PREVIEW_UNITS = 1500
+
+
+def _layer_system_prompt(
+    chat_id: int, *, scope: str, topic_id: Optional[int]
+) -> Optional[str]:
+    if scope == REASONING_SCOPE_TOPIC:
+        return topic_manager.get_system_prompt(_topic_key(chat_id, topic_id))
+    if scope == REASONING_SCOPE_CHAT:
+        return chat_manager.get_system_prompt(chat_id)
+    raise ValueError(f"Unknown system prompt scope: {scope}")
+
+
+def _set_layer_system_prompt(
+    chat_id: int, *, scope: str, topic_id: Optional[int], prompt: Optional[str]
+) -> None:
+    if scope == REASONING_SCOPE_TOPIC:
+        topic_manager.set_system_prompt(_topic_key(chat_id, topic_id), prompt)
+    elif scope == REASONING_SCOPE_CHAT:
+        chat_manager.set_system_prompt(chat_id, prompt)
+    else:
+        raise ValueError(f"Unknown system prompt scope: {scope}")
+
+
+def _prompt_menu_current(chat_id: int, *, scope: str, topic_id: Optional[int]) -> str:
+    current = _layer_system_prompt(chat_id, scope=scope, topic_id=topic_id)
+    if not current:
+        return f"Not set: {PROMPT_MENU_INHERITS[scope]}."
+    return f"\n```\n{_truncate_utf16(current, PROMPT_MENU_PREVIEW_UNITS)}\n```"
+
+
+def _prompt_menu_text(chat_id: int, *, scope: str, topic_id: Optional[int]) -> str:
+    return (
+        f"{BOT_META_INFO_PREFIX}{PROMPT_MENU_TITLES[scope]}\n\n"
+        f"**Current:** {_prompt_menu_current(chat_id, scope=scope, topic_id=topic_id)}"
+        "\n\nSend the new system prompt as your next message in this topic."
+        "\n(Type `clear` to remove it, or `cancel` to stop.)"
+    )
+
+
+def _prompt_menu_closed_text(
+    chat_id: int, *, scope: str, topic_id: Optional[int], outcome: str
+) -> str:
+    return (
+        f"{BOT_META_INFO_PREFIX}{PROMPT_MENU_TITLES[scope]}\n\n{outcome}\n\n"
+        f"**Current:** {_prompt_menu_current(chat_id, scope=scope, topic_id=topic_id)}"
+    )
+
+
+def _prompt_menu_rows(*, scope: str) -> list:
+    """The prompt menu's keyboard. The menu exists only in private topics, so
+    it always has the Apply-to row."""
+    return [
+        _apply_to_row(APPLY_TO_KIND_PROMPT, scope=scope),
+        [
+            tg_compat.callback_button(
+                "♻️ Clear",
+                data=f"{PROMPT_MENU_CALLBACK_PREFIX}{PROMPT_MENU_CLEAR}:{scope}",
+            ),
+            tg_compat.callback_button(
+                "❌ Cancel",
+                data=f"{PROMPT_MENU_CALLBACK_PREFIX}{PROMPT_MENU_CANCEL}:{scope}",
+            ),
+        ],
+    ]
+
+
+APPLY_TO_FEEDBACK = {
+    REASONING_SCOPE_TOPIC: "Now applies to this topic.",
+    REASONING_SCOPE_CHAT: "Now applies to the whole chat.",
+}
+#: The flow type a model menu's custom ID answers, by the layer it writes.
+HERE_MODEL_FLOW_TYPES = {
+    REASONING_SCOPE_TOPIC: "topicmodel",
+    REASONING_SCOPE_CHAT: "chatmodel",
+}
+
+
+async def _apply_to_press_handler(event, *, kind: str, scope: str) -> None:
+    """A press on an Apply-to row: the menu now writes SCOPE.
+
+    The menu is redrawn for that layer, and the answer it asked for, if still
+    pending, moves with it. Nothing is written until a choice is pressed.
+    """
+    if scope not in APPLY_TO_TARGETS or kind not in (
+        APPLY_TO_KIND_MODEL,
+        APPLY_TO_KIND_THINK,
+        APPLY_TO_KIND_PROMPT,
+    ):
+        #: Wire input from a button: an unknown value is answered, not raised.
+        await event.answer("This menu is invalid.", alert=True)
+        return
+    #: Apply-to rows exist only in private topics, so no group admin check.
+    topic_id = await _thread_topic_id_for_display(event)
+    if topic_id is None:
+        await event.answer(MENU_TOPIC_UNKNOWN, alert=True)
+        return
+
+    chat_id = event.chat_id
+    user_id = event.sender_id
+    menu = InputMenu(chat_id=chat_id, message_id=event.message_id)
+    if kind == APPLY_TO_KIND_MODEL:
+        config = llm_chat_config.load_config()
+        model_menu = _build_model_menu(
+            chat_id,
+            user_id,
+            scope=scope,
+            admin_p=await util.isAdmin(event),
+            codex_p=await llm_chat_config.can_use_codex(event, config),
+            topic_id=topic_id,
+        )
+        retarget_menu_input_flows(menu, {"type": HERE_MODEL_FLOW_TYPES[scope]})
+        text = _model_menu_text(scope=scope)
+        buttons = _model_menu_rows(model_menu, scope=scope, apply_to_p=True)
+    elif kind == APPLY_TO_KIND_THINK:
+        state = _think_menu_state(chat_id, user_id, scope=scope, topic_id=topic_id)
+        text = _think_menu_text(state, scope=scope)
+        buttons = _think_menu_rows(state, scope=scope, apply_to_p=True)
+    elif kind == APPLY_TO_KIND_PROMPT:
+        retarget_menu_input_flows(menu, {"scope": scope})
+        text = _prompt_menu_text(chat_id, scope=scope, topic_id=topic_id)
+        buttons = _prompt_menu_rows(scope=scope)
+    else:
+        raise ValueError(f"Unknown Apply-to kind: {kind}")
+
+    await event.answer(APPLY_TO_FEEDBACK[scope])
+    try:
+        await event.edit(text, buttons=buttons, parse_mode="md")
+    except errors.rpcerrorlist.MessageNotModifiedError:
+        pass
+
+
+async def _prompt_menu_press_handler(event, *, action: str, scope: str) -> None:
+    """A press on the prompt menu's Clear or Cancel. Either closes the menu."""
+    if scope not in PROMPT_MENU_TITLES or action not in (
+        PROMPT_MENU_CLEAR,
+        PROMPT_MENU_CANCEL,
+    ):
+        await event.answer("This menu is invalid.", alert=True)
+        return
+    topic_id = await _thread_topic_id_for_display(event)
+    if topic_id is None:
+        await event.answer(MENU_TOPIC_UNKNOWN, alert=True)
+        return
+
+    cancel_menu_input_flows(
+        InputMenu(chat_id=event.chat_id, message_id=event.message_id)
+    )
+    if action == PROMPT_MENU_CLEAR:
+        _set_layer_system_prompt(
+            event.chat_id, scope=scope, topic_id=topic_id, prompt=None
+        )
+        outcome = "Cleared."
+    else:
+        outcome = "Cancelled."
+    await event.answer(outcome)
+    try:
+        await event.edit(
+            _prompt_menu_closed_text(
+                event.chat_id, scope=scope, topic_id=topic_id, outcome=outcome
+            ),
+            buttons=None,
+            parse_mode="md",
+        )
+    except errors.rpcerrorlist.MessageNotModifiedError:
+        pass
 
 
 def _build_context_mode_menu_options(chat_id: int, user_id: int) -> Dict[str, str]:
@@ -3470,6 +3866,28 @@ def _apply_topic_model_choice(
     """Save a topic's model; like any explicit choice, it ends a redirect."""
     topic_manager.set_model(TopicManager.key(chat_id, topic_id), model)
     user_manager.clear_codex_quota_fallback(user_id)
+
+
+def _apply_here_model_choice(
+    chat_id: int,
+    user_id: int,
+    *,
+    scope: str,
+    topic_id: Optional[int],
+    model: Optional[str],
+) -> str:
+    """Save MODEL (None: inherit) for the chat or the topic; returns feedback."""
+    if scope == REASONING_SCOPE_TOPIC:
+        _apply_topic_model_choice(chat_id, topic_id, user_id=user_id, model=model)
+        if model is None:
+            return "Topic model cleared (using the chat's or personal default)"
+        return f"Topic model set to {_model_display_name(model)}"
+    if scope == REASONING_SCOPE_CHAT:
+        _apply_chat_model_choice(chat_id, user_id, model=model)
+        if model is None:
+            return "Chat model cleared (using personal default)"
+        return f"Chat model set to {_model_display_name(model)}"
+    raise ValueError(f"Unknown model scope: {scope}")
 
 
 def get_effective_gemini_api_key(user_id: int) -> str | None:
@@ -6563,6 +6981,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setSystemPrompt: Change my core instructions or reset to default.
 - /setModelHere: Set the AI model for the current chat only.
 - /getModelHere: View the effective AI model for the current chat.
+- /setSystemPromptHere: Set a system prompt for the current chat only.
 - /setLastN: Set your default 'Last N' message limit (global default: `{LAST_N_MESSAGES_LIMIT}`).
 - /getLastN: View your default 'Last N' message limit.
 - /setLastNHere: Set 'Last N' message limit for this chat (overrides personal/default).
@@ -6576,6 +6995,8 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /groupActivationMode: Change how I am triggered in groups.
 - /setthink: Adjust the current model's reasoning effort (per model, personal).
 - /setThinkHere: Same, but for this chat only. Overrides your personal setting.
+
+**In private topics**, /setModelHere, /setThinkHere and /setSystemPromptHere set this topic's own model, effort and prompt, which override the chat's. Their menus have an **Apply to** row to set the whole chat instead.
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
 {admin_help}
@@ -6743,7 +7164,15 @@ async def status_handler(event):
         event, chat_model, config=config
     ):
         chat_model = None
-    if chat_model:
+    topic_id = _thread_topic_id(event)
+    topic_model = _topic_setting(chat_id, topic_id, topic_manager.get_model)
+    if topic_model and not await _can_user_access_model(
+        event, topic_model, config=config
+    ):
+        topic_model = None
+    if topic_model:
+        model_status += f" (overridden in this topic)"
+    elif chat_model:
         model_status += f" (overridden in this chat)"
 
     # 'Last N' limit status
@@ -6831,8 +7260,12 @@ async def status_handler(event):
             f"{_md_code(_format_local(quota_fallback.until))} "
             f"({_format_relative(quota_fallback.until)})\n"
         )
-    effective_model, _ = _get_effective_model_and_service(chat_id, user_id)
-    reasoning = _get_effective_reasoning(chat_id, user_id, model=effective_model)
+    effective_model, _ = _get_effective_model_and_service(
+        chat_id, user_id, topic_id=topic_id
+    )
+    reasoning = _get_effective_reasoning(
+        chat_id, user_id, model=effective_model, topic_id=topic_id
+    )
     if reasoning.level:
         thinking_status = (
             f"`{_reasoning_level_display(reasoning.level)}` "
@@ -6847,6 +7280,29 @@ async def status_handler(event):
         if chat_reasoning
         else "`Not set`"
     )
+    #: Only rendered inside a private topic, and every line says so, so the
+    #: block is unchanged everywhere else.
+    topic_settings_lines = ""
+    if topic_id is not None:
+        topic_reasoning = _topic_setting(
+            chat_id,
+            topic_id,
+            lambda key: topic_manager.get_thinking(key, model=effective_model),
+        )
+        topic_prompt = _topic_setting(
+            chat_id, topic_id, topic_manager.get_system_prompt
+        )
+        topic_settings_lines = (
+            f"• **Model In This Topic:** `{topic_model or 'Not set'}`\n"
+            "• **System Prompt In This Topic:** "
+            f"`{'Custom (Overrides the chat and personal prompts)' if topic_prompt else 'Not set'}`\n"
+            "• **Reasoning Effort In This Topic:** "
+            + (
+                f"`{_reasoning_level_display(topic_reasoning)}`\n"
+                if topic_reasoning
+                else "`Not set`\n"
+            )
+        )
 
     # TTS Settings
     tts_model_display = tts_util.TTS_MODELS.get(chat_prefs.tts_model, "Unknown")
@@ -6869,6 +7325,7 @@ async def status_handler(event):
         f"• **Chat Model:** `{chat_model or 'Not set'}`\n"
         f"• **Chat System Prompt:** `{chat_system_prompt_status}`\n"
         f"• **Chat Reasoning Effort:** {chat_reasoning_status}\n"
+        f"{topic_settings_lines}"
         f"• **Chat 'Last N' Limit:** {chat_last_n_status}\n"
         f"• **Effective 'Last N' Limit:** {effective_last_n_status}\n\n"
         f"**TTS Settings (This Chat)**\n"
@@ -8795,15 +9252,50 @@ async def set_system_prompt_here_handler(event):
         return
 
     prompt_match = event.pattern_match.group(1)
+    topic_id = _thread_topic_id(event)
     if not prompt_match or not prompt_match.strip():
-        await send_info_message(
-            event, "**Usage:** `/setSystemPromptHere <your prompt here>`"
-        )
+        if topic_id is None:
+            await send_info_message(
+                event, "**Usage:** `/setSystemPromptHere <your prompt here>`"
+            )
+        else:
+            await _present_prompt_menu(event, topic_id=topic_id)
         return
 
     prompt = prompt_match.strip()
-    chat_manager.set_system_prompt(event.chat_id, prompt)
-    await send_info_message(event, "✅ This chat's system prompt has been updated.")
+    if topic_id is None:
+        chat_manager.set_system_prompt(event.chat_id, prompt)
+        await send_info_message(event, "✅ This chat's system prompt has been updated.")
+    else:
+        _set_layer_system_prompt(
+            event.chat_id, scope=REASONING_SCOPE_TOPIC, topic_id=topic_id, prompt=prompt
+        )
+        await send_info_message(
+            event,
+            "✅ This topic's system prompt has been updated."
+            + _whole_chat_hint(APPLY_TO_KIND_PROMPT),
+        )
+
+
+async def _present_prompt_menu(event, *, topic_id: int) -> None:
+    """The prompt menu of a private topic: it writes the topic until its
+    Apply-to row says otherwise, and takes the prompt as the next message."""
+    message = await event.reply(
+        _prompt_menu_text(
+            event.chat_id, scope=REASONING_SCOPE_TOPIC, topic_id=topic_id
+        ),
+        buttons=_prompt_menu_rows(scope=REASONING_SCOPE_TOPIC),
+        parse_mode="md",
+    )
+    start_input_flow(
+        event,
+        {
+            "type": "systemprompthere",
+            "scope": REASONING_SCOPE_TOPIC,
+            "chat_id": event.chat_id,
+            INPUT_MENU_KEY: InputMenu(chat_id=event.chat_id, message_id=message.id),
+        },
+    )
 
 
 async def reset_system_prompt_here_handler(event):
@@ -8817,29 +9309,52 @@ async def reset_system_prompt_here_handler(event):
         )
         return
 
+    topic_id = _thread_topic_id(event)
+    if topic_id is not None:
+        _set_layer_system_prompt(
+            event.chat_id, scope=REASONING_SCOPE_TOPIC, topic_id=topic_id, prompt=None
+        )
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}✅ This topic's system prompt has been cleared:"
+            f" {PROMPT_MENU_INHERITS[REASONING_SCOPE_TOPIC]}."
+            "\n\nTo clear the whole chat's, send /setSystemPromptHere alone,"
+            " press 💬 Whole Chat, then ♻️ Clear."
+        )
+        return
     chat_manager.set_system_prompt(event.chat_id, None)
     await event.reply(
         f"{BOT_META_INFO_PREFIX}✅ This chat's system prompt has been reset to default."
     )
 
 
+#: How /getSystemPromptHere names a prompt the chat or topic inherits.
+SYSTEM_PROMPT_SOURCE_NAMES = {
+    "chat": "the chat's prompt",
+    "user": "user's personal prompt",
+    "default": "default system prompt",
+}
+
+
 async def get_system_prompt_here_handler(event):
     """Gets and displays the system prompt for the current chat."""
     prompt_info = get_system_prompt_info(event)
+    in_topic_p = _thread_topic_id(event) is not None
 
-    if prompt_info.source == "chat":
+    if prompt_info.source == "topic":
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}**Current topic system prompt:**\n\n```\n{prompt_info.topic_prompt}\n```",
+            parse_mode="md",
+        )
+    elif prompt_info.source == "chat" and not in_topic_p:
         await event.reply(
             f"{BOT_META_INFO_PREFIX}**Current chat system prompt:**\n\n```\n{prompt_info.chat_prompt}\n```",
             parse_mode="md",
         )
     else:
-        source_text = (
-            "user's personal prompt"
-            if prompt_info.source == "user"
-            else "default system prompt"
-        )
+        source_text = SYSTEM_PROMPT_SOURCE_NAMES[prompt_info.source]
+        where = "This topic" if in_topic_p else "This chat"
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}This chat has no custom system prompt set. Using {source_text}:\n\n```\n{prompt_info.effective_prompt}\n```",
+            f"{BOT_META_INFO_PREFIX}{where} has no custom system prompt set. Using {source_text}:\n\n```\n{prompt_info.effective_prompt}\n```",
             parse_mode="md",
         )
 
@@ -8860,35 +9375,47 @@ async def set_model_here_handler(event):
     model_match = event.pattern_match.group(1)
     chat_id = event.chat_id
     user_id = event.sender_id
-    current_chat_model = chat_manager.get_model(chat_id)
+    #: Inside a private topic, the topic is the default target.
+    topic_id = _thread_topic_id(event)
+    scope = REASONING_SCOPE_CHAT if topic_id is None else REASONING_SCOPE_TOPIC
 
     if model_match and model_match.strip():
         model = model_match.strip()
         if not await _guard_model_access(event, model, config=config):
             return
-        _apply_chat_model_choice(chat_id, user_id, model=model)
-        cancel_input_flow(user_id)
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}✅ This chat's model has been set to: `{model}`"
+        _apply_here_model_choice(
+            chat_id, user_id, scope=scope, topic_id=topic_id, model=model
         )
+        cancel_input_flow(user_id)
+        if topic_id is None:
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}✅ This chat's model has been set to: `{model}`"
+            )
+        else:
+            await event.reply(
+                f"{BOT_META_INFO_PREFIX}✅ This topic's model has been set to: "
+                f"`{model}`{_whole_chat_hint(APPLY_TO_KIND_MODEL)}"
+            )
     else:
         menu = _build_model_menu(
             chat_id,
             user_id,
-            scope=REASONING_SCOPE_CHAT,
+            scope=scope,
             admin_p=await util.isAdmin(event),
             codex_p=codex_p,
+            topic_id=topic_id,
         )
         if IS_BOT:
             await _present_model_menu(
                 event,
-                scope=REASONING_SCOPE_CHAT,
+                scope=scope,
                 menu=menu,
                 flow=(
-                    {"type": "chatmodel", "chat_id": chat_id}
+                    {"type": HERE_MODEL_FLOW_TYPES[scope], "chat_id": chat_id}
                     if event.is_private
                     else None
                 ),
+                apply_to_p=topic_id is not None,
             )
             return
         await bot_util.present_options(
@@ -8909,17 +9436,41 @@ async def set_model_here_handler(event):
 
 
 async def get_model_here_handler(event):
-    """Gets and displays the effective model for the current chat."""
+    """Gets and displays the effective model for the current chat or topic."""
     user_id = event.sender_id
     chat_id = event.chat_id
-    effective_model, _ = _get_effective_model_and_service(chat_id, user_id)
+    topic_id = _thread_topic_id(event)
+    effective_model, _ = _get_effective_model_and_service(
+        chat_id, user_id, topic_id=topic_id
+    )
+    topic_model = _topic_setting(chat_id, topic_id, topic_manager.get_model)
     chat_model = chat_manager.get_model(chat_id)
     config = llm_chat_config.load_config()
     if not await _can_user_access_model(event, effective_model, config=config):
         effective_model = DEFAULT_MODEL
-        chat_model = None
+        topic_model = chat_model = None
 
-    if chat_model:
+    if topic_model:
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}**Current topic model:** `{effective_model}`",
+            parse_mode="md",
+        )
+    elif topic_id is not None:
+        source_text = (
+            "the chat's model"
+            if chat_model
+            else (
+                "your personal model"
+                if user_manager.get_prefs(user_id).model
+                else "the default model"
+            )
+        )
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}This topic has no model of its own. Using "
+            f"{source_text}: `{effective_model}`",
+            parse_mode="md",
+        )
+    elif chat_model:
         await event.reply(
             f"{BOT_META_INFO_PREFIX}**Current chat model:** `{effective_model}`",
             parse_mode="md",
@@ -9216,11 +9767,12 @@ async def group_activation_mode_handler(event):
     )
 
 
-async def _set_think_common(event, *, scope: str):
-    """Shared body of /setthink and /setthinkhere."""
+async def _set_think_common(event, *, scope: str, topic_id: Optional[int] = None):
+    """Shared body of /setthink and /setthinkhere. TOPIC_ID is the private
+    topic /setthinkhere was sent in; there its menu has an Apply-to row."""
     chat_id = event.chat_id
     user_id = event.sender_id
-    state = _think_menu_state(chat_id, user_id, scope=scope)
+    state = _think_menu_state(chat_id, user_id, scope=scope, topic_id=topic_id)
     config = llm_chat_config.load_config()
     if not await _guard_model_access(event, state.model, config=config):
         return
@@ -9248,7 +9800,12 @@ async def _set_think_common(event, *, scope: str):
             return
 
         _set_reasoning_level(
-            chat_id, user_id, scope=scope, model=state.model, level=level
+            chat_id,
+            user_id,
+            scope=scope,
+            model=state.model,
+            level=level,
+            topic_id=topic_id,
         )
         cancel_input_flow(user_id)
         display = (
@@ -9256,13 +9813,25 @@ async def _set_think_common(event, *, scope: str):
             if level
             else state.options[REASONING_CLEAR_KEY]
         )
+        where = (
+            f" in this topic{_whole_chat_hint(APPLY_TO_KIND_THINK)}"
+            if scope == REASONING_SCOPE_TOPIC
+            else ""
+        )
         await event.reply(
             f"{BOT_META_INFO_PREFIX}✅ Reasoning effort for "
-            f"`{state.model}` set to: **{display}**",
+            f"`{state.model}` set to: **{display}**{where}",
             parse_mode="md",
         )
         return
 
+    if topic_id is not None:
+        await event.reply(
+            _think_menu_text(state, scope=scope),
+            buttons=_think_menu_rows(state, scope=scope, apply_to_p=True),
+            parse_mode="md",
+        )
+        return
     await bot_util.present_options(
         event,
         title=_think_menu_title(state, scope=scope),
@@ -9288,7 +9857,12 @@ async def set_think_here_handler(event):
         )
         return
 
-    await _set_think_common(event, scope=REASONING_SCOPE_CHAT)
+    topic_id = _thread_topic_id(event)
+    await _set_think_common(
+        event,
+        scope=REASONING_SCOPE_CHAT if topic_id is None else REASONING_SCOPE_TOPIC,
+        topic_id=topic_id,
+    )
 
 
 async def tools_handler(event):
@@ -9792,7 +10366,17 @@ async def callback_handler(event):
         await event.answer(f"Title model set to {menu.options[choice]}")
         await event.edit(buttons=_model_menu_rows(menu, scope=MODEL_MENU_SCOPE_TITLE))
 
-    elif data_str.startswith("chatmodel_"):
+    elif data_str.startswith(
+        (
+            MODEL_MENU_CALLBACK_PREFIXES[REASONING_SCOPE_CHAT],
+            MODEL_MENU_CALLBACK_PREFIXES[REASONING_SCOPE_TOPIC],
+        )
+    ):
+        scope = (
+            REASONING_SCOPE_TOPIC
+            if data_str.startswith(MODEL_MENU_CALLBACK_PREFIXES[REASONING_SCOPE_TOPIC])
+            else REASONING_SCOPE_CHAT
+        )
         admin_p = await util.isAdmin(event)
         chat_id = event.chat_id
         model_id = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
@@ -9805,55 +10389,74 @@ async def callback_handler(event):
                 alert=True,
             )
             return
+        #: A chat menu in a topic needs it too, to keep its Apply-to row.
+        topic_id = await _thread_topic_id_for_display(event)
+        if scope == REASONING_SCOPE_TOPIC and topic_id is None:
+            await event.answer(MENU_TOPIC_UNKNOWN, alert=True)
+            return
 
         if level_key is not None:
             selected_model = _scope_selected_model(
-                chat_id, user_id, scope=REASONING_SCOPE_CHAT
+                chat_id, user_id, scope=scope, topic_id=topic_id
             )
             if not await _can_user_access_model(event, selected_model, config=config):
                 await event.answer(_model_access_denial(selected_model), alert=True)
                 return
             feedback_msg = await _apply_reasoning_menu_choice(
-                event, scope=REASONING_SCOPE_CHAT, level_key=level_key
+                event, scope=scope, level_key=level_key, topic_id=topic_id
             )
             if feedback_msg is None:
                 await event.answer(ADMIN_ONLY_COMMAND_IGNORED, alert=True)
                 return
         else:
-            chat_model_options = _chat_model_options_for_access(
-                admin_p=admin_p, codex_p=codex_p
-            )
-            if model_id not in chat_model_options or not await _can_user_access_model(
+            model_options = (
+                _topic_model_options_for_access
+                if scope == REASONING_SCOPE_TOPIC
+                else _chat_model_options_for_access
+            )(admin_p=admin_p, codex_p=codex_p)
+            if model_id not in model_options or not await _can_user_access_model(
                 event, model_id, config=config
             ):
                 await event.answer(_model_access_denial(model_id), alert=True)
                 return
-            # Handle "Not Set" option (empty string means remove chat-specific model)
-            if model_id == "":
-                _apply_chat_model_choice(chat_id, user_id, model=None)
-                feedback_msg = "Chat model cleared (using personal default)"
-            else:
-                _apply_chat_model_choice(chat_id, user_id, model=model_id)
-                feedback_msg = f"Chat model set to {_model_display_name(model_id)}"
+            #: The empty key is "Not Set": the layer inherits again.
+            feedback_msg = _apply_here_model_choice(
+                chat_id,
+                user_id,
+                scope=scope,
+                topic_id=topic_id,
+                model=model_id or None,
+            )
             cancel_input_flow(user_id)  # Cancel the custom input flow
 
         menu = _build_model_menu(
             chat_id,
             user_id,
-            scope=REASONING_SCOPE_CHAT,
+            scope=scope,
             admin_p=admin_p,
             codex_p=codex_p,
+            topic_id=topic_id,
         )
         #: Before the edit, which answers the press itself and would swallow
         #: this toast.
         await event.answer(feedback_msg)
-        await event.edit(buttons=_model_menu_rows(menu, scope=REASONING_SCOPE_CHAT))
+        await event.edit(
+            buttons=_model_menu_rows(menu, scope=scope, apply_to_p=topic_id is not None)
+        )
 
-    elif data_str.startswith("thinkhere_") or data_str.startswith("think_"):
-        scope = (
-            REASONING_SCOPE_CHAT
-            if data_str.startswith("thinkhere_")
-            else REASONING_SCOPE_PERSONAL
+    elif data_str.startswith(APPLY_TO_CALLBACK_PREFIX):
+        kind, _, scope = data_str[len(APPLY_TO_CALLBACK_PREFIX) :].partition(":")
+        await _apply_to_press_handler(event, kind=kind, scope=scope)
+
+    elif data_str.startswith(PROMPT_MENU_CALLBACK_PREFIX):
+        action, _, scope = data_str[len(PROMPT_MENU_CALLBACK_PREFIX) :].partition(":")
+        await _prompt_menu_press_handler(event, action=action, scope=scope)
+
+    elif data_str.startswith(tuple(REASONING_SCOPE_CALLBACK_PREFIXES.values())):
+        scope = next(
+            scope
+            for scope, prefix in REASONING_SCOPE_CALLBACK_PREFIXES.items()
+            if data_str.startswith(prefix)
         )
         if scope == REASONING_SCOPE_CHAT and not event.is_private:
             if not (await util.isAdmin(event) or await util.is_group_admin(event)):
@@ -9863,9 +10466,20 @@ async def callback_handler(event):
                     alert=True,
                 )
                 return
+        #: The personal menu never has an Apply-to row, and ignores topics.
+        topic_id = (
+            None
+            if scope == REASONING_SCOPE_PERSONAL
+            else await _thread_topic_id_for_display(event)
+        )
+        if scope == REASONING_SCOPE_TOPIC and topic_id is None:
+            await event.answer(MENU_TOPIC_UNKNOWN, alert=True)
+            return
 
-        level = data_str.split("_", 1)[1]
-        state = _think_menu_state(event.chat_id, user_id, scope=scope)
+        level = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
+        state = _think_menu_state(
+            event.chat_id, user_id, scope=scope, topic_id=topic_id
+        )
         if not await _can_user_access_model(event, state.model, config=config):
             await event.answer(_model_access_denial(state.model), alert=True)
             return
@@ -9882,16 +10496,16 @@ async def callback_handler(event):
             scope=scope,
             model=state.model,
             level=None if level == REASONING_CLEAR_KEY else level,
+            topic_id=topic_id,
         )
-        state = _think_menu_state(event.chat_id, user_id, scope=scope)
-        buttons = [
-            tg_compat.callback_button(
-                f"✅ {display}" if state.current_value == key else display,
-                data=f"{REASONING_SCOPE_CALLBACK_PREFIXES[scope]}{key}",
+        state = _think_menu_state(
+            event.chat_id, user_id, scope=scope, topic_id=topic_id
+        )
+        await event.edit(
+            buttons=_think_menu_rows(
+                state, scope=scope, apply_to_p=topic_id is not None
             )
-            for key, display in state.options.items()
-        ]
-        await event.edit(buttons=util.build_menu(buttons, n_cols=2))
+        )
         await event.answer("Reasoning effort updated.")
     elif data_str.startswith("tool_"):
         tool_name = data_str.split("_")[1]
@@ -10152,6 +10766,15 @@ async def callback_handler(event):
         await event.answer("This button is no longer valid.", alert=True)
 
 
+#: The flows whose answer is a model ID (or a `think:` key), by the layer
+#: they write.
+MODEL_FLOW_SCOPES = {
+    "model": REASONING_SCOPE_PERSONAL,
+    "chatmodel": REASONING_SCOPE_CHAT,
+    "topicmodel": REASONING_SCOPE_TOPIC,
+}
+
+
 async def generic_input_handler(event):
     """Handles plain-text submissions for interactive commands."""
     user_id = event.sender_id
@@ -10174,26 +10797,25 @@ async def generic_input_handler(event):
 
     if text.lower() in CANCEL_KEYWORDS:
         cancel_input_flow(user_id)
-        await _close_model_menu_of(event, flow_data)
+        await _close_menu_of(event, flow_data)
         await send_info_message(event, "Process cancelled.")
         return
 
     #: The model menus end with `think:<level>` entries; treat those as an
     #: effort change rather than a custom model ID.
-    if input_type in ("model", "chatmodel"):
+    if input_type in MODEL_FLOW_SCOPES:
         level_key = _reasoning_menu_key_level(text)
         if level_key is not None:
-            scope = (
-                REASONING_SCOPE_CHAT
-                if input_type == "chatmodel"
-                else REASONING_SCOPE_PERSONAL
+            scope = MODEL_FLOW_SCOPES[input_type]
+            topic_id = _flow_topic_id(flow_data)
+            selected_model = _scope_selected_model(
+                event.chat_id, user_id, scope=scope, topic_id=topic_id
             )
-            selected_model = _scope_selected_model(event.chat_id, user_id, scope=scope)
             if not await _guard_model_access(event, selected_model, config=config):
                 cancel_input_flow(user_id)
                 return
             feedback = await _apply_reasoning_menu_choice(
-                event, scope=scope, level_key=level_key
+                event, scope=scope, level_key=level_key, topic_id=topic_id
             )
             if feedback is None:
                 await send_info_message(
@@ -10234,6 +10856,39 @@ async def generic_input_handler(event):
             await event.reply(
                 f"{BOT_META_INFO_PREFIX}✅ This chat's model updated to: `{text}`"
             )
+    elif input_type == "topicmodel":
+        chat_id = flow_data.get("chat_id", event.chat_id)
+        model = None if text.lower() in RESET_KEYWORDS else text
+        if model is not None and not await _guard_model_access(
+            event, model, config=config
+        ):
+            cancel_input_flow(user_id)
+            return
+        feedback = _apply_here_model_choice(
+            chat_id,
+            user_id,
+            scope=REASONING_SCOPE_TOPIC,
+            topic_id=_flow_topic_id(flow_data),
+            model=model,
+        )
+        await send_info_message(event, f"✅ {feedback}")
+    elif input_type == "systemprompthere":
+        scope = flow_data["scope"]
+        clear_p = text.lower() in RESET_KEYWORDS
+        _set_layer_system_prompt(
+            flow_data.get("chat_id", event.chat_id),
+            scope=scope,
+            topic_id=_flow_topic_id(flow_data),
+            prompt=None if clear_p else text,
+        )
+        cancel_input_flow(user_id)
+        outcome = "Cleared." if clear_p else "Updated."
+        await _close_menu_of(event, flow_data, outcome=outcome)
+        where = "This topic's" if scope == REASONING_SCOPE_TOPIC else "This chat's"
+        await send_info_message(
+            event,
+            f"✅ {where} system prompt has been {'cleared' if clear_p else 'updated'}.",
+        )
     elif input_type == "system_prompt":
         if text.lower() in RESET_KEYWORDS:
             user_manager.set_system_prompt(user_id, "")

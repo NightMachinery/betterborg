@@ -43,7 +43,7 @@ from telethon.tl.types import (
     PeerUser,
 )
 
-from uniborg import history_util, topics
+from uniborg import history_util, tg_compat, topics
 from uniborg.constants import TWIN_FILE_MARKER
 
 
@@ -1275,6 +1275,420 @@ class TopicSettingsResolutionTests(_TopicSettingsCase):
         )
         self.assertEqual(self.chats.storage.data, {})
         self.assertIsNone(self.chats.get_model(USER_ID))
+
+
+MENU_ID = 700
+
+
+def _button_rows(rows):
+    """Each row of a keyboard as (label, data) pairs."""
+    return [
+        [
+            (tg_compat.button_text(button), tg_compat.button_data_text(button))
+            for button in row
+        ]
+        for row in rows
+    ]
+
+
+class TopicSettingsMenuTests(_TopicSettingsCase):
+    """The "Here" commands and menus write the topic they are sent in, and
+    their Apply-to row switches them to the whole chat."""
+
+    LEVEL_MODEL = "gemini/gemini-flash-latest"
+
+    def setUp(self):
+        super().setUp()
+        self.pending = {}
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        enter = stack.enter_context
+        enter(patch.object(plugin, "AWAITING_INPUT_FROM_USERS", self.pending))
+        enter(patch.object(plugin.util, "isAdmin", new=AsyncMock(return_value=False)))
+        enter(
+            patch.object(
+                plugin.util, "is_group_admin", new=AsyncMock(return_value=False)
+            )
+        )
+        enter(patch.object(plugin.llm_chat_config, "load_config", return_value=None))
+        enter(
+            patch.object(
+                plugin.llm_chat_config,
+                "can_use_codex",
+                new=AsyncMock(return_value=False),
+            )
+        )
+        enter(
+            patch.object(
+                plugin, "_can_user_access_model", new=AsyncMock(return_value=True)
+            )
+        )
+        enter(
+            patch.object(
+                plugin, "_guard_model_access", new=AsyncMock(return_value=True)
+            )
+        )
+        enter(patch.object(plugin.user_manager, "clear_codex_quota_fallback"))
+        self.info = enter(patch.object(plugin, "send_info_message", new=AsyncMock()))
+        self.edits = AsyncMock()
+
+    def command(self, handler, text, *, argument=None, top_id=TOPIC_ID, msg_id=330):
+        parent = ROOT_ID if top_id is not None else None
+        event = _Event(
+            _said(msg_id, text, top_id=top_id, parent=parent),
+            client=SimpleNamespace(edit_message=self.edits),
+            chat_id=USER_ID,
+            sender_id=USER_ID,
+            is_private=True,
+            pattern_match=SimpleNamespace(group=lambda _index: argument),
+            reply=AsyncMock(return_value=SimpleNamespace(id=MENU_ID)),
+        )
+        asyncio.run(handler(event))
+        return event
+
+    def press(self, data, *, top_id=TOPIC_ID):
+        """A press on menu MENU_ID, which sits in topic TOP_ID (None: outside
+        topics, as if the topic could not be told)."""
+        parent = ROOT_ID if top_id is not None else None
+        menu = _said(MENU_ID, "menu", top_id=top_id, parent=parent, bot=True)
+        press = SimpleNamespace(
+            data=data.encode(),
+            is_private=True,
+            chat_id=USER_ID,
+            sender_id=USER_ID,
+            message_id=MENU_ID,
+            client=SimpleNamespace(topic_placement=None),
+            get_message=AsyncMock(return_value=menu),
+            answer=AsyncMock(),
+            edit=AsyncMock(),
+        )
+        asyncio.run(plugin.callback_handler(press))
+        return press
+
+    def typed(self, text):
+        event = _Event(
+            _said(340, text),
+            client=SimpleNamespace(edit_message=self.edits),
+            chat_id=USER_ID,
+            sender_id=USER_ID,
+            is_private=True,
+            text=text,
+            reply=AsyncMock(),
+        )
+        asyncio.run(plugin.generic_input_handler(event))
+        return event
+
+    def assert_apply_to_row(self, rows, kind, *, scope):
+        topic_label = "📍 This Topic"
+        chat_label = "💬 Whole Chat"
+        if scope == plugin.REASONING_SCOPE_TOPIC:
+            topic_label = f"✅ {topic_label}"
+        else:
+            chat_label = f"✅ {chat_label}"
+        self.assertIn(
+            [
+                (topic_label, f"applyto:{kind}:topic"),
+                (chat_label, f"applyto:{kind}:chat"),
+            ],
+            _button_rows(rows),
+        )
+
+    # Model
+
+    def test_in_a_topic_the_model_menu_writes_the_topic(self):
+        event = self.command(plugin.set_model_here_handler, "/setModelHere")
+
+        ((text,), kwargs) = event.reply.await_args
+        self.assertIn("Set Model for This Topic", text)
+        rows = kwargs["buttons"]
+        self.assert_apply_to_row(rows, "model", scope=plugin.REASONING_SCOPE_TOPIC)
+        self.assertEqual(_button_rows(rows)[-1], [("❌ Cancel", "mm:cancel:topic")])
+        flow = self.pending[USER_ID]
+        self.assertEqual((flow["type"], flow["chat_id"]), ("topicmodel", USER_ID))
+
+        self.press(
+            f"topicmodel_{plugin.bot_util.sanitize_callback_data(self.LEVEL_MODEL)}"
+        )
+
+        self.assertEqual(self.topics.get_model(self.key()), self.LEVEL_MODEL)
+        self.assertIsNone(self.chats.get_model(USER_ID))
+
+    def test_outside_topics_the_model_menu_is_unchanged(self):
+        event = self.command(
+            plugin.set_model_here_handler, "/setModelHere", top_id=None
+        )
+
+        ((text,), kwargs) = event.reply.await_args
+        self.assertIn("Set Chat Model", text)
+        self.assertNotIn("applyto:", str(_button_rows(kwargs["buttons"])))
+        self.assertEqual(
+            self.pending[USER_ID],
+            {
+                "type": "chatmodel",
+                "chat_id": USER_ID,
+                plugin.INPUT_MENU_KEY: plugin.InputMenu(USER_ID, MENU_ID),
+            },
+        )
+
+    def test_apply_to_moves_the_menu_and_its_custom_id_to_the_chat(self):
+        self.command(plugin.set_model_here_handler, "/setModelHere")
+
+        press = self.press("applyto:model:chat")
+
+        ((text,), kwargs) = press.edit.await_args
+        self.assertIn("Set Chat Model", text)
+        self.assert_apply_to_row(
+            kwargs["buttons"], "model", scope=plugin.REASONING_SCOPE_CHAT
+        )
+        self.assertEqual(self.pending[USER_ID]["type"], "chatmodel")
+        self.assertEqual(self.topics.storage.data, {})
+
+        self.typed("custom/model")
+
+        self.assertEqual(self.chats.get_model(USER_ID), "custom/model")
+        self.assertIsNone(self.topics.get_model(self.key()))
+
+    def test_a_chat_press_in_a_topic_keeps_the_apply_to_row(self):
+        press = self.press(
+            f"chatmodel_{plugin.bot_util.sanitize_callback_data(self.CHAT_MODEL)}"
+        )
+
+        self.assertEqual(self.chats.get_model(USER_ID), self.CHAT_MODEL)
+        self.assert_apply_to_row(
+            press.edit.await_args.kwargs["buttons"],
+            "model",
+            scope=plugin.REASONING_SCOPE_CHAT,
+        )
+
+    def test_a_topic_press_whose_topic_is_unknown_writes_nothing(self):
+        for data in (
+            f"topicmodel_{plugin.bot_util.sanitize_callback_data(self.TOPIC_MODEL)}",
+            "thinktopic_high",
+            "applyto:model:chat",
+            "prompthere:clear:chat",
+        ):
+            with self.subTest(data=data):
+                press = self.press(data, top_id=None)
+
+                press.answer.assert_awaited_once_with(
+                    plugin.MENU_TOPIC_UNKNOWN, alert=True
+                )
+                press.edit.assert_not_awaited()
+        self.assertEqual(self.topics.storage.data, {})
+        self.assertEqual(self.chats.storage.data, {})
+
+    def test_typed_model_ids_and_resets_go_to_the_topic(self):
+        self.command(plugin.set_model_here_handler, "/setModelHere")
+        self.typed("custom/model")
+        self.assertEqual(self.topics.get_model(self.key()), "custom/model")
+
+        self.command(plugin.set_model_here_handler, "/setModelHere")
+        self.typed("not set")
+        self.assertIsNone(self.topics.get_model(self.key()))
+        self.assertEqual(self.chats.storage.data, {})
+
+    def test_the_argument_form_sets_the_topic_and_points_to_the_chat(self):
+        event = self.command(
+            plugin.set_model_here_handler, "/setModelHere x/y", argument="x/y"
+        )
+
+        self.assertEqual(self.topics.get_model(self.key()), "x/y")
+        self.assertIsNone(self.chats.get_model(USER_ID))
+        self.assertIn("💬 Whole Chat", event.reply.await_args.args[0])
+
+    def test_get_model_here_names_the_layer(self):
+        def said():
+            event = self.command(plugin.get_model_here_handler, "/getModelHere")
+            return event.reply.await_args.args[0]
+
+        self.chats.set_model(USER_ID, self.CHAT_MODEL)
+        self.assertIn(
+            f"no model of its own. Using the chat's model: `{self.CHAT_MODEL}`", said()
+        )
+        self.topics.set_model(self.key(), self.TOPIC_MODEL)
+        self.assertIn(f"Current topic model:** `{self.TOPIC_MODEL}`", said())
+
+    # Reasoning effort
+
+    def test_in_a_topic_the_effort_menu_writes_the_topic(self):
+        self.topics.set_model(self.key(), self.LEVEL_MODEL)
+
+        event = self.command(plugin.set_think_here_handler, "/setThinkHere")
+
+        ((text,), kwargs) = event.reply.await_args
+        self.assertIn("(This Topic)", text)
+        self.assert_apply_to_row(
+            kwargs["buttons"], "think", scope=plugin.REASONING_SCOPE_TOPIC
+        )
+
+        press = self.press("thinktopic_high")
+
+        self.assertEqual(
+            self.topics.get_thinking(self.key(), model=self.LEVEL_MODEL), "high"
+        )
+        self.assertIsNone(self.chats.get_thinking(USER_ID, model=self.LEVEL_MODEL))
+        self.assertIn(
+            ("✅ High", "thinktopic_high"),
+            sum(_button_rows(press.edit.await_args.kwargs["buttons"]), []),
+        )
+
+    def test_the_effort_menu_moved_to_the_chat_sets_the_chats_model(self):
+        self.chats.set_model(USER_ID, self.LEVEL_MODEL)
+        self.topics.set_model(self.key(), plugin.OPENAI_CODEX_GPT_5_6_SOL)
+
+        press = self.press("applyto:think:chat")
+
+        ((text,), kwargs) = press.edit.await_args
+        self.assertIn("(This Chat)", text)
+        self.assert_apply_to_row(
+            kwargs["buttons"], "think", scope=plugin.REASONING_SCOPE_CHAT
+        )
+        self.press("thinkhere_low")
+        self.assertEqual(
+            self.chats.get_thinking(USER_ID, model=self.LEVEL_MODEL), "low"
+        )
+        self.assertEqual(
+            self.topics.storage.data[self.key()].get("thinking_by_model"), None
+        )
+
+    def test_the_effort_argument_form_sets_the_topic(self):
+        self.topics.set_model(self.key(), self.LEVEL_MODEL)
+
+        event = self.command(
+            plugin.set_think_here_handler, "/setThinkHere low", argument="low"
+        )
+
+        self.assertEqual(
+            self.topics.get_thinking(self.key(), model=self.LEVEL_MODEL), "low"
+        )
+        self.assertIn("in this topic", event.reply.await_args.args[0])
+
+    def test_outside_topics_the_effort_menu_is_unchanged(self):
+        with patch.object(plugin.bot_util, "present_options", new=AsyncMock()) as menu:
+            self.command(plugin.set_think_here_handler, "/setThinkHere", top_id=None)
+
+        self.assertEqual(menu.await_args.kwargs["callback_prefix"], "thinkhere_")
+
+    # System prompt
+
+    def test_the_prompt_menu_takes_the_topic_prompt_as_the_next_message(self):
+        event = self.command(
+            plugin.set_system_prompt_here_handler, "/setSystemPromptHere"
+        )
+
+        ((text,), kwargs) = event.reply.await_args
+        self.assertIn("System Prompt for This Topic", text)
+        self.assertIn("Not set", text)
+        self.assertEqual(
+            _button_rows(kwargs["buttons"]),
+            [
+                [
+                    ("✅ 📍 This Topic", "applyto:prompt:topic"),
+                    ("💬 Whole Chat", "applyto:prompt:chat"),
+                ],
+                [
+                    ("♻️ Clear", "prompthere:clear:topic"),
+                    ("❌ Cancel", "prompthere:cancel:topic"),
+                ],
+            ],
+        )
+
+        self.typed("Answer in French.")
+
+        self.assertEqual(self.topics.get_system_prompt(self.key()), "Answer in French.")
+        self.assertIsNone(self.chats.get_system_prompt(USER_ID))
+        self.assertNotIn(USER_ID, self.pending)
+        args, kwargs = self.edits.await_args
+        self.assertEqual(args[:2], (USER_ID, MENU_ID))
+        self.assertIn("Updated.", args[2])
+        self.assertIn("Answer in French.", args[2])
+        self.assertIsNone(kwargs["buttons"])
+
+    def test_the_prompt_menu_moved_to_the_chat_writes_the_chat(self):
+        self.command(plugin.set_system_prompt_here_handler, "/setSystemPromptHere")
+
+        press = self.press("applyto:prompt:chat")
+
+        self.assertIn("System Prompt for This Chat", press.edit.await_args.args[0])
+        self.assertEqual(self.pending[USER_ID]["scope"], plugin.REASONING_SCOPE_CHAT)
+        self.typed("Be brief.")
+        self.assertEqual(self.chats.get_system_prompt(USER_ID), "Be brief.")
+        self.assertIsNone(self.topics.get_system_prompt(self.key()))
+
+    def test_clear_and_cancel_close_the_prompt_menu(self):
+        self.topics.set_system_prompt(self.key(), "old")
+        self.chats.set_system_prompt(USER_ID, "chat")
+        self.command(plugin.set_system_prompt_here_handler, "/setSystemPromptHere")
+
+        press = self.press("prompthere:clear:topic")
+
+        self.assertIsNone(self.topics.get_system_prompt(self.key()))
+        self.assertEqual(self.chats.get_system_prompt(USER_ID), "chat")
+        self.assertNotIn(USER_ID, self.pending)
+        self.assertIn("Cleared.", press.edit.await_args.args[0])
+        self.assertIsNone(press.edit.await_args.kwargs["buttons"])
+
+        self.command(plugin.set_system_prompt_here_handler, "/setSystemPromptHere")
+        press = self.press("prompthere:cancel:topic")
+        self.assertNotIn(USER_ID, self.pending)
+        self.assertIn("Cancelled.", press.edit.await_args.args[0])
+
+    def test_prompt_commands_with_text_set_and_reset_the_topic(self):
+        self.chats.set_system_prompt(USER_ID, "chat")
+        self.command(
+            plugin.set_system_prompt_here_handler,
+            "/setSystemPromptHere Be terse.",
+            argument="Be terse.",
+        )
+        self.assertEqual(self.topics.get_system_prompt(self.key()), "Be terse.")
+
+        get = self.command(
+            plugin.get_system_prompt_here_handler, "/getSystemPromptHere"
+        )
+        self.assertIn("Current topic system prompt", get.reply.await_args.args[0])
+
+        self.command(plugin.reset_system_prompt_here_handler, "/resetSystemPromptHere")
+        self.assertIsNone(self.topics.get_system_prompt(self.key()))
+        self.assertEqual(self.chats.get_system_prompt(USER_ID), "chat")
+
+        get = self.command(
+            plugin.get_system_prompt_here_handler, "/getSystemPromptHere"
+        )
+        self.assertIn(
+            "This topic has no custom system prompt set. Using the chat's prompt",
+            get.reply.await_args.args[0],
+        )
+
+    def test_outside_topics_the_prompt_commands_are_unchanged(self):
+        self.command(
+            plugin.set_system_prompt_here_handler, "/setSystemPromptHere", top_id=None
+        )
+        self.assertIn("Usage", self.info.await_args.args[1])
+        self.assertEqual(self.pending, {})
+
+        self.command(
+            plugin.set_system_prompt_here_handler,
+            "/setSystemPromptHere Be terse.",
+            argument="Be terse.",
+            top_id=None,
+        )
+        self.assertEqual(self.chats.get_system_prompt(USER_ID), "Be terse.")
+        self.assertEqual(self.topics.storage.data, {})
+
+    # Status
+
+    def test_status_shows_the_topics_own_settings(self):
+        self.topics.set_model(self.key(), self.TOPIC_MODEL)
+        self.topics.set_system_prompt(self.key(), "topic prompt")
+        with patch.object(
+            plugin.user_manager, "get_codex_quota_fallback", return_value=None
+        ):
+            self.command(plugin.status_handler, "/status")
+
+        status = self.info.await_args.args[1]
+        self.assertIn(f"• **Model In This Topic:** `{self.TOPIC_MODEL}`", status)
+        self.assertIn("(overridden in this topic)", status)
+        self.assertIn("• **System Prompt In This Topic:** `Custom", status)
 
 
 class TopicTitleHookTests(_BotChatCase):

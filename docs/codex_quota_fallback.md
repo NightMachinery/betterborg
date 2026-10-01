@@ -144,8 +144,9 @@ instead. Specifically:
   it survives restarts and leaves no timer behind. A request already in flight
   keeps the model it started with.
 - The "Switch back to Codex now" button on the panel.
-- Any explicit model choice: `/setModel`, `/setModelHere`, their menus and
-  text flows, and an admin assigning a default through `.codex-users`.
+- Any explicit model choice: `/setModel`, `/setModelHere` (for a chat or a
+  private topic), their menus and text flows, and an admin assigning a
+  default through `.codex-users`.
 - Automatically, if the stand-in's own API key stops working. Rather than
   prompting for a key the user never chose, the stand-in is dropped and the
   reason explained.

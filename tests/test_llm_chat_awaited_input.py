@@ -379,11 +379,23 @@ class ModelMenuCancelTests(_IsolatedStateTest):
         self.assertEqual(flow[plugin.INPUT_TOPIC_KEY].topic_id, TOPIC_ID)
 
     def test_the_chat_menu_cancel_names_its_scope(self):
-        event = self.open_menu(plugin.set_model_here_handler, _in_topic("/smh"))
+        event = self.open_menu(plugin.set_model_here_handler, _outside_topics("/smh"))
 
         (cancel,) = event.reply.await_args.kwargs["buttons"][-1]
         self.assertEqual(tg_compat.button_data(cancel), b"mm:cancel:chat")
         self.assertEqual(self.pending[USER_ID]["chat_id"], USER_ID)
+
+    def test_in_a_topic_the_here_menu_is_the_topics(self):
+        event = self.open_menu(plugin.set_model_here_handler, _in_topic("/smh"))
+
+        rows = event.reply.await_args.kwargs["buttons"]
+        (cancel,) = rows[-1]
+        self.assertEqual(tg_compat.button_data(cancel), b"mm:cancel:topic")
+        self.assertEqual(
+            [tg_compat.button_data(button) for button in rows[-2]],
+            [b"applyto:model:topic", b"applyto:model:chat"],
+        )
+        self.assertEqual(self.pending[USER_ID]["type"], "topicmodel")
 
     def test_a_group_menu_arms_no_prompt(self):
         self.admin.return_value = True

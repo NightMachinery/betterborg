@@ -268,6 +268,85 @@ no reply, as before.
   message that does not match the service's key format is refused and never
   stored.
 
+## Per-topic settings
+
+A private topic can have its own model, reasoning effort and system prompt.
+For each of them a request uses the first one set, in this order:
+
+1. a message prefix (`.f`, `.th`, ...), for that message only;
+2. this topic's setting;
+3. the chat's setting (`/setModelHere` and the like);
+4. the user's personal setting;
+5. the default.
+
+A *topic layer* means step 2: the settings stored for one topic. Reasoning
+effort is kept per model, in the topic as in the chat, so a topic's `high`
+for one model says nothing about another model.
+
+### Commands inside a topic
+
+Inside a private topic, these commands write the topic layer by default:
+
+- `/setModelHere`, its menu, and a custom model ID typed after it;
+- `/setThinkHere` and its menu;
+- `/setSystemPromptHere`. Without text it opens a menu that shows the
+  current prompt and takes the new one as the next message in the topic
+  (`clear` removes it, `cancel` stops). Outside topics it still answers
+  with its usage line.
+
+Each of these menus has an **Apply to** row, `📍 This Topic` and
+`💬 Whole Chat`, with a check mark on the layer it writes now. Pressing the
+other one redraws the menu for that layer and writes nothing yet. A custom
+model ID or a prompt the menu is still waiting for moves to the new layer
+too.
+
+With an argument (`/setModelHere x/y`, `/setThinkHere high`,
+`/setSystemPromptHere text`) the command writes the topic, and its reply
+says how to reach the whole chat. `/resetSystemPromptHere` clears only the
+topic's prompt.
+
+`/getModelHere`, `/getSystemPromptHere` and `/status` report the topic
+layer inside a topic: `/status` adds lines named "In This Topic" and says
+"overridden in this topic" when the topic's model wins.
+
+Outside private topics (a chat without threaded mode, a group, a user
+account) the commands and menus are unchanged: no Apply-to row, and the
+same flows as before.
+
+### Why the topic is the default target
+
+In a threaded private chat every message sits in a topic, since a message
+typed in "All" opens a new one. If the commands wrote the chat by default,
+the topic layer would be reachable only through the Apply-to row, and a
+topic is the narrower change: a wrong choice affects one conversation, not
+every topic that inherits from the chat.
+
+### Safety
+
+- A press on a topic menu reads its topic from the topic registry, or loads
+  the menu message once (`_thread_topic_id_for_display`). If the topic
+  still cannot be told, the press is refused with an alert. It never falls
+  back to writing the chat.
+- Choosing a model for a topic is an explicit model choice, so it ends a
+  Codex quota stand-in like any other (`docs/codex_quota_fallback.md`).
+
+### Storage
+
+`TopicManager` keeps the topic layer in its own store (purpose
+`llm_chat_topics`), keyed `<chat id>:<topic id>`, apart from the chat
+settings. Entries do not expire, and a deleted topic's entry stays; each is
+a few fields.
+
+### Limits
+
+- Only the model, the reasoning effort and the system prompt have a topic
+  layer. The context mode, the Last N limits, TTS and the other chat
+  settings stay chat-wide (and inside a topic the thread context replaces
+  the context mode anyway).
+- `/setThink` (personal) ignores topics: its menu is for the chat's
+  effective model, as before.
+- The STT bot has no topic layer.
+
 ## Automatic titles
 
 After the first answer in a topic Telegram named, llm_chat renames it once,
@@ -285,18 +364,21 @@ with the answering model's emoji, the effort's alias and a short title. See
   `record_message` and `get_last_n_topic_ids`.
 - `uniborg/topic_titles.py`: automatic titles for new topics.
 - `llm_chat_plugins/llm_chat.py`: `start_input_flow` and
-  `pending_input_flow`, which bind pending input to its topic; and thread
+  `pending_input_flow`, which bind pending input to its topic; thread
   context (`THREAD_CONTEXT_MODE`, `_thread_topic_id`, and its branch in
-  `build_conversation_history`).
+  `build_conversation_history`); and the topic layer (`TopicManager`,
+  `REASONING_SCOPE_TOPIC`, the Apply-to row and `_apply_to_press_handler`,
+  the prompt menu, `retarget_menu_input_flows`).
 - `tests/test_topics.py`: placement per request type, the registry, the
   result shapes, refusals, the composed client on a fake transport, and
   golden sends that must go out byte for byte outside private topics. Run it
   under both Telethon versions.
 - `tests/test_history_topics.py`: topic recording, old items without a
   topic, and the stored form through a fake Redis.
-- `tests/test_llm_chat_topics.py`: reply detection as `llm_chat` uses it,
-  and thread context: what a thread holds, the mode it replaces, the status
-  texts, and the modes outside topics.
+- `tests/test_llm_chat_topics.py`: reply detection as `llm_chat` uses it;
+  thread context: what a thread holds, the mode it replaces, the status
+  texts, and the modes outside topics; and the topic layer
+  (`TopicSettingsResolutionTests`, `TopicSettingsMenuTests`).
 - `tests/test_llm_chat_awaited_input.py`: pending input in topics.
 - `docs/telegram_ai_apis.md`, section 2.4: the Bot API side of private
   topics.

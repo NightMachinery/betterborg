@@ -150,7 +150,10 @@ message inside a private topic, so answers land next to their question, and
 llm_chat's pending prompts only take an answer from the topic that asked.
 Inside a topic, llm_chat always uses that topic's own earlier messages as the
 conversation (thread context), whatever the context mode, up to its own topic
-limit (200 by default, =/setThreadLastN=); =---= does nothing there. See
+limit (200 by default, =/setThreadLastN=); =---= does nothing there.
+Inside a topic, =/setModelHere=, =/setThinkHere= and =/setSystemPromptHere=
+set that topic's own model, effort and prompt, which come before the chat's;
+their menus have an "Apply to" row that switches them to the whole chat. See
 [[file:docs/private_topics.md][docs/private_topics.md]].
 After the first answer in a topic that Telegram named (one opened by typing in
 "All"), the bot renames it once: the answering model's emoji, the reasoning
