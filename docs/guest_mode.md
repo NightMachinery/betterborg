@@ -208,7 +208,9 @@ chat. The handler keeps queries for at most 120 seconds.
 - **Replies continue the exchange.** Each final answer is stored with the
   turns it answered (text only, media as "[media]") and the answer it
   continued, for 7 days, in a per-thread list (`borg:guest:thread:<bot id>:
-  <thread key>`, newest 50). When the reference is one of our answers, its
+  <thread key>`, newest 50). A reference is one of our answers when its sender
+  is this bot (`guestchat_via_from` marks every guest bot's answer, so it
+  counts only for a message with no sender). When it is, its
   date picks the stored answer posted within 5 seconds of it, and up to 10
   exchanges of that chain replace the reference in the history. Without a
   match, the reference alone is read, as the assistant's turn. The stored

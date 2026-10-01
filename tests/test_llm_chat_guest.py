@@ -77,6 +77,7 @@ def _query(
     reference_text=None,
     reference_from=OTHER,
     reference_date=None,
+    reference_via_guest=False,
     query_id=1,
 ):
     client = SimpleNamespace(
@@ -92,15 +93,20 @@ def _query(
     )
     references = []
     if reference_text is not None:
-        references.append(
-            types.Message(
-                id=19,
-                peer_id=types.PeerUser(OTHER),
-                date=reference_date or NOW,
-                message=reference_text,
-                from_id=types.PeerUser(reference_from),
-            )
+        reference = types.Message(
+            id=19,
+            peer_id=types.PeerUser(OTHER),
+            date=reference_date or NOW,
+            message=reference_text,
+            from_id=(
+                types.PeerUser(reference_from) if reference_from is not None else None
+            ),
         )
+        if reference_via_guest:
+            #: A guest bot's answer for CALLER (an attribute: Telethon 1.43
+            #: lacks the field).
+            reference.guestchat_via_from = types.PeerUser(caller)
+        references.append(reference)
     update = SimpleNamespace(
         query_id=query_id, message=trigger, reference_messages=references
     )
@@ -274,6 +280,39 @@ class ContinuationTests(_GuestTestCase):
         )
         self.assertEqual(records[0]["parent"], records[1]["id"])
         self.assertEqual(records[0]["answer"], "BTC is at $2.")
+
+    def test_another_guest_bots_answer_is_not_taken_for_ours(self):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self.run_query(_query(f"{BOT_USERNAME} what's eth price?", query_id=1))
+
+        self.run_query(
+            _query(
+                "is this right?",
+                reference_text="The earth is flat.",
+                reference_from=BOT_ID + 1,
+                reference_date=now,
+                reference_via_guest=True,
+                query_id=2,
+            )
+        )
+
+        _system, *turns = self.generate.await_args_list[-1].args[0].messages
+        self.assertEqual([t["role"] for t in turns], ["user", "user"], msg=str(turns))
+        self.assertIn("The earth is flat.", str(turns[0]["content"]))
+
+    def test_a_guest_answer_without_a_sender_counts_as_ours(self):
+        self.run_query(
+            _query(
+                "and btc?",
+                reference_text=self.answer_text,
+                reference_from=None,
+                reference_via_guest=True,
+                query_id=2,
+            )
+        )
+
+        _system, *turns = self.request().messages
+        self.assertEqual(turns[0]["role"], "assistant", msg=str(turns))
 
     def test_an_unmatched_answer_is_still_read_as_the_assistants(self):
         long_ago = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)

@@ -52,6 +52,7 @@ from telethon.tl.types import (
     MessageActionRequestedPeerSentMe,
     MessageMediaUnsupported,
     MessageService,
+    PeerUser,
     ReplyKeyboardHide,
     RequestPeerTypeUser,
     RequestedPeerUser,
@@ -11781,11 +11782,19 @@ def _guest_thread_name(query) -> str:
 
 
 def _is_own_guest_answer(message) -> bool:
-    return (
-        getattr(message, "guestchat_via_from", None) is not None
-        or message.sender_id == BOT_ID
-        or getattr(message, "via_bot_id", None) == BOT_ID
-    )
+    """Whether MESSAGE, a reference, is one of this bot's guest answers.
+
+    `guestchat_via_from` marks every guest bot's answer, so it decides only
+    when the message names no sender: our answer comes back from this bot.
+    `sender_id` is not used, since in a private chat Telethon falls back to the
+    chat's peer for it.
+    """
+    if getattr(message, "via_bot_id", None) == BOT_ID:
+        return True
+    from_id = getattr(message, "from_id", None)
+    if from_id is not None:
+        return isinstance(from_id, PeerUser) and from_id.user_id == BOT_ID
+    return getattr(message, "guestchat_via_from", None) is not None
 
 
 async def _guest_continuation(query) -> list:
