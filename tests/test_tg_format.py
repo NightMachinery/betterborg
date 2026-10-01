@@ -61,6 +61,17 @@ class Utf16HelperTests(unittest.TestCase):
     def test_a_suffix_longer_than_the_limit_is_returned_alone(self):
         self.assertEqual(tg_format.truncate_utf16("hello", 2, suffix="..."), "...")
 
+    def test_truncate_utf8_counts_bytes_and_never_splits_a_character(self):
+        self.assertEqual(tg_format.truncate_utf8("hello", 5), "hello")
+        self.assertEqual(
+            tg_format.truncate_utf8("hello world", 8, suffix="…"), "hello…"
+        )
+        #: "é" is two bytes: four bytes keep "ab" and one byte of "é", dropped.
+        self.assertEqual(tg_format.truncate_utf8("abéd", 4, suffix="!"), "ab!")
+        self.assertLessEqual(
+            len(tg_format.truncate_utf8("😀" * 10, 9, suffix="…").encode()), 9
+        )
+
 
 def _llm_chat_utf16_helpers():
     """Compile llm_chat's own helpers without importing the plugin."""

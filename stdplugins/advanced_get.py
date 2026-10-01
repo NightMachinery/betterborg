@@ -115,13 +115,7 @@ def _guest_shell_match(query):
 
 
 async def _answer_note(query, text):
-    """An explicit call always gets an answer, even when nothing runs."""
-    try:
-        await tg_raw.answer_guest(
-            borg, query_id=query.query_id, title=GUEST_TITLE, text=text
-        )
-    except Exception:
-        logger.exception("Could not answer guest query %s", query.query_id)
+    await guest_util.answer_note(borg, query, text, title=GUEST_TITLE, logger=logger)
 
 
 def _pre_answer(output, *, footer_lines, limit=GUEST_TEXT_LIMIT):

@@ -36,7 +36,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from telethon import errors, events, functions, types, utils
 
-from uniborg import tg_format
+from uniborg import tg_format, tg_raw
 
 _log = logging.getLogger(__name__)
 
@@ -546,6 +546,32 @@ def answer_chain(records: list, record: dict, *, limit: int = 10) -> list:
             break
         chain.append(parent)
     return chain[::-1]
+
+
+async def answer_note(
+    client: Any,
+    query: GuestQuery,
+    text: str,
+    *,
+    title: str,
+    buttons: Any = None,
+    logger: Optional[logging.Logger] = None,
+) -> bool:
+    """Answers QUERY with a short note, such as a refusal or a usage line.
+
+    Every explicit call gets an answer, even when nothing else happens; a
+    failure is only logged. Returns whether the answer was sent.
+    """
+    try:
+        await tg_raw.answer_guest(
+            client, query_id=query.query_id, title=title, text=text, buttons=buttons
+        )
+    except Exception:
+        (logger or _log).warning(
+            "Could not answer guest query %s", query.query_id, exc_info=True
+        )
+        return False
+    return True
 
 
 GuestHandler = Callable[[GuestQuery], Awaitable[None]]

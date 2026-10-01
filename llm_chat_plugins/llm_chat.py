@@ -11477,17 +11477,9 @@ def _guest_title() -> str:
 
 
 async def _guest_note(query, text: str, *, buttons=None) -> None:
-    """Answers QUERY with a short note: an explicit call is never ignored."""
-    try:
-        await tg_raw.answer_guest(
-            borg,
-            query_id=query.query_id,
-            title=_guest_title(),
-            text=text,
-            buttons=buttons,
-        )
-    except Exception:
-        logger.warning("Could not answer guest query %s", query.query_id, exc_info=True)
+    await guest_util.answer_note(
+        borg, query, text, title=_guest_title(), buttons=buttons, logger=logger
+    )
 
 
 async def _guest_invite(query, *, explicit: bool, policy) -> None:
@@ -11595,20 +11587,14 @@ def _chain_turns(chain: list) -> list:
     return turns
 
 
-def _fit_utf8(text: str, limit_bytes: int, *, note: str) -> str:
-    data = text.encode("utf-8")
-    if len(data) <= limit_bytes:
-        return text
-    kept = data[: limit_bytes - len(note.encode("utf-8"))]
-    return kept.decode("utf-8", errors="ignore").rstrip() + note
-
-
 async def _finalize_guest_answer(answer, text: str) -> None:
     """The last edit: rich Markdown, or classic Markdown if Telegram refuses it."""
     text = text or "_(The model returned no answer.)_"
     try:
         await answer.finalize(
-            markdown=_fit_utf8(text, GUEST_RICH_LIMIT_BYTES, note=GUEST_TRUNCATED_NOTE)
+            markdown=tg_format.truncate_utf8(
+                text, GUEST_RICH_LIMIT_BYTES, suffix=GUEST_TRUNCATED_NOTE
+            )
         )
         return
     except errors.FloodWaitError:

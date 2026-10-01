@@ -50,6 +50,19 @@ def truncate_utf16(text: str, max_units: int, *, suffix: str = "…") -> str:
     return "".join(kept) + suffix
 
 
+def truncate_utf8(text: str, max_bytes: int, *, suffix: str = "…") -> str:
+    """Cut TEXT to at most MAX_BYTES bytes of UTF-8, ending with SUFFIX.
+
+    For limits counted in UTF-8, such as a rich message's. TEXT that already
+    fits is returned unchanged; otherwise no character is split.
+    """
+    data = text.encode("utf-8")
+    if len(data) <= max_bytes:
+        return text
+    kept = data[: max(0, max_bytes - len(suffix.encode("utf-8")))]
+    return kept.decode("utf-8", errors="ignore") + suffix
+
+
 ##
 #: How an unknown constructor is shown in the flattened text.
 UNSUPPORTED_MARKER = "[unsupported: {}]"
