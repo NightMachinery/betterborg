@@ -53,6 +53,14 @@ BOT_META_INFO_PREFIX = "\u200b\u200b\u200b\u200b"
 
 # BOT_META_INFO_LINE = f"{BOT_META_INFO_PREFIX}---{BOT_META_INFO_PREFIX}"
 BOT_META_INFO_LINE = f"{BOT_META_INFO_PREFIX}── ※ ──{BOT_META_INFO_PREFIX}"
+
+#: Starts the caption of a twin file: the file copy of a long answer whose
+#: text was also delivered. Window context modes skip twins, since the text
+#: already carries the answer; Reply Chain keeps them, as a reply to a twin may
+#: be all that brings the answer in. It must neither start with
+#: `BOT_META_INFO_PREFIX` nor be a prefix of it, or meta filtering (which
+#: applies in every mode) would drop twins too.
+TWIN_FILE_MARKER = "\u200b\u2060"
 ##
 GEMINI_CHAT_ROTATE_KEYS_P = True
 GEMINI_STT_ROTATE_KEYS_P = True

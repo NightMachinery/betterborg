@@ -5,7 +5,7 @@ from unittest import mock
 from telethon import errors
 
 from uniborg import util
-from uniborg.constants import BOT_META_INFO_LINE
+from uniborg.constants import BOT_META_INFO_LINE, TWIN_FILE_MARKER
 
 
 class _Chat:
@@ -502,6 +502,7 @@ class EditMessageFileModeTests(_EditChainCase):
         self.assert_file_sent(
             "x" * 30, reply_to=user_message, file_name_mode="llm", parse_mode="md"
         )
+        self.assertNotIn("caption_prefix", self.send_file.await_args.kwargs)
         self.chat.calls.clear()
         await self.edit("later", append_p=True)
         self.assertEqual(self.chat.ops(), [("edit", self.head.id, "later")])
@@ -545,7 +546,39 @@ class EditMessageFileModeTests(_EditChainCase):
         )
 
         self.assertEqual(self.chat.ops(), [("edit", self.head.id, "x" * 5)])
-        self.assert_file_sent("x" * 5)
+        self.assert_file_sent("x" * 5, caption_prefix=TWIN_FILE_MARKER)
+
+    async def test_a_twin_of_a_multi_message_answer_is_marked(self):
+        await self.edit(
+            _blocks("A", "B", "C"),
+            send_file_mode=util.SendFileMode.ALSO,
+            file_length_threshold=3,
+        )
+
+        self.assertEqual(len(self.state().children), 2)
+        self.assert_file_sent(_blocks("A", "B", "C"), caption_prefix=TWIN_FILE_MARKER)
+
+    async def test_a_twin_of_a_partly_sent_answer_is_not_marked(self):
+        self.head.reply_errors.append(errors.FloodWaitError(request=None, capture=1))
+
+        await self.edit(
+            _blocks("A", "B"),
+            send_file_mode=util.SendFileMode.ALSO,
+            file_length_threshold=3,
+        )
+
+        self.assertEqual(self.state().children, [])
+        self.assert_file_sent(_blocks("A", "B"), caption_prefix="")
+
+    async def test_marking_can_be_turned_off(self):
+        await self.edit(
+            "x" * 5,
+            send_file_mode=util.SendFileMode.ALSO,
+            file_length_threshold=3,
+            twin_file_marker="",
+        )
+
+        self.assert_file_sent("x" * 5, caption_prefix="")
 
     async def test_also_if_less_than_sends_only_a_file_past_the_file_only_threshold(
         self,
@@ -561,6 +594,7 @@ class EditMessageFileModeTests(_EditChainCase):
             self.chat.ops(), [("edit", self.head.id, "__[sent as file]__")]
         )
         self.assert_file_sent("x" * 9)
+        self.assertNotIn("caption_prefix", self.send_file.await_args.kwargs)
 
     async def test_file_is_still_sent_when_the_head_edit_fails(self):
         self.head.edit_errors.append(errors.FloodWaitError(request=None, capture=120))
@@ -571,7 +605,8 @@ class EditMessageFileModeTests(_EditChainCase):
             file_length_threshold=3,
         )
 
-        self.assert_file_sent("x" * 5)
+        #: The text never showed, so the file is the only copy.
+        self.assert_file_sent("x" * 5, caption_prefix="")
 
     async def test_never_mode_sends_no_file(self):
         await self.edit("x" * 50, file_length_threshold=3)
@@ -835,6 +870,48 @@ class EditMessageHeadFailureTests(_EditChainCase):
         self.assertIn(("respond", self.head.id, "x" * 5), self.chat.ops())
         self.send_file.assert_awaited_once()
         self.assertIs(self.send_file.await_args.kwargs["reply_to"], user_message)
+        self.assertEqual(
+            self.send_file.await_args.kwargs["caption_prefix"], TWIN_FILE_MARKER
+        )
+
+
+class _FakeAction:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class SendAsFileCaptionTests(unittest.IsolatedAsyncioTestCase):
+    async def send(self, **kwargs):
+        sent = mock.AsyncMock(return_value="sent")
+        file_data = util.FileGeneration(
+            filename="t.md", caption="**Title**", extension=".md"
+        )
+        borg = mock.Mock(action=lambda *args, **kw: _FakeAction())
+        with mock.patch.object(
+            util, "_generate_file_data", mock.AsyncMock(return_value=file_data)
+        ), mock.patch.object(util, "send_text_as_file", sent), mock.patch.object(
+            util, "borg", borg, create=True
+        ):
+            result = await util.send_as_file_with_filename(
+                text="x",
+                parse_mode="md",
+                file_name_mode="llm",
+                message_obj=_Chat().message(),
+                **kwargs,
+            )
+        self.assertEqual(result, "sent")
+        return sent.await_args.kwargs["caption"]
+
+    async def test_the_prefix_goes_before_the_generated_caption(self):
+        caption = await self.send(caption_prefix=TWIN_FILE_MARKER)
+
+        self.assertEqual(caption, f"{TWIN_FILE_MARKER}**Title**")
+
+    async def test_without_a_prefix_the_caption_is_unchanged(self):
+        self.assertEqual(await self.send(), "**Title**")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from uniborg.constants import (
     DEFAULT_FILE_LENGTH_THRESHOLD,
     DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
     CHAT_TITLE_MODEL,
+    TWIN_FILE_MARKER,
 )
 from pynight.common_files import sanitize_filename
 import json
@@ -1360,6 +1361,7 @@ async def edit_message(
     title_model: str | None = None,
     api_keys: dict | None = None,
     send_new_on_head_failure: bool = False,
+    twin_file_marker: str = TWIN_FILE_MARKER,
 ):
     """
     Intelligently edits a message chain to reflect new text content,
@@ -1416,6 +1418,11 @@ async def edit_message(
             shows its chunk: that child and the ones after it are replaced by
             new replies to the last child kept.
             Other errors abort as with False.
+        twin_file_marker (str): Caption prefix for the file sent together with
+            the text (`constants.TWIN_FILE_MARKER`), so history can skip that
+            twin. It is added only when every chunk of the text was delivered:
+            otherwise the file may be the only full copy. Pass "" to never mark.
+            A file sent instead of the text is never marked.
     """
     global EDIT_CHAINS
     message_id = message_obj.id
@@ -1448,6 +1455,8 @@ async def edit_message(
         new_text, file_length_threshold, send_file_mode, file_only_threshold
     )
     only_send_file = decision.send_file and not decision.send_text
+    #: Whether the chain ends up showing every chunk of `new_text`.
+    text_delivered = False
 
     # If we should skip text editing, clean up message chain and send file
     if only_send_file:
@@ -1524,6 +1533,7 @@ async def edit_message(
                 ):
                     edit_state.last_text = new_text
                     EDIT_CHAINS[chain_key] = edit_state
+                    text_delivered = len(edit_state.children) == len(chunks) - 1
             return  # If the head of the chain fails, abort
 
         # Now, handle the children (the rest of the chunks)
@@ -1564,6 +1574,7 @@ async def edit_message(
             # --- Delete the children not kept: surplus, or replaced above ---
             for child_to_delete in existing_children[kept_count:]:
                 await _safe_delete_message(child_to_delete)
+            text_delivered = len(new_children) == len(chunks) - 1
 
         # Update the global state with the new chain configuration
         edit_state.children = new_children
@@ -1589,6 +1600,7 @@ async def edit_message(
                     reply_to=reply_to,
                     title_model=title_model,
                     api_keys=api_keys,
+                    caption_prefix=twin_file_marker if text_delivered else "",
                 )
             except Exception:
                 _log_file_sending_error("edit_message")
@@ -1987,8 +1999,13 @@ async def send_as_file_with_filename(
     api_keys: dict | None = None,
     api_user_id: int | None = None,
     default_caption: str | None = None,
+    caption_prefix: str = "",
 ):
-    """Helper function to send text as file with intelligent filename generation."""
+    """Helper function to send text as file with intelligent filename generation.
+
+    `caption_prefix` goes before the generated caption, e.g. an invisible
+    marker such as `constants.TWIN_FILE_MARKER`.
+    """
     try:
         # Generate file data using shared function, allow it to resolve user_id lazily
 
@@ -2010,7 +2027,7 @@ async def send_as_file_with_filename(
                 text=text,
                 suffix=file_data.suffix,
                 chat=chat,
-                caption=file_data.caption,
+                caption=f"{caption_prefix}{file_data.caption or ''}",
                 reply_to=reply_to,
                 filename=file_data.filename,
             )
