@@ -20,11 +20,10 @@ from uniborg.constants import (
     GEMINI_PRO_LATEST,
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_GPT_5_5,
-    OPENAI_CODEX_GPT_5_6_LUNA,
-    OPENAI_CODEX_GPT_5_6_SOL,
-    OPENAI_CODEX_GPT_5_6_TERRA,
+    OPENAI_CODEX_LUNA,
+    OPENAI_CODEX_SOL,
     OPENAI_CODEX_LUNA_RESERVE,
-    OR_OPENAI_5_6_SOL,
+    OR_OPENAI_SOL,
 )
 
 #: The single operator-level default. Every model spec falls back to this.
@@ -37,8 +36,8 @@ GEMINI_REASONING_LEVELS = ("disable", "low", "medium", "high")
 #: none/minimal/low/medium/high/xhigh/max. `ultra` is a Codex-app subagent mode
 #: and is rejected by the API, so it is deliberately absent.
 OPENAI_REASONING_LEVELS = ("none", "low", "medium", "high", "xhigh", "max")
-#: GPT-6 Astra rejects `none`.
-ASTRA_REASONING_LEVELS = ("low", "medium", "high", "xhigh", "max")
+#: GPT-6 Astra and GPT-6.1 Sol reject `none` (probed live, 2026-10-01).
+OPENAI_NO_NONE_REASONING_LEVELS = ("low", "medium", "high", "xhigh", "max")
 #: GPT-5.5 predates `max`.
 OPENAI_LEGACY_REASONING_LEVELS = ("none", "low", "medium", "high", "xhigh")
 OPENROUTER_REASONING_LEVELS = ("low", "medium", "high")
@@ -130,8 +129,8 @@ MODEL_SPECS = [
     # ModelSpec("gemini/gemini-2.5-flash-image-preview", "Gemini 2.5 Flash Image"),
     ## OpenAI
     ModelSpec(
-        OR_OPENAI_5_6_SOL,
-        "GPT-5.6 Sol (OpenRouter)",
+        OR_OPENAI_SOL,
+        "GPT-6.1 Sol (OpenRouter)",
         OPENROUTER_REASONING_LEVELS,
         emoji="🌞",
     ),
@@ -158,16 +157,16 @@ MODEL_SPECS = [
     ModelSpec("mistral/pixtral-large-latest", "Pixtral Large (Latest)", emoji="🖼️"),
     ## Codex (configurable access, ChatGPT OAuth)
     ModelSpec(
-        OPENAI_CODEX_GPT_5_6_SOL,
-        "GPT-5.6 Sol (Codex)",
-        OPENAI_REASONING_LEVELS,
+        OPENAI_CODEX_SOL,
+        "GPT-6.1 Sol (Codex)",
+        OPENAI_NO_NONE_REASONING_LEVELS,
         codex_access=True,
         emoji="☀️",
     ),
     ModelSpec(
         OPENAI_CODEX_ASTRA,
         "GPT-6 Astra (Codex)",
-        ASTRA_REASONING_LEVELS,
+        OPENAI_NO_NONE_REASONING_LEVELS,
         codex_access=True,
         emoji="✨",
     ),
@@ -188,16 +187,8 @@ MODEL_SPECS = [
     # ModelSpec(PIONEER_SONNET_4_6, "Pioneer Sonnet 4.6 (Admin)", PIONEER_REASONING_LEVELS, admin_only=True),
     ## Codex models known to the registry but kept out of the pickers.
     ModelSpec(
-        OPENAI_CODEX_GPT_5_6_TERRA,
-        "GPT-5.6 Terra (Codex)",
-        OPENAI_REASONING_LEVELS,
-        codex_access=True,
-        hidden=True,
-        emoji="🌍",
-    ),
-    ModelSpec(
-        OPENAI_CODEX_GPT_5_6_LUNA,
-        "GPT-5.6 Luna (Codex)",
+        OPENAI_CODEX_LUNA,
+        "GPT-6 Luna (Codex)",
         OPENAI_REASONING_LEVELS,
         codex_access=True,
         hidden=True,
@@ -214,6 +205,21 @@ MODEL_SPECS = [
 ]
 
 MODEL_SPECS_BY_ID: Dict[str, ModelSpec] = {spec.id: spec for spec in MODEL_SPECS}
+
+#: Ids that were once registered, and the model that replaced each. Settings
+#: saved with an old id load as its replacement (`current_model_id`). There is
+#: no GPT-6 Terra, so Terra moves to Sol, the model above it.
+RETIRED_MODELS: Dict[str, str] = {
+    "openrouter/openai/gpt-5.6-sol": OR_OPENAI_SOL,
+    "openai-codex/gpt-5.6-sol": OPENAI_CODEX_SOL,
+    "openai-codex/gpt-5.6-terra": OPENAI_CODEX_SOL,
+    "openai-codex/gpt-5.6-luna": OPENAI_CODEX_LUNA,
+}
+
+
+def current_model_id(model: Optional[str]) -> Optional[str]:
+    """MODEL, or the model that replaced it when it was retired."""
+    return RETIRED_MODELS.get(model, model) if model else model
 
 
 def public_model_choices() -> Dict[str, str]:

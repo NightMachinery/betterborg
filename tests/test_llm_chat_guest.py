@@ -470,9 +470,7 @@ class SurfaceTests(unittest.TestCase):
             )
             stack.enter_context(patch.object(plugin, "ACTIVE_LLM_TASKS", {}))
             result = asyncio.run(
-                plugin._generate_response(
-                    self._request(model="openai-codex/gpt-5.6-sol")
-                )
+                plugin._generate_response(self._request(model=plugin.OPENAI_CODEX_SOL))
             )
 
         self.assertTrue(result.delivered)

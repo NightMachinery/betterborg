@@ -60,7 +60,7 @@ from telethon.tl.types import (
     User,
     UpdateMessageReactions,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Any, Callable, Optional, List, Dict, Tuple
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -175,9 +175,9 @@ from uniborg.constants import (
     GEMINI_FLASH_3,
     GEMINI_CHAT_ROTATE_KEYS_P,
     ADMIN_ONLY_COMMAND_IGNORED,
-    OR_OPENAI_5_6_SOL,
+    OR_OPENAI_SOL,
     OR_OPENAI_LATEST,
-    OPENAI_CODEX_GPT_5_6_SOL,
+    OPENAI_CODEX_SOL,
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_LATEST,
     OPENAI_CODEX_LUNA_RESERVE,
@@ -241,12 +241,12 @@ CODEX_PREFIX_MODEL_MAPPING = {
     #: Pioneer is no longer used; uncomment to bring the prefixes back.
     # ".sn": (PIONEER_SONNET_4_6, None),
     # ".o": (PIONEER_OPUS_4_8, None),
-    (".cl", ".چل"): (OPENAI_CODEX_GPT_5_6_SOL, "low"),
-    (".cm", ".چم"): (OPENAI_CODEX_GPT_5_6_SOL, "medium"),
-    (".ch", ".چه"): (OPENAI_CODEX_GPT_5_6_SOL, "high"),
-    (".cx", ".چخ"): (OPENAI_CODEX_GPT_5_6_SOL, "xhigh"),
-    (".cxx", ".چخخ"): (OPENAI_CODEX_GPT_5_6_SOL, "max"),
-    (".c", ".چ"): (OPENAI_CODEX_GPT_5_6_SOL, "medium"),
+    (".cl", ".چل"): (OPENAI_CODEX_SOL, "low"),
+    (".cm", ".چم"): (OPENAI_CODEX_SOL, "medium"),
+    (".ch", ".چه"): (OPENAI_CODEX_SOL, "high"),
+    (".cx", ".چخ"): (OPENAI_CODEX_SOL, "xhigh"),
+    (".cxx", ".چخخ"): (OPENAI_CODEX_SOL, "max"),
+    (".c", ".چ"): (OPENAI_CODEX_SOL, "medium"),
     #: `.a` belongs to advanced_get and `.o` was Pioneer's, so Astra uses `.as`.
     (".asl", ".اسل"): (OPENAI_CODEX_ASTRA, "low"),
     (".asm", ".اسم"): (OPENAI_CODEX_ASTRA, "medium"),
@@ -1106,7 +1106,7 @@ def _resolve_image_generation_model(
         return stand_in
     if selected_model and codex_util.is_codex_model(selected_model):
         return selected_model
-    return OPENAI_CODEX_GPT_5_6_SOL
+    return OPENAI_CODEX_SOL
 
 
 def _codex_tools_for_request(enabled_tools, *, image_generation: bool) -> list:
@@ -1729,8 +1729,49 @@ def cancel_all_llm_tasks(user_id: int) -> int:
 
 # --- Preference Management ---
 
+#: Settings fields that hold one model id.
+MODEL_ID_FIELDS = ("model", "title_model", "codex_quota_fallback_model")
 
-class UserPrefs(BaseModel):
+
+def _current_model_settings(data):
+    """Saved settings DATA with retired model ids moved to their replacements
+    (`llm_models.RETIRED_MODELS`), effort keys included.
+
+    A key already saved under the new id keeps its own effort.
+    """
+    if not isinstance(data, dict):
+        return data
+    data = dict(data)
+    for field in MODEL_ID_FIELDS:
+        if data.get(field):
+            data[field] = llm_models.current_model_id(data[field])
+    thinking = data.get("thinking_by_model")
+    if isinstance(thinking, dict):
+        moved = {
+            llm_models.current_model_id(model): level
+            for model, level in thinking.items()
+            if llm_models.current_model_id(model) != model
+        }
+        moved.update(
+            (model, level)
+            for model, level in thinking.items()
+            if llm_models.current_model_id(model) == model
+        )
+        data["thinking_by_model"] = moved
+    return data
+
+
+class _SavedSettings(BaseModel):
+    """Settings loaded from storage. A retired model id loads as its
+    replacement, and is saved that way on the next write."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _move_retired_models(cls, data):
+        return _current_model_settings(data)
+
+
+class UserPrefs(_SavedSettings):
     """Pydantic model for type-safe user preferences."""
 
     model: str = Field(default=DEFAULT_MODEL)
@@ -1760,7 +1801,7 @@ class UserPrefs(BaseModel):
     codex_quota_fallback_until: Optional[int] = Field(default=None)
 
 
-class ChatPrefs(BaseModel):
+class ChatPrefs(_SavedSettings):
     """Pydantic model for chat-specific settings."""
 
     system_prompt: Optional[str] = Field(default=None)
@@ -1776,7 +1817,7 @@ class ChatPrefs(BaseModel):
     include_reply_chain: Optional[bool] = Field(default=None)
 
 
-class TopicPrefs(BaseModel):
+class TopicPrefs(_SavedSettings):
     """Settings of one private topic, layered between the message prefix and
     the chat's settings (docs/private_topics.md, "Per-topic settings")."""
 
@@ -6906,9 +6947,9 @@ async def help_handler(event):
     )
 
     codex_shortcuts_text = (
-        "- `.c` / `.چ` / `.cm` / `.چم` → Codex GPT-5.6 Sol (medium)\n"
+        "- `.c` / `.چ` / `.cm` / `.چم` → Codex GPT-6.1 Sol (medium)\n"
         "- `.cl` / `.چل` / `.ch` / `.چه` / `.cx` / `.چخ` / "
-        "`.cxx` / `.چخخ` → Codex GPT-5.6 Sol "
+        "`.cxx` / `.چخخ` → Codex GPT-6.1 Sol "
         "(low / high / extra high / max)\n"
         "- `.cr` / `.چر` → Codex Luna Reserve (medium)\n"
         "- `.as` / `.اس` / `.asm` / `.اسم` → Codex GPT-6 Astra (medium)\n"
@@ -6916,7 +6957,7 @@ async def help_handler(event):
         "`.asxx` / `.اسخخ` → Codex GPT-6 Astra "
         "(low / high / extra high / max)"
         if has_codex_access
-        else "- `.c` → GPT-5.6 Sol (OpenRouter): Latest OpenAI model on OpenRouter"
+        else "- `.c` → GPT-6.1 Sol (OpenRouter): Latest OpenAI model on OpenRouter"
     )
     if has_codex_imagegen_access:
         codex_shortcuts_text += (
@@ -8562,7 +8603,7 @@ CODEX_QUOTA_CALLBACK_PREFIX = "cq:"
 CODEX_QUOTA_FALLBACK_MODELS = {
     "l": OPENAI_CODEX_LUNA_RESERVE,
     "g": GEMINI_FLASH_LATEST,
-    "o": OR_OPENAI_5_6_SOL,
+    "o": OR_OPENAI_SOL,
 }
 CODEX_QUOTA_SETKEY_COMMANDS = {
     "gemini": "/setGeminiKey",

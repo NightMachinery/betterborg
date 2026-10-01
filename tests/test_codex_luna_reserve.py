@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, patch
 from uniborg import codex_util, llm_models, tg_compat
 from uniborg.constants import (
     OPENAI_CODEX_ASTRA,
-    OPENAI_CODEX_GPT_5_6_LUNA,
-    OPENAI_CODEX_GPT_5_6_SOL,
+    OPENAI_CODEX_LUNA,
+    OPENAI_CODEX_SOL,
     OPENAI_CODEX_LUNA_RESERVE,
 )
 
@@ -35,14 +35,14 @@ class LunaReserveModelTests(unittest.TestCase):
         #: The whole point: `gpt-5.6-luna` bills to the regular allowance, only
         #: `gpt-reserve` reaches the separate reserve meter.
         self.assertEqual(OPENAI_CODEX_LUNA_RESERVE, "openai-codex/gpt-reserve")
-        self.assertNotEqual(OPENAI_CODEX_LUNA_RESERVE, OPENAI_CODEX_GPT_5_6_LUNA)
+        self.assertNotEqual(OPENAI_CODEX_LUNA_RESERVE, OPENAI_CODEX_LUNA)
 
     def test_is_luna_reserve_model(self):
         self.assertTrue(codex_util.is_luna_reserve_model(OPENAI_CODEX_LUNA_RESERVE))
         self.assertTrue(codex_util.is_luna_reserve_model("gpt-reserve"))
         for other in (
-            OPENAI_CODEX_GPT_5_6_LUNA,
-            OPENAI_CODEX_GPT_5_6_SOL,
+            OPENAI_CODEX_LUNA,
+            OPENAI_CODEX_SOL,
             OPENAI_CODEX_ASTRA,
             "",
             None,
@@ -87,7 +87,7 @@ class LunaReservePrefixTests(unittest.TestCase):
 
     def test_cr_does_not_shadow_the_shorter_c_prefix(self):
         #: Longest-match wins, so `.c` must still mean Sol.
-        self.assertEqual(self.detect(".c hello").model, OPENAI_CODEX_GPT_5_6_SOL)
+        self.assertEqual(self.detect(".c hello").model, OPENAI_CODEX_SOL)
 
     def test_cr_combines_with_an_effort_prefix(self):
         result = self.detect(".cr .th hello")
@@ -105,7 +105,7 @@ class LunaReserveOfferTests(unittest.TestCase):
     """A spent plan allowance is reported and offered, never silently rerouted."""
 
     def run_request(self, *, stream_results, text="hello", selected=None):
-        selected = selected or OPENAI_CODEX_GPT_5_6_SOL
+        selected = selected or OPENAI_CODEX_SOL
         event = SimpleNamespace(
             id=99,
             sender_id=123,
@@ -225,7 +225,7 @@ class LunaReserveOfferTests(unittest.TestCase):
         run = self.run_request(stream_results=[self._usage_limit_error(), self._ok()])
         self.assertEqual(run.stream.await_count, 1)
         self.assertEqual(
-            run.stream.await_args_list[0].kwargs["model"], OPENAI_CODEX_GPT_5_6_SOL
+            run.stream.await_args_list[0].kwargs["model"], OPENAI_CODEX_SOL
         )
 
     def test_the_panel_is_offered_the_message_it_could_answer(self):

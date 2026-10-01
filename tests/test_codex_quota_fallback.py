@@ -12,9 +12,10 @@ from uniborg import tg_compat
 from uniborg.constants import (
     GEMINI_FLASH_LATEST,
     OPENAI_CODEX_ASTRA,
-    OPENAI_CODEX_GPT_5_6_SOL,
+    OPENAI_CODEX_SOL,
     OPENAI_CODEX_LUNA_RESERVE,
-    OR_OPENAI_5_6_SOL,
+    OPENAI_CODEX_LUNA,
+    OR_OPENAI_SOL,
 )
 
 
@@ -42,7 +43,7 @@ def _prefs(**overrides):
 
 def _armed_prefs(model=GEMINI_FLASH_LATEST, until=LATER):
     return _prefs(
-        model=OPENAI_CODEX_GPT_5_6_SOL,
+        model=OPENAI_CODEX_SOL,
         codex_quota_fallback_model=model,
         codex_quota_fallback_until=int(until.timestamp()),
     )
@@ -62,6 +63,57 @@ class QuotaFallbackStorageTests(unittest.TestCase):
         dumped = _prefs().model_dump(exclude_defaults=True)
         self.assertNotIn("codex_quota_fallback_model", dumped)
         self.assertNotIn("codex_quota_fallback_until", dumped)
+
+
+class RetiredModelSettingsTests(unittest.TestCase):
+    """Saved settings that name a retired model load as its replacement."""
+
+    OLD_SOL = "openai-codex/gpt-5.6-sol"
+
+    def test_every_model_field_and_effort_key_moves_forward(self):
+        prefs = plugin.UserPrefs.model_validate(
+            {
+                "model": self.OLD_SOL,
+                "title_model": "openai-codex/gpt-5.6-luna",
+                "codex_quota_fallback_model": "openrouter/openai/gpt-5.6-sol",
+                "thinking_by_model": {self.OLD_SOL: "high", "x/y": "low"},
+            }
+        )
+
+        self.assertEqual(prefs.model, plugin.OPENAI_CODEX_SOL)
+        self.assertEqual(prefs.title_model, OPENAI_CODEX_LUNA)
+        self.assertEqual(prefs.codex_quota_fallback_model, OR_OPENAI_SOL)
+        self.assertEqual(
+            prefs.thinking_by_model, {plugin.OPENAI_CODEX_SOL: "high", "x/y": "low"}
+        )
+
+    def test_an_effort_saved_for_the_new_id_wins(self):
+        for prefs_class in (plugin.UserPrefs, plugin.ChatPrefs, plugin.TopicPrefs):
+            with self.subTest(prefs_class=prefs_class.__name__):
+                prefs = prefs_class.model_validate(
+                    {
+                        "model": "openai-codex/gpt-5.6-terra",
+                        "thinking_by_model": {
+                            plugin.OPENAI_CODEX_SOL: "low",
+                            self.OLD_SOL: "high",
+                        },
+                    }
+                )
+
+                self.assertEqual(prefs.model, plugin.OPENAI_CODEX_SOL)
+                self.assertEqual(
+                    prefs.thinking_by_model, {plugin.OPENAI_CODEX_SOL: "low"}
+                )
+
+    def test_current_settings_are_untouched(self):
+        data = {"model": GEMINI_FLASH_LATEST, "title_model": "auto"}
+
+        prefs = plugin.UserPrefs.model_validate(data)
+
+        self.assertEqual(
+            (prefs.model, prefs.title_model), (GEMINI_FLASH_LATEST, "auto")
+        )
+        self.assertEqual(data, {"model": GEMINI_FLASH_LATEST, "title_model": "auto"})
 
 
 class QuotaFallbackAccessorTests(unittest.TestCase):
@@ -130,13 +182,13 @@ class RequestModelTests(unittest.TestCase):
         resolved = self.resolve(_armed_prefs())
         self.assertEqual(resolved.model, GEMINI_FLASH_LATEST)
         self.assertEqual(resolved.service, "gemini")
-        self.assertEqual(resolved.quota_fallback_from, OPENAI_CODEX_GPT_5_6_SOL)
+        self.assertEqual(resolved.quota_fallback_from, OPENAI_CODEX_SOL)
 
     def test_chat_level_codex_model_is_redirected(self):
-        prefs = _armed_prefs(model=OR_OPENAI_5_6_SOL)
+        prefs = _armed_prefs(model=OR_OPENAI_SOL)
         prefs.model = GEMINI_FLASH_LATEST
         resolved = self.resolve(prefs, chat_model=OPENAI_CODEX_ASTRA)
-        self.assertEqual(resolved.model, OR_OPENAI_5_6_SOL)
+        self.assertEqual(resolved.model, OR_OPENAI_SOL)
         self.assertEqual(resolved.service, "openrouter")
         self.assertEqual(resolved.quota_fallback_from, OPENAI_CODEX_ASTRA)
 
@@ -160,7 +212,7 @@ class RequestModelTests(unittest.TestCase):
 
     def test_expired_fallback_leaves_the_saved_codex_model_in_place(self):
         resolved = self.resolve(_armed_prefs(until=NOW - timedelta(seconds=1)))
-        self.assertEqual(resolved.model, OPENAI_CODEX_GPT_5_6_SOL)
+        self.assertEqual(resolved.model, OPENAI_CODEX_SOL)
         self.assertIsNone(resolved.quota_fallback_from)
 
 
@@ -221,9 +273,9 @@ class MissingFallbackKeyTests(unittest.TestCase):
                     plugin,
                     "_resolve_request_model",
                     return_value=plugin.RequestModel(
-                        model=OR_OPENAI_5_6_SOL,
+                        model=OR_OPENAI_SOL,
                         service="openrouter",
-                        quota_fallback_from=OPENAI_CODEX_GPT_5_6_SOL,
+                        quota_fallback_from=OPENAI_CODEX_SOL,
                     ),
                 )
             )
@@ -385,7 +437,7 @@ class QuotaPanelTests(unittest.TestCase):
         return plugin._codex_quota_model_line(model, **kwargs)
 
     def test_a_codex_model_is_told_the_allowances_are_its_own(self):
-        line = self.model_line(OPENAI_CODEX_GPT_5_6_SOL)
+        line = self.model_line(OPENAI_CODEX_SOL)
         self.assertIn("Your model", line)
         self.assertIn("uses the allowance", line)
 
@@ -400,14 +452,14 @@ class QuotaPanelTests(unittest.TestCase):
         self.assertNotIn("not Codex", line)
 
     def test_a_stand_in_names_both_the_saved_model_and_the_replacement(self):
-        line = self.model_line(OPENAI_CODEX_GPT_5_6_SOL, stand_in=GEMINI_FLASH_LATEST)
+        line = self.model_line(OPENAI_CODEX_SOL, stand_in=GEMINI_FLASH_LATEST)
         self.assertIn("temporarily switched to", line)
         self.assertIn(plugin._model_display_name(GEMINI_FLASH_LATEST), line)
 
     def test_a_stand_in_over_a_non_codex_model_says_it_is_not_redirecting(self):
         #: Armed, then the saved model changed away from Codex: the stand-in is
         #: still armed but redirects nothing, and the panel has to say so.
-        line = self.model_line(GEMINI_FLASH_LATEST, stand_in=OR_OPENAI_5_6_SOL)
+        line = self.model_line(GEMINI_FLASH_LATEST, stand_in=OR_OPENAI_SOL)
         self.assertIn("the stand-in is idle", line)
 
     def test_the_prefix_caveat_survives_in_every_branch_that_offers_one(self):
@@ -437,7 +489,7 @@ class QuotaPanelTests(unittest.TestCase):
         #: "Stand-in Active" panel that never mentioned the failure.
         fallback = plugin.CodexQuotaFallback(model=GEMINI_FLASH_LATEST, until=LATER)
         with patch.object(
-            plugin, "_codex_quota_saved_model", return_value=OPENAI_CODEX_GPT_5_6_SOL
+            plugin, "_codex_quota_saved_model", return_value=OPENAI_CODEX_SOL
         ):
             panel = self.panel(quota=self.quota, usage=_usage(), fallback=fallback)
         self.assertIn("Codex Usage Limit Reached", panel.text)

@@ -15,22 +15,23 @@ GEMINI_PRO_LATEST = "gemini/gemini-3-pro-preview"
 # GEMINI_FLASH_2_5 = "gemini/gemini-2.5-flash"
 # GEMINI_FLASH_LITE_2_5 = "gemini/gemini-2.5-flash-lite"
 
-OR_OPENAI_5_6_SOL = "openrouter/openai/gpt-5.6-sol"
-OR_OPENAI_LATEST = OR_OPENAI_5_6_SOL
+#: The OpenAI families are named without a version, so an upgrade changes only
+#: the id here. `llm_models.RETIRED_MODELS` moves saved settings forward.
+OR_OPENAI_SOL = "openrouter/openai/gpt-6.1-sol"
+OR_OPENAI_LATEST = OR_OPENAI_SOL
 
 #: Codex models are reached through the ChatGPT OAuth backend, not the public API.
 OPENAI_CODEX_GPT_5_5 = "openai-codex/gpt-5.5"
-OPENAI_CODEX_GPT_5_6_SOL = "openai-codex/gpt-5.6-sol"
-OPENAI_CODEX_GPT_5_6_TERRA = "openai-codex/gpt-5.6-terra"
-OPENAI_CODEX_GPT_5_6_LUNA = "openai-codex/gpt-5.6-luna"
+OPENAI_CODEX_SOL = "openai-codex/gpt-6.1-sol"
+OPENAI_CODEX_LUNA = "openai-codex/gpt-6-luna"
 OPENAI_CODEX_ASTRA = "openai-codex/gpt-6-astra"
 #: The Luna Reserve routing slug. `gpt-5.6-luna` is the model it presents as,
 #: but only `gpt-reserve` bills to the separate reserve meter, which stays
 #: usable after the regular plan allowance is spent. The Codex catalog marks it
 #: `visibility: hide`, so model listings that filter on that never expose it.
 OPENAI_CODEX_LUNA_RESERVE = "openai-codex/gpt-reserve"
-#: Astra is still rolling out to ChatGPT accounts; flip this once it is live.
-OPENAI_CODEX_LATEST = OPENAI_CODEX_GPT_5_6_SOL
+#: The Codex catalog's "latest workhorse model"; Astra is its frontier one.
+OPENAI_CODEX_LATEST = OPENAI_CODEX_SOL
 
 PIONEER_BASE_URL = "https://api.pioneer.ai/v1"
 PIONEER_OPUS_4_8 = "pioneer/claude-opus-4-8"

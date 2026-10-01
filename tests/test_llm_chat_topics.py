@@ -1243,7 +1243,7 @@ class TopicSettingsResolutionTests(_TopicSettingsCase):
         self.assertEqual((outside.source, outside.topic_prompt), ("chat", None))
 
     def test_a_topic_codex_model_is_a_saved_model_for_the_quota_fallback(self):
-        self.topics.set_model(self.key(), plugin.OPENAI_CODEX_GPT_5_6_SOL)
+        self.topics.set_model(self.key(), plugin.OPENAI_CODEX_SOL)
         stand_in = plugin.CodexQuotaFallback(
             model=self.CHAT_MODEL, until=T0 + timedelta(days=1)
         )
@@ -1253,7 +1253,7 @@ class TopicSettingsResolutionTests(_TopicSettingsCase):
             request = plugin._resolve_request_model(USER_ID, USER_ID, topic_id=TOPIC_ID)
 
         self.assertEqual(request.model, self.CHAT_MODEL)
-        self.assertEqual(request.quota_fallback_from, plugin.OPENAI_CODEX_GPT_5_6_SOL)
+        self.assertEqual(request.quota_fallback_from, plugin.OPENAI_CODEX_SOL)
 
     def test_a_topic_model_choice_ends_the_quota_fallback(self):
         with patch.object(
@@ -1534,7 +1534,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
 
     def test_the_effort_menu_moved_to_the_chat_sets_the_chats_model(self):
         self.chats.set_model(USER_ID, self.LEVEL_MODEL)
-        self.topics.set_model(self.key(), plugin.OPENAI_CODEX_GPT_5_6_SOL)
+        self.topics.set_model(self.key(), plugin.OPENAI_CODEX_SOL)
 
         press = self.press("applyto:think:chat")
 

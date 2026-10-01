@@ -6,7 +6,7 @@ from unittest import mock
 
 from uniborg import llm_chat_config
 from uniborg import llm_models
-from uniborg.constants import OPENAI_CODEX_GPT_5_6_SOL
+from uniborg.constants import OPENAI_CODEX_SOL
 
 
 class Event:
@@ -128,10 +128,10 @@ class LLMChatConfigTests(unittest.TestCase):
                 llm_chat_config.parse_config(text)
 
     def test_codex_models_are_separate_from_admin_models(self):
-        self.assertNotIn(OPENAI_CODEX_GPT_5_6_SOL, llm_models.admin_model_choices())
-        self.assertIn(OPENAI_CODEX_GPT_5_6_SOL, llm_models.codex_model_choices())
+        self.assertNotIn(OPENAI_CODEX_SOL, llm_models.admin_model_choices())
+        self.assertIn(OPENAI_CODEX_SOL, llm_models.codex_model_choices())
         self.assertNotIn(
-            "Admin", llm_models.codex_model_choices()[OPENAI_CODEX_GPT_5_6_SOL]
+            "Admin", llm_models.codex_model_choices()[OPENAI_CODEX_SOL]
         )
 
 

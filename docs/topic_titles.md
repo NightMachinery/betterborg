@@ -54,12 +54,11 @@ distinct.
 - 🌩️ Gemini 2.5 Flash
 - 💥 Gemini 3 Flash
 - 💎 Gemini 3 Pro
-- 🌞 GPT-5.6 Sol through OpenRouter
-- ☀️ GPT-5.6 Sol (Codex)
+- 🌞 GPT-6.1 Sol through OpenRouter
+- ☀️ GPT-6.1 Sol (Codex)
 - ✨ GPT-6 Astra (Codex)
 - 🌙 Luna Reserve (Codex)
-- 🌍 GPT-5.6 Terra (Codex)
-- 🌕 GPT-5.6 Luna (Codex)
+- 🌕 GPT-6 Luna (Codex)
 - 🌀 GPT-5.5 (Codex)
 - 🐋 DeepSeek Chat
 - 🐳 DeepSeek Reasoner

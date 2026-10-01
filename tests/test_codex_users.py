@@ -35,7 +35,7 @@ Path.home = classmethod(lambda cls: Path(_TEST_HOME.name))
 from uniborg import llm_chat_config, tg_compat
 from uniborg.constants import (
     OPENAI_CODEX_ASTRA,
-    OPENAI_CODEX_GPT_5_6_SOL,
+    OPENAI_CODEX_SOL,
     PIONEER_OPUS_4_8,
 )
 
@@ -228,7 +228,7 @@ class CodexUsersTests(unittest.TestCase):
         roster_user = llm_chat_config.CodexUser(123, "Configured Name", False, True)
         cfg = config(users=(roster_user,))
         event = Event()
-        prefs = SimpleNamespace(model=OPENAI_CODEX_GPT_5_6_SOL, thinking_by_model={})
+        prefs = SimpleNamespace(model=OPENAI_CODEX_SOL, thinking_by_model={})
         with patch.object(
             llm_chat.llm_chat_config, "load_config", return_value=cfg
         ), patch.object(
@@ -346,7 +346,7 @@ class CodexUsersTests(unittest.TestCase):
                 set_model.assert_not_called()
 
     def test_picker_callback_changes_target_only(self):
-        token = llm_chat._codex_users_model_token(OPENAI_CODEX_GPT_5_6_SOL)
+        token = llm_chat._codex_users_model_token(OPENAI_CODEX_SOL)
         event = Event()
         event.data = f"cu:m:123:{token}".encode()
         with patch.object(
@@ -364,7 +364,7 @@ class CodexUsersTests(unittest.TestCase):
             llm_chat, "_show_codex_user_models", new=AsyncMock(return_value=True)
         ):
             asyncio.run(llm_chat.callback_handler(event))
-        set_model.assert_called_once_with(123, OPENAI_CODEX_GPT_5_6_SOL)
+        set_model.assert_called_once_with(123, OPENAI_CODEX_SOL)
         self.assertNotEqual(set_model.call_args.args[0], event.sender_id)
 
     def test_unauthorized_and_forged_callbacks_do_not_read_or_write(self):
@@ -389,7 +389,7 @@ class CodexUsersTests(unittest.TestCase):
                 load.assert_not_called()
 
     def test_revoked_callback_does_not_write(self):
-        token = llm_chat._codex_users_model_token(OPENAI_CODEX_GPT_5_6_SOL)
+        token = llm_chat._codex_users_model_token(OPENAI_CODEX_SOL)
         event = Event()
         event.data = f"cu:m:123:{token}".encode()
         with patch.object(
@@ -599,12 +599,12 @@ class CodexUsersTests(unittest.TestCase):
             )
         )
         labels = [tg_compat.button_text(button) for row in rows for button in row]
-        self.assertTrue(any(OPENAI_CODEX_GPT_5_6_SOL in label for label in labels))
+        self.assertTrue(any(OPENAI_CODEX_SOL in label for label in labels))
 
     def test_picker_shows_full_model_ids_and_current_model_effort(self):
         prefs = SimpleNamespace(
-            model=OPENAI_CODEX_GPT_5_6_SOL,
-            thinking_by_model={OPENAI_CODEX_GPT_5_6_SOL: "high"},
+            model=OPENAI_CODEX_SOL,
+            thinking_by_model={OPENAI_CODEX_SOL: "high"},
         )
         event = Event()
         with patch.object(
@@ -625,11 +625,11 @@ class CodexUsersTests(unittest.TestCase):
         labels = [tg_compat.button_text(button) for button in flat]
         callbacks = [tg_compat.button_data_text(button) for button in flat]
         self.assertIn("🧠 buttons set personal reasoning", send.await_args.args[1])
-        self.assertIn(f"✅ {OPENAI_CODEX_GPT_5_6_SOL}", labels)
+        self.assertIn(f"✅ {OPENAI_CODEX_SOL}", labels)
         self.assertEqual(labels.count("✅ 🧠 High"), 1)
         expected_levels = set(
             llm_chat.llm_models.spec_for_model(
-                OPENAI_CODEX_GPT_5_6_SOL
+                OPENAI_CODEX_SOL
             ).reasoning_levels
         ) | {llm_chat.REASONING_CLEAR_KEY}
         shown_levels = {
@@ -666,7 +666,7 @@ class CodexUsersTests(unittest.TestCase):
         self.assertEqual(labels.count("✅ 🧠 Default (medium)"), 1)
 
     def test_switching_model_rerenders_that_models_effort_levels(self):
-        records = {123: {"model": OPENAI_CODEX_GPT_5_6_SOL}}
+        records = {123: {"model": OPENAI_CODEX_SOL}}
         manager = llm_chat.UserManager()
         manager.storage = Mock()
         manager.storage.get.side_effect = lambda uid: records.get(uid)
@@ -700,7 +700,7 @@ class CodexUsersTests(unittest.TestCase):
 
     def test_effort_callback_saves_and_clears_without_changing_model(self):
         records = {
-            123: {"model": OPENAI_CODEX_GPT_5_6_SOL},
+            123: {"model": OPENAI_CODEX_SOL},
             900: {"model": "caller-model"},
         }
         manager = llm_chat.UserManager()
@@ -726,11 +726,11 @@ class CodexUsersTests(unittest.TestCase):
                 event = Event()
                 event.data = f"cu:r:123:{level}".encode()
                 asyncio.run(llm_chat.callback_handler(event))
-                self.assertEqual(records[123]["model"], OPENAI_CODEX_GPT_5_6_SOL)
+                self.assertEqual(records[123]["model"], OPENAI_CODEX_SOL)
                 self.assertEqual(
                     records[123]
                     .get("thinking_by_model", {})
-                    .get(OPENAI_CODEX_GPT_5_6_SOL),
+                    .get(OPENAI_CODEX_SOL),
                     expected,
                 )
 
@@ -739,9 +739,9 @@ class CodexUsersTests(unittest.TestCase):
 
     def test_effort_callback_rejects_revoked_invalid_and_admin_only_state(self):
         cases = (
-            (config(), OPENAI_CODEX_GPT_5_6_SOL, "high"),
-            (config(123, valid=False), OPENAI_CODEX_GPT_5_6_SOL, "high"),
-            (config(123), OPENAI_CODEX_GPT_5_6_SOL, "ultra"),
+            (config(), OPENAI_CODEX_SOL, "high"),
+            (config(123, valid=False), OPENAI_CODEX_SOL, "high"),
+            (config(123), OPENAI_CODEX_SOL, "ultra"),
             (config(123), OPENAI_CODEX_ASTRA, "none"),
             (config(123), PIONEER_OPUS_4_8, "high"),
             (config(123), "provider/no-reasoning", "clear"),
@@ -790,8 +790,8 @@ class CodexUsersTests(unittest.TestCase):
         roster = llm_chat_config.CodexUser(123, None, True, False)
         event = Event()
         prefs = SimpleNamespace(
-            model=OPENAI_CODEX_GPT_5_6_SOL,
-            thinking_by_model={OPENAI_CODEX_GPT_5_6_SOL: "high"},
+            model=OPENAI_CODEX_SOL,
+            thinking_by_model={OPENAI_CODEX_SOL: "high"},
         )
         with patch.object(
             llm_chat.llm_chat_config,

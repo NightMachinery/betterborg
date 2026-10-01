@@ -11,7 +11,7 @@ from uniborg import codex_util, llm_chat_config
 from uniborg.constants import (
     GEMINI_FLASH_LATEST,
     OPENAI_CODEX_ASTRA,
-    OPENAI_CODEX_GPT_5_6_SOL,
+    OPENAI_CODEX_SOL,
     OPENAI_CODEX_LUNA_RESERVE,
 )
 
@@ -67,10 +67,10 @@ class CodexImagePrefixTests(unittest.TestCase):
     def test_model_resolution_precedence(self):
         self.assertEqual(
             llm_chat._resolve_image_generation_model(
-                prefix_model=OPENAI_CODEX_GPT_5_6_SOL,
+                prefix_model=OPENAI_CODEX_SOL,
                 selected_model=OPENAI_CODEX_ASTRA,
             ),
-            OPENAI_CODEX_GPT_5_6_SOL,
+            OPENAI_CODEX_SOL,
         )
         self.assertEqual(
             llm_chat._resolve_image_generation_model(
@@ -82,7 +82,7 @@ class CodexImagePrefixTests(unittest.TestCase):
             llm_chat._resolve_image_generation_model(
                 prefix_model=None, selected_model=GEMINI_FLASH_LATEST
             ),
-            OPENAI_CODEX_GPT_5_6_SOL,
+            OPENAI_CODEX_SOL,
         )
 
     def test_a_codex_stand_in_takes_over_an_unprefixed_request(self):
@@ -91,7 +91,7 @@ class CodexImagePrefixTests(unittest.TestCase):
         self.assertEqual(
             llm_chat._resolve_image_generation_model(
                 prefix_model=None,
-                selected_model=OPENAI_CODEX_GPT_5_6_SOL,
+                selected_model=OPENAI_CODEX_SOL,
                 stand_in=OPENAI_CODEX_LUNA_RESERVE,
             ),
             OPENAI_CODEX_LUNA_RESERVE,
@@ -114,7 +114,7 @@ class CodexImagePrefixTests(unittest.TestCase):
         self.assertEqual(
             llm_chat._resolve_image_generation_model(
                 prefix_model=OPENAI_CODEX_ASTRA,
-                selected_model=OPENAI_CODEX_GPT_5_6_SOL,
+                selected_model=OPENAI_CODEX_SOL,
                 stand_in=OPENAI_CODEX_LUNA_RESERVE,
             ),
             OPENAI_CODEX_ASTRA,
@@ -537,7 +537,7 @@ class CodexTelegramDeliveryTests(unittest.TestCase):
             )
             asyncio.run(llm_chat.chat_handler(event))
 
-        self.assertEqual(captured["model"], OPENAI_CODEX_GPT_5_6_SOL)
+        self.assertEqual(captured["model"], OPENAI_CODEX_SOL)
         self.assertEqual(
             captured["tools"],
             [

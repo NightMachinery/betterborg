@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from uniborg import llm_chat_config
-from uniborg.constants import OPENAI_CODEX_GPT_5_6_SOL
+from uniborg.constants import OPENAI_CODEX_SOL
 
 
 class _FakeLoop:
@@ -27,7 +27,7 @@ plugin = asyncio.run(_import_plugin())
 
 class CodexFallbackNoticeTests(unittest.TestCase):
     def run_request(self, *, text="hello", trusted=False, selected=None):
-        selected = selected or OPENAI_CODEX_GPT_5_6_SOL
+        selected = selected or OPENAI_CODEX_SOL
         event = SimpleNamespace(
             sender_id=123,
             chat_id=456,

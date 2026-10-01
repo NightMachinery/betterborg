@@ -237,7 +237,7 @@ all of its messages; the reaction-only bulk command is available separately. See
 [[file:docs/deleter.md][docs/deleter.md]].
 
 ** Codex models
-=llm_chat= can expose =openai-codex/gpt-5.6-sol= and =openai-codex/gpt-6-astra=
+=llm_chat= can expose =openai-codex/gpt-6.1-sol= and =openai-codex/gpt-6-astra=
 as access-controlled chat models using the published =llm-openai-via-codex=
 package and local Codex OAuth credentials. Access is configured in
 =~/.borg/llm_chat_config.json5= (or =LLM_CHAT_CONFIG_PATH=) using numeric
@@ -277,7 +277,7 @@ File titles and summaries, and the names of new private topics, come from
 each user's title model (=/setTitleModel=): by default the Luna Reserve with
 Codex access, else Gemini Flash Lite; see
 [[file:docs/title_model.md][docs/title_model.md]].
-Codex quick prefixes have matching Persian aliases: =.چ*= for GPT-5.6 Sol and
+Codex quick prefixes have matching Persian aliases: =.چ*= for GPT-6.1 Sol and
 =.اس*= for GPT-6 Astra; see [[file:docs/codex_models.md][the complete mapping]].
 Use =.i= on the current message to enable Codex image generation, for example
 =.i .cl draw a fox=. Both access policies must allow the sender. Previews and

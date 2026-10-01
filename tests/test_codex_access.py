@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from uniborg import llm_chat_config, tg_compat
 from uniborg.constants import (
     OPENAI_CODEX_ASTRA,
-    OPENAI_CODEX_GPT_5_6_SOL,
+    OPENAI_CODEX_SOL,
     OR_OPENAI_LATEST,
     PIONEER_OPUS_4_8,
 )
@@ -41,13 +41,13 @@ class Event:
 class CodexAccessIntegrationTests(unittest.TestCase):
     def test_authorized_nonadmin_gets_codex_picker_without_admin_models(self):
         choices = llm_chat._model_choices_for_access(admin_p=False, codex_p=True)
-        self.assertIn(OPENAI_CODEX_GPT_5_6_SOL, choices)
+        self.assertIn(OPENAI_CODEX_SOL, choices)
         for model in llm_chat.ADMIN_MODEL_CHOICES:
             self.assertNotIn(model, choices)
 
     def test_admin_without_policy_does_not_get_codex_picker(self):
         choices = llm_chat._model_choices_for_access(admin_p=True, codex_p=False)
-        self.assertNotIn(OPENAI_CODEX_GPT_5_6_SOL, choices)
+        self.assertNotIn(OPENAI_CODEX_SOL, choices)
 
     def test_combined_menu_hides_reasoning_when_selected_model_access_is_missing(self):
         prefs = SimpleNamespace(
@@ -74,8 +74,8 @@ class CodexAccessIntegrationTests(unittest.TestCase):
 
     def test_normal_model_menu_buttons_keep_friendly_labels_and_callbacks(self):
         prefs = SimpleNamespace(
-            model=OPENAI_CODEX_GPT_5_6_SOL,
-            thinking_by_model={OPENAI_CODEX_GPT_5_6_SOL: "high"},
+            model=OPENAI_CODEX_SOL,
+            thinking_by_model={OPENAI_CODEX_SOL: "high"},
         )
         with patch.object(llm_chat.user_manager, "get_prefs", return_value=prefs):
             menu = llm_chat._build_model_menu(
@@ -94,7 +94,7 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         labels = [tg_compat.button_text(button) for button in buttons]
         callbacks = [tg_compat.button_data_text(button) for button in buttons]
         self.assertIn(
-            f"✅ {llm_chat._model_display_name(OPENAI_CODEX_GPT_5_6_SOL)}",
+            f"✅ {llm_chat._model_display_name(OPENAI_CODEX_SOL)}",
             labels,
         )
         self.assertEqual(labels.count("✅ 🧠 High"), 1)
@@ -103,11 +103,11 @@ class CodexAccessIntegrationTests(unittest.TestCase):
 
     def test_codex_prefix_and_reasoning_work_for_authorized_nonadmin(self):
         cases = {
-            (".c", ".چ", ".cm", ".چم"): (OPENAI_CODEX_GPT_5_6_SOL, "medium"),
-            (".cl", ".چل"): (OPENAI_CODEX_GPT_5_6_SOL, "low"),
-            (".ch", ".چه"): (OPENAI_CODEX_GPT_5_6_SOL, "high"),
-            (".cx", ".چخ"): (OPENAI_CODEX_GPT_5_6_SOL, "xhigh"),
-            (".cxx", ".چخخ"): (OPENAI_CODEX_GPT_5_6_SOL, "max"),
+            (".c", ".چ", ".cm", ".چم"): (OPENAI_CODEX_SOL, "medium"),
+            (".cl", ".چل"): (OPENAI_CODEX_SOL, "low"),
+            (".ch", ".چه"): (OPENAI_CODEX_SOL, "high"),
+            (".cx", ".چخ"): (OPENAI_CODEX_SOL, "xhigh"),
+            (".cxx", ".چخخ"): (OPENAI_CODEX_SOL, "max"),
             (".as", ".اس", ".asm", ".اسم"): (OPENAI_CODEX_ASTRA, "medium"),
             (".asl", ".اسل"): (OPENAI_CODEX_ASTRA, "low"),
             (".ash", ".اسه"): (OPENAI_CODEX_ASTRA, "high"),
@@ -127,7 +127,7 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         result = llm_chat._detect_and_process_message_prefix(
             ".th .چ hello", admin_p=False, codex_p=True
         )
-        self.assertEqual(result.model, OPENAI_CODEX_GPT_5_6_SOL)
+        self.assertEqual(result.model, OPENAI_CODEX_SOL)
         self.assertEqual(result.reasoning_effort, "high")
         self.assertEqual(result.processed_text, "hello")
 
@@ -141,8 +141,8 @@ class CodexAccessIntegrationTests(unittest.TestCase):
 
     def test_restricted_prefix_is_recognized_for_explicit_denial(self):
         for prefix, model in (
-            (".cm", OPENAI_CODEX_GPT_5_6_SOL),
-            (".چم", OPENAI_CODEX_GPT_5_6_SOL),
+            (".cm", OPENAI_CODEX_SOL),
+            (".چم", OPENAI_CODEX_SOL),
             (".asx", OPENAI_CODEX_ASTRA),
             (".اسخ", OPENAI_CODEX_ASTRA),
         ):
@@ -169,7 +169,7 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         with patch.object(llm_chat.util, "isAdmin", new=AsyncMock(return_value=False)):
             allowed = asyncio.run(
                 llm_chat._can_user_access_model(
-                    Event(), OPENAI_CODEX_GPT_5_6_SOL, config=config
+                    Event(), OPENAI_CODEX_SOL, config=config
                 )
             )
         self.assertTrue(allowed)
@@ -181,8 +181,8 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         event.answer = AsyncMock()
         config = llm_chat_config.LLMChatConfig((123,), ())
         menu = llm_chat.ModelMenu(
-            options={OPENAI_CODEX_GPT_5_6_SOL: "Codex"},
-            current_value=OPENAI_CODEX_GPT_5_6_SOL,
+            options={OPENAI_CODEX_SOL: "Codex"},
+            current_value=OPENAI_CODEX_SOL,
             think_state=Mock(),
         )
         with patch.object(
@@ -192,14 +192,14 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         ), patch.object(
             llm_chat.bot_util,
             "unsanitize_callback_data",
-            return_value=OPENAI_CODEX_GPT_5_6_SOL,
+            return_value=OPENAI_CODEX_SOL,
         ), patch.object(
             llm_chat.user_manager, "set_model"
         ) as set_model, patch.object(
             llm_chat, "_build_model_menu", return_value=menu
         ):
             asyncio.run(llm_chat.callback_handler(event))
-        set_model.assert_called_once_with(123, OPENAI_CODEX_GPT_5_6_SOL)
+        set_model.assert_called_once_with(123, OPENAI_CODEX_SOL)
 
     def test_revoked_callback_cannot_select_codex(self):
         event = Event()
@@ -213,7 +213,7 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         ), patch.object(
             llm_chat.bot_util,
             "unsanitize_callback_data",
-            return_value=OPENAI_CODEX_GPT_5_6_SOL,
+            return_value=OPENAI_CODEX_SOL,
         ), patch.object(
             llm_chat.user_manager, "set_model"
         ) as set_model:
@@ -229,7 +229,7 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         with patch.object(
             llm_chat.llm_chat_config, "load_config", return_value=config
         ), patch.object(
-            llm_chat, "_scope_selected_model", return_value=OPENAI_CODEX_GPT_5_6_SOL
+            llm_chat, "_scope_selected_model", return_value=OPENAI_CODEX_SOL
         ), patch.object(
             llm_chat, "send_info_message", new=AsyncMock()
         ), patch.object(

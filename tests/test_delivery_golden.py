@@ -58,7 +58,7 @@ from uniborg.constants import (
     BOT_META_INFO_PREFIX,
     DEFAULT_FILE_LENGTH_THRESHOLD,
     DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
-    OPENAI_CODEX_GPT_5_6_SOL,
+    OPENAI_CODEX_SOL,
     PIONEER_GPT_5_5,
 )
 
@@ -419,7 +419,7 @@ LITELLM_IMAGE = _Backend(
     image_generation=True,
 )
 CODEX = _Backend(
-    model=OPENAI_CODEX_GPT_5_6_SOL,
+    model=OPENAI_CODEX_SOL,
     service="codex",
     admin=False,
     delta=_codex_delta,

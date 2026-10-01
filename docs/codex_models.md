@@ -2,7 +2,7 @@
 
 `llm_chat` exposes the ChatGPT Codex backend as access-controlled models:
 
-- `openai-codex/gpt-5.6-sol`
+- `openai-codex/gpt-6.1-sol` (GPT-6.1 Sol)
 - `openai-codex/gpt-6-astra`
 - `openai-codex/gpt-reserve` (Luna Reserve; see
   [Codex Luna Reserve](codex_luna_reserve.md))
@@ -193,31 +193,53 @@ message conversion, access checks, and streaming response handling.
 
 ## Availability
 
-Verified directly against the ChatGPT Codex backend, the models exposed to a
-ChatGPT account are `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
-`gpt-5.4` and `gpt-5.4-mini`.
+The backend's catalog is `GET https://chatgpt.com/backend-api/codex/models?client_version=…`,
+with the Codex OAuth token. On 2026-10-01 it listed, in its own priority
+order:
 
-The catalog endpoint also reports `gpt-reserve` and `codex-auto-review` with
-`supported_in_api` true but `visibility: hide`, so they do not appear in the
-listed set above. `gpt-reserve` is the Luna Reserve routing slug and is used
-deliberately; `codex-auto-review` is not investigated.
+- `gpt-6.1-sol`, "Latest workhorse model for coding and everyday work";
+- `gpt-6-astra`, "Frontier intelligence for the most demanding work";
+- `gpt-6-sol`, "Previous generation workhorse model";
+- `gpt-6-luna`, "Fast and affordable model for easier tasks";
+- `gpt-5.6-sol`, `gpt-5.6-terra` and `gpt-5.6-luna`, described as older;
+- `gpt-5.5`, "Legacy coding model", whose `upgrade` field says it retires on
+  2026-10-14 and points at `gpt-6.1-sol`.
 
-GPT-6 Astra was previously rejected with:
+It also reports `gpt-reserve` and `codex-auto-review` with `supported_in_api`
+true but `visibility: hide`. `gpt-reserve` is the Luna Reserve routing slug
+and is used deliberately; `codex-auto-review` is not investigated.
 
-    The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.
+There is no `latest` alias: every entry is a pinned slug. The only pointers
+are a retiring model's `upgrade` field and the descriptions above. OpenRouter,
+by contrast, has router aliases such as `~openai/gpt-sol-latest` and
+`~openai/gpt-luna-latest`.
 
-The catalog now lists it as available, but this has not been re-tested against
-a live request. Once the regular allowance resets, confirm it answers before
-pointing `OPENAI_CODEX_LATEST` in `uniborg/constants.py` at
-`OPENAI_CODEX_ASTRA`.
+The bot registers `gpt-6.1-sol` (in the pickers), `gpt-6-astra`, the Reserve,
+and, hidden, `gpt-6-luna` and `gpt-5.5`. GPT-6 Astra answers live requests
+(guest answers on eva, 2026-10-01).
+
+### Upgrades
+
+The families are named without a version in `uniborg/constants.py`
+(`OPENAI_CODEX_SOL`, `OPENAI_CODEX_LUNA`, `OR_OPENAI_SOL`), so an upgrade
+changes one id there. `llm_models.RETIRED_MODELS` maps each id that was once
+registered to its replacement, and saved settings (personal, chat and topic
+models, the title model, a quota stand-in, and the per-model efforts) load
+with the replacement and are saved that way on their next write
+(`_SavedSettings` in `llm_chat.py`). On 2026-10-01: GPT-5.6 Sol moved to
+GPT-6.1 Sol, GPT-5.6 Luna to GPT-6 Luna, and GPT-5.6 Terra, which has no
+GPT-6 successor, to GPT-6.1 Sol. A saved effort the new model lacks (`none`
+on Sol) is skipped, so the next layer's effort applies.
 
 ## Reasoning effort
 
 Reasoning effort is a per-model preference. See `docs/reasoning_effort.md`.
 
 The Responses API accepts `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
-and `max`. GPT-5.6 Sol exposes all of these except `minimal` in the bot menus;
-GPT-6 Astra drops `none` as well; GPT-5.5 has no `max`.
+and `max`, but not every model takes every level. Probed live on 2026-10-01:
+GPT-6.1 Sol rejects `none` ("Supported values are: 'low', 'medium', 'high',
+'xhigh', and 'max'"), as GPT-6 Astra does; GPT-6 Luna takes `none` through
+`max`. GPT-5.5 has no `max`. No menu offers `minimal`.
 
 The `ultra` level advertised by the Codex CLI model list is a Codex-app
 subagent mode, not an API value. Sending it returns an "Invalid value" error,
@@ -225,11 +247,11 @@ so it is deliberately absent from the level sets.
 
 ## Access-controlled quick prefixes
 
-- `.c` / `.چ` and `.cm` / `.چم`: GPT-5.6 Sol with `medium` reasoning.
-- `.cl` / `.چل`: GPT-5.6 Sol with `low` reasoning.
-- `.ch` / `.چه`: GPT-5.6 Sol with `high` reasoning.
-- `.cx` / `.چخ`: GPT-5.6 Sol with `xhigh` reasoning.
-- `.cxx` / `.چخخ`: GPT-5.6 Sol with `max` reasoning.
+- `.c` / `.چ` and `.cm` / `.چم`: GPT-6.1 Sol with `medium` reasoning.
+- `.cl` / `.چل`: GPT-6.1 Sol with `low` reasoning.
+- `.ch` / `.چه`: GPT-6.1 Sol with `high` reasoning.
+- `.cx` / `.چخ`: GPT-6.1 Sol with `xhigh` reasoning.
+- `.cxx` / `.چخخ`: GPT-6.1 Sol with `max` reasoning.
 - `.as` / `.اس`, `.asm` / `.اسم`, `.asl` / `.اسل`, `.ash` / `.اسه`,
   `.asx` / `.اسخ`, and `.asxx` / `.اسخخ`: the same ladder for GPT-6 Astra.
 - `.cr` / `.چر`: Luna Reserve with `medium` reasoning.
@@ -260,7 +282,7 @@ See [docs/codex_caching.md](codex_caching.md) for Codex prompt caching behavior.
 Use `.i` to enable image generation for a single request. It combines with
 model and reasoning prefixes, such as `.i .cl draw a fox`. Both access policies
 must allow the sender. An explicit Codex prefix takes precedence, otherwise the
-selected Codex model is used, falling back to GPT-5.6 Sol when the selected
+selected Codex model is used, falling back to GPT-6.1 Sol when the selected
 model is from another provider. Explicit non-Codex prefixes conflict with `.i`.
 
 Every streamed preview and completed image is sent separately to Telegram,
