@@ -125,6 +125,15 @@ MTProto and Telethon versions are summarized in
 [[file:docs/telegram_ai_apis.md][docs/telegram_ai_apis.md]], along with the
 workarounds considered and why this repo upgrades Telethon instead.
 
+** Draft streaming
+In private chats, the chat bot shows its answer as a live Telegram draft that
+grows about once a second and then becomes the real message, instead of
+editing a placeholder (which Telegram rate-limits, so long answers slow down).
+On Telethon 1.45 the draft has a Stop button. =/stream= picks drafts or edits
+separately for private chats and for groups; groups default to edits, since
+Telegram refuses drafts there. See
+[[file:docs/draft_streaming.md][docs/draft_streaming.md]].
+
 ** Guest mode
 The bots answer where they are mentioned, even in chats they are not in.
 =@bot .a CMD= runs a shell command for an admin, with any files sent to the

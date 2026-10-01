@@ -59,6 +59,7 @@ from telethon.tl.types import (
     UpdateNewMessage,
     User,
     UpdateMessageReactions,
+    UpdateUserTyping,
 )
 from pydantic import BaseModel, Field, model_validator
 from typing import Any, Callable, Optional, List, Dict, Tuple
@@ -200,6 +201,7 @@ from uniborg.llm_models import DEFAULT_REASONING_EFFORT, ModelSpec
 from uniborg import redis_util
 from uniborg import common_util
 from uniborg import topics
+from uniborg import draft_stream
 from uniborg import guest_util
 from uniborg import media_store
 from uniborg import tg_format
@@ -1199,6 +1201,28 @@ METADATA_MODES = {
     "only_forwarded": "Only Forwarded Metadata",
     "full_metadata": "Full Metadata",
 }
+
+
+class StreamMode(str, Enum):
+    """How an answer shows while it is written (/stream)."""
+
+    #: Telegram's live draft, with a Stop button; private chats only.
+    DRAFTS = "drafts"
+    #: A message edited as the answer grows.
+    EDITS = "edits"
+
+
+STREAM_SCOPE_PRIVATE = "private"
+STREAM_SCOPE_GROUPS = "groups"
+STREAM_SCOPE_NAMES = {
+    STREAM_SCOPE_PRIVATE: "Private chats",
+    STREAM_SCOPE_GROUPS: "Groups",
+}
+STREAM_MODE_NAMES = {StreamMode.DRAFTS: "Drafts", StreamMode.EDITS: "Edits"}
+STREAM_CALLBACK_PREFIX = "stream:"
+#: The placeholder an answer streams into, when nothing else is shown first.
+RESPONSE_PLACEHOLDER = "..."
+
 MAX_RETRIES = 5
 
 # Maximum number of retries for "no response" scenarios
@@ -1316,6 +1340,7 @@ BOT_COMMANDS = [
     },
     {"command": "tools", "description": "Enable or disable tools like search"},
     {"command": "json", "description": "Toggle JSON output mode"},
+    {"command": "stream", "description": "Stream answers as drafts or edits"},
     {"command": "tts", "description": "Set TTS model for this chat"},
     {"command": "geminivoice", "description": "Set global Gemini voice"},
     {"command": "geminivoicehere", "description": "Set Gemini voice for this chat"},
@@ -1817,6 +1842,9 @@ class UserPrefs(_SavedSettings):
     group_activation_mode: str = Field(default="mention_and_reply")
     metadata_mode: str = Field(default="only_forwarded")
     group_metadata_mode: str = Field(default="full_metadata")
+    #: How answers stream in private chats, and in groups (/stream).
+    stream_private: StreamMode = Field(default=StreamMode.DRAFTS)
+    stream_groups: StreamMode = Field(default=StreamMode.EDITS)
     tts_global_voice: str = Field(default=tts_util.DEFAULT_VOICE)
     live_model: str = Field(default="gemini-2.5-flash-preview-native-audio-dialog")
     #: Writes the titles and summaries of files, and the names of new private
@@ -1955,6 +1983,16 @@ class UserManager:
 
         prefs = self.get_prefs(user_id)
         prefs.group_metadata_mode = mode
+        self._save_prefs(user_id, prefs)
+
+    def set_stream_mode(self, user_id: int, *, scope: str, mode: StreamMode):
+        prefs = self.get_prefs(user_id)
+        if scope == STREAM_SCOPE_PRIVATE:
+            prefs.stream_private = mode
+        elif scope == STREAM_SCOPE_GROUPS:
+            prefs.stream_groups = mode
+        else:
+            raise ValueError(f"Unknown stream scope: {scope!r}")
         self._save_prefs(user_id, prefs)
 
     def set_group_activation_mode(self, user_id: int, mode: str):
@@ -4064,32 +4102,18 @@ async def _call_llm_with_retry(
                 if delta:
                     response_text += delta
                     current_time = asyncio.get_event_loop().time()
+                    pace = draft_stream.streaming_pace(
+                        response_message,
+                        elapsed=current_time - streaming_start_time,
+                        edit_interval=edit_interval,
+                    )
 
-                    # Dynamic streaming delay: increase delay for long outputs
-                    current_edit_interval = edit_interval
-                    cursor = "▌"  # Normal typing cursor
-
-                    if (current_time - streaming_start_time) > 120:
-                        current_edit_interval = 60
-                        cursor = "▌💤💤"
-                        #: Doubly slow mode cursor to indicate increased delay
-
-                    elif (
-                        current_time - streaming_start_time
-                    ) > 30:  # 30 seconds elapsed
-                        current_edit_interval = 15  # Increase delay to 15 seconds
-                        # cursor = "▌(💤)"
-                        # cursor = "▌⁞💤"
-                        cursor = "▌💤"
-                        # Slow mode cursor to indicate increased delay
-                        ##
-
-                    if (current_time - last_edit_time) > current_edit_interval:
+                    if (current_time - last_edit_time) > pace.interval:
                         try:
                             # Add a cursor to indicate the bot is still "typing"
                             await util.edit_message(
                                 response_message,
-                                f"{response_text}{cursor}",
+                                f"{response_text}{pace.cursor}",
                                 parse_mode="md",
                             )
                             last_edit_time = current_time
@@ -6867,6 +6891,14 @@ def register_handlers():
             func=lambda e: e.is_private,
         )
     )(json_mode_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/stream{bot_username_suffix_re}(?:\s+(?P<args>.*))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(stream_handler)
+    if IS_BOT and draft_stream.STOP_SUPPORTED:
+        borg.on(events.Raw(types=UpdateUserTyping))(draft_stop_handler)
     borg.on(events.NewMessage(pattern=rf"(?i)^/tts{bot_username_suffix_re}\s*$"))(
         tts_handler
     )
@@ -7154,6 +7186,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 **In private topics**, /setModelHere, /setThinkHere and /setSystemPromptHere set this topic's own model, effort and prompt, which override the chat's. Their menus have an **Apply to** row to set the whole chat instead.
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
+- /stream: Stream answers as live drafts or as edits, for private chats and for groups.
 {admin_help}
 
 **Quick Model Selection Shortcuts**
@@ -7474,6 +7507,8 @@ async def status_handler(event):
         f"• **Reasoning Effort ({_model_display_name(effective_model)}):** {thinking_status}\n"
         f"• **Enabled Tools:** `{enabled_tools_str}`\n"
         f"• **JSON Mode:** `{'Enabled' if prefs.json_mode else 'Disabled'}`\n"
+        f"• **Streaming:** private chats `{_stream_mode(prefs, scope=STREAM_SCOPE_PRIVATE).value}`, "
+        f"groups `{_stream_mode(prefs, scope=STREAM_SCOPE_GROUPS).value}`\n"
         f"• **Personal System Prompt:** `{user_system_prompt_status}`\n"
         f"• **Personal 'Last N' Limit:** {user_last_n_limit}\n\n"
         f"**This Chat's Settings**\n"
@@ -9894,6 +9929,91 @@ async def group_metadata_mode_handler(event):
     )
 
 
+def _stream_menu_text(prefs) -> str:
+    lines = [
+        "**Streaming**",
+        "How an answer shows while it is written:",
+        "• **Drafts**: Telegram's live preview"
+        f"{', with a Stop button' if draft_stream.STOP_SUPPORTED else ''}. The "
+        "answer then arrives as one new message. Telegram allows drafts only in "
+        "private chats, so elsewhere they fall back to edits.",
+        "• **Edits**: a message edited as the answer grows.",
+        "",
+    ]
+    for scope, name in STREAM_SCOPE_NAMES.items():
+        mode = _stream_mode(prefs, scope=scope)
+        lines.append(f"{name}: **{STREAM_MODE_NAMES[mode]}**")
+    if not draft_stream.DRAFTS_SUPPORTED:
+        lines.append(
+            "\nThis bot's Telethon cannot send drafts, so every answer streams "
+            "by edits."
+        )
+    return "\n".join(lines)
+
+
+def _stream_menu_buttons(prefs) -> list:
+    rows = []
+    for scope, name in STREAM_SCOPE_NAMES.items():
+        current = _stream_mode(prefs, scope=scope)
+        rows.append(
+            [
+                tg_compat.callback_button(
+                    f"{'✅ ' if mode == current else ''}{name}: "
+                    f"{STREAM_MODE_NAMES[mode]}",
+                    data=f"{STREAM_CALLBACK_PREFIX}{scope}:{mode.value}",
+                )
+                for mode in StreamMode
+            ]
+        )
+    return rows
+
+
+STREAM_USAGE = "Usage: `/stream`, or `/stream private|groups drafts|edits`."
+
+
+async def stream_handler(event):
+    """/stream: drafts or edits, for private chats and for groups."""
+    if not IS_BOT:
+        await send_info_message(
+            event, "Draft streaming needs a bot account; answers stream by edits."
+        )
+        return
+    user_id = event.sender_id
+    args = (event.pattern_match.group("args") or "").lower().split()
+    if args:
+        modes = {mode.value: mode for mode in StreamMode}
+        if len(args) != 2 or args[0] not in STREAM_SCOPE_NAMES or args[1] not in modes:
+            await send_info_message(event, STREAM_USAGE, parse_mode="md")
+            return
+        user_manager.set_stream_mode(user_id, scope=args[0], mode=modes[args[1]])
+    prefs = user_manager.get_prefs(user_id)
+    await send_info_message(
+        event,
+        _stream_menu_text(prefs),
+        parse_mode="md",
+        buttons=_stream_menu_buttons(prefs),
+    )
+
+
+async def _stream_menu_press_handler(event, *, scope: str, mode: StreamMode):
+    user_manager.set_stream_mode(event.sender_id, scope=scope, mode=mode)
+    prefs = user_manager.get_prefs(event.sender_id)
+    try:
+        await event.edit(
+            f"{BOT_META_INFO_PREFIX}{_stream_menu_text(prefs)}",
+            parse_mode="md",
+            buttons=_stream_menu_buttons(prefs),
+        )
+    except errors.rpcerrorlist.MessageNotModifiedError:
+        pass
+    await event.answer(f"{STREAM_SCOPE_NAMES[scope]}: {STREAM_MODE_NAMES[mode]}.")
+
+
+async def draft_stop_handler(update):
+    """A press of a draft's Stop button (`draft_stream.on_typing_update`)."""
+    await draft_stream.on_typing_update(update)
+
+
 async def sep_handler(event):
     """Switch to smart mode and set to until_separator context."""
     user_id = event.sender_id
@@ -10662,6 +10782,11 @@ async def callback_handler(event):
             )
         )
         await event.answer("Reasoning effort updated.")
+    elif data_str.startswith(STREAM_CALLBACK_PREFIX):
+        scope, mode = data_str[len(STREAM_CALLBACK_PREFIX) :].split(":", 1)
+        if scope not in STREAM_SCOPE_NAMES:
+            raise ValueError(f"Unknown stream scope: {scope!r}")
+        await _stream_menu_press_handler(event, scope=scope, mode=StreamMode(mode))
     elif data_str.startswith("tool_"):
         tool_name = data_str.split("_")[1]
         is_enabled = tool_name not in prefs.enabled_tools
@@ -12127,6 +12252,50 @@ _ALREADY_DELIVERED = GenerationResult(
 )
 
 
+def _stream_mode(prefs, *, scope: str) -> StreamMode:
+    if scope == STREAM_SCOPE_PRIVATE:
+        return StreamMode(prefs.stream_private)
+    elif scope == STREAM_SCOPE_GROUPS:
+        return StreamMode(prefs.stream_groups)
+    else:
+        raise ValueError(f"Unknown stream scope: {scope!r}")
+
+
+async def _response_placeholder(event, placeholder_text: str, *, prefs):
+    """The message an answer to EVENT streams into (docs/draft_streaming.md).
+
+    A draft stand-in where the user streams drafts here and Telegram shows
+    one; otherwise PLACEHOLDER_TEXT, sent.
+    """
+    scope = STREAM_SCOPE_PRIVATE if event.is_private else STREAM_SCOPE_GROUPS
+    if IS_BOT and _stream_mode(prefs, scope=scope) == StreamMode.DRAFTS:
+        draft = draft_stream.DraftAnswerMessage(
+            borg, event=event, top_msg_id=_thread_topic_id(event), logger=logger
+        )
+        #: An empty draft shows Telegram's own "Thinking…".
+        if await draft.start(
+            "" if placeholder_text == RESPONSE_PLACEHOLDER else placeholder_text
+        ):
+            return draft
+    return await send_info_message(event, placeholder_text)
+
+
+async def _generate_streamed(req: GenerationRequest) -> GenerationResult:
+    """`_generate_response`, ending a draft stream when it returns or fails.
+
+    The draft's Stop button cancels the generation, as /stop would.
+    """
+    draft = req.response_message
+    if not isinstance(draft, draft_stream.DraftAnswerMessage):
+        return await _generate_response(req)
+    task = asyncio.ensure_future(_generate_response(req))
+    draft.on_stop = task.cancel
+    try:
+        return await task
+    finally:
+        await draft.end_stream()
+
+
 async def _generate_response(req: GenerationRequest) -> GenerationResult:
     """Calls the model, streaming into `req.response_message`.
 
@@ -12631,7 +12800,7 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
         placeholder_text = f"**Recent Context Mode:** I'll use only the recent messages to form the conversation context. I have waited {RECENT_WAIT_TIME} second(s) to receive all your messages.\n\nProcessing ... "
 
     else:
-        placeholder_text = "..."
+        placeholder_text = RESPONSE_PLACEHOLDER
 
     import tempfile
 
@@ -12640,7 +12809,9 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
     try:
         #: Inside `try`, so a chat the bot cannot post in reaches the error
         #: reply below instead of escaping the handler.
-        response_message = await send_info_message(event, placeholder_text)
+        response_message = await _response_placeholder(
+            event, placeholder_text, prefs=prefs
+        )
         temp_dir.mkdir(exist_ok=True)
 
         if group_id:
@@ -12676,7 +12847,7 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
             await util.edit_message(response_message, error_message, parse_mode="md")
             return
 
-        generation = await _generate_response(
+        generation = await _generate_streamed(
             GenerationRequest(
                 event=event,
                 response_message=response_message,
@@ -12755,6 +12926,13 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
             error_id_p=True,
         )
     finally:
+        if isinstance(response_message, draft_stream.DraftAnswerMessage):
+            #: Whatever the draft last showed and nothing replaced, such as an
+            #: error or a cancelled partial answer, is sent for real.
+            try:
+                await response_message.flush()
+            except Exception:
+                logger.warning("Could not send a draft's last text", exc_info=True)
         if group_id:
             bot_util.PROCESSED_GROUP_IDS.discard(group_id)
         if temp_dir.exists():

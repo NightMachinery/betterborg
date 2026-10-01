@@ -151,6 +151,12 @@ acceptance is [untested]. Android never adopts a final message from a user
 account, yet it still blocks the recipient's send button while the draft
 lives [src]. Userbot plugins keep edit streaming.
 
+Decision: the chat bot streams drafts in private chats by default, with the
+sync draft, heartbeats, a cancellable worker and a call timeout described
+above; groups and the userbot keep edit streaming. The code is
+`uniborg/draft_stream.py`, and the behavior and the `/stream` setting are in
+[draft_streaming.md](draft_streaming.md).
+
 ### 2.2 Rich messages ("full Markdown")
 
 What they are:
@@ -585,7 +591,8 @@ Telethon 1.45 supports the new features at the raw-TL level only:
   `rich_message`, and `Message.text` ignores it. `edit_message` routes inline
   edits to the right data center through the private
   `_borrow_exported_sender`, so a rich inline edit must copy that routing.
-- There is no event builder for guest queries and no draft helper.
+- There is no event builder for guest queries and no draft helper. This
+  repo's are `uniborg/guest_util.py` and `uniborg/draft_stream.py`.
 - Raw requests bypass this repo's patched `send_message` history recorder, so
   record outgoing messages by hand.
 
@@ -601,7 +608,8 @@ These hold in both 1.43.2 and 1.45.0 unless noted:
   `client.flood_sleep_threshold` (default 60 s) counts.
 - **FloodWait sleeps, then re-sends the stale request.** For drafts that
   produces ghost drafts after finalize, and it stalls whatever awaited the
-  call. Send drafts from a cancellable background task.
+  call. Send drafts from a cancellable background task, with a timeout on
+  each call, since cancelling the call is the only way to cancel the sleep.
 - **The flood map is keyed by request type, not by peer.** After a
   FLOOD_WAIT on one peer's `SetTypingRequest`, every `SetTypingRequest` to any
   peer, typing loops included, waits first if more than 3 s remain.

@@ -15,7 +15,7 @@ import httpx
 import openai
 from PIL import Image
 
-from uniborg import util
+from uniborg import draft_stream, util
 from uniborg.constants import OPENAI_CODEX_LUNA_RESERVE
 
 
@@ -643,18 +643,20 @@ async def stream_codex_response(
                 )
                 add_text(key, _field(stream_event, "delta"), delta=True)
                 current_time = asyncio.get_running_loop().time()
-                elapsed = current_time - streaming_start_time
-                current_edit_interval = (
-                    60 if elapsed > 120 else 15 if elapsed > 30 else edit_interval
+                pace = draft_stream.streaming_pace(
+                    response_message,
+                    elapsed=current_time - streaming_start_time,
+                    edit_interval=edit_interval,
                 )
-                cursor = "▌💤💤" if elapsed > 120 else "▌💤" if elapsed > 30 else "▌"
                 if (
                     response_message is not None
-                    and current_time - last_edit_time > current_edit_interval
+                    and current_time - last_edit_time > pace.interval
                 ):
                     try:
                         await util.edit_message(
-                            response_message, result.text + cursor, parse_mode="md"
+                            response_message,
+                            result.text + pace.cursor,
+                            parse_mode="md",
                         )
                         last_edit_time = current_time
                     except Exception as exc:

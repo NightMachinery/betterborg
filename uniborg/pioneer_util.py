@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 import openai
 
-from uniborg import util
+from uniborg import draft_stream, util
 from uniborg.constants import PIONEER_BASE_URL
 
 
@@ -66,9 +66,8 @@ def _content_part_to_pioneer(part: dict) -> Optional[dict]:
         data_url_mime = _data_url_mime_type(file_id)
 
         if data_url_mime is not None:
-            if (
-                data_url_mime != "application/pdf"
-                and not data_url_mime.startswith("text/")
+            if data_url_mime != "application/pdf" and not data_url_mime.startswith(
+                "text/"
             ):
                 return None
             converted = {
@@ -222,21 +221,17 @@ async def stream_pioneer_response(
                 continue
             response_text += delta
             current_time = asyncio.get_event_loop().time()
-            current_edit_interval = edit_interval
-            cursor = "▌"
+            pace = draft_stream.streaming_pace(
+                response_message,
+                elapsed=current_time - streaming_start_time,
+                edit_interval=edit_interval,
+            )
 
-            if (current_time - streaming_start_time) > 120:
-                current_edit_interval = 60
-                cursor = "▌💤💤"
-            elif (current_time - streaming_start_time) > 30:
-                current_edit_interval = 15
-                cursor = "▌💤"
-
-            if (current_time - last_edit_time) > current_edit_interval:
+            if (current_time - last_edit_time) > pace.interval:
                 try:
                     await util.edit_message(
                         response_message,
-                        f"{response_text}{cursor}",
+                        f"{response_text}{pace.cursor}",
                         parse_mode="md",
                     )
                     last_edit_time = current_time
