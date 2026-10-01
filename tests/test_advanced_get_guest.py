@@ -244,6 +244,11 @@ class GuestShellTests(unittest.TestCase):
             f".aa printf x @{BOT_USERNAME}",
             f"see @{BOT_USERNAME} .aa printf x",
             f"@{BOT_USERNAME} hello",
+            #: Telegram sees a mention in each, but only whitespace may
+            #: separate it from the command.
+            f"@{BOT_USERNAME}: .aa printf x",
+            f"@{BOT_USERNAME}, .aa printf x",
+            f"@{BOT_USERNAME}.aa printf x",
         ):
             with self.subTest(text=text):
                 self.answers.clear()

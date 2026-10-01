@@ -247,11 +247,17 @@ def guest_query_from_update(
     )
 
 
+#: What may separate a leading mention from the text it addresses.
+#: Telegram ends a mention at any non-word character, so "@x_bot: hi" and
+#: "@x_bot,hi" mention the bot as well as "@x_bot hi" does.
+MENTION_SEPARATORS = r"[\s,:]*"
+
+
 def _mention_patterns(username: str) -> tuple:
     name = re.escape(username.lstrip("@"))
     return (
         re.compile(rf"(?<![\w@])@{name}(?!\w)", re.IGNORECASE),
-        re.compile(rf"^\s*@{name}(?!\w)[\s,:]*", re.IGNORECASE),
+        re.compile(rf"^\s*@{name}(?!\w){MENTION_SEPARATORS}", re.IGNORECASE),
         re.compile(rf"[\s,]*(?<![\w@])@{name}(?!\w)\s*$", re.IGNORECASE),
     )
 
@@ -267,6 +273,21 @@ def text_after_leading_mention(text: Optional[str], *, username: str) -> Optiona
     with it. Only whitespace may come before the mention."""
     _anywhere, leading, _trailing = _mention_patterns(username)
     match = leading.match(text or "")
+    if match is None:
+        return None
+    return text[match.end() :]
+
+
+def shell_command_after_mention(text: Optional[str], *, username: str) -> Optional[str]:
+    """The `.a…` command after a leading `@username`, or None.
+
+    This is the guest shell's strict trigger: only whitespace, at least one
+    character of it, may separate the mention from `.a`. The userbot's trigger
+    guard (`defang_guest_trigger`) defangs a superset, any `MENTION_SEPARATORS`
+    or none, so text the shell would run never leaves a user account intact.
+    """
+    name = re.escape(username.lstrip("@"))
+    match = re.match(rf"^\s*@{name}(?!\w)\s+(?=\.a)", text or "", re.IGNORECASE)
     if match is None:
         return None
     return text[match.end() :]
@@ -838,9 +859,13 @@ TRIGGER_GUARD_ENV = "borg_guest_trigger_guard"
 _ENABLED_VALUES = frozenset({"", "1", "true", "yes", "on"})
 _DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
 
-#: A leading bot mention followed by `.a`: the guest shell's trigger shape.
+#: A leading bot mention, then any `MENTION_SEPARATORS` (or none), then `.a`:
+#: wider than the shell's strict trigger (`shell_command_after_mention`), so
+#: the guard covers every shape the shell could be loosened to run.
 #: Every bot username ends in "bot".
-_SHELL_TRIGGER = re.compile(r"^(\s*)@(\w*bot)(?=\s+\.a)", re.IGNORECASE)
+_SHELL_TRIGGER = re.compile(
+    rf"^(\s*)@(\w*bot)(?!\w)(?={MENTION_SEPARATORS}\.a)", re.IGNORECASE
+)
 
 #: U+FF20 FULLWIDTH COMMERCIAL AT: looks like "@", is not a mention, and is one
 #: UTF-16 unit, so no entity moves.

@@ -76,8 +76,11 @@ Each rule is enforced in code; this is why.
   steered by someone else, or command output echoing untrusted text.
   `guest_util.OutgoingTriggerGuardMixin` (first in `Uniborg`'s bases) replaces
   that "@" with "＠" (U+FF20) in outgoing messages, captions and edits of user
-  accounts, and drops a mention entity there. Text typed in a Telegram app
-  never passes through it. `borg_guest_trigger_guard=0` turns it off; an
+  accounts, and drops a mention entity there. It matches the mention followed
+  by any of spaces, commas and colons (or none) and then `.a`, since Telegram
+  ends a mention at any of them; that is wider than what the shell runs, so
+  the two cannot drift apart. Text typed in a Telegram app never passes
+  through it. `borg_guest_trigger_guard=0` turns it off; an
   unknown value stops startup. Other tools logged in as the owner are not
   covered.
 - **Guest queries survive gaps.** Telethon drops qts updates that
@@ -151,7 +154,9 @@ without Brish, `.af` without forking, `.ad` without albums, `.an` with
 dropped, never run late.
 
 - **Only a strict trigger runs.** The text must start with the bot's mention,
-  followed directly by `.a`, and no code block may cover the mention. The
+  then whitespace, then `.a` (`guest_util.shell_command_after_mention`), and
+  no code block may cover the mention. `@bot: .a` or `@bot.a` gets the usage
+  line instead. The
   caller must be an admin by user id (`util.is_admin_by_id`).
 - **Every explicit call is answered.** A non-admin who mentions the bot gets
   "Not available here."; an admin whose text is not a strict trigger gets the

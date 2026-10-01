@@ -97,13 +97,13 @@ def _guest_username() -> str:
 def _guest_shell_match(query):
     """The `pattern_a` match of a strict guest trigger, or None.
 
-    The text must start with the bot's mention followed directly by `.a`, and
-    must not start inside a code block: relayed text (command output, an LLM
-    answer) is what a looser rule would let through.
+    The text must start with the bot's mention, then whitespace, then `.a`,
+    and must not start inside a code block: relayed text (command output, an
+    LLM answer) is what a looser rule would let through.
     """
     text = query.text
-    after = guest_util.text_after_leading_mention(text, username=_guest_username())
-    if after is None or not after.startswith(".a"):
+    after = guest_util.shell_command_after_mention(text, username=_guest_username())
+    if after is None:
         return None
     mention_at = tg_format.utf16_len(text[: len(text) - len(text.lstrip())])
     for entity in query.trigger.entities or []:

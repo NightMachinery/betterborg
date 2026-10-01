@@ -474,12 +474,44 @@ class TriggerGuardTests(unittest.TestCase):
             "  \uff20X_BOT\n.af rm x",
         )
 
+    def test_every_separator_telegram_ends_a_mention_with_is_defanged(self):
+        for text in (
+            "@julia_bot: .a ls",
+            "@julia_bot, .a ls",
+            "@julia_bot:.a ls",
+            "@julia_bot,.a ls",
+            "@julia_bot.a ls",
+            "@Julia_Bot,  .a ls",
+            "@julia_bot:\n.a ls",
+        ):
+            with self.subTest(text=text):
+                defanged, _ = guest_util.defang_guest_trigger(text)
+                self.assertTrue(defanged.startswith("\uff20"))
+
+    def test_the_guard_covers_every_text_the_shell_would_run(self):
+        for text in (
+            "@julia_bot .a ls",
+            " @julia_bot\t.af ls",
+            "@JULIA_BOT\n.ad ls",
+            "@julia_bot: .a ls",
+            "@julia_bot.a ls",
+        ):
+            with self.subTest(text=text):
+                runs = (
+                    guest_util.shell_command_after_mention(text, username="julia_bot")
+                    is not None
+                )
+                defanged, _ = guest_util.defang_guest_trigger(text)
+                self.assertTrue(defanged.lstrip().startswith("\uff20") or not runs)
+
     def test_other_text_is_untouched(self):
         for text in (
             "@julia_bot hi",
             "hi @julia_bot .a ls",
             "@julia .a ls",
             ".a ls @julia_bot",
+            "@julia_botx .a ls",
+            "@julia_bot hi .a ls",
             None,
         ):
             with self.subTest(text=text):
