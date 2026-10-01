@@ -9880,6 +9880,10 @@ async def callback_handler(event):
         await event.edit(buttons=util.build_menu(buttons, n_cols=1))
         await event.answer(f"Live model set to {live_model_options[model_key]}")
 
+    else:
+        #: A button from a feature or version that is gone.
+        await event.answer("This button is no longer valid.", alert=True)
+
 
 async def generic_input_handler(event):
     """Handles plain-text submissions for interactive commands."""

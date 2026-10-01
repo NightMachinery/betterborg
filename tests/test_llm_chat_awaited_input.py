@@ -443,6 +443,16 @@ class ModelMenuCancelTests(_IsolatedStateTest):
         )
         self.assertNotIn(USER_ID, self.pending)
 
+    def test_an_unknown_button_says_it_is_no_longer_valid(self):
+        press = _press("retired_feature_1")
+
+        asyncio.run(plugin.callback_handler(press))
+
+        press.answer.assert_awaited_once_with(
+            "This button is no longer valid.", alert=True
+        )
+        press.edit.assert_not_awaited()
+
     def test_a_typed_cancel_closes_the_menu_too(self):
         self.open_menu()
         typed = _in_topic("cancel", msg_id=501)
