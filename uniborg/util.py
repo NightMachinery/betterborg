@@ -12,10 +12,9 @@ from uniborg.constants import (
 from pynight.common_files import sanitize_filename
 import json
 from pydantic import BaseModel, Field
-import litellm
 from brish import z, zp, zs, bsh, Brish
 from pynight.common_icecream import ic
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from IPython.terminal.embed import InteractiveShellEmbed, InteractiveShell
 from IPython.terminal.ipapp import load_default_config
 from aioify import aioify
@@ -1362,6 +1361,7 @@ async def edit_message(
     file_name_mode="random",
     title_model: str | None = None,
     api_keys: dict | None = None,
+    title_generator: "TitleGenerator | None" = None,
     send_new_on_head_failure: bool = False,
     twin_file_marker: str = TWIN_FILE_MARKER,
 ):
@@ -1403,6 +1403,9 @@ async def edit_message(
             constants.CHAT_TITLE_MODEL when not provided.
         api_keys (dict | None): Optional mapping of service name (e.g., "gemini") to
             API key value. If provided, avoids sender_id-based key lookup.
+        title_generator (TitleGenerator | None): Writes the "llm" title and
+            summary in place of `title_model` and `api_keys` (see
+            `title_util.file_title_generator`).
         send_new_on_head_failure (bool): What to do when editing the head fails
             with one of `HEAD_LOST_ERRORS` (a FloodWait too long for Telethon to
             sleep through, or a head that is gone or no longer editable).
@@ -1479,6 +1482,7 @@ async def edit_message(
                 reply_to=reply_to,
                 title_model=title_model,
                 api_keys=api_keys,
+                title_generator=title_generator,
             )
         except Exception:
             _log_file_sending_error("edit_message (ONLY mode)")
@@ -1602,6 +1606,7 @@ async def edit_message(
                     reply_to=reply_to,
                     title_model=title_model,
                     api_keys=api_keys,
+                    title_generator=title_generator,
                     caption_prefix=twin_file_marker if text_delivered else "",
                 )
             except Exception:
@@ -1885,6 +1890,47 @@ class FilenameGeneration(BaseModel):
     )
 
 
+#: Takes the (truncated) text and returns its title, file name and summary.
+TitleGenerator = Callable[[str], Awaitable[FilenameGeneration]]
+
+
+async def _default_title_generator(
+    *,
+    title_model: str | None,
+    api_keys: dict | None,
+    api_user_id: int | None,
+    message_obj,
+) -> TitleGenerator | None:
+    """`title_model` (or CHAT_TITLE_MODEL) with a resolved key; None without a key."""
+    from uniborg import title_util
+
+    model_in_use, service_needed = _get_title_model_and_service(title_model)
+    api_key, resolved_uid = await _resolve_title_api_key(
+        service_needed,
+        api_keys=api_keys,
+        user_id=api_user_id,
+        message_obj=message_obj,
+    )
+    if api_user_id is None:
+        api_user_id = resolved_uid
+    if not api_key:
+        print(
+            f"Warning: {service_needed} API key not found for user {api_user_id}, falling back to random filename"
+        )
+        return None
+
+    async def generate(text: str) -> FilenameGeneration:
+        return await title_util.complete_structured(
+            title_util.FILE_TITLE_PROMPT.format(text=text),
+            FilenameGeneration,
+            model=model_in_use,
+            api_key=api_key,
+            api_user_id=api_user_id,
+        )
+
+    return generate
+
+
 async def _generate_file_data(
     text: str,
     parse_mode: str,
@@ -1893,10 +1939,16 @@ async def _generate_file_data(
     api_user_id: int | None = None,
     api_keys: dict | None = None,
     title_model: str | None = None,
+    title_generator: TitleGenerator | None = None,
     message_obj=None,
     default_caption: str | None = None,
 ) -> FileGeneration:
-    """Generate file data (filename, caption, extension) based on the specified mode."""
+    """Generate file data (filename, caption, extension) based on the specified mode.
+
+    In "llm" mode, `title_generator` writes the title when given; otherwise
+    `title_model` (or CHAT_TITLE_MODEL) does, with a key from `api_keys` or
+    the sender's stored keys.
+    """
     from uniborg import llm_util
 
     # Determine file extension based on parse_mode
@@ -1920,29 +1972,17 @@ async def _generate_file_data(
 
     elif file_name_mode == "llm":
         try:
-
-            # Decide which service is needed based on the model in use
-            model_in_use, service_needed = _get_title_model_and_service(title_model)
-
-            # Resolve API key using shared helper
-            api_key_to_use, resolved_uid = await _resolve_title_api_key(
-                service_needed,
-                api_keys=api_keys,
-                user_id=api_user_id,
-                message_obj=message_obj,
-            )
-            if api_user_id is None:
-                api_user_id = resolved_uid
-
-            if not api_key_to_use:
-                print(
-                    f"Warning: {service_needed} API key not found for user {api_user_id}, falling back to random filename"
+            if title_generator is None:
+                title_generator = await _default_title_generator(
+                    title_model=title_model,
+                    api_keys=api_keys,
+                    api_user_id=api_user_id,
+                    message_obj=message_obj,
                 )
+            if title_generator is None:
                 filename = _generate_random_filename(file_ext)
                 caption = default_caption
             else:
-                # Set up LiteLLM with the API key
-                # Use LiteLLM with structured output
                 truncated_text = llm_util.truncate_text_for_llm(
                     text,
                     mode="start_end",
@@ -1950,28 +1990,7 @@ async def _generate_file_data(
                     semantic_boundaries_p=False,
                     start_split=0.6,
                 )
-                acompletion_kwargs = dict(
-                    api_key=api_key_to_use,
-                    model=model_in_use,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": f"Generate a title and filename for this text content:\n\n{truncated_text}",
-                        }
-                    ],
-                    response_format=FilenameGeneration,
-                )
-                # Route native Gemini (Google API) traffic through the special proxy.
-                if model_in_use.startswith("gemini/"):
-                    proxy_client = llm_util.create_litellm_proxy_client(api_user_id)
-                    if proxy_client is not None:
-                        acompletion_kwargs["client"] = proxy_client
-                response = await litellm.acompletion(**acompletion_kwargs)
-
-                # Parse the structured response using Pydantic
-                result = FilenameGeneration.model_validate_json(
-                    response.choices[0].message.content
-                )
+                result = await title_generator(truncated_text)
                 safe_filename = sanitize_filename(result.title_as_file_name)
                 filename = f"{safe_filename}{file_ext}"
                 caption = f"**{result.title}**\n\n{result.short_description[:2000]}"
@@ -2000,6 +2019,7 @@ async def send_as_file_with_filename(
     title_model: str | None = None,
     api_keys: dict | None = None,
     api_user_id: int | None = None,
+    title_generator: TitleGenerator | None = None,
     default_caption: str | None = None,
     caption_prefix: str = "",
 ):
@@ -2020,6 +2040,7 @@ async def send_as_file_with_filename(
                 api_user_id=api_user_id,
                 api_keys=api_keys,
                 title_model=title_model,
+                title_generator=title_generator,
                 message_obj=message_obj,
                 default_caption=default_caption,
             )
