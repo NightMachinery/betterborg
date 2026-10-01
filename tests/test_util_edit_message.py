@@ -874,6 +874,48 @@ class EditMessageHeadFailureTests(_EditChainCase):
             self.send_file.await_args.kwargs["caption_prefix"], TWIN_FILE_MARKER
         )
 
+    async def deliver_with_a_twin(self, text):
+        await self.deliver(
+            text, send_file_mode=util.SendFileMode.ALSO, file_length_threshold=3
+        )
+        self.send_file.assert_awaited_once()
+        return self.send_file.await_args.kwargs["caption_prefix"]
+
+    async def test_a_twin_of_a_partly_resent_answer_is_not_marked(self):
+        self.head.edit_errors.append(_flood_wait())
+        make_message = self.chat.message
+
+        def message(*args, **kwargs):
+            made = make_message(*args, **kwargs)
+            made.reply_errors.append(_flood_wait())
+            return made
+
+        self.chat.message = message
+
+        prefix = await self.deliver_with_a_twin(_blocks("A", "B"))
+
+        self.assertIsNotNone(self.new_head())
+        self.assertEqual(self.state().children, [])
+        self.assertEqual(prefix, "")
+
+    async def test_a_twin_of_a_chain_stopped_by_a_child_error_is_not_marked(self):
+        await self.edit(_blocks("A", "B"))
+        (child_b,) = self.state().children
+        child_b.edit_errors.append(RuntimeError("boom"))
+
+        prefix = await self.deliver_with_a_twin(_blocks("A", "X"))
+
+        self.assertEqual(self.state().children, [])
+        self.assertEqual(prefix, "")
+
+    async def test_a_twin_of_a_chain_with_a_replaced_child_is_marked(self):
+        await self.stream_then_flood_the_last_child()
+
+        prefix = await self.deliver_with_a_twin(_blocks("A", "B", "C", "D"))
+
+        self.assertEqual(len(self.state().children), 3)
+        self.assertEqual(prefix, TWIN_FILE_MARKER)
+
 
 class _FakeAction:
     async def __aenter__(self):
