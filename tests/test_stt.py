@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from telethon import types
+from telethon import errors, types
 from telethon._updates import EntityCache
 
 from uniborg import guest_util, tg_compat
@@ -352,6 +352,54 @@ class GuestSttTests(unittest.TestCase):
 
         self.assertEqual(
             self.edits, [{"text": "No valid media files found to transcribe."}]
+        )
+
+    def test_past_the_hourly_limit_the_caller_is_told_and_nothing_runs(self):
+        spent = SimpleNamespace(allow=AsyncMock(return_value=False))
+        with patch.object(stt, "_guest_limiter", spent):
+            self.run_query(_query(f"@{BOT_USERNAME}", reference_media=_voice()))
+
+        (note,) = self.answers
+        self.assertTrue(note.text.startswith("You have had"))
+        self.assertEqual((self.downloaded, self.jobs), ([], []))
+
+    def test_admins_are_not_rate_limited(self):
+        def refuse(*args, **kwargs):
+            raise AssertionError("an admin must not be counted")
+
+        with patch.object(
+            stt.util, "isAdmin", AsyncMock(return_value=True)
+        ), patch.object(stt, "_guest_limiter", SimpleNamespace(allow=refuse)):
+            self.run_query(_query(f"@{BOT_USERNAME}", reference_media=_voice()))
+
+        self.assertEqual(len(self.jobs), 1)
+
+    def test_no_answer_means_nothing_is_downloaded_or_transcribed(self):
+        async def fail(*args, **kwargs):
+            raise RuntimeError("delivery unknown")
+
+        with patch.object(stt.tg_raw, "answer_guest", fail):
+            self.run_query(_query(f"@{BOT_USERNAME}", reference_media=_voice()))
+
+        self.assertEqual((self.downloaded, self.jobs, self.edits), ([], [], []))
+
+    def test_a_refused_rich_transcript_is_cut_to_one_classic_message(self):
+        self.transcript = "word " * 2000
+
+        class _RefusingEditor(_Editor):
+            async def edit(self, **kwargs):
+                if "markdown" in kwargs:
+                    raise errors.RPCError(request=None, message="REFUSED", code=400)
+                return await super().edit(**kwargs)
+
+        with patch.object(stt.tg_raw, "InlineEditor", _RefusingEditor(self.edits)):
+            self.run_query(_query(f"@{BOT_USERNAME}", reference_media=_voice()))
+
+        final = self.edits[-1]
+        self.assertEqual(final["parse_mode"], "md")
+        self.assertTrue(final["text"].endswith(stt.GUEST_TRUNCATED_NOTE))
+        self.assertLessEqual(
+            len(final["text"].encode("utf-16-le")) // 2, stt.GUEST_CLASSIC_LIMIT_UNITS
         )
 
     def test_an_echoed_answer_is_not_media_to_transcribe(self):
