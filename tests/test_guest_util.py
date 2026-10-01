@@ -343,6 +343,7 @@ class RegisterTests(unittest.TestCase):
         self._deliver(_message(date=NOW - datetime.timedelta(minutes=5)), query_id=6)
         self._deliver(_message(fwd_from=types.MessageFwdHeader(date=NOW)), query_id=7)
         self._deliver(_message(via_bot_id=123), query_id=8)
+        self._deliver(_message(via_business_bot_id=124), query_id=9)
 
         self.assertEqual(_plugin_handler.calls, [])
 

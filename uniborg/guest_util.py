@@ -621,6 +621,19 @@ async def answer_note(
 GuestHandler = Callable[[GuestQuery], Awaitable[None]]
 
 
+def _relayed(message) -> bool:
+    """Whether someone or something other than the sender wrote `message`.
+
+    A Business bot connected to an account sends in that account's name, with
+    the account as `from_id`, so its messages would pass for the owner's.
+    """
+    return bool(
+        message.fwd_from
+        or message.via_bot_id
+        or getattr(message, "via_business_bot_id", None)
+    )
+
+
 def register_guest_handler(
     client: Any,
     handler: GuestHandler,
@@ -637,8 +650,8 @@ def register_guest_handler(
     Telethon has no guest types (1.43.2). Call it from a plugin's module body:
     the callback takes the handler's `__module__`, so a plugin reload removes
     it together with the plugin's other handlers. Before `handler` runs, a
-    query is dropped when its trigger is forwarded or sent via a bot (unless
-    `allow_forwarded`), older than `max_age_seconds` (a late command should
+    query is dropped when its trigger is forwarded, sent via a bot, or sent by
+    a Business bot on its owner's behalf (unless `allow_forwarded`), older than `max_age_seconds` (a late command should
     not run, and Telegram rejects late answers anyway), or already claimed.
     """
     log = logger or _log
@@ -658,7 +671,7 @@ def register_guest_handler(
             return
 
         trigger = query.trigger
-        if not allow_forwarded and (trigger.fwd_from or trigger.via_bot_id):
+        if not allow_forwarded and _relayed(trigger):
             log.info("Ignoring guest query %s: forwarded trigger", query.query_id)
             return
         age = query.received_at - trigger.date.timestamp()
