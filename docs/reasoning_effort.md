@@ -80,7 +80,10 @@ parameter is sent at all.
   the model: `.tn`, `.tl`, `.tm`, `.th`, `.tx`, `.txx` for none, low, medium,
   high, extra high and max. They combine with a model prefix in either order,
   so `.f .th question` and `.th .f question` both work, and an explicit effort
-  prefix beats the effort baked into a model prefix.
+  prefix beats the effort baked into a model prefix. Each is `.t` plus the
+  level's short alias (`REASONING_LEVEL_ALIASES` in `uniborg/llm_models.py`),
+  which automatic topic titles also show (`docs/topic_titles.md`). Gemini's
+  `disable` has no prefix and shows there as `n`, like `none`.
 
 A prefix only matches when followed by whitespace or the end of the message,
 so another plugin's `.tlg` or `.tex` command is never swallowed. Prefixes are

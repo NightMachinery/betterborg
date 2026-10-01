@@ -273,14 +273,10 @@ DISPLAY_TIMEZONE = "Asia/Tehran"
 
 #: Sets reasoning effort for one message without changing the model. Available
 #: to everyone; a level the model does not accept is ignored by the resolver.
+#: `.t` plus a level's alias: `.tn`, `.tl`, `.tm`, `.th`, `.tx` and `.txx`.
 #: @hiddenDep Update `Quick Model Selection Shortcuts` in `/help` to match.
 EFFORT_PREFIX_MAPPING = {
-    ".tn": "none",
-    ".tl": "low",
-    ".tm": "medium",
-    ".th": "high",
-    ".tx": "xhigh",
-    ".txx": "max",
+    f".t{alias}": level for level, alias in llm_models.REASONING_LEVEL_ALIASES.items()
 }
 
 # Audio summarization prompt

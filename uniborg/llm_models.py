@@ -46,6 +46,31 @@ OPENROUTER_REASONING_LEVELS = ("low", "medium", "high")
 #: match what Pioneer's own model list advertises for its Claude models.
 PIONEER_REASONING_LEVELS = ("low", "medium", "high")
 
+#: Short text names of the reasoning levels. The `.t` effort prefixes are built
+#: from them (`.th` is high), and automatic topic titles show them
+#: (docs/topic_titles.md).
+REASONING_LEVEL_ALIASES = {
+    "none": "n",
+    "low": "l",
+    "medium": "m",
+    "high": "h",
+    "xhigh": "x",
+    "max": "xx",
+}
+
+
+def reasoning_level_alias(level: Optional[str]) -> str:
+    """The short text name of LEVEL, or "" when there is no level.
+
+    Gemini's `disable` has no prefix of its own; it shows as `none` does,
+    since both mean no reasoning. A level without an alias shows in full.
+    """
+    if not level:
+        return ""
+    if level == "disable":
+        return REASONING_LEVEL_ALIASES["none"]
+    return REASONING_LEVEL_ALIASES.get(level, level)
+
 
 @dataclass(frozen=True)
 class ModelSpec:
@@ -59,6 +84,8 @@ class ModelSpec:
     codex_access: bool = False
     #: Known to the registry but not offered in the model pickers.
     hidden: bool = False
+    #: Names the model in automatic topic titles (docs/topic_titles.md).
+    emoji: str = "🤖"
 
     def supports_reasoning_p(self) -> bool:
         return bool(self.reasoning_levels)
@@ -81,15 +108,21 @@ def is_gemini_model_p(model: str) -> bool:
 
 MODEL_SPECS = [
     ## Gemini
-    ModelSpec(GEMINI_FLASH_LATEST, "Gemini Flash (Latest)", GEMINI_REASONING_LEVELS),
+    ModelSpec(
+        GEMINI_FLASH_LATEST,
+        "Gemini Flash (Latest)",
+        GEMINI_REASONING_LEVELS,
+        emoji="⚡",
+    ),
     ModelSpec(
         GEMINI_FLASH_LITE_LATEST,
         "Gemini Flash Lite (Latest)",
         GEMINI_REASONING_LEVELS,
+        emoji="🪶",
     ),
-    ModelSpec(GEMINI_FLASH_2_5, "Gemini 2.5 Flash", GEMINI_REASONING_LEVELS),
-    ModelSpec(GEMINI_PRO_LATEST, "Gemini 3 Pro", GEMINI_REASONING_LEVELS),
-    ModelSpec(GEMINI_FLASH_3, "Gemini 3 Flash", GEMINI_REASONING_LEVELS),
+    ModelSpec(GEMINI_FLASH_2_5, "Gemini 2.5 Flash", GEMINI_REASONING_LEVELS, emoji="🌩️"),
+    ModelSpec(GEMINI_PRO_LATEST, "Gemini 3 Pro", GEMINI_REASONING_LEVELS, emoji="💎"),
+    ModelSpec(GEMINI_FLASH_3, "Gemini 3 Flash", GEMINI_REASONING_LEVELS, emoji="💥"),
     # ModelSpec("gemini/gemini-2.5-pro", "Gemini 2.5 Pro", GEMINI_REASONING_LEVELS),
     # ModelSpec("openrouter/google/gemini-2.5-pro", "Gemini 2.5 Pro (OpenRouter)", GEMINI_REASONING_LEVELS),
     # ModelSpec("gemini/gemini-2.0-flash", "Gemini 2 Flash", GEMINI_REASONING_LEVELS),
@@ -97,7 +130,10 @@ MODEL_SPECS = [
     # ModelSpec("gemini/gemini-2.5-flash-image-preview", "Gemini 2.5 Flash Image"),
     ## OpenAI
     ModelSpec(
-        OR_OPENAI_5_6_SOL, "GPT-5.6 Sol (OpenRouter)", OPENROUTER_REASONING_LEVELS
+        OR_OPENAI_5_6_SOL,
+        "GPT-5.6 Sol (OpenRouter)",
+        OPENROUTER_REASONING_LEVELS,
+        emoji="🌞",
     ),
     # ModelSpec("openrouter/openai/chatgpt-4o-latest", "ChatGPT 4o (OpenRouter)"),
     ## Anthropic Claude
@@ -112,24 +148,28 @@ MODEL_SPECS = [
     #: model name is too long for Telegram API's `data` field in callback buttons
     # ModelSpec("openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free", "🎁 Venice Uncensored 24B (Free, OpenRouter)"),
     ## DeepSeek
-    ModelSpec("deepseek/deepseek-chat", "DeepSeek Chat"),
-    ModelSpec("deepseek/deepseek-reasoner", "DeepSeek Reasoner"),
+    ModelSpec("deepseek/deepseek-chat", "DeepSeek Chat", emoji="🐋"),
+    ModelSpec("deepseek/deepseek-reasoner", "DeepSeek Reasoner", emoji="🐳"),
     ## Mistral
-    ModelSpec("mistral/mistral-medium-latest", "Mistral Medium (Latest)"),
-    ModelSpec("mistral/magistral-medium-latest", "Magistral Medium (Latest)"),
-    ModelSpec("mistral/pixtral-large-latest", "Pixtral Large (Latest)"),
+    ModelSpec("mistral/mistral-medium-latest", "Mistral Medium (Latest)", emoji="🌬️"),
+    ModelSpec(
+        "mistral/magistral-medium-latest", "Magistral Medium (Latest)", emoji="🧙"
+    ),
+    ModelSpec("mistral/pixtral-large-latest", "Pixtral Large (Latest)", emoji="🖼️"),
     ## Codex (configurable access, ChatGPT OAuth)
     ModelSpec(
         OPENAI_CODEX_GPT_5_6_SOL,
         "GPT-5.6 Sol (Codex)",
         OPENAI_REASONING_LEVELS,
         codex_access=True,
+        emoji="☀️",
     ),
     ModelSpec(
         OPENAI_CODEX_ASTRA,
         "GPT-6 Astra (Codex)",
         ASTRA_REASONING_LEVELS,
         codex_access=True,
+        emoji="✨",
     ),
     #: Billed to the Luna Reserve meter, so it keeps answering once the regular
     #: plan allowance is spent. Every level was verified against the backend.
@@ -138,6 +178,7 @@ MODEL_SPECS = [
         "Luna Reserve (Codex)",
         OPENAI_REASONING_LEVELS,
         codex_access=True,
+        emoji="🌙",
     ),
     ## Pioneer (admin-only) - no longer used, kept for easy re-enabling.
     #: Uncomment these and the `.sn`/`.o` prefixes in llm_chat.py to bring it
@@ -152,6 +193,7 @@ MODEL_SPECS = [
         OPENAI_REASONING_LEVELS,
         codex_access=True,
         hidden=True,
+        emoji="🌍",
     ),
     ModelSpec(
         OPENAI_CODEX_GPT_5_6_LUNA,
@@ -159,6 +201,7 @@ MODEL_SPECS = [
         OPENAI_REASONING_LEVELS,
         codex_access=True,
         hidden=True,
+        emoji="🌕",
     ),
     ModelSpec(
         OPENAI_CODEX_GPT_5_5,
@@ -166,6 +209,7 @@ MODEL_SPECS = [
         OPENAI_LEGACY_REASONING_LEVELS,
         codex_access=True,
         hidden=True,
+        emoji="🌀",
     ),
 ]
 
@@ -208,6 +252,7 @@ def _synthesized_spec(model: str) -> ModelSpec:
             OPENAI_REASONING_LEVELS,
             codex_access=True,
             hidden=True,
+            emoji="🔷",
         )
     if pioneer_util.is_pioneer_model(model):
         return ModelSpec(
@@ -216,11 +261,14 @@ def _synthesized_spec(model: str) -> ModelSpec:
             PIONEER_REASONING_LEVELS,
             admin_only=True,
             hidden=True,
+            emoji="🧭",
         )
     if is_gemini_model_p(model):
-        return ModelSpec(model, model, GEMINI_REASONING_LEVELS, hidden=True)
+        return ModelSpec(model, model, GEMINI_REASONING_LEVELS, hidden=True, emoji="♊")
     if model.startswith("openrouter/"):
-        return ModelSpec(model, model, OPENROUTER_REASONING_LEVELS, hidden=True)
+        return ModelSpec(
+            model, model, OPENROUTER_REASONING_LEVELS, hidden=True, emoji="🔀"
+        )
     #: Unknown providers get no reasoning UI and no reasoning parameter.
     return ModelSpec(model, model, NO_REASONING_LEVELS, hidden=True)
 
@@ -233,6 +281,11 @@ def spec_for_model(model: Optional[str]) -> ModelSpec:
     if spec is not None:
         return spec
     return _synthesized_spec(model)
+
+
+def model_emoji(model: Optional[str]) -> str:
+    """The emoji that names MODEL in automatic topic titles."""
+    return spec_for_model(model).emoji
 
 
 def reasoning_levels_for_model(model: Optional[str]) -> Tuple[str, ...]:
