@@ -280,10 +280,11 @@ class RegisterTests(unittest.TestCase):
     def setUp(self):
         _plugin_handler.calls = []
         self.client = _Client()
+        self.claims = guest_util.QueryClaims()
         self.callback = guest_util.register_guest_handler(
             self.client,
             _plugin_handler,
-            claims=guest_util.QueryClaims(),
+            claims=self.claims,
             max_age_seconds=60,
             clock=lambda: NOW.timestamp() + 5,
         )
@@ -297,6 +298,22 @@ class RegisterTests(unittest.TestCase):
 
         self.assertEqual(len(_plugin_handler.calls), 1)
         self.assertEqual(_plugin_handler.calls[0].query_id, 5)
+
+    def test_bots_sharing_claims_each_get_their_query(self):
+        other = _Client()
+        other._self_id = BOT_ID + 1
+        other_callback = guest_util.register_guest_handler(
+            other,
+            _plugin_handler,
+            claims=self.claims,
+            max_age_seconds=60,
+            clock=lambda: NOW.timestamp() + 5,
+        )
+
+        self._deliver(_message())
+        asyncio.run(other_callback(_update(_message(), query_id=5)))
+
+        self.assertEqual(len(_plugin_handler.calls), 2)
 
     def test_stale_and_forwarded_triggers_are_dropped(self):
         self._deliver(_message(date=NOW - datetime.timedelta(minutes=5)), query_id=6)

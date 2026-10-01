@@ -623,7 +623,7 @@ def register_guest_handler(
                 "Ignoring guest query %s: trigger is %.0fs old", query.query_id, age
             )
             return
-        if not await claims.claim(f"q:{query.query_id}"):
+        if not await claims.claim(f"q:{client._self_id}:{query.query_id}"):
             log.info("Ignoring guest query %s: already claimed", query.query_id)
             return
 

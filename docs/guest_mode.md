@@ -31,7 +31,8 @@ is in [telegram_ai_apis.md](telegram_ai_apis.md), section 2.3.
    bound to a `GuestClient`, the caller, the chat kind and a thread key.
 3. The wrapper drops the query if its trigger is forwarded or sent via a bot,
    older than the handler's `max_age_seconds`, or already claimed (a
-   `QueryClaims` keyed by query id, in Redis when available).
+   `QueryClaims` keyed by the bot's id and the query id, in Redis when
+   available, so bots sharing a Redis never drop each other's queries).
 4. The bot's handler decides whether to answer, answers once with
    `tg_raw.answer_guest` (a placeholder before any slow work), then edits the
    answer through `tg_raw.InlineEditor` until it is final.
