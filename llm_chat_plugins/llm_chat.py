@@ -1503,6 +1503,16 @@ def _input_topic(event) -> Optional[InputTopic]:
     return InputTopic(chat_id=event.chat_id, topic_id=topic_id)
 
 
+def _topic_reply_target(event):
+    """EVENT's message when it sits in a private topic, else None.
+
+    Placement puts a send in a private topic only when it replies to a message
+    there (docs/private_topics.md, "Limits"); outside topics, a send given this
+    target stays as it was, with no reply.
+    """
+    return event.message if _input_topic(event) is not None else None
+
+
 def _thread_topic_id(event) -> Optional[int]:
     """The private topic whose thread context EVENT's message gets, or None.
 
@@ -10235,13 +10245,15 @@ async def as_file_handler(event):
                 chat_id=chat_id,
             )
 
+            #: Inside a private topic, the export answers there.
+            reply_to = _topic_reply_target(event)
             # Send as file with auto-generated title and description
             sent_file = await util.send_as_file_with_filename(
                 text=markdown_content,
                 parse_mode="md",
                 file_name_mode="llm",
                 message_obj=event,
-                reply_to=None,
+                reply_to=reply_to,
                 default_caption="",
             )
 
@@ -10250,7 +10262,10 @@ async def as_file_handler(event):
                 warning_text = f"{BOT_META_INFO_PREFIX}⚠️ Warnings:\n" + "\n".join(
                     f"• {warning}" for warning in history_result.warnings
                 )
-                await event.respond(warning_text, reply_to=sent_file)
+                await event.respond(
+                    warning_text,
+                    reply_to=sent_file if sent_file is not None else reply_to,
+                )
 
     except Exception as e:
         await llm_util.handle_llm_error(

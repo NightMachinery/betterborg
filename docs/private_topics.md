@@ -188,6 +188,11 @@ applies outside topics and adds the topic limit's quick picks. A button pressed 
 the menu's topic comes from the registry, or from loading the menu message
 once after a restart.
 
+`/asfile` (and `..`) inside a topic exports that topic's thread, and sends the
+file into the topic as a reply to the command, since placement needs a reply
+target. Its warnings reply to the file. Outside topics the file is sent with
+no reply, as before.
+
 ## Limits
 
 - **Sends without a reply stay in "All".** `event.respond(text)` and

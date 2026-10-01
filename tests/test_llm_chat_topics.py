@@ -878,6 +878,83 @@ class TwinFileContextTests(_BotChatCase):
         self.assertEqual(processed, [340, 341, 343])
 
 
+class _NoAction:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class AsFileTests(_BotChatCase):
+    """/asfile exports the topic's thread, and sends it into that topic."""
+
+    def setUp(self):
+        super().setUp()
+        self.see(*CONVERSATION)
+        self.sent_file = SimpleNamespace(id=900)
+        self.send = AsyncMock(side_effect=lambda **kwargs: self.sent_file)
+        self.error = AsyncMock()
+        self.warnings = []
+        self.exported = []
+
+        async def capture(event, messages, *args, **kwargs):
+            self.exported.extend(m.id for m in messages)
+            return [], list(self.warnings)
+
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        enter = stack.enter_context
+        enter(patch.object(plugin.util, "send_as_file_with_filename", self.send))
+        enter(patch.object(plugin.llm_util, "handle_llm_error", self.error))
+        enter(patch.object(plugin, "_process_turns_to_history", new=capture))
+        enter(
+            patch.object(
+                builtins,
+                "borg",
+                SimpleNamespace(action=lambda *args, **kwargs: _NoAction()),
+            )
+        )
+
+    def export(self, message):
+        self.see(message)
+        event = _Event(
+            message,
+            client=self.chat.client,
+            chat_id=USER_ID,
+            sender_id=USER_ID,
+            is_private=True,
+            chat=None,
+            grouped_id=None,
+            respond=AsyncMock(),
+        )
+        asyncio.run(plugin.as_file_handler(event))
+        self.error.assert_not_awaited()
+        return event
+
+    def test_in_a_topic_the_file_replies_to_the_command(self):
+        event = self.export(_said(337, "/asfile"))
+
+        self.assertIs(self.send.await_args.kwargs["reply_to"], event.message)
+        self.assertEqual(self.exported, THREAD_IDS + [337])
+
+    def test_outside_topics_the_file_is_sent_as_before(self):
+        self.prefs.context_mode = "last_N"
+        self.export(_said(337, "/asfile", top_id=None, parent=None))
+
+        self.assertIsNone(self.send.await_args.kwargs["reply_to"])
+        self.assertEqual(self.exported, sorted(m.id for m in CONVERSATION) + [337])
+
+    def test_warnings_follow_the_file_or_else_stay_in_the_topic(self):
+        self.warnings = ["a warning"]
+        event = self.export(_said(337, "/asfile"))
+        self.assertIs(event.respond.await_args.kwargs["reply_to"], self.sent_file)
+
+        self.sent_file = None
+        event = self.export(_said(338, ".."))
+        self.assertIs(event.respond.await_args.kwargs["reply_to"], event.message)
+
+
 class ThreadStatusTests(_BotChatCase):
     IN_TOPIC_STATUS = (
         "∙ **Current Mode:** `Topic Thread (Limit: 200)`\n"
