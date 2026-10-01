@@ -469,6 +469,11 @@ class ModelMenuCancelTests(_IsolatedStateTest):
 
         (cancel,) = press.edit.await_args.kwargs["buttons"][-1]
         self.assertEqual(tg_compat.button_data(cancel), b"mm:cancel:personal")
+        #: The toast goes first: Telethon's `edit` answers the press itself.
+        self.assertEqual(
+            [call[0] for call in press.order.mock_calls], ["answer", "edit"]
+        )
+        self.assertEqual(press.answer.await_args.args, ("Model set to Model B",))
 
 
 class GenericInputHandlerTests(_IsolatedStateTest):

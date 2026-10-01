@@ -9508,8 +9508,10 @@ async def callback_handler(event):
             admin_p=admin_p,
             codex_p=codex_p,
         )
-        await event.edit(buttons=_model_menu_rows(menu, scope=REASONING_SCOPE_PERSONAL))
+        #: Before the edit, which answers the press itself and would swallow
+        #: this toast.
         await event.answer(feedback)
+        await event.edit(buttons=_model_menu_rows(menu, scope=REASONING_SCOPE_PERSONAL))
 
     elif data_str.startswith("chatmodel_"):
         admin_p = await util.isAdmin(event)
@@ -9565,8 +9567,10 @@ async def callback_handler(event):
             admin_p=admin_p,
             codex_p=codex_p,
         )
-        await event.edit(buttons=_model_menu_rows(menu, scope=REASONING_SCOPE_CHAT))
+        #: Before the edit, which answers the press itself and would swallow
+        #: this toast.
         await event.answer(feedback_msg)
+        await event.edit(buttons=_model_menu_rows(menu, scope=REASONING_SCOPE_CHAT))
 
     elif data_str.startswith("thinkhere_") or data_str.startswith("think_"):
         scope = (
