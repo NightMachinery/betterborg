@@ -169,9 +169,8 @@ class GuestShellTests(unittest.TestCase):
         self.assertEqual(self.answers, ["⏳ Running…"])
         (final,) = self.edits
         self.assertEqual(final["text"], "hi there")
-        (pre,) = final["entities"]
-        self.assertIsInstance(pre, types.MessageEntityPre)
-        self.assertEqual((pre.offset, pre.length), (0, len("hi there")))
+        self.assertFalse(final.get("entities"))
+        self.assertIsNone(final.get("parse_mode"))
         self.assertEqual(self.uploads, [])
         self.assertEqual(list(Path(self.dl_base).iterdir()), [])
 
@@ -197,7 +196,7 @@ class GuestShellTests(unittest.TestCase):
         self.assertIsInstance(final["media"], types.InputMediaDocument)
         self.assertEqual(final["media"].id.id, 100)
         self.assertLessEqual(len(final["text"].encode("utf-16-le")) // 2, 1024)
-        self.assertIsInstance(final["entities"][0], types.MessageEntityPre)
+        self.assertFalse(final.get("entities"))
         self.assertTrue(final["text"].startswith("yyy"))
 
     def test_a_failed_attachment_falls_back_to_the_text_answer(self):

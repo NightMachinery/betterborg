@@ -162,9 +162,9 @@ dropped, never run late.
   not run unseen, or twice.
 - **Media**: the trigger's and the reference's files are downloaded into the
   command's working directory, as with `.a` on a reply.
-- **The answer** is the output in a `pre` block, cut to fit one message,
-  followed by the exit code when it is not 0. Empty output reads "The process
-  exited N.". An exception becomes the traceback.
+- **The answer** is the output as plain text, as `.a` sends it, cut to fit
+  one message and followed by the exit code when it is not 0. Empty output
+  reads "The process exited N.". An exception becomes the traceback.
 - **Files go to the caller's DM**, after a header message naming the command:
   the files the command left in its working directory, plus `output.txt` with
   the whole output when it was cut. The answer says how many were sent. They

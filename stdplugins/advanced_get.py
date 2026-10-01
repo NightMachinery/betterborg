@@ -118,16 +118,12 @@ async def _answer_note(query, text):
     await guest_util.answer_note(borg, query, text, title=GUEST_TITLE, logger=logger)
 
 
-def _pre_answer(output, *, footer_lines, limit=GUEST_TEXT_LIMIT):
-    """The answer text: `output` in a pre block, then the footer lines."""
+def _plain_answer(output, *, footer_lines, limit=GUEST_TEXT_LIMIT):
+    """The answer text: `output` as plain text, like `.a`, then the footer lines."""
     footer = "\n".join(footer_lines)
     budget = limit - (tg_format.utf16_len(footer) + 2 if footer else 0)
-    block = tg_format.truncate_utf16(output, budget)
-    text = f"{block}\n\n{footer}" if footer else block
-    entities = [
-        types.MessageEntityPre(offset=0, length=tg_format.utf16_len(block), language="")
-    ]
-    return text, entities
+    body = tg_format.truncate_utf16(output, budget)
+    return f"{body}\n\n{footer}" if footer else body
 
 
 async def _send_files_to_dm(caller_id, *, request, files):
@@ -171,10 +167,10 @@ async def _finalize_with_attachment(answer, dm_message, *, output, footer_lines)
     """
     try:
         media = utils.get_input_media(dm_message.media)
-        caption, entities = _pre_answer(
+        caption = _plain_answer(
             output, footer_lines=footer_lines, limit=GUEST_CAPTION_LIMIT
         )
-        await answer.finalize(text=caption, entities=entities, media=media)
+        await answer.finalize(text=caption, media=media)
         return True
     except Exception:
         logger.warning("Could not attach the file to the guest answer", exc_info=True)
@@ -224,8 +220,7 @@ async def _run_guest_shell(query, request, answer):
             answer, sent[0], output=output, footer_lines=footer_lines
         ):
             return
-        text, entities = _pre_answer(output, footer_lines=footer_lines)
-        await answer.finalize(text=text, entities=entities)
+        await answer.finalize(text=_plain_answer(output, footer_lines=footer_lines))
     finally:
         await util.remove_potential_file(cwd)
 
@@ -260,11 +255,12 @@ async def guest_shell(query):
         try:
             await _run_guest_shell(query, request, answer)
         except Exception:
-            text, entities = _pre_answer(
-                "Julia encountered an exception. :(\n" + traceback.format_exc(),
-                footer_lines=[],
+            await answer.finalize(
+                text=_plain_answer(
+                    "Julia encountered an exception. :(\n" + traceback.format_exc(),
+                    footer_lines=[],
+                )
             )
-            await answer.finalize(text=text, entities=entities)
 
 
 guest_util.register_guest_handler(
