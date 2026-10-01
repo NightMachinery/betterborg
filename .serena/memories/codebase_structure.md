@@ -3,7 +3,7 @@
 ## Entry Points
 - **`stdborg.py`**: Main entry point with standalone mode and FastAPI integration
 - **`start_server.py`**: Server mode startup script
-- **`inline.py`**: Additional inline functionality
+- **`inline.py`**: Deprecated Bot API inline bot (python-telegram-bot 13); guest mode in `stdplugins/advanced_get.py` replaces it
 
 ## Core Architecture
 

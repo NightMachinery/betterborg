@@ -2,13 +2,23 @@
 # -*- coding: utf-8 -*-
 
 """
-First, a few handler functions are defined. Then, those functions are passed to
-the Dispatcher and registered at their respective places.
-Then, the bot is started and runs until we press Ctrl-C on the command line.
-Usage:
-Basic inline bot example. Applies different text transformations.
-Press Ctrl-C on the command line or send a signal to the process to stop the
-bot.
+DEPRECATED: the Bot API inline bot, launched as `julia_inline`.
+
+Guest mode replaces it: `@<bot> .a CMD`, sent in any chat to the bot of the
+`stdplugins` instance, runs a shell command for an admin and answers in that
+chat (`stdplugins/advanced_get.py`, docs/guest_mode.md). Unlike this bot, the
+guest shell reads the replied-to message's media and needs no second token.
+
+Dropped with it:
+- the graylisted users' search tools (`.g`, `.d`, `.as`, `.ki`);
+- resending a file by its Bot API `file_id` (`.di ID [KIND] fin`);
+- `.x`, which restarted Brish and cleared the result cache;
+- JSON output (`tlg_title`, `tlg_img`, ...) shown as a picker of several
+  results; a guest answer is one message.
+
+It is written for python-telegram-bot 13 (`telegram.ParseMode`,
+`telegram.utils.helpers`, `Updater(use_context=True)`), so it no longer
+imports on 20.x.
 """
 import logging
 import os
