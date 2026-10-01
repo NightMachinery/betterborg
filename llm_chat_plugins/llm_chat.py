@@ -59,7 +59,7 @@ from telethon.tl.types import (
     UpdateMessageReactions,
 )
 from pydantic import BaseModel, Field
-from typing import Callable, Optional, List, Dict, Tuple
+from typing import Any, Callable, Optional, List, Dict, Tuple
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -10696,6 +10696,368 @@ def get_streaming_delay(model_name: str) -> float:
     return 0.8
 
 
+@dataclass
+class GenerationRequest:
+    """What `_generate_response` needs for one model call."""
+
+    event: Any
+    #: The placeholder that streaming edits.
+    response_message: Any
+    messages: list
+    model: str
+    model_capabilities: Dict[str, bool]
+    api_key: str
+    prefs: Any
+    #: The reasoning effort a message prefix asked for, if any.
+    prefix_effort: Optional[str]
+    image_generation: bool
+    #: Notes for the user; `_generate_response` appends to it.
+    warnings: list
+
+
+@dataclass(frozen=True)
+class GenerationResult:
+    text: str
+    finish_reason: Optional[str]
+    has_image: bool
+    #: The response message already shows the outcome (a Codex error or the
+    #: quota panel), so the caller must not deliver anything else.
+    delivered: bool = False
+
+
+_ALREADY_DELIVERED = GenerationResult(
+    text="", finish_reason=None, has_image=False, delivered=True
+)
+
+
+async def _generate_response(req: GenerationRequest) -> GenerationResult:
+    """Calls the model, streaming into `req.response_message`.
+
+    Builds the API arguments (context caching, reasoning effort, JSON mode,
+    tools), then dispatches to the backend: native Gemini image generation,
+    Pioneer, Codex, or litellm. The final delivery is the caller's.
+    """
+    event = req.event
+    response_message = req.response_message
+    messages = req.messages
+    warnings = req.warnings
+    model_in_use = req.model
+    model_capabilities = req.model_capabilities
+    api_key = req.api_key
+    prefs = req.prefs
+    user_id = event.sender_id
+    chat_id = event.chat_id
+
+    # --- Context Caching for Native Gemini Models ---
+    # Free-tier keys have a per-model cached-content storage limit of 0; once we've seen
+    # that 429 for this (key, model) we skip caching pre-emptively to avoid recurring errors.
+    caching_applied_p = False
+    if is_native_gemini(model_in_use):
+        if await history_util.is_gemini_caching_disabled(api_key, model_in_use):
+            _strip_cache_control(messages)
+        else:
+            _apply_cache_control(messages)
+            caching_applied_p = True
+
+    # --- Construct API call arguments ---
+    is_gemini_model_p = is_gemini_model(model_in_use)
+    is_codex_model_p = codex_util.is_codex_model(model_in_use)
+    is_pioneer_model_p = is_pioneer_model(model_in_use)
+
+    # Image generation models don't support streaming
+    # Note: Native Gemini image generation has separate handling with its own streaming
+    use_streaming = not model_capabilities.get("image_generation", False)
+
+    api_kwargs = {
+        "model": model_in_use,
+        "messages": messages,
+        "api_key": api_key,
+        "stream": use_streaming,
+    }
+
+    #: Reasoning effort is per-model: prefix > this chat > personal > default.
+    reasoning = _get_effective_reasoning(
+        chat_id,
+        user_id,
+        model=model_in_use,
+        prefix_effort=req.prefix_effort,
+    )
+    if reasoning.level:
+        api_kwargs["reasoning_effort"] = reasoning.level
+
+    if prefs.json_mode and not is_codex_model_p:
+        api_kwargs["response_format"] = {"type": "json_object"}
+        if prefs.enabled_tools:
+            warnings.append("Tools are disabled (not supported in JSON mode).")
+    elif prefs.json_mode and is_codex_model_p:
+        warnings.append("JSON mode is disabled for Codex models.")
+
+    if is_gemini_model_p:
+        api_kwargs["safety_settings"] = SAFETY_SETTINGS
+        # Route native Gemini (Google API) traffic through the special proxy.
+        # OpenRouter google/* models are excluded as they don't hit Google endpoints.
+        if is_native_gemini(model_in_use):
+            proxy_client = llm_util.create_litellm_proxy_client(event.sender_id)
+            if proxy_client is not None:
+                api_kwargs["client"] = proxy_client
+        # Upstream Gemini Limitation: Only enable tools if JSON mode is OFF.
+        if prefs.enabled_tools and not prefs.json_mode:
+            tools_to_use = list(prefs.enabled_tools)
+
+            # Fix for gemini/gemini-2.0-flash: cannot have both googleSearch and urlContext
+            if (
+                "gemini-2.0-flash" in model_in_use
+                and "googleSearch" in tools_to_use
+                and "urlContext" in tools_to_use
+            ):
+                tools_to_use.remove("urlContext")
+                # print("Disabled url_context due to conflict with google_search for gemini/gemini-2.0-flash")
+            if (
+                model_in_use in [GEMINI_FLASH_3, GEMINI_FLASH_LATEST]
+                and "googleSearch" in tools_to_use
+            ):
+                #: Gemini 3 models have no free Search Grounding tool call quota.
+                #:
+                #: Avoid tool quota 429s for this model.
+                tools_to_use.remove("googleSearch")
+
+            api_kwargs["tools"] = [{t: {}} for t in tools_to_use]
+            # ic(api_kwargs["tools"])
+
+        # Add modalities for image generation models
+        if model_capabilities.get("image_generation", False):
+            api_kwargs["modalities"] = ["image", "text"]
+    elif is_pioneer_model_p:
+        pioneer_tools = pioneer_tools_from_enabled(prefs.enabled_tools)
+        if pioneer_tools:
+            api_kwargs["tools"] = pioneer_tools
+        unsupported_pioneer_tools = set(prefs.enabled_tools) - {"googleSearch"}
+        if unsupported_pioneer_tools and WARN_UNAVAILABLE_TOOLS_P:
+            warnings.append("Only Google Search is supported for Pioneer models.")
+    elif is_codex_model_p:
+        codex_tools = _codex_tools_for_request(
+            prefs.enabled_tools,
+            image_generation=req.image_generation,
+        )
+        if codex_tools:
+            api_kwargs["tools"] = codex_tools
+    else:
+        # Add warnings if user has Gemini-specific settings enabled
+        if prefs.enabled_tools and WARN_UNAVAILABLE_TOOLS_P:
+            warnings.append("Tools are disabled (Gemini-only feature).")
+
+    # Make the API call
+    response_text = ""
+    has_image = False
+
+    # Check if this is a native Gemini image generation model
+    if is_native_gemini_image_generation(model_in_use):
+        # Use native Gemini API for image generation with streaming
+        response_text, has_image = await _handle_native_gemini_image_generation(
+            event,
+            messages,
+            api_key,
+            model_in_use,
+            response_message,
+            model_capabilities,
+        )
+        finish_reason = (
+            None  # Native Gemini image generation doesn't provide finish_reason
+        )
+    elif is_pioneer_model_p:
+        edit_interval = get_streaming_delay(model_in_use)
+        pioneer_task = asyncio.create_task(
+            pioneer_util.stream_pioneer_response(
+                event=event,
+                response_message=response_message,
+                model=model_in_use,
+                messages=messages,
+                api_key=api_key,
+                reasoning_effort=api_kwargs.get("reasoning_effort"),
+                tools=api_kwargs.get("tools"),
+                edit_interval=edit_interval,
+            )
+        )
+        add_active_llm_task(user_id, pioneer_task)
+        try:
+            pioneer_response = await pioneer_task
+            response_text = pioneer_response.text
+            finish_reason = pioneer_response.finish_reason
+            has_image = False
+        except asyncio.CancelledError:
+            await util.edit_message(
+                response_message,
+                f"{BOT_META_INFO_PREFIX}❌ Request was canceled.",
+                append_p=True,
+                parse_mode="md",
+            )
+            raise
+        finally:
+            remove_active_llm_task(user_id, pioneer_task)
+    elif is_codex_model_p:
+        edit_interval = get_streaming_delay(model_in_use)
+        delivered_image_count = 0
+        image_sequence = 0
+
+        async def deliver_codex_image(image):
+            nonlocal delivered_image_count, image_sequence
+            image_sequence += 1
+            if image.is_preview:
+                caption = f"Codex preview {image.preview_index + 1}"
+                filename_base = "codex_preview"
+            else:
+                caption = "Codex generated image"
+                filename_base = "codex_generated_image"
+            sent = await _send_image_to_telegram(
+                event,
+                image.data,
+                filename_base=filename_base,
+                file_extension=image.file_extension,
+                file_index=image_sequence,
+                caption=caption,
+            )
+            if not sent:
+                raise RuntimeError("Telegram could not deliver a generated image.")
+            delivered_image_count += 1
+
+        async def _run_codex(model, *, reasoning_effort):
+            """One Codex attempt, tracked so /stop can still cancel it."""
+            codex_task = asyncio.create_task(
+                codex_util.stream_codex_response(
+                    event=event,
+                    response_message=response_message,
+                    model=model,
+                    messages=messages,
+                    reasoning_effort=reasoning_effort,
+                    tools=api_kwargs.get("tools"),
+                    edit_interval=edit_interval,
+                    prompt_cache_key=codex_util.codex_prompt_cache_key(
+                        model=model, chat_id=chat_id, user_id=user_id
+                    ),
+                    image_callback=(
+                        deliver_codex_image if req.image_generation else None
+                    ),
+                )
+            )
+            add_active_llm_task(user_id, codex_task)
+            try:
+                return await codex_task
+            finally:
+                remove_active_llm_task(user_id, codex_task)
+
+        try:
+            #: Deliberately no automatic retry on the Reserve. It cost a
+            #: doomed request and a message edit on *every* message while
+            #: the allowance was spent, and it moved the account to another
+            #: meter without being asked. The panel offers it as a button
+            #: instead; one tap answers this message and changes nothing.
+            codex_response = await _run_codex(
+                model_in_use,
+                reasoning_effort=api_kwargs.get("reasoning_effort"),
+            )
+            response_text = codex_response.text
+            finish_reason = codex_response.finish_reason
+            has_image = codex_response.has_image
+        except codex_util.CodexStreamError as e:
+            partial = e.response.text.strip()
+            if e.usage_limit is not None:
+                panel = _codex_quota_panel(
+                    user_id,
+                    e.usage_limit,
+                    chat_id=chat_id,
+                    usage=await codex_util.fetch_codex_usage(),
+                    fallback=user_manager.get_codex_quota_fallback(user_id),
+                    #: Only when there is something the Reserve could still
+                    #: answer: a request already aimed at it has nowhere
+                    #: left to go.
+                    source_message_id=(
+                        None
+                        if codex_util.is_luna_reserve_model(model_in_use)
+                        else event.id
+                    ),
+                    buttons_p=IS_BOT,
+                )
+                if partial:
+                    #: edit_message chunks a partial answer that a direct
+                    #: Telethon edit would reject as too long, so keep it
+                    #: where it is and put the panel in its own message.
+                    await util.edit_message(
+                        response_message,
+                        f"{partial}\n\n{BOT_META_INFO_LINE}\n"
+                        f"{BOT_META_INFO_PREFIX}❌ Codex usage limit reached.",
+                        parse_mode="md",
+                    )
+                    await _show_codex_quota_panel(event, panel)
+                else:
+                    await _show_codex_quota_panel(
+                        event, panel, message=response_message
+                    )
+                return _ALREADY_DELIVERED
+            #: Fenced so JSON braces and backticks cannot break markdown.
+            error_text = (
+                f"{BOT_META_INFO_PREFIX}❌ Codex request failed.\n```\n{e}\n```"
+            )
+            if partial:
+                error_text = f"{partial}\n\n{BOT_META_INFO_LINE}\n{error_text}"
+            await util.edit_message(
+                response_message,
+                error_text,
+                parse_mode="md",
+            )
+            return _ALREADY_DELIVERED
+        except asyncio.CancelledError:
+            kept = (
+                " Already-delivered images have been kept."
+                if delivered_image_count
+                else ""
+            )
+            await util.edit_message(
+                response_message,
+                f"{BOT_META_INFO_PREFIX}❌ Request was canceled.{kept}",
+                append_p=True,
+                parse_mode="md",
+            )
+            raise
+    else:
+        edit_interval = get_streaming_delay(model_in_use) if use_streaming else None
+
+        async def _run_llm_call():
+            return await _retry_on_no_response_with_reasons(
+                user_id,
+                event,
+                response_message,
+                api_kwargs,
+                edit_interval,
+                model_capabilities,
+                streaming_p=use_streaming,
+            )
+
+        try:
+            llm_response = await _run_llm_call()
+        except llm_util.RateLimitException as e:
+            # Free-tier cached-content storage limit: caching can't work for this
+            # (key, model), but the request itself can. Disable caching for it and
+            # silently retry once without cache_control so the user still gets a reply.
+            if not (caching_applied_p and is_cache_storage_quota_error(e)):
+                raise
+            print(
+                f"Gemini cache storage quota hit for model {model_in_use}; "
+                "disabling context caching for this key/model and retrying."
+            )
+            await history_util.disable_gemini_caching(api_key, model_in_use)
+            _strip_cache_control(messages)
+            caching_applied_p = False
+            llm_response = await _run_llm_call()
+
+        response_text = llm_response.text
+        finish_reason = llm_response.finish_reason
+        has_image = getattr(llm_response, "has_image", False)
+
+    return GenerationResult(
+        text=response_text, finish_reason=finish_reason, has_image=has_image
+    )
+
+
 async def chat_handler(event, *, forced_model: Optional[str] = None):
     """Main handler for all non-command messages in a private chat.
 
@@ -10886,312 +11248,23 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
             await util.edit_message(response_message, error_message, parse_mode="md")
             return
 
-        # --- Context Caching for Native Gemini Models ---
-        # Free-tier keys have a per-model cached-content storage limit of 0; once we've seen
-        # that 429 for this (key, model) we skip caching pre-emptively to avoid recurring errors.
-        caching_applied_p = False
-        if is_native_gemini(model_in_use):
-            if await history_util.is_gemini_caching_disabled(api_key, model_in_use):
-                _strip_cache_control(messages)
-            else:
-                _apply_cache_control(messages)
-                caching_applied_p = True
-
-        # --- Construct API call arguments ---
-        is_gemini_model_p = is_gemini_model(model_in_use)
-        is_codex_model_p = codex_util.is_codex_model(model_in_use)
-        is_pioneer_model_p = is_pioneer_model(model_in_use)
-
-        # Image generation models don't support streaming
-        # Note: Native Gemini image generation has separate handling with its own streaming
-        use_streaming = not model_capabilities.get("image_generation", False)
-
-        api_kwargs = {
-            "model": model_in_use,
-            "messages": messages,
-            "api_key": api_key,
-            "stream": use_streaming,
-        }
-
-        #: Reasoning effort is per-model: prefix > this chat > personal > default.
-        reasoning = _get_effective_reasoning(
-            chat_id,
-            user_id,
-            model=model_in_use,
-            prefix_effort=prefix_result.reasoning_effort,
-        )
-        if reasoning.level:
-            api_kwargs["reasoning_effort"] = reasoning.level
-
-        if prefs.json_mode and not is_codex_model_p:
-            api_kwargs["response_format"] = {"type": "json_object"}
-            if prefs.enabled_tools:
-                warnings.append("Tools are disabled (not supported in JSON mode).")
-        elif prefs.json_mode and is_codex_model_p:
-            warnings.append("JSON mode is disabled for Codex models.")
-
-        if is_gemini_model_p:
-            api_kwargs["safety_settings"] = SAFETY_SETTINGS
-            # Route native Gemini (Google API) traffic through the special proxy.
-            # OpenRouter google/* models are excluded as they don't hit Google endpoints.
-            if is_native_gemini(model_in_use):
-                proxy_client = llm_util.create_litellm_proxy_client(event.sender_id)
-                if proxy_client is not None:
-                    api_kwargs["client"] = proxy_client
-            # Upstream Gemini Limitation: Only enable tools if JSON mode is OFF.
-            if prefs.enabled_tools and not prefs.json_mode:
-                tools_to_use = list(prefs.enabled_tools)
-
-                # Fix for gemini/gemini-2.0-flash: cannot have both googleSearch and urlContext
-                if (
-                    "gemini-2.0-flash" in model_in_use
-                    and "googleSearch" in tools_to_use
-                    and "urlContext" in tools_to_use
-                ):
-                    tools_to_use.remove("urlContext")
-                    # print("Disabled url_context due to conflict with google_search for gemini/gemini-2.0-flash")
-                if (
-                    model_in_use in [GEMINI_FLASH_3, GEMINI_FLASH_LATEST]
-                    and "googleSearch" in tools_to_use
-                ):
-                    #: Gemini 3 models have no free Search Grounding tool call quota.
-                    #:
-                    #: Avoid tool quota 429s for this model.
-                    tools_to_use.remove("googleSearch")
-
-                api_kwargs["tools"] = [{t: {}} for t in tools_to_use]
-                # ic(api_kwargs["tools"])
-
-            # Add modalities for image generation models
-            if model_capabilities.get("image_generation", False):
-                api_kwargs["modalities"] = ["image", "text"]
-        elif is_pioneer_model_p:
-            pioneer_tools = pioneer_tools_from_enabled(prefs.enabled_tools)
-            if pioneer_tools:
-                api_kwargs["tools"] = pioneer_tools
-            unsupported_pioneer_tools = set(prefs.enabled_tools) - {"googleSearch"}
-            if unsupported_pioneer_tools and WARN_UNAVAILABLE_TOOLS_P:
-                warnings.append("Only Google Search is supported for Pioneer models.")
-        elif is_codex_model_p:
-            codex_tools = _codex_tools_for_request(
-                prefs.enabled_tools,
+        generation = await _generate_response(
+            GenerationRequest(
+                event=event,
+                response_message=response_message,
+                messages=messages,
+                model=model_in_use,
+                model_capabilities=model_capabilities,
+                api_key=api_key,
+                prefs=prefs,
+                prefix_effort=prefix_result.reasoning_effort,
                 image_generation=prefix_result.image_generation,
+                warnings=warnings,
             )
-            if codex_tools:
-                api_kwargs["tools"] = codex_tools
-        else:
-            # Add warnings if user has Gemini-specific settings enabled
-            if prefs.enabled_tools and WARN_UNAVAILABLE_TOOLS_P:
-                warnings.append("Tools are disabled (Gemini-only feature).")
-
-        # Make the API call
-        response_text = ""
-        has_image = False
-
-        # Check if this is a native Gemini image generation model
-        if is_native_gemini_image_generation(model_in_use):
-            # Use native Gemini API for image generation with streaming
-            response_text, has_image = await _handle_native_gemini_image_generation(
-                event,
-                messages,
-                api_key,
-                model_in_use,
-                response_message,
-                model_capabilities,
-            )
-            finish_reason = (
-                None  # Native Gemini image generation doesn't provide finish_reason
-            )
-        elif is_pioneer_model_p:
-            edit_interval = get_streaming_delay(model_in_use)
-            pioneer_task = asyncio.create_task(
-                pioneer_util.stream_pioneer_response(
-                    event=event,
-                    response_message=response_message,
-                    model=model_in_use,
-                    messages=messages,
-                    api_key=api_key,
-                    reasoning_effort=api_kwargs.get("reasoning_effort"),
-                    tools=api_kwargs.get("tools"),
-                    edit_interval=edit_interval,
-                )
-            )
-            add_active_llm_task(user_id, pioneer_task)
-            try:
-                pioneer_response = await pioneer_task
-                response_text = pioneer_response.text
-                finish_reason = pioneer_response.finish_reason
-                has_image = False
-            except asyncio.CancelledError:
-                await util.edit_message(
-                    response_message,
-                    f"{BOT_META_INFO_PREFIX}❌ Request was canceled.",
-                    append_p=True,
-                    parse_mode="md",
-                )
-                raise
-            finally:
-                remove_active_llm_task(user_id, pioneer_task)
-        elif is_codex_model_p:
-            edit_interval = get_streaming_delay(model_in_use)
-            delivered_image_count = 0
-            image_sequence = 0
-
-            async def deliver_codex_image(image):
-                nonlocal delivered_image_count, image_sequence
-                image_sequence += 1
-                if image.is_preview:
-                    caption = f"Codex preview {image.preview_index + 1}"
-                    filename_base = "codex_preview"
-                else:
-                    caption = "Codex generated image"
-                    filename_base = "codex_generated_image"
-                sent = await _send_image_to_telegram(
-                    event,
-                    image.data,
-                    filename_base=filename_base,
-                    file_extension=image.file_extension,
-                    file_index=image_sequence,
-                    caption=caption,
-                )
-                if not sent:
-                    raise RuntimeError("Telegram could not deliver a generated image.")
-                delivered_image_count += 1
-
-            async def _run_codex(model, *, reasoning_effort):
-                """One Codex attempt, tracked so /stop can still cancel it."""
-                codex_task = asyncio.create_task(
-                    codex_util.stream_codex_response(
-                        event=event,
-                        response_message=response_message,
-                        model=model,
-                        messages=messages,
-                        reasoning_effort=reasoning_effort,
-                        tools=api_kwargs.get("tools"),
-                        edit_interval=edit_interval,
-                        prompt_cache_key=codex_util.codex_prompt_cache_key(
-                            model=model, chat_id=chat_id, user_id=user_id
-                        ),
-                        image_callback=(
-                            deliver_codex_image
-                            if prefix_result.image_generation
-                            else None
-                        ),
-                    )
-                )
-                add_active_llm_task(user_id, codex_task)
-                try:
-                    return await codex_task
-                finally:
-                    remove_active_llm_task(user_id, codex_task)
-
-            try:
-                #: Deliberately no automatic retry on the Reserve. It cost a
-                #: doomed request and a message edit on *every* message while
-                #: the allowance was spent, and it moved the account to another
-                #: meter without being asked. The panel offers it as a button
-                #: instead; one tap answers this message and changes nothing.
-                codex_response = await _run_codex(
-                    model_in_use,
-                    reasoning_effort=api_kwargs.get("reasoning_effort"),
-                )
-                response_text = codex_response.text
-                finish_reason = codex_response.finish_reason
-                has_image = codex_response.has_image
-            except codex_util.CodexStreamError as e:
-                partial = e.response.text.strip()
-                if e.usage_limit is not None:
-                    panel = _codex_quota_panel(
-                        user_id,
-                        e.usage_limit,
-                        chat_id=chat_id,
-                        usage=await codex_util.fetch_codex_usage(),
-                        fallback=user_manager.get_codex_quota_fallback(user_id),
-                        #: Only when there is something the Reserve could still
-                        #: answer: a request already aimed at it has nowhere
-                        #: left to go.
-                        source_message_id=(
-                            None
-                            if codex_util.is_luna_reserve_model(model_in_use)
-                            else event.id
-                        ),
-                        buttons_p=IS_BOT,
-                    )
-                    if partial:
-                        #: edit_message chunks a partial answer that a direct
-                        #: Telethon edit would reject as too long, so keep it
-                        #: where it is and put the panel in its own message.
-                        await util.edit_message(
-                            response_message,
-                            f"{partial}\n\n{BOT_META_INFO_LINE}\n"
-                            f"{BOT_META_INFO_PREFIX}❌ Codex usage limit reached.",
-                            parse_mode="md",
-                        )
-                        await _show_codex_quota_panel(event, panel)
-                    else:
-                        await _show_codex_quota_panel(
-                            event, panel, message=response_message
-                        )
-                    return
-                #: Fenced so JSON braces and backticks cannot break markdown.
-                error_text = (
-                    f"{BOT_META_INFO_PREFIX}❌ Codex request failed.\n```\n{e}\n```"
-                )
-                if partial:
-                    error_text = f"{partial}\n\n{BOT_META_INFO_LINE}\n{error_text}"
-                await util.edit_message(
-                    response_message,
-                    error_text,
-                    parse_mode="md",
-                )
-                return
-            except asyncio.CancelledError:
-                kept = (
-                    " Already-delivered images have been kept."
-                    if delivered_image_count
-                    else ""
-                )
-                await util.edit_message(
-                    response_message,
-                    f"{BOT_META_INFO_PREFIX}❌ Request was canceled.{kept}",
-                    append_p=True,
-                    parse_mode="md",
-                )
-                raise
-        else:
-            edit_interval = get_streaming_delay(model_in_use) if use_streaming else None
-
-            async def _run_llm_call():
-                return await _retry_on_no_response_with_reasons(
-                    user_id,
-                    event,
-                    response_message,
-                    api_kwargs,
-                    edit_interval,
-                    model_capabilities,
-                    streaming_p=use_streaming,
-                )
-
-            try:
-                llm_response = await _run_llm_call()
-            except llm_util.RateLimitException as e:
-                # Free-tier cached-content storage limit: caching can't work for this
-                # (key, model), but the request itself can. Disable caching for it and
-                # silently retry once without cache_control so the user still gets a reply.
-                if not (caching_applied_p and is_cache_storage_quota_error(e)):
-                    raise
-                print(
-                    f"Gemini cache storage quota hit for model {model_in_use}; "
-                    "disabling context caching for this key/model and retrying."
-                )
-                await history_util.disable_gemini_caching(api_key, model_in_use)
-                _strip_cache_control(messages)
-                caching_applied_p = False
-                llm_response = await _run_llm_call()
-
-            response_text = llm_response.text
-            finish_reason = llm_response.finish_reason
-            has_image = getattr(llm_response, "has_image", False)
+        )
+        if generation.delivered:
+            return
+        response_text = generation.text
 
         # Final text processing (now handles both success and failure cases)
         final_text = response_text.strip()
