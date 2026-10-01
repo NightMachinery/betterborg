@@ -19,7 +19,6 @@ from uniborg.constants import (
     GEMINI_FLASH_LITE_LATEST,
     GEMINI_PRO_LATEST,
     OPENAI_CODEX_ASTRA,
-    OPENAI_CODEX_GPT_5_5,
     OPENAI_CODEX_LUNA,
     OPENAI_CODEX_SOL,
     OPENAI_CODEX_LUNA_RESERVE,
@@ -38,8 +37,6 @@ GEMINI_REASONING_LEVELS = ("disable", "low", "medium", "high")
 OPENAI_REASONING_LEVELS = ("none", "low", "medium", "high", "xhigh", "max")
 #: GPT-6 Astra and GPT-6.1 Sol reject `none` (probed live, 2026-10-01).
 OPENAI_NO_NONE_REASONING_LEVELS = ("low", "medium", "high", "xhigh", "max")
-#: GPT-5.5 predates `max`.
-OPENAI_LEGACY_REASONING_LEVELS = ("none", "low", "medium", "high", "xhigh")
 OPENROUTER_REASONING_LEVELS = ("low", "medium", "high")
 #: Pioneer's OpenAI-compatible Responses endpoint. Not probed directly; these
 #: match what Pioneer's own model list advertises for its Claude models.
@@ -194,26 +191,20 @@ MODEL_SPECS = [
         hidden=True,
         emoji="🌕",
     ),
-    ModelSpec(
-        OPENAI_CODEX_GPT_5_5,
-        "GPT-5.5 (Codex)",
-        OPENAI_LEGACY_REASONING_LEVELS,
-        codex_access=True,
-        hidden=True,
-        emoji="🌀",
-    ),
 ]
 
 MODEL_SPECS_BY_ID: Dict[str, ModelSpec] = {spec.id: spec for spec in MODEL_SPECS}
 
 #: Ids that were once registered, and the model that replaced each. Settings
 #: saved with an old id load as its replacement (`current_model_id`). There is
-#: no GPT-6 Terra, so Terra moves to Sol, the model above it.
+#: no GPT-6 Terra, so Terra moves to Sol, the model above it. GPT-5.5 retires
+#: on 2026-10-14, and Codex names GPT-6.1 Sol its successor.
 RETIRED_MODELS: Dict[str, str] = {
     "openrouter/openai/gpt-5.6-sol": OR_OPENAI_SOL,
     "openai-codex/gpt-5.6-sol": OPENAI_CODEX_SOL,
     "openai-codex/gpt-5.6-terra": OPENAI_CODEX_SOL,
     "openai-codex/gpt-5.6-luna": OPENAI_CODEX_LUNA,
+    "openai-codex/gpt-5.5": OPENAI_CODEX_SOL,
 }
 
 

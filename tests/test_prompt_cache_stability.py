@@ -9,7 +9,7 @@ from uniborg import codex_util, tg_compat
 from uniborg.constants import (
     GEMINI_FLASH_LATEST,
     GEMINI_FLASH_LITE_LATEST,
-    OPENAI_CODEX_GPT_5_5,
+    OPENAI_CODEX_SOL,
 )
 
 
@@ -187,10 +187,10 @@ class ModelPrefixAfterMentionTests(unittest.TestCase):
 class CodexPromptCacheHintTests(unittest.TestCase):
     def test_codex_prompt_cache_key_is_stable_and_non_raw_id(self):
         key1 = codex_util.codex_prompt_cache_key(
-            model=OPENAI_CODEX_GPT_5_5, chat_id=123, user_id=456
+            model=OPENAI_CODEX_SOL, chat_id=123, user_id=456
         )
         key2 = codex_util.codex_prompt_cache_key(
-            model=OPENAI_CODEX_GPT_5_5, chat_id=123, user_id=456
+            model=OPENAI_CODEX_SOL, chat_id=123, user_id=456
         )
 
         self.assertEqual(key1, key2)
@@ -200,7 +200,7 @@ class CodexPromptCacheHintTests(unittest.TestCase):
 
     def test_codex_response_kwargs_include_supported_cache_hint(self):
         kwargs = codex_util.prepare_codex_response_kwargs(
-            model=OPENAI_CODEX_GPT_5_5,
+            model=OPENAI_CODEX_SOL,
             instructions="stable",
             input_messages=[{"role": "user", "content": "hello"}],
             prompt_cache_key="bb-codex-test",
@@ -212,13 +212,13 @@ class CodexPromptCacheHintTests(unittest.TestCase):
 
     def test_codex_prompt_cache_key_is_chat_scoped_not_user_scoped(self):
         key1 = codex_util.codex_prompt_cache_key(
-            model=OPENAI_CODEX_GPT_5_5, chat_id=123, user_id=456
+            model=OPENAI_CODEX_SOL, chat_id=123, user_id=456
         )
         key2 = codex_util.codex_prompt_cache_key(
-            model=OPENAI_CODEX_GPT_5_5, chat_id=123, user_id=789
+            model=OPENAI_CODEX_SOL, chat_id=123, user_id=789
         )
         key3 = codex_util.codex_prompt_cache_key(
-            model=OPENAI_CODEX_GPT_5_5, chat_id=999, user_id=456
+            model=OPENAI_CODEX_SOL, chat_id=999, user_id=456
         )
 
         self.assertEqual(key1, key2)

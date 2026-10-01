@@ -59,7 +59,6 @@ distinct.
 - ✨ GPT-6 Astra (Codex)
 - 🌙 Luna Reserve (Codex)
 - 🌕 GPT-6 Luna (Codex)
-- 🌀 GPT-5.5 (Codex)
 - 🐋 DeepSeek Chat
 - 🐳 DeepSeek Reasoner
 - 🌬️ Mistral Medium

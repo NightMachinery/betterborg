@@ -21,7 +21,6 @@ OR_OPENAI_SOL = "openrouter/openai/gpt-6.1-sol"
 OR_OPENAI_LATEST = OR_OPENAI_SOL
 
 #: Codex models are reached through the ChatGPT OAuth backend, not the public API.
-OPENAI_CODEX_GPT_5_5 = "openai-codex/gpt-5.5"
 OPENAI_CODEX_SOL = "openai-codex/gpt-6.1-sol"
 OPENAI_CODEX_LUNA = "openai-codex/gpt-6-luna"
 OPENAI_CODEX_ASTRA = "openai-codex/gpt-6-astra"

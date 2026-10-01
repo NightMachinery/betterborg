@@ -215,7 +215,8 @@ by contrast, has router aliases such as `~openai/gpt-sol-latest` and
 `~openai/gpt-luna-latest`.
 
 The bot registers `gpt-6.1-sol` (in the pickers), `gpt-6-astra`, the Reserve,
-and, hidden, `gpt-6-luna` and `gpt-5.5`. GPT-6 Astra answers live requests
+and, hidden, `gpt-6-luna`. GPT-5.5 was dropped on 2026-10-01, ahead of its
+retirement. GPT-6 Astra answers live requests
 (guest answers on eva, 2026-10-01).
 
 ### Upgrades
@@ -229,7 +230,8 @@ with the replacement and are saved that way on their next write
 (`_SavedSettings` in `llm_chat.py`). On 2026-10-01: GPT-5.6 Sol moved to
 GPT-6.1 Sol, GPT-5.6 Luna to GPT-6 Luna, and GPT-5.6 Terra, which has no
 GPT-6 successor, to GPT-6.1 Sol. A saved effort the new model lacks (`none`
-on Sol) is skipped, so the next layer's effort applies.
+on Sol) is skipped, so the next layer's effort applies. GPT-5.5, dropped on
+2026-10-01, moved to GPT-6.1 Sol, the successor its `upgrade` field names.
 
 ## Reasoning effort
 
@@ -239,7 +241,7 @@ The Responses API accepts `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
 and `max`, but not every model takes every level. Probed live on 2026-10-01:
 GPT-6.1 Sol rejects `none` ("Supported values are: 'low', 'medium', 'high',
 'xhigh', and 'max'"), as GPT-6 Astra does; GPT-6 Luna takes `none` through
-`max`. GPT-5.5 has no `max`. No menu offers `minimal`.
+`max`. No menu offers `minimal`.
 
 The `ultra` level advertised by the Codex CLI model list is a Codex-app
 subagent mode, not an API value. Sending it returns an "Invalid value" error,
