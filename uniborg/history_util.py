@@ -5,7 +5,6 @@
 from pynight.common_icecream import ic
 import os
 import json
-import hashlib
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from telethon import events
@@ -1129,7 +1128,7 @@ async def get_cached_gemini_file_info(file_id: str, user_id: int) -> Optional[di
 
 def _gemini_api_key_hash(api_key: str) -> str:
     """Short, stable hash of an API key for use in cache-state Redis keys (never the raw key)."""
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:32]
+    return redis_util.api_key_hash(api_key)
 
 
 async def is_gemini_caching_disabled(api_key: str, model: str) -> bool:

@@ -15,6 +15,7 @@ from uniborg.constants import (
     GEMINI_STT_ROTATE_KEYS_P,
     ADMIN_ONLY_COMMAND_IGNORED,
     STT_MODELS,
+    STT_MODEL_UNAVAILABLE_SECONDS,
     STT_RETRIES_PER_MODEL,
     STT_RETRY_SLEEP,
     STT_RETRY_MAX_DELAY,
@@ -185,6 +186,41 @@ def _is_retriable_stt_error(exception) -> bool:
     return any(marker in text for marker in retriable_markers)
 
 
+def _is_model_unavailable_error(exception) -> bool:
+    """Whether the API refused the model itself for this key.
+
+    Google answers 404 "This model models/gemini-2.5-flash is no longer
+    available to new users" once a model is closed to new keys. Retrying the
+    model cannot help, but the next one may work.
+    """
+    text = str(exception).lower()
+    return "no longer available" in text or "is not found for api version" in text
+
+
+async def _model_unavailable_p(api_key: str, model_name: str) -> bool:
+    key = redis_util.model_unavailable_key(redis_util.api_key_hash(api_key), model_name)
+    return await redis_util.get_and_renew(key, renew=False) is not None
+
+
+async def _mark_model_unavailable(api_key: str, model_name: str) -> None:
+    key = redis_util.model_unavailable_key(redis_util.api_key_hash(api_key), model_name)
+    await redis_util.set_with_expiry(
+        key, "1", expire_seconds=STT_MODEL_UNAVAILABLE_SECONDS
+    )
+
+
+async def _show_stt_status(status_message, text: str) -> None:
+    try:
+        await util.edit_message(
+            status_message,
+            text,
+            parse_mode="md",
+            link_preview=False,
+        )
+    except Exception:
+        pass  # Progress edit is best-effort.
+
+
 async def _transcribe_with_retry(
     *,
     model_name,
@@ -199,6 +235,9 @@ async def _transcribe_with_retry(
     model is tried. Sleeps STT_RETRY_SLEEP seconds between every attempt (capped at
     STT_RETRY_MAX_DELAY). Edits ``status_message`` to show retry progress.
 
+    A model that refuses the API key is skipped at once, and for that key it
+    stays skipped for STT_MODEL_UNAVAILABLE_SECONDS.
+
     Returns the raw response text, or raises on the last failure.
     """
     # Build the ordered model sequence starting from the requested model.
@@ -208,18 +247,31 @@ async def _transcribe_with_retry(
         models_to_try = models_to_try[idx:] + models_to_try[:idx]
     else:
         models_to_try = [model_name] + models_to_try
+    available = [
+        name for name in models_to_try if not await _model_unavailable_p(api_key, name)
+    ]
+    #: When every model refused this key before, try them all again.
+    models_to_try = available or models_to_try
 
     total_attempts = len(models_to_try) * STT_RETRIES_PER_MODEL
     global_attempt = 0
     last_exception = None
 
-    for current_model_name in models_to_try:
+    for current_idx, current_model_name in enumerate(models_to_try):
         try:
             current_model = llm.get_async_model(current_model_name)
         except Exception as e:
             print(f"STT: could not load model {current_model_name!r}: {e}")
             last_exception = e
+            global_attempt += STT_RETRIES_PER_MODEL
             continue
+        next_model_name = (
+            models_to_try[current_idx + 1]
+            if current_idx + 1 < len(models_to_try)
+            else None
+        )
+        model_label = current_model_name.split("/")[-1]
+        next_label = next_model_name.split("/")[-1] if next_model_name else None
 
         for model_attempt in range(1, STT_RETRIES_PER_MODEL + 1):
             global_attempt += 1
@@ -236,6 +288,22 @@ async def _transcribe_with_retry(
                 raise
             except Exception as e:
                 last_exception = e
+                if _is_model_unavailable_error(e):
+                    await _mark_model_unavailable(api_key, current_model_name)
+                    if next_model_name is None:
+                        raise
+                    #: This model's remaining attempts are skipped.
+                    global_attempt += STT_RETRIES_PER_MODEL - model_attempt
+                    print(
+                        f"STT: {current_model_name} refused this API key "
+                        f"({type(e).__name__}: {e}); switching to {next_model_name}."
+                    )
+                    await _show_stt_status(
+                        status_message,
+                        f"{italics_marker}{model_label} is not available for this "
+                        f"API key; switching to {next_label}…{italics_marker}",
+                    )
+                    break
                 if not _is_retriable_stt_error(e):
                     raise
 
@@ -244,13 +312,7 @@ async def _transcribe_with_retry(
                     raise
 
                 delay = min(STT_RETRY_SLEEP, STT_RETRY_MAX_DELAY)
-                current_idx = models_to_try.index(current_model_name)
                 switching = model_attempt >= STT_RETRIES_PER_MODEL
-                next_model_name = (
-                    models_to_try[current_idx + 1]
-                    if switching and current_idx + 1 < len(models_to_try)
-                    else None
-                )
 
                 print(
                     f"STT: attempt {global_attempt}/{total_attempts} "
@@ -262,31 +324,25 @@ async def _transcribe_with_retry(
                         else f"retrying in {delay:.0f}s."
                     )
                 )
-                try:
-                    model_label = current_model_name.split("/")[-1]
-                    if switching:
-                        next_label = next_model_name.split("/")[-1]
-                        status = (
-                            f"{italics_marker}High demand on {model_label} — "
-                            f"switching to {next_label} "
-                            f"({global_attempt}/{total_attempts}), "
-                            f"waiting {delay:.0f}s…{italics_marker}"
-                        )
-                    else:
-                        status = (
-                            f"{italics_marker}High demand — retrying with {model_label} "
-                            f"({global_attempt}/{total_attempts}), "
-                            f"waiting {delay:.0f}s…{italics_marker}"
-                        )
-                    await util.edit_message(
-                        status_message,
-                        status,
-                        parse_mode="md",
-                        link_preview=False,
+                if switching:
+                    status = (
+                        f"{italics_marker}High demand on {model_label} — "
+                        f"switching to {next_label} "
+                        f"({global_attempt}/{total_attempts}), "
+                        f"waiting {delay:.0f}s…{italics_marker}"
                     )
-                except Exception:
-                    pass  # Progress edit is best-effort.
+                else:
+                    status = (
+                        f"{italics_marker}High demand — retrying with {model_label} "
+                        f"({global_attempt}/{total_attempts}), "
+                        f"waiting {delay:.0f}s…{italics_marker}"
+                    )
+                await _show_stt_status(status_message, status)
                 await asyncio.sleep(delay)
+
+    if last_exception is not None:
+        raise last_exception
+    raise SttModelLoadError("No STT model could be tried.")
 
 
 class SttRequestError(Exception):

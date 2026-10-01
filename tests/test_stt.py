@@ -253,6 +253,121 @@ class _GuestBorg:
         raise AttributeError(name)
 
 
+class _ScriptedModel:
+    """Answers each prompt with the next outcome: text, or an exception."""
+
+    def __init__(self, *outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = 0
+
+    async def prompt(self, **kwargs):
+        self.calls += 1
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return SimpleNamespace(text=AsyncMock(return_value=outcome))
+
+
+REFUSED = Exception(
+    "This model models/gemini-2.5-flash is no longer available to new users."
+)
+BUSY = Exception("503 UNAVAILABLE: high demand")
+
+
+class ModelFallbackTests(unittest.TestCase):
+    """`_transcribe_with_retry`: transient errors and models that refuse a key."""
+
+    def setUp(self):
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        self.models = {}
+        self.redis = {}
+
+        async def get(key, **kwargs):
+            return self.redis.get(key)
+
+        async def set_(key, value, **kwargs):
+            self.redis[key] = value
+            return True
+
+        for target, name, value in (
+            (stt, "STT_MODELS", ["gemini/a", "gemini/b"]),
+            (stt, "STT_RETRY_SLEEP", 0),
+            (stt.llm, "get_async_model", lambda name: self.models[name]),
+            (stt.redis_util, "get_and_renew", get),
+            (stt.redis_util, "set_with_expiry", set_),
+            (stt.util, "edit_message", AsyncMock()),
+        ):
+            stack.enter_context(patch.object(target, name, value))
+
+    def transcribe(self, *, api_key="key-1"):
+        return asyncio.run(
+            stt._transcribe_with_retry(
+                model_name="gemini/a",
+                attachments=[],
+                api_key=api_key,
+                status_message=object(),
+                italics_marker="_",
+            )
+        )
+
+    def test_a_refusal_falls_through_at_once_and_is_remembered_for_the_key(self):
+        self.models = {
+            "gemini/a": _ScriptedModel(REFUSED),
+            "gemini/b": _ScriptedModel("first", "second"),
+        }
+
+        self.assertEqual(self.transcribe(), "first")
+        self.assertEqual(self.transcribe(), "second")
+
+        self.assertEqual(self.models["gemini/a"].calls, 1)
+        (key,) = self.redis
+        self.assertNotIn("key-1", key)
+
+    def test_another_key_still_tries_the_model(self):
+        self.models = {
+            "gemini/a": _ScriptedModel(REFUSED, "for key 2"),
+            "gemini/b": _ScriptedModel("for key 1"),
+        }
+
+        self.assertEqual(self.transcribe(api_key="key-1"), "for key 1")
+        self.assertEqual(self.transcribe(api_key="key-2"), "for key 2")
+
+    def test_when_every_model_refused_the_key_all_are_tried_again(self):
+        self.models = {
+            "gemini/a": _ScriptedModel(REFUSED, "back"),
+            "gemini/b": _ScriptedModel(REFUSED),
+        }
+
+        with self.assertRaises(Exception) as caught:
+            self.transcribe()
+        self.assertIs(caught.exception, REFUSED)
+        self.assertEqual(self.transcribe(), "back")
+
+    def test_transient_errors_retry_each_model_then_switch(self):
+        retries = stt.STT_RETRIES_PER_MODEL
+        self.models = {
+            "gemini/a": _ScriptedModel(*[BUSY] * retries),
+            "gemini/b": _ScriptedModel("ok"),
+        }
+
+        self.assertEqual(self.transcribe(), "ok")
+        self.assertEqual(self.models["gemini/a"].calls, retries)
+        self.assertEqual(self.redis, {})
+
+    def test_a_refusal_then_transient_errors_ends_in_the_error(self):
+        retries = stt.STT_RETRIES_PER_MODEL
+        self.models = {
+            "gemini/a": _ScriptedModel(REFUSED),
+            "gemini/b": _ScriptedModel(*[BUSY] * retries),
+        }
+
+        with self.assertRaises(Exception) as caught:
+            self.transcribe()
+        self.assertIs(caught.exception, BUSY)
+        self.assertEqual(self.models["gemini/b"].calls, retries)
+
+
 class GuestSttTests(unittest.TestCase):
     api_key = "caller-key"
     transcript = "hello"

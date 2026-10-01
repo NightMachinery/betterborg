@@ -68,12 +68,16 @@ GEMINI_STT_ROTATE_KEYS_P = True
 GEMINI_API_KEYS = os.path.expanduser("~/.gemini_api_keys")
 
 # STT model list — first entry is the default; the rest are tried in order when
-# the primary model returns a high-demand / transient error.
+# the primary model returns a high-demand / transient error, or refuses the
+# caller's API key (Gemini 2.5 Flash is closed to new keys).
 STT_MODELS = [
     # GEMINI_STT_LATEST,
     GEMINI_FLASH_2_5,
     # GEMINI_FLASH_3,
+    GEMINI_FLASH_LITE_LATEST,
 ]
+#: How long a model that refused an API key is skipped for that key.
+STT_MODEL_UNAVAILABLE_SECONDS = 30 * 24 * 3600
 STT_RETRIES_PER_MODEL = 4  # attempts on each model before moving to the next
 STT_RETRY_SLEEP = 10.0  # seconds between all retry attempts
 STT_RETRY_MAX_DELAY = 180.0  # upper cap per sleep

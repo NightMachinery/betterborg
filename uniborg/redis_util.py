@@ -11,6 +11,7 @@ used across different plugins and utilities.
 
 from pynight.common_icecream import ic
 import asyncio
+import hashlib
 import os
 import time
 from typing import Callable, Optional
@@ -180,6 +181,16 @@ def gemini_file_cache_key(file_id: str, user_id: int) -> str:
 def smart_context_key(user_id: int) -> str:
     """Redis key for smart context state."""
     return f"borg:smart_context:{user_id}"
+
+
+def api_key_hash(api_key: str) -> str:
+    """Short, stable hash of an API key, for Redis keys (never the raw key)."""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:32]
+
+
+def model_unavailable_key(key_hash: str, model: str) -> str:
+    """Redis key marking MODEL as refused to the API key whose hash is KEY_HASH."""
+    return f"borg:model_unavailable:{key_hash}:{model}"
 
 
 def gemini_cache_disabled_key(key_hash: str, model: str) -> str:

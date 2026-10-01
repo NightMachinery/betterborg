@@ -65,6 +65,9 @@ borgdir=~/code/betterborg/
 tmuxnew betterborg_stt "dash -c 'cd $(gq $borgdir) && borg_session=session_stt borg_plugin_path=stt_plugins borg_brish_count=1 $(gq "$(realpath2 python3)") $(gq $borgdir/stdborg.py)'"
 #+end_src
 
+The models it transcribes with, and how it falls back when one is busy or
+refuses the caller's key, are in [[file:docs/stt_models.md][docs/stt_models.md]].
+
 * reply-chainer
 #+begin_src zsh :eval never
 borgdir=~/code/betterborg/
