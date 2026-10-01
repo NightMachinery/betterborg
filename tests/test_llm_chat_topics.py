@@ -31,8 +31,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from telethon.tl.types import (
+    Document,
+    DocumentAttributeFilename,
     Message,
     MessageActionTopicCreate,
+    MessageFwdHeader,
+    MessageMediaDocument,
     MessageReplyHeader,
     MessageService,
     PeerChannel,
@@ -40,6 +44,7 @@ from telethon.tl.types import (
 )
 
 from uniborg import history_util, topics
+from uniborg.constants import TWIN_FILE_MARKER
 
 
 class _FakeLoop:
@@ -744,6 +749,133 @@ class OutsideTopicsContextTests(_BotChatCase):
     def test_thread_context_needs_a_topic(self):
         with self.assertRaises(ValueError):
             self.context_of(self.chain[-1], mode=plugin.THREAD_CONTEXT_MODE)
+
+
+def _file(msg_id, caption, *, top_id=None, parent=None, bot=True, forwarded=False):
+    """A `.md` file with CAPTION, sent by the bot unless BOT is False."""
+    message = _said(msg_id, caption, top_id=top_id, parent=parent, bot=bot)
+    message.media = MessageMediaDocument(
+        document=Document(
+            id=msg_id,
+            access_hash=1,
+            file_reference=b"",
+            date=T0,
+            mime_type="text/markdown",
+            size=3,
+            dc_id=2,
+            attributes=[DocumentAttributeFilename("answer.md")],
+        )
+    )
+    if forwarded:
+        message.fwd_from = MessageFwdHeader(date=T0)
+    return message
+
+
+def _twin(msg_id, **kwargs):
+    return _file(msg_id, f"{TWIN_FILE_MARKER}**Answer**", **kwargs)
+
+
+class TwinFileContextTests(_BotChatCase):
+    """Window modes skip the bot's twin files; Reply Chain keeps them."""
+
+    def setUp(self):
+        super().setUp()
+        #: A question, the answer's text head, its twin, then a follow-up.
+        self.see(
+            _said(340, "Explain monads at length.", top_id=None, parent=None),
+            _said(341, "Monads are ...", top_id=None, parent=340, bot=True),
+            _twin(342, parent=340),
+        )
+
+    def after(self, message, *, mode):
+        self.see(message)
+        self.prefs.context_mode = mode
+        return self.context_of(message)
+
+    def test_last_n_and_until_separator_skip_the_twin(self):
+        follow_up = _said(343, "And in Haskell?", top_id=None, parent=None)
+        for mode in ("last_N", "until_separator"):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    self.after(follow_up, mode=mode), (mode, [340, 341, 343])
+                )
+
+    def test_the_reply_chain_keeps_the_twin(self):
+        reply = _said(343, "Why?", top_id=None, parent=342)
+        self.assertEqual(
+            self.after(reply, mode="reply_chain"), ("reply_chain", [340, 342, 343])
+        )
+
+    def test_a_twin_in_the_window_stays_out_when_the_chain_reaches_it(self):
+        reply = _said(343, "Why?", top_id=None, parent=342)
+        self.assertEqual(self.after(reply, mode="last_N"), ("last_N", [340, 341, 343]))
+
+    def test_a_twin_only_the_chain_reaches_is_kept(self):
+        self.see(_said(343, plugin.CONTEXT_SEPARATOR, top_id=None, parent=None))
+        reply = _said(344, "Back to this:", top_id=None, parent=342)
+        self.assertEqual(
+            self.after(reply, mode="until_separator"),
+            ("until_separator", [340, 342, 344]),
+        )
+
+    def test_forwarded_and_unmarked_files_are_kept(self):
+        self.see(
+            _twin(343, forwarded=True),
+            _file(344, f"{TWIN_FILE_MARKER}**Answer**", bot=False, forwarded=True),
+            _file(345, "**A file-only answer**"),
+        )
+        follow_up = _said(346, "Thanks", top_id=None, parent=None)
+        self.assertEqual(
+            self.after(follow_up, mode="last_N"),
+            ("last_N", [340, 341, 343, 344, 345, 346]),
+        )
+
+    def test_a_topic_thread_skips_the_twin(self):
+        self.see(
+            _said(350, "Explain monads at length."),
+            _said(351, "Monads are ...", parent=350, bot=True),
+            _twin(352, top_id=TOPIC_ID, parent=350),
+        )
+        follow_up = _said(353, "And in Haskell?")
+        self.see(follow_up)
+        self.assertEqual(
+            self.context_of(follow_up, mode=plugin.THREAD_CONTEXT_MODE)[1],
+            [350, 351, 353],
+        )
+
+    def test_our_id_identifies_twins_that_carry_a_sender(self):
+        twin = _twin(343)
+        twin.from_id = PeerUser(BOT_ID)
+        foreign = _file(344, f"{TWIN_FILE_MARKER}**Answer**", bot=False)
+        foreign.from_id = PeerUser(USER_ID)
+        self.see(twin, foreign)
+        follow_up = _said(345, "Thanks", top_id=None, parent=None)
+        with patch.object(plugin, "BOT_ID", BOT_ID):
+            self.assertEqual(
+                self.after(follow_up, mode="last_N"),
+                ("last_N", [340, 341, 344, 345]),
+            )
+
+    def test_the_export_skips_the_twin_too(self):
+        follow_up = _said(343, "/asfile", top_id=None, parent=None)
+        self.see(follow_up)
+        self.prefs.context_mode = "last_N"
+        processed = []
+
+        async def capture(event, messages, *args, **kwargs):
+            processed.extend(m.id for m in messages)
+            return [], []
+
+        with patch.object(plugin, "_process_turns_to_history", new=capture):
+            asyncio.run(
+                plugin.build_conversation_history_for_export(
+                    self.event(follow_up),
+                    "last_N",
+                    is_private=True,
+                    include_system_prompt_p=False,
+                )
+            )
+        self.assertEqual(processed, [340, 341, 343])
 
 
 class ThreadStatusTests(_BotChatCase):

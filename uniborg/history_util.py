@@ -32,6 +32,7 @@ from dataclasses import dataclass, replace
 # Redis utilities
 from . import redis_util
 from . import topics
+from .constants import TWIN_FILE_MARKER
 
 # --- Configuration ---
 HISTORY_LIMIT = 5000  # Max number of message IDs to store per chat
@@ -605,6 +606,27 @@ async def record_message(message: Message):
         message.id,
         message.date,
         topic_id=topics.private_message_topic_id(message),
+    )
+
+
+def is_twin_file(message, *, self_id: Optional[int]) -> bool:
+    """Whether MESSAGE is a twin file this account sent, not a forward of one.
+
+    A twin is the file copy of a long answer whose text was also delivered;
+    `util.edit_message` starts its caption with `TWIN_FILE_MARKER`. Our own
+    private-chat messages may come without a sender id, so `out` stands in.
+    """
+    if getattr(message, "fwd_from", None) is not None:
+        return False
+    if getattr(message, "media", None) is None:
+        return False
+    sender_id = getattr(message, "sender_id", None)
+    if sender_id is None:
+        own = bool(getattr(message, "out", False))
+    else:
+        own = self_id is not None and sender_id == self_id
+    return own and (getattr(message, "message", None) or "").startswith(
+        TWIN_FILE_MARKER
     )
 
 

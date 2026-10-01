@@ -5357,6 +5357,22 @@ def _thread_messages(messages: List[Message], *, topic_id: int) -> List[Message]
     ]
 
 
+def _without_twin_files(
+    messages: List[Message], *, bot_id: Optional[int] = None
+) -> List[Message]:
+    """MESSAGES without the bot's twin files (docs/twin_files.md).
+
+    `bot_id` defaults to `BOT_ID`, the account this plugin runs as.
+    """
+    if bot_id is None:
+        bot_id = BOT_ID
+    return [
+        message
+        for message in messages
+        if not history_util.is_twin_file(message, self_id=bot_id)
+    ]
+
+
 async def build_conversation_history_for_export(
     event,
     context_mode: str,
@@ -5554,6 +5570,11 @@ async def build_conversation_history(
     # If include_reply_chain is enabled and we're not already in reply_chain mode,
     # merge the reply chain of the triggering message into the message set.
     if context_mode != "reply_chain":
+        #: Taken before twins are dropped, so a twin the window held stays
+        #: dropped when the reply chain reaches it too, while one that only the
+        #: chain reaches is kept: its text is likely out of the window as well.
+        window_ids = {m.id for m in messages_to_process}
+        messages_to_process = _without_twin_files(messages_to_process)
         user_prefs = user_manager.get_prefs(user_id)
         chat_include_reply_chain = chat_manager.get_include_reply_chain(chat_id)
         effective_include_reply_chain = (
@@ -5564,8 +5585,7 @@ async def build_conversation_history(
         if effective_include_reply_chain:
             chain_messages = await _get_initial_messages_for_reply_chain(event)
             if chain_messages:
-                existing_ids = {m.id for m in messages_to_process}
-                new_chain = [m for m in chain_messages if m.id not in existing_ids]
+                new_chain = [m for m in chain_messages if m.id not in window_ids]
                 messages_to_process = new_chain + messages_to_process
 
     expanded_messages = await bot_util.expand_and_sort_messages_with_groups(

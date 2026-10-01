@@ -33,3 +33,39 @@ twin must still count when someone replies to it.
 `edit_message(..., twin_file_marker="")` turns marking off for a call.
 Answers sent before marking existed carry no marker and keep counting as
 before.
+
+## Skipping
+
+In every window mode, `build_conversation_history` drops the twins it finds,
+through `history_util.is_twin_file`. A twin is skipped when all of these hold:
+
+- its caption starts with the marker;
+- it is a media message;
+- this bot sent it (its sender id is the bot's, or it is an outgoing message
+  with no sender id, as private chats deliver them);
+- it is not a forward. A forwarded twin arrives without its text, so it is the
+  only copy here and is kept.
+
+The text head of the answer is a separate message and stays in the context,
+so the model reads the answer once instead of twice. The skip applies even
+when the window holds the twin but not its head (say, Last N starts right
+after the head), which loses that one answer from the context.
+
+Reply Chain never skips: a reply to a twin brings in only the question and the
+twin, since the text head is a sibling, not a parent.
+
+When "Include Reply Chain" merges the trigger's reply chain into a window,
+the chain is checked against the window as it was before twins were dropped.
+So a twin the window held stays out even when the chain reaches it too,
+while a twin that only the chain reaches (an older one, replied to on purpose
+to bring it back) is kept, since its text is most likely outside the window
+as well.
+
+`/asfile` exports go through the same builder, so they skip twins in window
+modes and keep them in Reply Chain.
+
+Last N counts a twin among its N messages before dropping it, so a window with
+twins holds a few messages fewer than N.
+
+`llm_chat._without_twin_files(messages, bot_id=...)` takes the bot's id as an
+argument for tests; it defaults to the plugin's `BOT_ID`.

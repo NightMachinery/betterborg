@@ -198,6 +198,11 @@ inline quick picks (=50=, =100=, =200=, =400=, =800=), or use =/setLastN= and
 =/setLastNHere= for arbitrary valid values. See
 [[file:docs/llm_chat_last_n_context.md][docs/llm_chat_last_n_context.md]].
 
+A long answer is also sent as a =.md= file. That twin file is left out of the
+window modes (Last N, Until Separator, a topic's thread), where its text
+already carries the answer, and kept in Reply Chain. See
+[[file:docs/twin_files.md][docs/twin_files.md]].
+
 ** history export
 =stdplugins/history_export.py= adds an admin-only =.export [number-of-messages=all]=
 command that silently writes a Telegram Desktop-style, text-only =result.json=
