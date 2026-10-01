@@ -30,14 +30,22 @@ class RosterTests(unittest.TestCase):
     def test_roster_is_authoritative_over_legacy_numeric_grants(self):
         config = llm_chat_config.parse_config(BASE)
         with mock.patch("uniborg.util.isAdmin", new=mock.AsyncMock(return_value=False)):
-            self.assertFalse(asyncio.run(llm_chat_config.can_use_codex(Event(7), config)))
-            self.assertFalse(asyncio.run(llm_chat_config.can_use_codex_imagegen(Event(7), config)))
+            self.assertFalse(
+                asyncio.run(llm_chat_config.can_use_codex(Event(7), config))
+            )
+            self.assertFalse(
+                asyncio.run(llm_chat_config.can_use_codex_imagegen(Event(7), config))
+            )
 
     def test_sentinel_is_independent_of_disabled_manual_flag(self):
         config = llm_chat_config.parse_config(BASE)
         with mock.patch("uniborg.util.isAdmin", new=mock.AsyncMock(return_value=True)):
-            self.assertTrue(asyncio.run(llm_chat_config.can_use_codex(Event(7), config)))
-            self.assertTrue(asyncio.run(llm_chat_config.can_use_codex_imagegen(Event(7), config)))
+            self.assertTrue(
+                asyncio.run(llm_chat_config.can_use_codex(Event(7), config))
+            )
+            self.assertTrue(
+                asyncio.run(llm_chat_config.can_use_codex_imagegen(Event(7), config))
+            )
 
     def test_complete_manual_and_sentinel_authorization_matrix(self):
         for manual_codex in (False, True):
@@ -50,11 +58,15 @@ class RosterTests(unittest.TestCase):
                             config = llm_chat_config.LLMChatConfig(
                                 codex_policy,
                                 image_policy,
-                                codex_users=(llm_chat_config.CodexUser(
-                                    7, None, manual_codex, manual_image
-                                ),),
+                                codex_users=(
+                                    llm_chat_config.CodexUser(
+                                        7, None, manual_codex, manual_image
+                                    ),
+                                ),
                             )
-                            expected_codex = manual_codex or (is_admin and codex_sentinel)
+                            expected_codex = manual_codex or (
+                                is_admin and codex_sentinel
+                            )
                             expected_image = expected_codex and (
                                 manual_image or (is_admin and image_sentinel)
                             )
@@ -70,11 +82,17 @@ class RosterTests(unittest.TestCase):
                             ):
                                 event = Event(7)
                                 self.assertEqual(
-                                    asyncio.run(llm_chat_config.can_use_codex(event, config)),
+                                    asyncio.run(
+                                        llm_chat_config.can_use_codex(event, config)
+                                    ),
                                     expected_codex,
                                 )
                                 self.assertEqual(
-                                    asyncio.run(llm_chat_config.can_use_codex_imagegen(event, config)),
+                                    asyncio.run(
+                                        llm_chat_config.can_use_codex_imagegen(
+                                            event, config
+                                        )
+                                    ),
                                     expected_image,
                                 )
 
@@ -104,7 +122,9 @@ class RosterTests(unittest.TestCase):
         for value in values:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 llm_chat_config.parse_config(
-                    "{codex_allowed_users:[],codex_imagegen_allowed_users:[],codex_users:" + value + "}"
+                    "{codex_allowed_users:[],codex_imagegen_allowed_users:[],codex_users:"
+                    + value
+                    + "}"
                 )
 
     def test_duplicate_keys_are_rejected_at_root_and_in_records(self):
@@ -123,7 +143,9 @@ class UpdateTests(unittest.TestCase):
         self.path = Path(self.directory.name) / "config.json5"
         self.path.write_text(BASE)
         self.path.chmod(0o640)
-        self.path_patch = mock.patch.object(llm_chat_config, "config_path", return_value=self.path)
+        self.path_patch = mock.patch.object(
+            llm_chat_config, "config_path", return_value=self.path
+        )
         self.path_patch.start()
 
     def tearDown(self):
@@ -141,9 +163,13 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o640)
 
     def test_legacy_record_is_inserted_without_losing_other_flag(self):
-        self.path.write_text("{codex_allowed_users:[8],codex_imagegen_allowed_users:[8]}")
+        self.path.write_text(
+            "{codex_allowed_users:[8],codex_imagegen_allowed_users:[8]}"
+        )
         result = llm_chat_config.update_user_access(8, "codex_enabled", False)
-        self.assertEqual(result.codex_users, (llm_chat_config.CodexUser(8, None, False, True),))
+        self.assertEqual(
+            result.codex_users, (llm_chat_config.CodexUser(8, None, False, True),)
+        )
         self.assertIn("codex_users", self.path.read_text())
 
     def test_idempotent_update_does_not_replace_file(self):
@@ -194,7 +220,9 @@ class UpdateTests(unittest.TestCase):
 
     def test_generated_invalid_source_is_validated_before_replace(self):
         original = self.path.read_text()
-        with mock.patch.object(llm_chat_config, "_updated_source", return_value="{broken:"):
+        with mock.patch.object(
+            llm_chat_config, "_updated_source", return_value="{broken:"
+        ):
             with self.assertRaises(llm_chat_config.ConfigUpdateError):
                 llm_chat_config.update_user_access(7, "codex_enabled", True)
         self.assertEqual(self.path.read_text(), original)
@@ -236,9 +264,9 @@ class UpdateTests(unittest.TestCase):
             link.symlink_to(second)
             return original_fsync(fd)
 
-        with mock.patch.object(llm_chat_config, "config_path", return_value=link), mock.patch.object(
-            os, "fsync", side_effect=retarget_then_fsync
-        ):
+        with mock.patch.object(
+            llm_chat_config, "config_path", return_value=link
+        ), mock.patch.object(os, "fsync", side_effect=retarget_then_fsync):
             with self.assertRaises(llm_chat_config.ConfigUpdateError):
                 llm_chat_config.update_user_access(7, "codex_enabled", True)
         self.assertIn("codex_enabled: false", first.read_text())
@@ -259,7 +287,9 @@ class AddUserTests(unittest.TestCase):
         self.path = Path(self.directory.name) / "config.json5"
         self.path.write_text(BASE)
         self.path.chmod(0o640)
-        self.path_patch = mock.patch.object(llm_chat_config, "config_path", return_value=self.path)
+        self.path_patch = mock.patch.object(
+            llm_chat_config, "config_path", return_value=self.path
+        )
         self.path_patch.start()
 
     def tearDown(self):
@@ -281,42 +311,63 @@ class AddUserTests(unittest.TestCase):
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o640)
 
     def test_adds_roster_array_when_missing(self):
-        self.path.write_text("""// keep me
+        self.path.write_text(
+            """// keep me
 {codex_allowed_users:[], codex_imagegen_allowed_users:[]} // tail
-""")
+"""
+        )
         result = llm_chat_config.add_user(13)
-        self.assertEqual(result.codex_users, (llm_chat_config.CodexUser(13, None, False, False),))
+        self.assertEqual(
+            result.codex_users, (llm_chat_config.CodexUser(13, None, False, False),)
+        )
         text = self.path.read_text()
         self.assertIn("// keep me", text)
         self.assertIn("// tail", text)
-        self.assertIn("codex_users: [{id: 13, codex_enabled: false, imagegen_enabled: false}]", text)
+        self.assertIn(
+            "codex_users: [{id: 13, codex_enabled: false, imagegen_enabled: false}]",
+            text,
+        )
 
     def test_existing_roster_and_legacy_users_are_unchanged(self):
         for user_id in (7, 19):
             with self.subTest(user_id=user_id):
-                self.path.write_text(BASE.replace(
-                    'codex_allowed_users: [7, "MAGIC_ADMINS"]',
-                    'codex_allowed_users: [7, 19, "MAGIC_ADMINS"]',
-                ))
+                self.path.write_text(
+                    BASE.replace(
+                        'codex_allowed_users: [7, "MAGIC_ADMINS"]',
+                        'codex_allowed_users: [7, 19, "MAGIC_ADMINS"]',
+                    )
+                )
                 before = self.path.read_text()
                 inode = self.path.stat().st_ino
                 result = llm_chat_config.add_user(user_id, name="Replacement")
                 self.assertEqual(self.path.read_text(), before)
                 self.assertEqual(self.path.stat().st_ino, inode)
-                configured = next(user for user in llm_chat_config.configured_users(result) if user.id == user_id)
+                configured = next(
+                    user
+                    for user in llm_chat_config.configured_users(result)
+                    if user.id == user_id
+                )
                 if user_id == 7:
-                    self.assertEqual(configured, llm_chat_config.CodexUser(7, "Seven", False, True))
+                    self.assertEqual(
+                        configured, llm_chat_config.CodexUser(7, "Seven", False, True)
+                    )
                 else:
-                    self.assertEqual(configured, llm_chat_config.CodexUser(19, None, True, False))
+                    self.assertEqual(
+                        configured, llm_chat_config.CodexUser(19, None, True, False)
+                    )
 
     def test_rejects_invalid_ids_names_and_current_config(self):
         original = self.path.read_text()
         for user_id in (True, 1.5, "1", 0, -1, 2**63):
-            with self.subTest(user_id=user_id), self.assertRaises(llm_chat_config.ConfigUpdateError):
+            with self.subTest(user_id=user_id), self.assertRaises(
+                llm_chat_config.ConfigUpdateError
+            ):
                 llm_chat_config.add_user(user_id)
             self.assertEqual(self.path.read_text(), original)
         for name in (False, 3, []):
-            with self.subTest(name=name), self.assertRaises(llm_chat_config.ConfigUpdateError):
+            with self.subTest(name=name), self.assertRaises(
+                llm_chat_config.ConfigUpdateError
+            ):
                 llm_chat_config.add_user(21, name=name)
             self.assertEqual(self.path.read_text(), original)
         self.path.write_text("{broken:")
@@ -333,7 +384,9 @@ class AddUserTests(unittest.TestCase):
             barrier.wait()
             results.append(llm_chat_config.add_user(user_id))
 
-        threads = [threading.Thread(target=add, args=(user_id,)) for user_id in (31, 32)]
+        threads = [
+            threading.Thread(target=add, args=(user_id,)) for user_id in (31, 32)
+        ]
         for thread in threads:
             thread.start()
         barrier.wait()
@@ -364,7 +417,9 @@ class AddUserTests(unittest.TestCase):
             "  ],",
             "    {id: 42, codex_enabled: true, imagegen_enabled: false},\n  ],",
         )
-        with mock.patch.object(llm_chat_config, "_added_user_source", return_value=changed):
+        with mock.patch.object(
+            llm_chat_config, "_added_user_source", return_value=changed
+        ):
             with self.assertRaises(llm_chat_config.ConfigUpdateError):
                 llm_chat_config.add_user(42)
         self.assertEqual(self.path.read_text(), original)

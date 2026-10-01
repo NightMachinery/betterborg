@@ -52,7 +52,11 @@ DENY_ALL_CONFIG = LLMChatConfig((), (), valid=False)
 
 def config_path() -> Path:
     override = os.environ.get("LLM_CHAT_CONFIG_PATH")
-    return Path(override).expanduser() if override else Path.home() / ".borg" / "llm_chat_config.json5"
+    return (
+        Path(override).expanduser()
+        if override
+        else Path.home() / ".borg" / "llm_chat_config.json5"
+    )
 
 
 def _parse_json5(text: str) -> dict:
@@ -93,7 +97,9 @@ def parse_config(text: str) -> LLMChatConfig:
         allowed_keys = {"id", "name", "codex_enabled", "imagegen_enabled"}
         extra = set(value) - allowed_keys
         if extra:
-            raise ValueError(f"codex_users[{index}] has unknown key(s): {', '.join(sorted(extra))}")
+            raise ValueError(
+                f"codex_users[{index}] has unknown key(s): {', '.join(sorted(extra))}"
+            )
         user_id = value.get("id")
         if isinstance(user_id, bool) or not isinstance(user_id, int):
             raise ValueError(f"codex_users[{index}].id must be an integer")
@@ -106,7 +112,9 @@ def parse_config(text: str) -> LLMChatConfig:
             if type(value.get(key)) is not bool:
                 raise ValueError(f"codex_users[{index}].{key} must be a boolean")
         seen_ids.add(user_id)
-        users.append(CodexUser(user_id, name, value["codex_enabled"], value["imagegen_enabled"]))
+        users.append(
+            CodexUser(user_id, name, value["codex_enabled"], value["imagegen_enabled"])
+        )
     return LLMChatConfig(
         codex_allowed_users=_validate_policy(data[required[0]], required[0]),
         codex_imagegen_allowed_users=_validate_policy(data[required[1]], required[1]),
@@ -205,16 +213,22 @@ def configured_users(config: LLMChatConfig) -> Tuple[CodexUser, ...]:
     roster_ids = {user.id for user in users}
     legacy_ids = []
     for entry in config.codex_allowed_users + config.codex_imagegen_allowed_users:
-        if isinstance(entry, int) and not isinstance(entry, bool) and entry not in legacy_ids:
+        if (
+            isinstance(entry, int)
+            and not isinstance(entry, bool)
+            and entry not in legacy_ids
+        ):
             legacy_ids.append(entry)
     for user_id in legacy_ids:
         if user_id not in roster_ids:
-            users.append(CodexUser(
-                user_id,
-                None,
-                user_id in config.codex_allowed_users,
-                user_id in config.codex_imagegen_allowed_users,
-            ))
+            users.append(
+                CodexUser(
+                    user_id,
+                    None,
+                    user_id in config.codex_allowed_users,
+                    user_id in config.codex_imagegen_allowed_users,
+                )
+            )
     return tuple(users)
 
 
@@ -222,6 +236,7 @@ async def _sentinel_allows(event, policy: Tuple[PolicyEntry, ...]) -> bool:
     if MAGIC_ADMINS not in policy:
         return False
     from uniborg import util
+
     return await util.isAdmin(event)
 
 
@@ -229,7 +244,11 @@ def _manual_flag(sender_id, config: LLMChatConfig, capability: str) -> bool:
     for user in config.codex_users:
         if user.id == sender_id:
             return getattr(user, capability)
-    policy = config.codex_allowed_users if capability == "codex_enabled" else config.codex_imagegen_allowed_users
+    policy = (
+        config.codex_allowed_users
+        if capability == "codex_enabled"
+        else config.codex_imagegen_allowed_users
+    )
     return sender_id in policy
 
 
@@ -237,15 +256,21 @@ async def can_use_codex(event, config: LLMChatConfig) -> bool:
     if not config.valid:
         return False
     sender_id = getattr(event, "sender_id", None)
-    return _manual_flag(sender_id, config, "codex_enabled") or await _sentinel_allows(event, config.codex_allowed_users)
+    return _manual_flag(sender_id, config, "codex_enabled") or await _sentinel_allows(
+        event, config.codex_allowed_users
+    )
 
 
 async def can_use_codex_imagegen(event, config: LLMChatConfig) -> bool:
     if not config.valid:
         return False
     sender_id = getattr(event, "sender_id", None)
-    codex = _manual_flag(sender_id, config, "codex_enabled") or await _sentinel_allows(event, config.codex_allowed_users)
-    imagegen = _manual_flag(sender_id, config, "imagegen_enabled") or await _sentinel_allows(event, config.codex_imagegen_allowed_users)
+    codex = _manual_flag(sender_id, config, "codex_enabled") or await _sentinel_allows(
+        event, config.codex_allowed_users
+    )
+    imagegen = _manual_flag(
+        sender_id, config, "imagegen_enabled"
+    ) or await _sentinel_allows(event, config.codex_imagegen_allowed_users)
     return codex and imagegen
 
 
@@ -270,7 +295,9 @@ def _tokens(text: str):
             i += 1
             continue
         if text.startswith("//", i):
-            endings = [text.find(char, i + 2) for char in ("\n", "\r", "\u2028", "\u2029")]
+            endings = [
+                text.find(char, i + 2) for char in ("\n", "\r", "\u2028", "\u2029")
+            ]
             endings = [ending for ending in endings if ending >= 0]
             i = len(text) if not endings else min(endings) + 1
             continue
@@ -297,7 +324,13 @@ def _tokens(text: str):
         elif text[i] in punctuation:
             i += 1
         else:
-            while i < len(text) and not text[i].isspace() and text[i] not in punctuation and not text.startswith("//", i) and not text.startswith("/*", i):
+            while (
+                i < len(text)
+                and not text[i].isspace()
+                and text[i] not in punctuation
+                and not text.startswith("//", i)
+                and not text.startswith("/*", i)
+            ):
                 i += 1
         result.append(_Token(text[start:i], start, i))
     return result
@@ -330,11 +363,17 @@ def _key_value_span(text: str, tokens, object_start: int, object_end: int, key: 
                 decoded = json5.loads(raw, allow_duplicate_keys=False)
             else:
                 try:
-                    decoded = next(iter(json5.loads(
-                        "{" + raw + ":null}", allow_duplicate_keys=False
-                    )))
+                    decoded = next(
+                        iter(
+                            json5.loads(
+                                "{" + raw + ":null}", allow_duplicate_keys=False
+                            )
+                        )
+                    )
                 except Exception as exc:
-                    raise ConfigUpdateError(f"unsupported JSON5 property name {raw!r}") from exc
+                    raise ConfigUpdateError(
+                        f"unsupported JSON5 property name {raw!r}"
+                    ) from exc
             if decoded == key:
                 value_index = i + 2
                 value_token = tokens[value_index]
@@ -349,7 +388,9 @@ def _key_value_span(text: str, tokens, object_start: int, object_end: int, key: 
     return None
 
 
-def _updated_source(text: str, user_id: int, capability: str, enabled: bool, config: LLMChatConfig) -> str:
+def _updated_source(
+    text: str, user_id: int, capability: str, enabled: bool, config: LLMChatConfig
+) -> str:
     tokens = _tokens(text)
     if not tokens or tokens[0].value != "{":
         raise ConfigUpdateError("configuration root span could not be located")
@@ -368,20 +409,24 @@ def _updated_source(text: str, user_id: int, capability: str, enabled: bool, con
                 if id_span and json5.loads(tokens[id_span[0]].value) == user_id:
                     flag_span = _key_value_span(text, tokens, i, obj_end, capability)
                     if not flag_span:
-                        raise ConfigUpdateError(f"existing roster record lacks {capability}")
+                        raise ConfigUpdateError(
+                            f"existing roster record lacks {capability}"
+                        )
                     flag_token = tokens[flag_span[0]]
                     if flag_token.value == desired:
                         return text
-                    return text[:flag_token.start] + desired + text[flag_token.end:]
+                    return text[: flag_token.start] + desired + text[flag_token.end :]
                 i = obj_end
             i += 1
         legacy = next(user for user in configured_users(config) if user.id == user_id)
         codex = enabled if capability == "codex_enabled" else legacy.codex_enabled
-        imagegen = enabled if capability == "imagegen_enabled" else legacy.imagegen_enabled
+        imagegen = (
+            enabled if capability == "imagegen_enabled" else legacy.imagegen_enabled
+        )
         empty = array_end == array_start + 1
         has_trailing_comma = not empty and tokens[array_end - 1].value == ","
         prefix = "" if empty or has_trailing_comma else ","
-        insertion = f'{prefix}\n    {{id: {user_id}, codex_enabled: {str(codex).lower()}, imagegen_enabled: {str(imagegen).lower()}}},'
+        insertion = f"{prefix}\n    {{id: {user_id}, codex_enabled: {str(codex).lower()}, imagegen_enabled: {str(imagegen).lower()}}},"
         position = tokens[array_end].start
         return text[:position] + insertion + text[position:]
     legacy = next(user for user in configured_users(config) if user.id == user_id)
@@ -391,7 +436,7 @@ def _updated_source(text: str, user_id: int, capability: str, enabled: bool, con
     empty = root_end == 1
     has_trailing_comma = not empty and tokens[root_end - 1].value == ","
     prefix = "" if empty or has_trailing_comma else ","
-    insertion = f'{prefix}\n  codex_users: [{{id: {user_id}, codex_enabled: {str(codex).lower()}, imagegen_enabled: {str(imagegen).lower()}}}],\n'
+    insertion = f"{prefix}\n  codex_users: [{{id: {user_id}, codex_enabled: {str(codex).lower()}, imagegen_enabled: {str(imagegen).lower()}}}],\n"
     return text[:position] + insertion + text[position:]
 
 
@@ -401,7 +446,9 @@ def _added_user_source(text: str, user_id: int, name: Optional[str]) -> str:
         raise ConfigUpdateError("configuration root span could not be located")
     root_end = _matching(tokens, 0, "{", "}")
     roster = _key_value_span(text, tokens, 0, root_end, "codex_users")
-    name_source = "" if name is None else f", name: {json.dumps(name, ensure_ascii=False)}"
+    name_source = (
+        "" if name is None else f", name: {json.dumps(name, ensure_ascii=False)}"
+    )
     record = (
         f"{{id: {user_id}{name_source}, codex_enabled: false, "
         "imagegen_enabled: false}"
@@ -439,7 +486,9 @@ def _write_config_update(transform) -> LLMChatConfig:
                 return config
             candidate = parse_config(updated)
             if candidate != expected:
-                raise ConfigUpdateError("generated configuration did not preserve policy semantics")
+                raise ConfigUpdateError(
+                    "generated configuration did not preserve policy semantics"
+                )
             fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as temp_file:
@@ -474,10 +523,18 @@ def _write_config_update(transform) -> LLMChatConfig:
                     final_stat.st_ctime_ns,
                     final_stat.st_size,
                 )
-                if identity_current != identity_before or identity_final != identity_current or current != original:
-                    raise ConfigUpdateError("configuration changed while the update was being prepared")
+                if (
+                    identity_current != identity_before
+                    or identity_final != identity_current
+                    or current != original
+                ):
+                    raise ConfigUpdateError(
+                        "configuration changed while the update was being prepared"
+                    )
                 if requested_path.resolve(strict=True) != path:
-                    raise ConfigUpdateError("configuration symlink target changed during update")
+                    raise ConfigUpdateError(
+                        "configuration symlink target changed during update"
+                    )
                 os.replace(temp_name, path)
             finally:
                 try:
@@ -511,17 +568,29 @@ def update_user_access(user_id: int, capability: str, enabled: bool) -> LLMChatC
                     user.id,
                     user.name,
                     enabled if capability == "codex_enabled" else user.codex_enabled,
-                    enabled if capability == "imagegen_enabled" else user.imagegen_enabled,
+                    (
+                        enabled
+                        if capability == "imagegen_enabled"
+                        else user.imagegen_enabled
+                    ),
                 )
                 break
         else:
-            legacy = next(user for user in configured_users(config) if user.id == user_id)
-            roster.append(CodexUser(
-                user_id,
-                None,
-                enabled if capability == "codex_enabled" else legacy.codex_enabled,
-                enabled if capability == "imagegen_enabled" else legacy.imagegen_enabled,
-            ))
+            legacy = next(
+                user for user in configured_users(config) if user.id == user_id
+            )
+            roster.append(
+                CodexUser(
+                    user_id,
+                    None,
+                    enabled if capability == "codex_enabled" else legacy.codex_enabled,
+                    (
+                        enabled
+                        if capability == "imagegen_enabled"
+                        else legacy.imagegen_enabled
+                    ),
+                )
+            )
         expected = LLMChatConfig(
             config.codex_allowed_users,
             config.codex_imagegen_allowed_users,
