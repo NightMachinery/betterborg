@@ -10,6 +10,7 @@ from pynight.common_iterable import (
 )
 import traceback
 import os
+import time
 import uuid
 import base64
 import binascii
@@ -11450,6 +11451,11 @@ _guest_claims = guest_util.QueryClaims(
 _guest_limiter = guest_util.CallLimiter(
     backend=guest_util.redis_counter_backend(redis_util.get_redis)
 )
+#: Earlier answers of each guest thread, for replies that continue one.
+_guest_threads = guest_util.GuestThreadStore(get_redis=redis_util.get_redis)
+#: How many earlier exchanges a continuation brings back.
+GUEST_THREAD_EXCHANGES = 10
+GUEST_ANSWER_DATE_TOLERANCE_SECONDS = 5.0
 
 
 @dataclass
@@ -11538,6 +11544,57 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
     )
 
 
+def _guest_thread_name(query) -> str:
+    return f"{BOT_ID}:{query.thread_key}"
+
+
+def _is_own_guest_answer(message) -> bool:
+    return (
+        getattr(message, "guestchat_via_from", None) is not None
+        or message.sender_id == BOT_ID
+        or getattr(message, "via_bot_id", None) == BOT_ID
+    )
+
+
+async def _guest_continuation(query) -> list:
+    """The stored exchanges that a reply to one of our answers continues.
+
+    Oldest first; empty when the reference is not our answer, or no record
+    matches its date. Our answer is read as the assistant's either way.
+    """
+    own = [m for m in query.references if _is_own_guest_answer(m)]
+    for message in own:
+        message._role = "assistant"
+    if not own:
+        return []
+    records = await _guest_threads.records(_guest_thread_name(query))
+    match = guest_util.find_answer(
+        records,
+        answered_at=own[0].date.timestamp(),
+        tolerance_seconds=GUEST_ANSWER_DATE_TOLERANCE_SECONDS,
+    )
+    if match is None:
+        return []
+    return guest_util.answer_chain(records, match, limit=GUEST_THREAD_EXCHANGES)
+
+
+def _content_text(content) -> str:
+    """The text of a history entry's content; media parts become a marker."""
+    if isinstance(content, str):
+        return content
+    return "\n".join(
+        part["text"] if part.get("type") == "text" else "[media]" for part in content
+    )
+
+
+def _chain_turns(chain: list) -> list:
+    turns = []
+    for record in chain:
+        turns.extend(record["turns"])
+        turns.append({"role": "assistant", "content": record["answer"]})
+    return turns
+
+
 def _fit_utf8(text: str, limit_bytes: int, *, note: str) -> str:
     data = text.encode("utf-8")
     if len(data) <= limit_bytes:
@@ -11568,14 +11625,22 @@ async def _finalize_guest_answer(answer, text: str) -> None:
     )
 
 
-async def _run_guest_answer(event, answer, *, plan: GuestRequestPlan) -> None:
-    """Builds the history from the guest query's own messages and answers."""
+async def _run_guest_answer(
+    event, answer, *, plan: GuestRequestPlan, answered_at: float
+) -> None:
+    """Builds the history from the guest query's own messages and answers.
+
+    A reply to one of our answers continues it: the stored exchanges replace
+    the reference, which is that answer.
+    """
+    query = event.query
     temp_dir = Path(tempfile.gettempdir()) / f"temp_llm_chat_guest_{uuid.uuid4().hex}"
     temp_dir.mkdir()
     try:
+        chain = await _guest_continuation(query)
         history, warnings = await _process_turns_to_history(
             event,
-            event.query.messages,
+            [query.trigger] if chain else query.messages,
             temp_dir,
             plan.model_capabilities,
             plan.api_key,
@@ -11588,6 +11653,11 @@ async def _run_guest_answer(event, answer, *, plan: GuestRequestPlan) -> None:
                 text="I couldn't find any text or supported media to answer."
             )
             return
+        new_turns = [
+            {"role": entry["role"], "content": _content_text(entry["content"])}
+            for entry in history[1:]
+        ]
+        history[1:1] = _chain_turns(chain)
         append_runtime_context_to_latest_user_message(
             history, get_runtime_context_text()
         )
@@ -11610,6 +11680,16 @@ async def _run_guest_answer(event, answer, *, plan: GuestRequestPlan) -> None:
             return
         await _finalize_guest_answer(
             answer, _append_warnings(generation.text.strip(), warnings, event=event)
+        )
+        await _guest_threads.add(
+            _guest_thread_name(query),
+            {
+                "id": uuid.uuid4().hex,
+                "answered_at": answered_at,
+                "turns": new_turns,
+                "answer": generation.text.strip(),
+                "parent": chain[-1]["id"] if chain else None,
+            },
         )
         #: Lengths only: the references are other people's messages.
         logger.info(
@@ -11691,9 +11771,11 @@ async def guest_chat_handler(query) -> None:
         #: Not retried: a second answer could post twice.
         logger.exception("Could not answer guest query %s", query.query_id)
         return
+    #: The answer's message is dated now; a reply to it is matched by that.
+    answered_at = time.time()
     async with tg_raw.InlineEditor(borg, inline_id) as editor:
         answer = guest_util.GuestAnswerMessage(editor, logger=logger)
-        await _run_guest_answer(event, answer, plan=plan)
+        await _run_guest_answer(event, answer, plan=plan, answered_at=answered_at)
 
 
 def register_guest_handlers():

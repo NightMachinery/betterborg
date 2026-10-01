@@ -27,6 +27,7 @@ import asyncio
 from dataclasses import dataclass, field
 import enum
 import itertools
+import json
 import logging
 import os
 import re
@@ -46,6 +47,7 @@ GUEST_MESSAGE_ATTR = "_borg_guest_query_id"
 #: touch `borg:*` keys.
 REDIS_CLAIM_PREFIX = "borg:guest:claim:"
 REDIS_COUNTER_PREFIX = "borg:guest:count:"
+REDIS_THREAD_PREFIX = "borg:guest:thread:"
 
 DEFAULT_CLAIM_TTL_SECONDS = 24 * 60 * 60
 
@@ -446,6 +448,104 @@ def redis_counter_backend(
         return int(value)
 
     return count
+
+
+class GuestThreadStore:
+    """Recent guest answers per thread, so that a reply to one can continue it.
+
+    A record is a JSON-able dict with at least `id` and `answered_at` (epoch
+    seconds); `parent` names the record it continued. The newest
+    `max_records` of a thread are kept for `ttl_seconds` after its last
+    write: in Redis (a list under `borg:guest:thread:`) when `get_redis`
+    gives a connection, else in this process's memory.
+    """
+
+    def __init__(
+        self,
+        *,
+        get_redis: Optional[Callable[[], Awaitable[Any]]] = None,
+        prefix: str = REDIS_THREAD_PREFIX,
+        ttl_seconds: int = 7 * 24 * 60 * 60,
+        max_records: int = 50,
+        clock: Callable[[], float] = time.time,
+        logger: Optional[logging.Logger] = None,
+    ):
+        self._get_redis = get_redis
+        self._prefix = prefix
+        self._ttl_seconds = ttl_seconds
+        self._max_records = max_records
+        self._clock = clock
+        self._log = logger or _log
+        self._memory = {}
+
+    async def _redis(self) -> Any:
+        if self._get_redis is None:
+            return None
+        try:
+            return await self._get_redis()
+        except Exception:
+            self._log.warning("Guest thread store has no Redis", exc_info=True)
+            return None
+
+    async def add(self, thread: str, record: dict) -> None:
+        now = self._clock()
+        _expires, records = self._memory.get(thread, (now, []))
+        self._memory[thread] = (
+            now + self._ttl_seconds,
+            ([record] + records)[: self._max_records],
+        )
+        client = await self._redis()
+        if client is None:
+            return
+        name = f"{self._prefix}{thread}"
+        try:
+            await client.lpush(name, json.dumps(record))
+            await client.ltrim(name, 0, self._max_records - 1)
+            await client.expire(name, self._ttl_seconds)
+        except Exception:
+            self._log.warning("Could not store a guest answer", exc_info=True)
+
+    async def records(self, thread: str) -> list:
+        """The thread's records, newest first."""
+        client = await self._redis()
+        if client is not None:
+            try:
+                raw = await client.lrange(
+                    f"{self._prefix}{thread}", 0, self._max_records - 1
+                )
+                return [json.loads(item) for item in raw]
+            except Exception:
+                self._log.warning("Could not read guest answers", exc_info=True)
+        expires, records = self._memory.get(thread, (0, []))
+        return list(records) if expires > self._clock() else []
+
+
+def find_answer(
+    records: list, *, answered_at: float, tolerance_seconds: float = 5.0
+) -> Optional[dict]:
+    """The record answered closest to `answered_at`, if within the tolerance.
+
+    A guest answer's message is dated when Telegram posted it, which is when
+    the answer call returned, so its date identifies the record.
+    """
+    best = None
+    for record in records:
+        gap = abs(record["answered_at"] - answered_at)
+        if gap <= tolerance_seconds and (best is None or gap < best[0]):
+            best = (gap, record)
+    return None if best is None else best[1]
+
+
+def answer_chain(records: list, record: dict, *, limit: int = 10) -> list:
+    """`record` and the records it continued, oldest first, at most `limit`."""
+    by_id = {r["id"]: r for r in records}
+    chain = [record]
+    while len(chain) < limit:
+        parent = by_id.get(chain[-1].get("parent"))
+        if parent is None or parent in chain:
+            break
+        chain.append(parent)
+    return chain[::-1]
 
 
 GuestHandler = Callable[[GuestQuery], Awaitable[None]]

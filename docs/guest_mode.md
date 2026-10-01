@@ -120,6 +120,10 @@ Each rule is enforced in code; this is why.
 - `QueryClaims(backend=redis_claim_backend(redis_util.get_redis))`: claim a
   key once per TTL, across restarts with Redis (keys under
   `borg:guest:claim:`), in memory without it.
+- `GuestThreadStore(get_redis=redis_util.get_redis)`: recent answer records
+  per thread (`add`, `records`, newest first), with `find_answer` (the record
+  answered closest to a date, within a tolerance) and `answer_chain` (a record
+  and the ones it continued, oldest first).
 - `CallLimiter(backend=redis_counter_backend(redis_util.get_redis))`:
   `await limiter.allow(key, limit=n)` counts a call and says whether it is
   within `n` per hour. Windows follow the wall clock, so Redis (keys under
@@ -189,6 +193,14 @@ chat. The handler keeps queries for at most 120 seconds.
 - **What it reads**: the trigger, with the mention removed, and the reference.
   Nothing else of the chat. A reply quote that would need a fetch is dropped,
   since `GuestClient` refuses the fetch.
+- **Replies continue the exchange.** Each final answer is stored with the
+  turns it answered (text only, media as "[media]") and the answer it
+  continued, for 7 days, in a per-thread list (`borg:guest:thread:<bot id>:
+  <thread key>`, newest 50). When the reference is one of our answers, its
+  date picks the stored answer posted within 5 seconds of it, and up to 10
+  exchanges of that chain replace the reference in the history. Without a
+  match, the reference alone is read, as the assistant's turn. The stored
+  turns can quote other people's messages, which is why they expire.
 - **No generated images**: an image model is replaced by the default model,
   and `.i` is ignored. A guest answer can only reuse files Telegram already
   has.

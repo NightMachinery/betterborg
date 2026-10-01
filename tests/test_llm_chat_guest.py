@@ -70,7 +70,15 @@ def _import_plugin():
 plugin = _import_plugin()
 
 
-def _query(text, *, caller=CALLER, reference_text=None, query_id=1):
+def _query(
+    text,
+    *,
+    caller=CALLER,
+    reference_text=None,
+    reference_from=OTHER,
+    reference_date=None,
+    query_id=1,
+):
     client = SimpleNamespace(
         _self_id=BOT_ID, _mb_entity_cache=EntityCache(), parse_mode=None
     )
@@ -88,9 +96,9 @@ def _query(text, *, caller=CALLER, reference_text=None, query_id=1):
             types.Message(
                 id=19,
                 peer_id=types.PeerUser(OTHER),
-                date=NOW,
+                date=reference_date or NOW,
                 message=reference_text,
-                from_id=types.PeerUser(OTHER),
+                from_id=types.PeerUser(reference_from),
             )
         )
     update = SimpleNamespace(
@@ -172,6 +180,7 @@ class _GuestTestCase(unittest.TestCase):
             (plugin, "_generate_response", self.generate),
             (plugin, "_guest_claims", guest_util.QueryClaims()),
             (plugin, "_guest_limiter", guest_util.CallLimiter()),
+            (plugin, "_guest_threads", guest_util.GuestThreadStore()),
         ):
             stack.enter_context(patch.object(target, name, value))
 
@@ -228,6 +237,54 @@ class AnswerTests(_GuestTestCase):
         self.run_query(_query(f"{BOT_USERNAME} hi"))
 
         self.assertIn("no answer", self.edits[-1]["markdown"])
+
+
+class ContinuationTests(_GuestTestCase):
+    answer_text = "ETH is at $1."
+
+    def _reply_to_answer(self, text, *, date, query_id=2):
+        return _query(
+            text,
+            reference_text=self.answer_text,
+            reference_from=BOT_ID,
+            reference_date=date,
+            query_id=query_id,
+        )
+
+    def test_a_reply_to_an_answer_continues_its_exchange(self):
+        self.run_query(_query(f"{BOT_USERNAME} what's eth price?", query_id=1))
+        self.answer_text = "BTC is at $2."
+        self.run_query(
+            self._reply_to_answer(
+                "and btc?", date=datetime.datetime.now(datetime.timezone.utc)
+            )
+        )
+
+        first, second = [call.args[0] for call in self.generate.await_args_list]
+        _system, *turns = second.messages
+        #: Stored turns keep their metadata prefix, as live turns have one.
+        self.assertEqual([t["role"] for t in turns[:2]], ["user", "assistant"])
+        self.assertIn("what's eth price?", turns[0]["content"])
+        self.assertEqual(turns[1]["content"], "ETH is at $1.")
+        self.assertEqual(turns[2]["role"], "user")
+        self.assertIn("and btc?", str(turns[2]["content"]))
+        self.assertEqual(len(turns), 3)
+        records = asyncio.run(
+            plugin._guest_threads.records(plugin._guest_thread_name(_query("x")))
+        )
+        self.assertEqual(records[0]["parent"], records[1]["id"])
+        self.assertEqual(records[0]["answer"], "BTC is at $2.")
+
+    def test_an_unmatched_answer_is_still_read_as_the_assistants(self):
+        long_ago = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+
+        self.run_query(self._reply_to_answer("and btc?", date=long_ago))
+
+        _system, *turns = self.request().messages
+        self.assertEqual(
+            [t["role"] for t in turns], ["assistant", "user"], msg=str(turns)
+        )
+        self.assertIn(self.answer_text, str(turns[0]["content"]))
 
 
 class RichFallbackTests(_GuestTestCase):
@@ -420,6 +477,74 @@ class SharedHelperTests(unittest.TestCase):
         )
         with patch.object(plugin, "BOT_USERNAME", BOT_USERNAME):
             self.assertFalse(asyncio.run(plugin.is_valid_chat_message(event)))
+
+
+class GuestThreadStoreTests(unittest.TestCase):
+    def test_records_are_newest_first_and_expire(self):
+        now = [100.0]
+        store = guest_util.GuestThreadStore(
+            ttl_seconds=10, max_records=2, clock=lambda: now[0]
+        )
+        for n in range(3):
+            asyncio.run(store.add("t", {"id": str(n), "answered_at": n}))
+
+        self.assertEqual([r["id"] for r in asyncio.run(store.records("t"))], ["2", "1"])
+        self.assertEqual(asyncio.run(store.records("other")), [])
+        now[0] = 111.0
+        self.assertEqual(asyncio.run(store.records("t")), [])
+
+    def test_the_redis_list_is_used_when_there_is_a_connection(self):
+        calls = []
+
+        class _Redis:
+            async def lpush(self, name, value):
+                calls.append(("lpush", name))
+
+            async def ltrim(self, name, start, end):
+                calls.append(("ltrim", name, start, end))
+
+            async def expire(self, name, ttl):
+                calls.append(("expire", name, ttl))
+
+            async def lrange(self, name, start, end):
+                return [b'{"id": "r", "answered_at": 1}']
+
+        async def get_redis():
+            return _Redis()
+
+        store = guest_util.GuestThreadStore(get_redis=get_redis, max_records=5)
+        asyncio.run(store.add("t", {"id": "x", "answered_at": 1}))
+
+        name = "borg:guest:thread:t"
+        self.assertEqual(
+            calls,
+            [("lpush", name), ("ltrim", name, 0, 4), ("expire", name, 7 * 86400)],
+        )
+        self.assertEqual(
+            asyncio.run(store.records("t")), [{"id": "r", "answered_at": 1}]
+        )
+
+    def test_find_answer_takes_the_closest_within_the_tolerance(self):
+        records = [{"id": "a", "answered_at": 100}, {"id": "b", "answered_at": 103}]
+
+        self.assertEqual(guest_util.find_answer(records, answered_at=102.5)["id"], "b")
+        self.assertIsNone(guest_util.find_answer(records, answered_at=120))
+
+    def test_answer_chain_follows_parents_oldest_first_within_the_limit(self):
+        records = [
+            {"id": "c", "parent": "b"},
+            {"id": "b", "parent": "a"},
+            {"id": "a", "parent": None},
+        ]
+
+        self.assertEqual(
+            [r["id"] for r in guest_util.answer_chain(records, records[0])],
+            ["a", "b", "c"],
+        )
+        self.assertEqual(
+            [r["id"] for r in guest_util.answer_chain(records, records[0], limit=2)],
+            ["b", "c"],
+        )
 
 
 class GuestCallLimiterTests(unittest.TestCase):
