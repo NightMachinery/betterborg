@@ -8,19 +8,29 @@ it replies to); the bot answers once and then edits that *guest answer*. An
 """
 
 import asyncio
+import base64
 import builtins
 import datetime
 import importlib
 import logging
 from contextlib import ExitStack
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from telethon import errors, types
 from telethon._updates import EntityCache
 
-from uniborg import codex_util, guest_util, llm_chat_config, llm_util, tg_compat
+from uniborg import (
+    codex_util,
+    guest_util,
+    llm_chat_config,
+    llm_util,
+    media_store,
+    tg_compat,
+)
 
 BOT_ID = 4242
 BOT_USERNAME = "@vlm_test_bot"
@@ -28,6 +38,11 @@ CALLER = 777001
 OTHER = 777002
 NOW = datetime.datetime.now(datetime.timezone.utc)
 IMAGE_MODEL = "gemini/gemini-2.5-flash-image-preview"
+#: A 1x1 PNG.
+PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kg"
+    "AAAABJRU5ErkJggg=="
+)
 
 
 class _RecordingBorg:
@@ -79,6 +94,7 @@ def _query(
     reference_date=None,
     reference_via_guest=False,
     query_id=1,
+    trigger_photo=None,
 ):
     client = SimpleNamespace(
         _self_id=BOT_ID, _mb_entity_cache=EntityCache(), parse_mode=None
@@ -90,6 +106,20 @@ def _query(
         message=text,
         from_id=types.PeerUser(caller),
         out=True,
+        media=(
+            types.MessageMediaPhoto(
+                photo=types.Photo(
+                    id=55,
+                    access_hash=1,
+                    file_reference=b"",
+                    date=NOW,
+                    sizes=[],
+                    dc_id=2,
+                )
+            )
+            if trigger_photo is not None
+            else None
+        ),
     )
     references = []
     if reference_text is not None:
@@ -114,7 +144,16 @@ def _query(
         caller: types.User(id=caller, first_name="Caller"),
         OTHER: types.User(id=OTHER, first_name="Other"),
     }
-    return guest_util.guest_query_from_update(update, client=client)
+    query = guest_util.guest_query_from_update(update, client=client)
+    if trigger_photo is not None:
+
+        async def download_media(file):
+            path = Path(file) / "photo.png"
+            path.write_bytes(trigger_photo)
+            return str(path)
+
+        query.trigger.download_media = download_media
+    return query
 
 
 class _FakeEditor:
@@ -167,6 +206,8 @@ class _GuestTestCase(unittest.TestCase):
         config = llm_chat_config.LLMChatConfig((), (), guest=self.policy)
         stack = ExitStack()
         self.addCleanup(stack.close)
+        media_dir = stack.enter_context(tempfile.TemporaryDirectory())
+        self.media = media_store.MediaStore(Path(media_dir) / "media.sqlite3")
         #: Uniborg injects `logger` into a plugin; a plain import has none.
         stack.enter_context(
             patch.object(
@@ -190,6 +231,7 @@ class _GuestTestCase(unittest.TestCase):
             (plugin, "_guest_claims", guest_util.QueryClaims()),
             (plugin, "_guest_limiter", guest_util.CallLimiter()),
             (plugin, "_guest_threads", guest_util.GuestThreadStore()),
+            (plugin, "_guest_media", self.media),
         ):
             stack.enter_context(patch.object(target, name, value))
 
@@ -395,6 +437,82 @@ class ContinuationTests(_GuestTestCase):
             [t["role"] for t in turns], ["assistant", "user"], msg=str(turns)
         )
         self.assertIn(self.answer_text, str(turns[0]["content"]))
+
+
+class MediaContinuationTests(_GuestTestCase):
+    """A reply brings back the media of its exchange, from the store on disk."""
+
+    answer_text = "A dot."
+
+    def setUp(self):
+        super().setUp()
+        for target, name, value in (
+            (plugin, "is_native_gemini_files_mode", lambda model: False),
+            #: python-magic is not installed everywhere the tests run.
+            (plugin, "mime_guess", lambda path: "image/png"),
+            (plugin.history_util, "get_cached_file", AsyncMock(return_value=None)),
+            (plugin.history_util, "cache_file", AsyncMock(return_value=True)),
+        ):
+            patcher = patch.object(target, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def reply(self, text):
+        self.run_query(
+            _query(
+                text,
+                reference_text=self.answer_text,
+                reference_from=BOT_ID,
+                reference_date=datetime.datetime.now(datetime.timezone.utc),
+                query_id=2,
+            )
+        )
+        return self.generate.await_args_list[-1].args[0].messages
+
+    def test_a_reply_brings_back_the_photo_it_asked_about(self):
+        self.run_query(
+            _query(f"{BOT_USERNAME} what is this?", trigger_photo=PNG, query_id=1)
+        )
+        _system, user, assistant, reply = self.reply("and its colour?")
+
+        (photo,) = [p for p in user["content"] if p["type"] == "image_url"]
+        self.assertEqual(
+            photo["image_url"]["url"],
+            f"data:image/png;base64,{base64.b64encode(PNG).decode()}",
+        )
+        self.assertIn("what is this?", str(user["content"]))
+        self.assertEqual(assistant["content"], "A dot.")
+        self.assertIn("and its colour?", str(reply["content"]))
+
+    def test_a_reply_brings_back_the_image_the_answer_showed(self):
+        async def generate(req):
+            await req.response_message.show_image(PNG, file_name="dot.png")
+            return plugin.GenerationResult(
+                text="Here.", finish_reason="stop", has_image=True
+            )
+
+        self.generate.side_effect = generate
+        self.run_query(_query(f"{BOT_USERNAME} draw a dot", query_id=1))
+        self.generate.side_effect = None
+        self.generate.return_value = plugin.GenerationResult(
+            text="Red.", finish_reason="stop", has_image=False
+        )
+        _system, _user, assistant, _reply = self.reply("what colour?")
+
+        image, text = assistant["content"]
+        self.assertEqual(image["type"], "image_url")
+        self.assertIn(base64.b64encode(PNG).decode(), image["image_url"]["url"])
+        self.assertEqual(text, {"type": "text", "text": "Here."})
+
+    def test_media_the_store_lost_becomes_a_marker(self):
+        self.run_query(
+            _query(f"{BOT_USERNAME} what is this?", trigger_photo=PNG, query_id=1)
+        )
+        self.media.path.unlink()
+        _system, user, _assistant, _reply = self.reply("and its colour?")
+
+        self.assertIn(plugin.GUEST_MEDIA_MARKER, user["content"])
+        self.assertIn("what is this?", user["content"])
 
 
 class RichFallbackTests(_GuestTestCase):
@@ -608,6 +726,41 @@ class SharedHelperTests(unittest.TestCase):
         )
         with patch.object(plugin, "BOT_USERNAME", BOT_USERNAME):
             self.assertFalse(asyncio.run(plugin.is_valid_chat_message(event)))
+
+
+class GuestMediaCleanupTests(unittest.TestCase):
+    def register(self, registered):
+        tasks = []
+
+        def create_task(coro):
+            coro.close()
+            tasks.append(Mock())
+            return tasks[-1]
+
+        fake_borg = SimpleNamespace(loop=SimpleNamespace(create_task=create_task))
+        with ExitStack() as stack:
+            for target, name, value in (
+                (builtins, "borg", fake_borg),
+                (builtins, "logger", logging.getLogger("test.guest")),
+                (
+                    plugin.guest_util,
+                    "register_guest_handler",
+                    lambda *args, **kwargs: registered,
+                ),
+            ):
+                stack.enter_context(patch.object(target, name, value, create=True))
+            plugin.register_guest_handlers()
+            plugin.register_guest_handlers()
+        return tasks
+
+    def test_a_reload_replaces_the_cleanup_loop(self):
+        first, second = self.register(object())
+
+        first.cancel.assert_called_once_with()
+        second.cancel.assert_not_called()
+
+    def test_a_user_account_cleans_nothing_up(self):
+        self.assertEqual(self.register(None), [])
 
 
 class GuestThreadStoreTests(unittest.TestCase):

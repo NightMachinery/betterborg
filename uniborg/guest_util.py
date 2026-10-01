@@ -777,6 +777,14 @@ _ANSWER_IDS = itertools.count(-1, -1)
 CAPTION_LIMIT_UNITS = 1024
 
 
+@dataclass(frozen=True)
+class GuestImage:
+    """An image a guest answer showed."""
+
+    data: bytes
+    file_name: str
+
+
 class GuestAnswerMessage:
     """Stands in for the response `Message` that streaming code edits.
 
@@ -789,7 +797,8 @@ class GuestAnswerMessage:
     text past the first 4096 units is dropped rather than posted anywhere.
 
     `show_image` turns the answer into a photo, `media`; the text is then its
-    caption, so later edits are cut to `CAPTION_LIMIT_UNITS`.
+    caption, so later edits are cut to `CAPTION_LIMIT_UNITS`. `image` keeps
+    the image shown.
     """
 
     reply_to_msg_id = None
@@ -818,6 +827,8 @@ class GuestAnswerMessage:
         self.parse_mode = None
         #: The `InputMedia` the answer shows, once `show_image` has run.
         self.media = None
+        #: The `GuestImage` it shows.
+        self.image = None
         self.blocked_until = 0.0
         self._min_interval = min_interval
         self._max_final_wait = max_final_wait
@@ -930,6 +941,7 @@ class GuestAnswerMessage:
             else:
                 await self._edit_patiently(**kwargs)
             self.media = media
+            self.image = GuestImage(data=data, file_name=file_name)
             self.text = caption
             return True
 

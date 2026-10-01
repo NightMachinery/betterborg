@@ -212,15 +212,27 @@ chat. The handler keeps queries for at most 120 seconds.
   Nothing else of the chat. A reply quote that would need a fetch is dropped,
   since `GuestClient` refuses the fetch.
 - **Replies continue the exchange.** Each final answer is stored with the
-  turns it answered (text only, media as "[media]") and the answer it
-  continued, for 7 days, in a per-thread list (`borg:guest:thread:<bot id>:
-  <thread key>`, newest 50). A reference is one of our answers when its sender
-  is this bot (`guestchat_via_from` marks every guest bot's answer, so it
-  counts only for a message with no sender). When it is, its
-  date picks the stored answer posted within 5 seconds of it, and up to 10
-  exchanges of that chain replace the reference in the history. Without a
-  match, the reference alone is read, as the assistant's turn. The stored
-  turns can quote other people's messages, which is why they expire.
+  turns it answered and the answer it continued, for 7 days, in a per-thread
+  list (`borg:guest:thread:<bot id>:<thread key>`, newest 50). A reference is
+  one of our answers when its sender is this bot (`guestchat_via_from` marks
+  every guest bot's answer, so it counts only for a message with no sender).
+  When it is, its date picks the stored answer posted within 5 seconds of it,
+  and up to 10 exchanges of that chain replace the reference in the history.
+  Only that chain comes back, by its `parent` links: other answers in the
+  same chat are never added, so the history follows the replies, not a window
+  of recent messages. Without a match, the reference alone is read, as the
+  assistant's turn. The stored turns can quote other people's messages, which
+  is why they expire.
+- **Their media comes back too.** A guest message's file reference cannot be
+  refreshed, so every file a guest answer downloads is also kept on disk, in
+  the media store (`uniborg/media_store.py`), as is the image a guest answer
+  showed. A stored turn keeps such a file as its key
+  (`{"type": "media", "key": …}`), and a continuation rebuilds the part for
+  the model that answers it, through `_process_media`, as if the message were
+  new: capability checks and the Gemini Files API apply as usual. A file the
+  store no longer has, or media that could not be kept, becomes "[media]".
+  Codex reads no images in an assistant turn, so it does not see an answer's
+  own image when continuing; Gemini does.
 - **Generated images become the answer's photo.** An image model answers as
   itself, and `.i` is checked and resolved as in a private chat
   (`_image_generation_model`): without image generation access, an explicit
@@ -313,6 +325,27 @@ forgets.
   3600).
 - `borg:guest:thread:<bot id>:<thread key>`, the newest 50 records, kept until
   7 days after the latest answer: the chat bot's answers, for continuation.
+
+## What is kept on disk
+
+The media store, one SQLite file at `~/.borg/media_store.sqlite3` (or the
+path in `borg_media_store_path`), holds the files of guest messages the chat
+bot answered and the images its guest answers showed, keyed as the media cache
+keys them (`guest_…`; an answer's image is `guest_answer_<record id>`). Files
+are stored as bytes, not Base64.
+
+- A file expires 7 days after it was stored or last read, so a continuation
+  keeps the files of its chain alive.
+- A file over 20 MiB is not kept. Past 1 GiB in total, the least recently
+  used files go first.
+- Expired files are deleted when a bot that answers guest queries starts and
+  every hour after (`register_guest_handlers`; a plugin reload replaces the
+  loop). SQLite reuses the space they free; the file does not shrink.
+- Every call runs in a worker thread on a connection of its own, so the
+  instances on one machine can share the file. A failing store is logged and
+  treated as empty.
+- The files are other people's media, which is why they expire. The test run
+  points `borg_media_store_path` at a temporary directory (`tests/conftest.py`).
 
 ## Enabling guest mode for a bot
 

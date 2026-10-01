@@ -201,6 +201,7 @@ from uniborg import redis_util
 from uniborg import common_util
 from uniborg import topics
 from uniborg import guest_util
+from uniborg import media_store
 from uniborg import tg_format
 from uniborg import tg_raw
 
@@ -1391,6 +1392,18 @@ class ProcessMediaResult:
 
     media_part: Optional[Dict]
     warnings: List[str]
+
+
+class StoredMediaPart(dict):
+    """A content part of a file the media store keeps, under `media_key`.
+
+    It is sent like any other part; the key is an attribute, so the model
+    never sees it. A guest record keeps the key in place of the part.
+    """
+
+    def __init__(self, part: dict, *, media_key: str):
+        super().__init__(part)
+        self.media_key = media_key
 
 
 @dataclass
@@ -4843,6 +4856,9 @@ async def _get_and_cache_media_info(message, file_id, temp_dir):
     Downloads media if not cached, determines its type, and caches it in a
     text-safe format (raw text or Base64).
 
+    A guest message's file is also kept in the media store on disk, and read
+    from there when Redis no longer has it. MESSAGE None reads the caches only.
+
     Returns a tuple of:
     (storage_type, content, filename, mime_type)
     - storage_type: 'text' or 'base64'
@@ -4859,6 +4875,12 @@ async def _get_and_cache_media_info(message, file_id, temp_dir):
             cached_file_info.get("filename"),
             cached_file_info.get("mime_type"),
         )
+    if _is_guest_media_key(file_id):
+        stored = await _guest_media.get(file_id)
+        if stored is not None:
+            return stored.storage_type, stored.data, stored.filename, stored.mime_type
+    if message is None:
+        return None, None, None, None
 
     # File not cached, download and process
     file_path_str = await message.download_media(file=temp_dir)
@@ -4972,25 +4994,31 @@ async def _get_and_cache_media_info(message, file_id, temp_dir):
         mime_type = "text/plain"
 
     if is_text_file:
-        text_content = file_bytes.decode("utf-8", errors="ignore")
-        await history_util.cache_file(
-            file_id,
-            data=text_content,
-            data_storage_type="text",
+        info = media_store.MediaInfo(
+            storage_type=media_store.STORAGE_TEXT,
+            data=file_bytes.decode("utf-8", errors="ignore"),
             filename=file_path.name,
             mime_type=mime_type,
         )
-        return "text", text_content, file_path.name, mime_type
     else:
-        b64_content = base64.b64encode(file_bytes).decode("utf-8")
-        await history_util.cache_file(
-            file_id,
-            data=b64_content,
-            data_storage_type="base64",
+        info = media_store.MediaInfo(
+            storage_type=media_store.STORAGE_BASE64,
+            data=base64.b64encode(file_bytes).decode("utf-8"),
             filename=file_path.name,
             mime_type=mime_type,
         )
-        return "base64", b64_content, file_path.name, mime_type
+    await history_util.cache_file(
+        file_id,
+        data=info.data,
+        data_storage_type=info.storage_type,
+        filename=info.filename,
+        mime_type=info.mime_type,
+    )
+    if _is_guest_media_key(file_id):
+        #: A guest message cannot be downloaded again, and a reply may
+        #: continue its exchange for days.
+        await _guest_media.put(file_id, info)
+    return info.storage_type, info.data, info.filename, info.mime_type
 
 
 @dataclass
@@ -5242,18 +5270,32 @@ def _check_media_capability(
     return result
 
 
+#: Starts the media cache key of every file of a guest exchange.
+GUEST_MEDIA_KEY_PREFIX = "guest_"
+#: The files of guest messages, and the images of guest answers, for the
+#: replies that continue their exchange (docs/guest_mode.md).
+_guest_media = media_store.MediaStore()
+
+
+def _is_guest_media_key(file_id: str) -> bool:
+    return file_id.startswith(GUEST_MEDIA_KEY_PREFIX)
+
+
 def _media_cache_key(message: Message) -> str:
     media_id = getattr(message.media, "id", "unknown")
     if guest_util.is_guest_message(message):
         #: Its chat id and message id are the caller's view of the chat, and
         #: can equal those of a message in one of the bot's own chats.
         caller_id = guest_util.caller_id_of(message)
-        return f"guest_{caller_id}_{message.chat_id}_{message.id}_{media_id}"
+        return (
+            f"{GUEST_MEDIA_KEY_PREFIX}{caller_id}_{message.chat_id}_{message.id}"
+            f"_{media_id}"
+        )
     return f"{message.chat_id}_{message.id}_{media_id}"
 
 
 async def _process_media(
-    message: Message,
+    message: Optional[Message],
     temp_dir: Path,
     model_capabilities: Dict[str, bool],
     issued_warnings: set,
@@ -5263,18 +5305,52 @@ async def _process_media(
     *,
     is_private: bool,
     check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
+    media_key: Optional[str] = None,
 ) -> ProcessMediaResult:
     """
     Downloads or retrieves media from cache, prepares it for litellm,
     and ensures it's cached in a text-safe format (raw text or Base64).
     Uses the Gemini Files API for native models if configured.
+
+    MEDIA_KEY, with MESSAGE None, names a cached file instead. A part of a
+    guest file is a `StoredMediaPart`.
     """
-    if not message or not message.media:
+    if media_key is None and (not message or not message.media):
         return ProcessMediaResult(media_part=None, warnings=[])
+    file_id = media_key or _media_cache_key(message)
+    result = await _process_media_file(
+        file_id,
+        message=message,
+        temp_dir=temp_dir,
+        model_capabilities=model_capabilities,
+        issued_warnings=issued_warnings,
+        sender_id=sender_id,
+        api_key=api_key,
+        model_in_use=model_in_use,
+        is_private=is_private,
+        check_gemini_cached_files_p=check_gemini_cached_files_p,
+    )
+    part = result.media_part
+    if part is not None and part.get("type") != "text" and _is_guest_media_key(file_id):
+        result.media_part = StoredMediaPart(part, media_key=file_id)
+    return result
 
+
+async def _process_media_file(
+    file_id: str,
+    *,
+    message: Optional[Message],
+    temp_dir: Path,
+    model_capabilities: Dict[str, bool],
+    issued_warnings: set,
+    sender_id: int,
+    api_key: str,
+    model_in_use: str,
+    is_private: bool,
+    check_gemini_cached_files_p: bool,
+) -> ProcessMediaResult:
+    """`_process_media` for the file FILE_ID, of MESSAGE if it is not None."""
     try:
-        file_id = _media_cache_key(message)
-
         # --- Branch 1: Gemini Files API Mode ---
         if is_native_gemini_files_mode(model_in_use):
             gemini_client = None
@@ -5476,7 +5552,7 @@ async def _process_media(
             return ProcessMediaResult(media_part=part, warnings=[])
 
     except Exception as e:
-        print(f"Error processing media from message {message.id}: {e}")
+        print(f"Error processing media {file_id}: {e}")
         traceback.print_exc()
         return ProcessMediaResult(media_part=None, warnings=[])
 
@@ -12845,21 +12921,98 @@ async def _guest_continuation(query) -> list:
     return guest_util.answer_chain(records, match, limit=GUEST_THREAD_EXCHANGES)
 
 
-def _content_text(content) -> str:
-    """The text of a history entry's content; media parts become a marker."""
+#: Stands for media a guest record could not keep, or no longer has.
+GUEST_MEDIA_MARKER = "[media]"
+
+
+def _stored_content(content):
+    """A history entry's content as a guest record keeps it.
+
+    Text stays; a part of a file the media store keeps becomes its key, and
+    any other media part a marker.
+    """
     if isinstance(content, str):
         return content
-    return "\n".join(
-        part["text"] if part.get("type") == "text" else "[media]" for part in content
-    )
+    stored = []
+    for part in content:
+        if part.get("type") == "text":
+            stored.append({"type": "text", "text": part["text"]})
+        elif isinstance(part, StoredMediaPart):
+            stored.append({"type": "media", "key": part.media_key})
+        else:
+            stored.append({"type": "text", "text": GUEST_MEDIA_MARKER})
+    return stored
 
 
-def _chain_turns(chain: list) -> list:
+async def _restored_content(content, *, media_part):
+    """Stored CONTENT as history again; MEDIA_PART(key) rebuilds a media part.
+
+    Media the store no longer has becomes the marker.
+    """
+    if isinstance(content, str):
+        return content
+    texts, parts = [], []
+    for part in content:
+        if part["type"] == "text":
+            texts.append(part["text"])
+        elif part["type"] == "media":
+            restored = await media_part(part["key"])
+            if restored is None:
+                texts.append(GUEST_MEDIA_MARKER)
+            else:
+                parts.append(restored)
+        else:
+            raise ValueError(f"Unknown stored part type: {part['type']!r}")
+    final = await _finalize_content_parts(texts, parts)
+    if len(final) == 1 and final[0]["type"] == "text":
+        return final[0]["text"]
+    return final
+
+
+async def _restored_chain(chain: list, *, media_part) -> list:
+    """The turns of CHAIN's records, oldest first, with their media rebuilt."""
     turns = []
     for record in chain:
-        turns.extend(record["turns"])
-        turns.append({"role": "assistant", "content": record["answer"]})
+        for turn in record["turns"]:
+            turns.append(
+                {
+                    "role": turn["role"],
+                    "content": await _restored_content(
+                        turn["content"], media_part=media_part
+                    ),
+                }
+            )
+        turns.append(
+            {
+                "role": "assistant",
+                "content": await _restored_content(
+                    record["answer"], media_part=media_part
+                ),
+            }
+        )
     return turns
+
+
+async def _stored_answer(answer, text: str, *, record_id: str):
+    """The answer as its guest record keeps it, with the image it shows."""
+    if answer.image is None:
+        return text
+    key = f"{GUEST_MEDIA_KEY_PREFIX}answer_{record_id}"
+    stored = await _guest_media.put(
+        key,
+        media_store.MediaInfo(
+            storage_type=media_store.STORAGE_BASE64,
+            data=base64.b64encode(answer.image.data).decode("ascii"),
+            filename=answer.image.file_name,
+            mime_type=mimetypes.guess_type(answer.image.file_name)[0],
+        ),
+    )
+    image = (
+        {"type": "media", "key": key}
+        if stored
+        else {"type": "text", "text": GUEST_MEDIA_MARKER}
+    )
+    return [image] + ([{"type": "text", "text": text}] if text else [])
 
 
 async def _finalize_guest_answer(answer, text: str) -> None:
@@ -12904,11 +13057,30 @@ async def _run_guest_answer(
     """Builds the history from the guest query's own messages and answers.
 
     A reply to one of our answers continues it: the stored exchanges replace
-    the reference, which is that answer.
+    the reference, which is that answer. Only that answer's chain of replies
+    comes back, with the media its turns kept (`_guest_media`).
     """
     query = event.query
     temp_dir = Path(tempfile.gettempdir()) / f"temp_llm_chat_guest_{uuid.uuid4().hex}"
     temp_dir.mkdir()
+    restore_warnings = []
+    issued_warnings = set()
+
+    async def media_part(key):
+        result = await _process_media(
+            None,
+            temp_dir,
+            plan.model_capabilities,
+            issued_warnings,
+            event.sender_id,
+            plan.api_key,
+            plan.model,
+            is_private=False,
+            media_key=key,
+        )
+        restore_warnings.extend(result.warnings)
+        return result.media_part
+
     try:
         chain = await _guest_continuation(query)
         history, warnings = await _process_turns_to_history(
@@ -12920,17 +13092,17 @@ async def _run_guest_answer(
             plan.model,
             is_private=False,
         )
-        warnings = plan.warnings + warnings
         if not any(entry["role"] != "system" for entry in history):
             await answer.finalize(
                 text="I couldn't find any text or supported media to answer."
             )
             return
         new_turns = [
-            {"role": entry["role"], "content": _content_text(entry["content"])}
+            {"role": entry["role"], "content": _stored_content(entry["content"])}
             for entry in history[1:]
         ]
-        history[1:1] = _chain_turns(chain)
+        history[1:1] = await _restored_chain(chain, media_part=media_part)
+        warnings = plan.warnings + warnings + restore_warnings
         append_runtime_context_to_latest_user_message(
             history, get_runtime_context_text()
         )
@@ -12954,13 +13126,16 @@ async def _run_guest_answer(
         await _finalize_guest_answer(
             answer, _append_warnings(generation.text.strip(), warnings, event=event)
         )
+        record_id = uuid.uuid4().hex
         await _guest_threads.add(
             _guest_thread_name(query),
             {
-                "id": uuid.uuid4().hex,
+                "id": record_id,
                 "answered_at": answered_at,
                 "turns": new_turns,
-                "answer": generation.text.strip(),
+                "answer": await _stored_answer(
+                    answer, generation.text.strip(), record_id=record_id
+                ),
                 "parent": chain[-1]["id"] if chain else None,
             },
         )
@@ -13056,14 +13231,33 @@ async def guest_chat_handler(query) -> None:
         await _run_guest_answer(event, answer, plan=plan, answered_at=answered_at)
 
 
+#: Where the hourly cleanup of `_guest_media` is kept, on `borg`, so that a
+#: reloaded plugin can stop the old one.
+GUEST_MEDIA_CLEANUP_ATTRIBUTE = "_llm_chat_guest_media_cleanup"
+
+
 def register_guest_handlers():
-    """Answers guest queries; a no-op on a user account or Telethon 1.43."""
-    guest_util.register_guest_handler(
+    """Answers guest queries; a no-op on a user account or Telethon 1.43.
+
+    Where guest queries are answered, also cleans up `_guest_media` now and
+    every hour.
+    """
+    registered = guest_util.register_guest_handler(
         borg,
         guest_chat_handler,
         claims=_guest_claims,
         max_age_seconds=GUEST_MAX_AGE_SECONDS,
         logger=logger,
+    )
+    if registered is None:
+        return
+    previous = getattr(borg, GUEST_MEDIA_CLEANUP_ATTRIBUTE, None)
+    if previous is not None:
+        previous.cancel()
+    setattr(
+        borg,
+        GUEST_MEDIA_CLEANUP_ATTRIBUTE,
+        borg.loop.create_task(_guest_media.cleanup_forever()),
     )
 
 

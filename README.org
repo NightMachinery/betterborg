@@ -129,7 +129,8 @@ workarounds considered and why this repo upgrades Telethon instead.
 The bots answer where they are mentioned, even in chats they are not in.
 =@bot .a CMD= runs a shell command for an admin, with any files sent to the
 caller's DM; =@vlm_chat_bot question= answers with the caller's own model and
-API key, and replies to the answer continue the exchange; =@llm_stt_bot= in a
+API key, can generate images into its answer, and replies to the answer
+continue the exchange, media included; =@llm_stt_bot= in a
 reply to a voice note posts its transcript. The flow, the safety rules (never
 send by the guest chat id, one answer sent once, admin checks on the caller
 alone), the chat bot's =guest= config section and the steps to enable it are
