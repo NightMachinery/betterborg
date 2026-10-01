@@ -1,0 +1,3 @@
+[flake8]
+# Uniborg.load_plugin_from_file injects these into every plugin module.
+builtins = borg,logger,storage
