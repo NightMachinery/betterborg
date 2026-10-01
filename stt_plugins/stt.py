@@ -7,6 +7,10 @@ from uniborg import redis_util
 from uniborg import tg_compat
 from uniborg import tg_format
 from uniborg import tg_raw
+from uniborg import callback_util
+from uniborg import bot_util
+from uniborg import stt_models
+from uniborg.storage import UserStorage
 from uniborg.constants import (
     GEMINI_FLASH_LATEST,
     GEMINI_STT_LATEST,
@@ -38,7 +42,7 @@ from telethon.tl.types import (
     MessageMediaWebPage,
 )
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import List, Optional
 from dataclasses import dataclass
 
 # --- Bot Commands Registration ---
@@ -46,6 +50,7 @@ BOT_COMMANDS = [
     {"command": "start", "description": "Onboard and set API key"},
     {"command": "help", "description": "Show help and instructions"},
     {"command": "setgeminikey", "description": "Set or update your Gemini API key"},
+    {"command": "model", "description": "Choose the transcription model"},
 ]
 KNOWN_STRICT_COMMANDS = {".rot"}  # Undocumented admin-only command; do not add to help.
 
@@ -147,7 +152,7 @@ def get_effective_gemini_api_key(user_id: int) -> str | None:
 
 
 # Retry config lives in uniborg/constants.py:
-#   STT_MODELS            — ordered model list; first is default, rest are fallbacks
+#   STT_MODELS            — Auto's ordered model list; first is default, rest are fallbacks
 #   STT_RETRIES_PER_MODEL — attempts per model before cycling to the next
 #   STT_RETRY_SLEEP       — base sleep between attempts (seconds)
 #   STT_RETRY_MAX_DELAY   — upper cap on sleep (seconds)
@@ -221,32 +226,39 @@ async def _show_stt_status(status_message, text: str) -> None:
         pass  # Progress edit is best-effort.
 
 
+@dataclass
+class SttAnswer:
+    #: The model that answered.
+    model_name: str
+    #: Its answer: JSON from a media model, plain text from a speech model.
+    raw: str
+    #: Files a speech model could not hear (images, silent videos).
+    skipped: int = 0
+
+
 async def _transcribe_with_retry(
     *,
-    model_name,
+    models: List[str],
     attachments,
     api_key,
     status_message,
     italics_marker,
-):
-    """Run the transcription prompt, cycling through STT_MODELS on transient errors.
+) -> SttAnswer:
+    """Transcribes ATTACHMENTS with the first of MODELS that answers.
 
-    Each model in STT_MODELS gets STT_RETRIES_PER_MODEL attempts before the next
-    model is tried. Sleeps STT_RETRY_SLEEP seconds between every attempt (capped at
-    STT_RETRY_MAX_DELAY). Edits ``status_message`` to show retry progress.
+    Each model gets STT_RETRIES_PER_MODEL attempts on transient errors before
+    the next one is tried. Sleeps STT_RETRY_SLEEP seconds between every attempt
+    (capped at STT_RETRY_MAX_DELAY). Edits ``status_message`` to show retry
+    progress. A user's explicit choice is a list of one, so nothing else is
+    tried.
 
     A model that refuses the API key is skipped at once, and for that key it
-    stays skipped for STT_MODEL_UNAVAILABLE_SECONDS.
+    stays skipped for STT_MODEL_UNAVAILABLE_SECONDS. When it was the last
+    model, `SttModelRefusedError` says so.
 
-    Returns the raw response text, or raises on the last failure.
+    Raises on the last failure.
     """
-    # Build the ordered model sequence starting from the requested model.
-    models_to_try = list(STT_MODELS)
-    if model_name in models_to_try:
-        idx = models_to_try.index(model_name)
-        models_to_try = models_to_try[idx:] + models_to_try[:idx]
-    else:
-        models_to_try = [model_name] + models_to_try
+    models_to_try = list(models)
     available = [
         name for name in models_to_try if not await _model_unavailable_p(api_key, name)
     ]
@@ -256,26 +268,43 @@ async def _transcribe_with_retry(
     total_attempts = len(models_to_try) * STT_RETRIES_PER_MODEL
     global_attempt = 0
     last_exception = None
+    sound = None
 
     for current_idx, current_model_name in enumerate(models_to_try):
-        try:
-            current_model = llm.get_async_model(current_model_name)
-        except Exception as e:
-            print(f"STT: could not load model {current_model_name!r}: {e}")
-            last_exception = e
-            global_attempt += STT_RETRIES_PER_MODEL
-            continue
+        speech_model = None
+        if stt_models.is_speech_model(current_model_name):
+            speech_model = stt_models.model_for_id(current_model_name)
+        else:
+            try:
+                current_model = stt_models.load_media_model(current_model_name)
+            except Exception as e:
+                print(f"STT: could not load model {current_model_name!r}: {e}")
+                last_exception = e
+                global_attempt += STT_RETRIES_PER_MODEL
+                continue
+        if speech_model is not None and sound is None:
+            try:
+                sound = await stt_models.audio_inputs(attachments)
+            except stt_models.NoSoundError:
+                raise SttRequestError(_no_sound_text(current_model_name)) from None
         next_model_name = (
             models_to_try[current_idx + 1]
             if current_idx + 1 < len(models_to_try)
             else None
         )
-        model_label = current_model_name.split("/")[-1]
-        next_label = next_model_name.split("/")[-1] if next_model_name else None
+        model_label = stt_models.label_for(current_model_name)
+        next_label = stt_models.label_for(next_model_name) if next_model_name else None
 
         for model_attempt in range(1, STT_RETRIES_PER_MODEL + 1):
             global_attempt += 1
             try:
+                if speech_model is not None:
+                    text = await stt_models.transcribe(
+                        speech_model, audio=sound.audio, api_key=api_key
+                    )
+                    return SttAnswer(
+                        model_name=current_model_name, raw=text, skipped=sound.skipped
+                    )
                 response = await current_model.prompt(
                     prompt=TRANSCRIPTION_PROMPT,
                     attachments=attachments,
@@ -283,7 +312,9 @@ async def _transcribe_with_retry(
                     key=api_key,
                     temperature=0,
                 )
-                return await response.text()
+                return SttAnswer(
+                    model_name=current_model_name, raw=await response.text()
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -291,7 +322,10 @@ async def _transcribe_with_retry(
                 if _is_model_unavailable_error(e):
                     await _mark_model_unavailable(api_key, current_model_name)
                     if next_model_name is None:
-                        raise
+                        raise SttModelRefusedError(
+                            f"{model_label} is not available for this API key. "
+                            "Choose another model with /model."
+                        ) from e
                     #: This model's remaining attempts are skipped.
                     global_attempt += STT_RETRIES_PER_MODEL - model_attempt
                     print(
@@ -353,15 +387,54 @@ class MissingSttKeyError(SttRequestError):
     pass
 
 
+class SttModelRefusedError(SttRequestError):
+    """The last model to try refused the API key."""
+
+
 class SttModelLoadError(Exception):
     """Loading the model failed unexpectedly; the cause is chained."""
 
 
+def _no_sound_text(model_name: str) -> str:
+    return (
+        f"{stt_models.label_for(model_name)} transcribes speech only, and none of "
+        "these files has sound. Choose a Flash model with /model to read images."
+    )
+
+
+# --- Model choice ---
+#: Each user's choice from /model: a model id, or `stt_models.AUTO`.
+
+STT_PREFS_PURPOSE = "stt_preferences"
+_prefs_storage = None
+
+
+def _prefs() -> UserStorage:
+    #: Made on first use, so importing the plugin creates no directory.
+    global _prefs_storage
+    if _prefs_storage is None:
+        _prefs_storage = UserStorage(purpose=STT_PREFS_PURPOSE)
+    return _prefs_storage
+
+
+def get_model_choice(user_id: int) -> str:
+    """USER_ID's model, or Auto when they chose none or one no longer offered."""
+    data = _prefs().get(user_id) or {}
+    return stt_models.normalize_choice(data.get("model"))
+
+
+def set_model_choice(user_id: int, choice: str) -> None:
+    data = _prefs().get(user_id) or {}
+    data["model"] = stt_models.normalize_choice(choice)
+    _prefs().set(user_id, data)
+
+
 @dataclass
 class SttJob:
-    """A transcription that passed its checks: the key, model and files."""
+    """A transcription that passed its checks: the key, models and files."""
 
-    model_name: str
+    #: The models to try, in order: Auto's list, or the user's choice alone.
+    models: List[str]
     api_key: str
     attachments: list
 
@@ -372,10 +445,14 @@ class Transcription:
     text: str
     #: What the model returned, for the log.
     raw: str
+    #: The model that answered.
+    model_name: str = ""
 
 
-def prepare_stt_job(cwd, *, user_id: int, model_name: str = STT_MODELS[0]) -> SttJob:
+def prepare_stt_job(cwd, *, user_id: int, model_choice: Optional[str] = None) -> SttJob:
     """Checks the key, the model and the files in CWD before any status message.
+
+    MODEL_CHOICE defaults to the user's own (`get_model_choice`).
 
     Raises `MissingSttKeyError`, `SttRequestError` (with a message for the
     user) or `SttModelLoadError`.
@@ -383,22 +460,47 @@ def prepare_stt_job(cwd, *, user_id: int, model_name: str = STT_MODELS[0]) -> St
     api_key = get_effective_gemini_api_key(user_id)
     if not api_key:
         raise MissingSttKeyError("No Gemini API key is set.")
-    try:
-        model = llm.get_async_model(model_name)
-    except llm.UnknownModelError:
-        raise SttRequestError(
-            f"Error: '{model_name}' model not found. Perhaps the relevant LLM plugin has not been installed."
-        ) from None
-    except Exception as e:
-        raise SttModelLoadError(model_name) from e
-    if not getattr(model, "supports_schema", False):
-        raise SttRequestError(
-            f"Error: The model '{model_name}' does not support structured output (schemas)."
-        )
+    if model_choice is None:
+        model_choice = get_model_choice(user_id)
+    models = stt_models.models_for_choice(model_choice, auto=STT_MODELS)
+    first = models[0]
+    if not stt_models.is_speech_model(first):
+        try:
+            model = stt_models.load_media_model(first)
+        except llm.UnknownModelError:
+            raise SttRequestError(
+                f"Error: '{first}' model not found. Perhaps the relevant LLM plugin has not been installed."
+            ) from None
+        except Exception as e:
+            raise SttModelLoadError(first) from e
+        if not getattr(model, "supports_schema", False):
+            raise SttRequestError(
+                f"Error: The model '{first}' does not support structured output (schemas)."
+            )
     attachments = llm_util.create_attachments_from_dir(Path(cwd))
     if not attachments:
         raise SttRequestError("No valid media files found to transcribe.")
-    return SttJob(model_name=model_name, api_key=api_key, attachments=attachments)
+    if stt_models.is_speech_model(first) and not any(
+        stt_models.has_sound(attachment) for attachment in attachments
+    ):
+        raise SttRequestError(_no_sound_text(first))
+    return SttJob(models=models, api_key=api_key, attachments=attachments)
+
+
+def format_speech_transcript(
+    text: str, *, model_name: str, skipped: int, italics_marker: str
+) -> str:
+    """A speech model's plain transcript as the message the user gets."""
+    parts = [text.strip() or f"{italics_marker}[No speech detected]{italics_marker}"]
+    if skipped:
+        files = f"{skipped} files without sound were"
+        if skipped == 1:
+            files = "1 file without sound was"
+        parts.append(
+            f"{italics_marker}({stt_models.label_for(model_name)} hears speech "
+            f"only, so {files} skipped.){italics_marker}"
+        )
+    return "\n\n".join(parts)
 
 
 def format_transcription(json_response_text: str, *, italics_marker: str) -> str:
@@ -449,8 +551,8 @@ async def run_stt_job(
     proxy_token = llm_util.set_llm_gemini_proxy(proxy_url)
     try:
         # Transcribe, cycling through fallback models on transient upstream errors.
-        json_response_text = await _transcribe_with_retry(
-            model_name=job.model_name,
+        answer = await _transcribe_with_retry(
+            models=job.models,
             attachments=job.attachments,
             api_key=job.api_key,
             status_message=status_message,
@@ -458,10 +560,16 @@ async def run_stt_job(
         )
     finally:
         llm_util.reset_llm_gemini_proxy(proxy_token)
-    return Transcription(
-        text=format_transcription(json_response_text, italics_marker=italics_marker),
-        raw=json_response_text,
-    )
+    if stt_models.is_speech_model(answer.model_name):
+        text = format_speech_transcript(
+            answer.raw,
+            model_name=answer.model_name,
+            skipped=answer.skipped,
+            italics_marker=italics_marker,
+        )
+    else:
+        text = format_transcription(answer.raw, italics_marker=italics_marker)
+    return Transcription(text=text, raw=answer.raw, model_name=answer.model_name)
 
 
 def _log_transcription(event, *, model_name: str, raw: str) -> None:
@@ -500,16 +608,16 @@ def _log_transcription(event, *, model_name: str, raw: str) -> None:
         print(traceback.format_exc())
 
 
-async def llm_stt(*, cwd, event, model_name=STT_MODELS[0], log=True):
+async def llm_stt(*, cwd, event, model_choice=None, log=True):
     """
-    Performs speech-to-text on media, enforcing a single structured JSON output
-    that synthesizes all provided files.
+    Performs speech-to-text on media with the sender's model (`/model`), or
+    MODEL_CHOICE when given.
     """
     parse_mode = "md"
     italics_marker = "__"
 
     try:
-        job = prepare_stt_job(cwd, user_id=event.sender_id, model_name=model_name)
+        job = prepare_stt_job(cwd, user_id=event.sender_id, model_choice=model_choice)
     except MissingSttKeyError:
         await llm_db.request_api_key_message(event, "gemini")
         return
@@ -552,8 +660,12 @@ async def llm_stt(*, cwd, event, model_name=STT_MODELS[0], log=True):
         )
 
         if log:
-            _log_transcription(event, model_name=model_name, raw=transcription.raw)
+            _log_transcription(
+                event, model_name=transcription.model_name, raw=transcription.raw
+            )
 
+    except SttRequestError as e:
+        await _show_stt_status(status_message, str(e))
     except Exception as e:
         await llm_util.handle_llm_error(
             event=event,
@@ -633,10 +745,13 @@ Here's how to use me:
     Simply send any audio file, voice message, or video. If you send multiple files as an album, I will process them in a single request.
 4.  **In Other Chats:**
     Reply to a voice note, audio, video or image in any chat, even one I am not in, with a mention of me, and I post the transcript there. It uses your API key, and everyone in that chat sees it.
+5.  **Choose a Model:**
+    /model picks the Gemini model. Auto (the default) falls back to another model when one is busy or unavailable for your key; any other choice uses that model alone. 3.5 Transcribe is Google's dedicated speech-to-text model: audio only, plain text.
 **Available Commands:**
 - `/start`: Onboard and set up your API key.
 - `/help`: Shows this help message.
 - `/setGeminiKey [API_KEY]`: Sets or updates your Gemini API key.
+- `/model`: Chooses the transcription model.
 """
     await event.reply(help_text, link_preview=False)
 
@@ -665,6 +780,67 @@ async def rotate_keys_handler(event):
 async def set_key_handler(event):
     """Delegates /setgeminikey command logic to the shared module."""
     await llm_db.handle_set_key_command(event, "gemini")
+
+
+MODEL_CALLBACK_PREFIX = "sttmodel_"
+MODEL_MENU_COLUMNS = 2
+
+
+def _model_menu_title() -> str:
+    auto = ", then ".join(stt_models.label_for(name) for name in STT_MODELS)
+    return (
+        "**Choose the transcription model**\n\n"
+        f"Auto tries {auto}, and skips a model your API key cannot use. "
+        "Any other choice uses that model alone.\n\n"
+        "3.5 Transcribe is Google's speech-to-text model: it hears audio "
+        "only, and writes plain text without speaker labels or emoji."
+    )
+
+
+@borg.on(events.NewMessage(pattern=r"(?i)^/model(?:@\w+)?\s*$"))
+async def model_handler(event):
+    """Presents the transcription model menu."""
+    choice = get_model_choice(event.sender_id)
+    await bot_util.present_options(
+        event,
+        title=_model_menu_title(),
+        options=stt_models.menu_options(),
+        current_value=stt_models.slug_for_choice(choice),
+        callback_prefix=MODEL_CALLBACK_PREFIX,
+        awaiting_key="stt_model_selection",
+        n_cols=MODEL_MENU_COLUMNS,
+        is_bot=True,
+    )
+
+
+@borg.on(events.CallbackQuery(pattern=MODEL_CALLBACK_PREFIX.encode()))
+@callback_util.hold_bare_answers
+async def model_callback_handler(event):
+    """Saves the model the user pressed, for the presser."""
+    slug = bot_util.unsanitize_callback_data(
+        event.data.decode("utf-8").removeprefix(MODEL_CALLBACK_PREFIX)
+    )
+    if slug == stt_models.AUTO:
+        choice, label = stt_models.AUTO, stt_models.AUTO_LABEL
+    else:
+        model = stt_models.model_for_slug(slug)
+        if model is None:
+            await event.answer(
+                "That model is no longer offered. Send /model again.", alert=True
+            )
+            return
+        choice, label = model.model_id, model.label
+    set_model_choice(event.sender_id, choice)
+    await event.answer(f"Transcription model: {label}")
+    buttons = bot_util.option_buttons(
+        stt_models.menu_options(),
+        current_value=slug,
+        callback_prefix=MODEL_CALLBACK_PREFIX,
+    )
+    try:
+        await event.edit(buttons=util.build_menu(buttons, n_cols=MODEL_MENU_COLUMNS))
+    except Exception:
+        pass  # The menu is unchanged, or too old to edit.
 
 
 @borg.on(
@@ -865,9 +1041,13 @@ async def guest_stt_handler(query):
                 return
             except SttModelLoadError as e:
                 raise e.__cause__
-            transcription = await run_stt_job(
-                job, user_id=caller_id, status_message=answer
-            )
+            try:
+                transcription = await run_stt_job(
+                    job, user_id=caller_id, status_message=answer
+                )
+            except SttRequestError as e:
+                await answer.finalize(text=str(e))
+                return
             await _finalize_guest_transcript(answer, transcription.text)
 
         cwd = f"{util.dl_base}{uuid.uuid4()}/"

@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, patch
 from telethon import errors, types
 from telethon._updates import EntityCache
 
-from uniborg import guest_util, tg_compat
+from uniborg import guest_util, stt_models, tg_compat
 
 
 class _FakeLoop:
@@ -70,6 +70,8 @@ class LlmSttTests(unittest.TestCase):
         outcome=json.dumps({"transcription": "hello", "output_type": "transcript"}),
         attachments=("a.ogg",),
         model=None,
+        choice=stt_models.AUTO,
+        speech=None,
     ):
         status = SimpleNamespace(id=2)
         event = SimpleNamespace(
@@ -83,10 +85,19 @@ class LlmSttTests(unittest.TestCase):
             enter(
                 patch.object(stt, "get_effective_gemini_api_key", return_value=api_key)
             )
+            enter(patch.object(stt, "get_model_choice", return_value=choice))
+            for name in ("get_and_renew", "set_with_expiry"):
+                enter(patch.object(stt.redis_util, name, AsyncMock(return_value=None)))
+            if speech is not None:
+                calls.speech = enter(
+                    patch.object(
+                        stt.stt_models, "transcribe", AsyncMock(side_effect=[speech])
+                    )
+                )
             calls.request_key = enter(
                 patch.object(stt.llm_db, "request_api_key_message", AsyncMock())
             )
-            enter(
+            calls.get_model = enter(
                 patch.object(
                     stt.llm,
                     "get_async_model",
@@ -168,6 +179,102 @@ class LlmSttTests(unittest.TestCase):
             error["base_error_message"], "An error occurred during the API call."
         )
         calls.edit.assert_not_awaited()
+
+
+def _attachment(data, mime_type):
+    return stt.llm.Attachment(content=data, type=mime_type)
+
+
+class ModelChoiceTests(unittest.TestCase):
+    """/model: the saved choice, a chosen model alone, and the speech model."""
+
+    run_stt = LlmSttTests.run_stt
+
+    def test_a_chosen_model_alone_answers(self):
+        calls = self.run_stt(choice="gemini/gemini-3.8-flash")
+
+        self.assertEqual(calls.edit.await_args.args[1], "hello")
+        self.assertEqual(
+            {c.args[0] for c in calls.get_model.call_args_list},
+            {"gemini/gemini-3.8-flash"},
+        )
+
+    def test_a_chosen_model_that_refuses_the_key_says_so_in_the_status(self):
+        calls = self.run_stt(choice="gemini/gemini-2.5-flash", outcome=REFUSED)
+
+        text = calls.edit.await_args.args[1]
+        self.assertIn("2.5 Flash is not available for this API key", text)
+        calls.error.assert_not_awaited()
+
+    def test_the_speech_model_sends_its_plain_text_and_counts_what_it_skipped(self):
+        attachments = (
+            _attachment(b"OggS", "audio/ogg"),
+            _attachment(b"\x89PNG", "image/png"),
+        )
+        calls = self.run_stt(
+            choice="gemini/gemini-3.5-transcribe",
+            attachments=attachments,
+            speech="Hello there.",
+        )
+
+        self.assertEqual(
+            calls.edit.await_args.args[1],
+            "Hello there.\n\n__(3.5 Transcribe hears speech only, so 1 file "
+            "without sound was skipped.)__",
+        )
+        (audio,) = calls.speech.await_args.kwargs["audio"]
+        self.assertEqual(audio.data, b"OggS")
+        calls.get_model.assert_not_called()
+
+    def test_the_speech_model_on_images_alone_is_told_before_any_call(self):
+        calls = self.run_stt(
+            choice="gemini/gemini-3.5-transcribe",
+            attachments=(_attachment(b"\x89PNG", "image/png"),),
+            speech="unused",
+        )
+
+        self.assertIn("speech only", calls.event.reply.await_args.args[0])
+        calls.speech.assert_not_awaited()
+
+    def test_a_saved_choice_survives_and_one_no_longer_offered_is_auto(self):
+        saved = {}
+        storage = SimpleNamespace(
+            get=lambda user_id: saved.get(user_id, {}),
+            set=lambda user_id, data: saved.__setitem__(user_id, dict(data)),
+        )
+        with patch.object(stt, "_prefs_storage", storage):
+            self.assertEqual(stt.get_model_choice(7), stt_models.AUTO)
+            stt.set_model_choice(7, "gemini/gemini-3.5-transcribe")
+            self.assertEqual(stt.get_model_choice(7), "gemini/gemini-3.5-transcribe")
+            saved[7]["model"] = "gemini/gemini-1.0-pro"
+            self.assertEqual(stt.get_model_choice(7), stt_models.AUTO)
+
+    def press(self, slug):
+        data = stt.MODEL_CALLBACK_PREFIX + stt.bot_util.sanitize_callback_data(slug)
+        event = SimpleNamespace(
+            data=data.encode(),
+            sender_id=7,
+            answer=AsyncMock(),
+            edit=AsyncMock(),
+        )
+        with patch.object(stt, "set_model_choice") as saved:
+            asyncio.run(stt.model_callback_handler(event))
+        return event, saved
+
+    def test_a_press_saves_the_model_for_the_presser(self):
+        event, saved = self.press("3.8-flash")
+
+        saved.assert_called_once_with(7, "gemini/gemini-3.8-flash")
+        event.answer.assert_awaited_once_with("Transcription model: 3.8 Flash")
+        event.edit.assert_awaited_once()
+
+    def test_a_press_on_auto_and_on_a_retired_model(self):
+        _event, saved = self.press(stt_models.AUTO)
+        saved.assert_called_once_with(7, stt_models.AUTO)
+
+        event, saved = self.press("1.0-pro")
+        saved.assert_not_called()
+        self.assertTrue(event.answer.await_args.kwargs["alert"])
 
 
 BOT_ID = 5151
@@ -300,16 +407,18 @@ class ModelFallbackTests(unittest.TestCase):
         ):
             stack.enter_context(patch.object(target, name, value))
 
-    def transcribe(self, *, api_key="key-1"):
-        return asyncio.run(
+    def transcribe(self, *, api_key="key-1", models=("gemini/a", "gemini/b")):
+        answer = asyncio.run(
             stt._transcribe_with_retry(
-                model_name="gemini/a",
+                models=list(models),
                 attachments=[],
                 api_key=api_key,
                 status_message=object(),
                 italics_marker="_",
             )
         )
+        self.answered_by = answer.model_name
+        return answer.raw
 
     def test_a_refusal_falls_through_at_once_and_is_remembered_for_the_key(self):
         self.models = {
@@ -318,6 +427,7 @@ class ModelFallbackTests(unittest.TestCase):
         }
 
         self.assertEqual(self.transcribe(), "first")
+        self.assertEqual(self.answered_by, "gemini/b")
         self.assertEqual(self.transcribe(), "second")
 
         self.assertEqual(self.models["gemini/a"].calls, 1)
@@ -339,9 +449,10 @@ class ModelFallbackTests(unittest.TestCase):
             "gemini/b": _ScriptedModel(REFUSED),
         }
 
-        with self.assertRaises(Exception) as caught:
+        with self.assertRaises(stt.SttModelRefusedError) as caught:
             self.transcribe()
-        self.assertIs(caught.exception, REFUSED)
+        self.assertIs(caught.exception.__cause__, REFUSED)
+        self.assertIn("/model", str(caught.exception))
         self.assertEqual(self.transcribe(), "back")
 
     def test_transient_errors_retry_each_model_then_switch(self):
@@ -366,6 +477,28 @@ class ModelFallbackTests(unittest.TestCase):
             self.transcribe()
         self.assertIs(caught.exception, BUSY)
         self.assertEqual(self.models["gemini/b"].calls, retries)
+
+    def test_a_chosen_model_alone_is_retried_and_its_error_shown(self):
+        retries = stt.STT_RETRIES_PER_MODEL
+        self.models = {
+            "gemini/a": _ScriptedModel(),
+            "gemini/b": _ScriptedModel(*[BUSY] * retries),
+        }
+
+        with self.assertRaises(Exception) as caught:
+            self.transcribe(models=["gemini/b"])
+        self.assertIs(caught.exception, BUSY)
+        self.assertEqual(self.models["gemini/a"].calls, 0)
+
+    def test_a_chosen_model_that_refuses_the_key_is_not_replaced(self):
+        self.models = {
+            "gemini/a": _ScriptedModel(),
+            "gemini/b": _ScriptedModel(REFUSED),
+        }
+
+        with self.assertRaises(stt.SttModelRefusedError):
+            self.transcribe(models=["gemini/b"])
+        self.assertEqual(self.models["gemini/a"].calls, 0)
 
 
 class GuestSttTests(unittest.TestCase):
@@ -401,6 +534,7 @@ class GuestSttTests(unittest.TestCase):
             (stt.util, "isAdmin", AsyncMock(return_value=False)),
             (stt.util, "run_and_get", run_and_get),
             (stt, "get_effective_gemini_api_key", lambda user_id: self.api_key),
+            (stt, "get_model_choice", lambda user_id: stt_models.AUTO),
             (stt.llm, "get_async_model", lambda name: _Model("")),
             (
                 stt.llm_util,
