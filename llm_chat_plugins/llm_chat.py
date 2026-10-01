@@ -2643,6 +2643,11 @@ MODEL_MENU_CUSTOM_ID_HINTS = {
         "\n(Type `cancel` or `not set` to stop/clear.)"
     ),
 }
+#: A group menu arms no prompt: only private text can answer one, and a
+#: pending prompt would silence the user's messages in the group meanwhile.
+MODEL_MENU_GROUP_CUSTOM_ID_HINT = (
+    "Or, set a custom model ID with `/setModelHere MODEL_ID`."
+)
 
 
 def _model_menu_rows(menu: ModelMenu, *, scope: str) -> list:
@@ -2661,11 +2666,14 @@ def _model_menu_rows(menu: ModelMenu, *, scope: str) -> list:
     ]
 
 
-def _model_menu_text(*, scope: str) -> str:
-    return (
-        f"{BOT_META_INFO_PREFIX}{MODEL_MENU_TITLE}\n\n"
-        f"{MODEL_MENU_CUSTOM_ID_HINTS[scope]}"
+def _model_menu_text(*, scope: str, prompt_p: bool = True) -> str:
+    """A model menu's text. PROMPT_P: it asks for a custom ID as the next message."""
+    hint = (
+        MODEL_MENU_CUSTOM_ID_HINTS[scope]
+        if prompt_p
+        else MODEL_MENU_GROUP_CUSTOM_ID_HINT
     )
+    return f"{BOT_META_INFO_PREFIX}{MODEL_MENU_TITLE}\n\n{hint}"
 
 
 def _model_menu_closed_text(*, scope: str, chat_id, user_id: int) -> str:
@@ -2682,17 +2690,22 @@ def _model_menu_closed_text(*, scope: str, chat_id, user_id: int) -> str:
     return f"{BOT_META_INFO_PREFIX}{MODEL_MENU_TITLE}\n\nCancelled. Current model: {current}."
 
 
-async def _present_model_menu(event, *, scope: str, menu: ModelMenu, flow: dict):
+async def _present_model_menu(
+    event, *, scope: str, menu: ModelMenu, flow: Optional[dict]
+):
     """Sends a bot's model menu, and arms FLOW for a custom model ID.
 
     The menu message carries the custom-ID hint and a Cancel row, and the flow
-    records that message, so Cancel drops exactly the flow it armed.
+    records that message, so Cancel drops exactly the flow it armed. With FLOW
+    None, the menu asks for no next message.
     """
     message = await event.reply(
-        _model_menu_text(scope=scope),
+        _model_menu_text(scope=scope, prompt_p=flow is not None),
         buttons=_model_menu_rows(menu, scope=scope),
         parse_mode="md",
     )
+    if flow is None:
+        return
     start_input_flow(
         event,
         {
@@ -8620,7 +8633,11 @@ async def set_model_here_handler(event):
                 event,
                 scope=REASONING_SCOPE_CHAT,
                 menu=menu,
-                flow={"type": "chatmodel", "chat_id": chat_id},
+                flow=(
+                    {"type": "chatmodel", "chat_id": chat_id}
+                    if event.is_private
+                    else None
+                ),
             )
             return
         await bot_util.present_options(

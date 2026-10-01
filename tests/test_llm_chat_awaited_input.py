@@ -385,6 +385,13 @@ class ModelMenuCancelTests(_IsolatedStateTest):
         self.assertEqual(tg_compat.button_data(cancel), b"mm:cancel:chat")
         self.assertEqual(self.pending[USER_ID]["chat_id"], USER_ID)
 
+    def test_a_group_menu_arms_no_prompt(self):
+        self.admin.return_value = True
+        event = self.open_menu(plugin.set_model_here_handler, _in_forum_group("/smh"))
+
+        self.assertIn("/setModelHere MODEL_ID", event.reply.await_args.args[0])
+        self.assertEqual(self.pending, {})
+
     def test_cancel_drops_the_flow_then_closes_the_menu(self):
         self.open_menu()
         press = _press("mm:cancel:personal")

@@ -67,6 +67,11 @@ parameter is sent at all.
   from the menu stays picked. Typing `cancel` closes the menu as well. In a
   group, Cancel on a `/setModelHere` menu needs the same admin rights as its
   other buttons. On a user account the pickers are unchanged.
+- In a group, the bot's `/setModelHere` menu asks for no custom ID as the next
+  message, and says to send `/setModelHere MODEL_ID` instead. Such a prompt
+  could only be answered in private, so the user's next private message,
+  whatever it said, became the group's model, and until then the prompt
+  silenced their messages to the bot in the group.
 - The bot-admin `.codex-users` model panel uses the same menu state for a target
   user's personal model. It keeps full model IDs in that panel and appends only
   the levels supported by the selected model; changes are saved in the target's
