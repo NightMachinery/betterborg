@@ -312,6 +312,56 @@ class CodexStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(raised.exception.response.images_delivered, 0)
 
+    async def test_without_a_response_message_nothing_is_edited(self):
+        events = [
+            {
+                "type": "response.output_text.delta",
+                "item_id": "message-a",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "partial",
+            },
+            _completed(),
+        ]
+        stream = _Stream(events)
+        client = _Client(stream)
+        with mock.patch.object(
+            codex_util, "_create_async_client", mock.AsyncMock(return_value=client)
+        ), mock.patch.object(codex_util.util, "edit_message") as edit:
+            result = await codex_util.stream_codex_response(
+                event=None,
+                response_message=None,
+                model="openai-codex/test-model",
+                messages=[{"role": "user", "content": "hello"}],
+                edit_interval=0,
+            )
+        self.assertEqual(result.text, "partial")
+        edit.assert_not_called()
+
+    async def test_complete_codex_text_sends_one_quiet_request(self):
+        item = {
+            "id": "message-a",
+            "type": "message",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "{}"}],
+        }
+        client = _Client(_Stream([_completed([item])]))
+        create_client = mock.AsyncMock(return_value=client)
+        with mock.patch.object(codex_util, "_create_async_client", create_client):
+            text = await codex_util.complete_codex_text(
+                model="openai-codex/gpt-reserve",
+                instructions="Reply in JSON.",
+                text="the content",
+                reasoning_effort="low",
+            )
+        self.assertEqual(text, "{}")
+        create_client.assert_awaited_once_with(max_retries=0)
+        kwargs = client.responses.kwargs
+        self.assertEqual(kwargs["model"], "gpt-reserve")
+        self.assertEqual(kwargs["instructions"], "Reply in JSON.")
+        self.assertEqual(kwargs["input"], [{"role": "user", "content": "the content"}])
+        self.assertEqual(kwargs["reasoning"], {"effort": "low"})
+
     async def test_create_time_usage_limit_reaches_the_error(self):
         error = SimpleNamespace(
             body={

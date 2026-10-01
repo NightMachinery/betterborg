@@ -553,6 +553,7 @@ async def stream_codex_response(
 
     Callback failures stop this request without retrying generation. Cancellation
     propagates after resource cleanup; already-delivered images remain intact.
+    With `response_message` None, the text is collected without partial edits.
     """
     instructions, input_messages = messages_to_codex(messages)
     kwargs = prepare_codex_response_kwargs(
@@ -647,7 +648,10 @@ async def stream_codex_response(
                     60 if elapsed > 120 else 15 if elapsed > 30 else edit_interval
                 )
                 cursor = "▌💤💤" if elapsed > 120 else "▌💤" if elapsed > 30 else "▌"
-                if current_time - last_edit_time > current_edit_interval:
+                if (
+                    response_message is not None
+                    and current_time - last_edit_time > current_edit_interval
+                ):
                     try:
                         await util.edit_message(
                             response_message, result.text + cursor, parse_mode="md"
@@ -718,3 +722,33 @@ async def stream_codex_response(
                     await resource.close()
                 except Exception as exc:
                     print(f"Error closing Codex {name}: {exc}")
+
+
+async def complete_codex_text(
+    *,
+    model: str,
+    instructions: str,
+    text: str,
+    reasoning_effort: Optional[str] = None,
+    prompt_cache_key: Optional[str] = None,
+    max_retries: Optional[int] = 0,
+) -> str:
+    """One Codex request outside any chat: the reply's text.
+
+    It raises `CodexStreamError` like `stream_codex_response`, with
+    `usage_limit` set when the account's meter is spent. `max_retries`
+    defaults to 0, so a usage-limit 429 fails at once.
+    """
+    response = await stream_codex_response(
+        event=None,
+        response_message=None,
+        model=model,
+        messages=[
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": text},
+        ],
+        reasoning_effort=reasoning_effort,
+        prompt_cache_key=prompt_cache_key,
+        max_retries=max_retries,
+    )
+    return response.text
