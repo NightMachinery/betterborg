@@ -190,14 +190,24 @@ class GuestShellTests(unittest.TestCase):
     def test_a_single_file_is_attached_to_the_answer_with_a_caption(self):
         self.dm_media = True
 
-        self._run(_query(f"@{BOT_USERNAME} .aa printf 'y%.0s' $(seq 2000); : > f"))
+        self._run(_query(f"@{BOT_USERNAME} .aa printf 'y%.0s' $(seq 900); : > f"))
 
         (final,) = self.edits
         self.assertIsInstance(final["media"], types.InputMediaDocument)
         self.assertEqual(final["media"].id.id, 100)
         self.assertLessEqual(len(final["text"].encode("utf-16-le")) // 2, 1024)
         self.assertFalse(final.get("entities"))
-        self.assertTrue(final["text"].startswith("yyy"))
+        self.assertTrue(final["text"].startswith("y" * 900))
+
+    def test_output_too_long_for_a_caption_stays_a_whole_text_answer(self):
+        self.dm_media = True
+
+        self._run(_query(f"@{BOT_USERNAME} .aa printf 'y%.0s' $(seq 2000); : > f"))
+
+        (final,) = self.edits
+        self.assertNotIn("media", final)
+        self.assertTrue(final["text"].startswith("y" * 2000))
+        self.assertIn("1 file(s) sent to your DM", final["text"])
 
     def test_a_failed_attachment_falls_back_to_the_text_answer(self):
         self.dm_media = True

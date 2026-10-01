@@ -216,8 +216,20 @@ async def _run_guest_shell(query, request, answer):
         if truncated:
             footer_lines.append("✂️ Output truncated; the full output is a file.")
 
-        if len(sent) == 1 and await _finalize_with_attachment(
-            answer, sent[0], output=output, footer_lines=footer_lines
+        #: A caption holds far less than a text answer; attaching must not cut
+        #: output that the text answer would show whole.
+        caption_fits = (
+            tg_format.utf16_len(
+                _plain_answer(output, footer_lines=footer_lines, limit=10**9)
+            )
+            <= GUEST_CAPTION_LIMIT
+        )
+        if (
+            len(sent) == 1
+            and caption_fits
+            and await _finalize_with_attachment(
+                answer, sent[0], output=output, footer_lines=footer_lines
+            )
         ):
             return
         await answer.finalize(text=_plain_answer(output, footer_lines=footer_lines))

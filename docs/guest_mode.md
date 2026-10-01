@@ -176,10 +176,11 @@ dropped, never run late.
   never go to the guest chat, whose id in a private chat is the other person.
   The caller must have started the bot for the DM to work; the answer says so
   when it does not.
-- **A single file is also attached to the answer.** An inline edit cannot
-  upload, so the answer reuses the DM copy, with the output as its caption
-  (1024 UTF-16 units, so less of it shows than in a text answer). If Telegram
-  refuses, the answer stays text. Several files are only in the DM.
+- **A single file is also attached to the answer** when the output and the
+  footer fit a caption (1024 UTF-16 units). An inline edit cannot upload, so
+  the answer reuses the DM copy, with the output as its caption. Longer output
+  keeps the text answer, which shows up to 4096 units, and the file is only
+  in the DM; so does a refused attachment. Several files are only in the DM.
 
 ## The chat bot (`llm_chat_plugins/llm_chat.py`)
 
