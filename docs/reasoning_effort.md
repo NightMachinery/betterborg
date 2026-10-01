@@ -60,6 +60,13 @@ parameter is sent at all.
   buttons for the selected model's levels, so switching model and effort
   happens in one place. Picking a different model re-renders the row with that
   model's levels.
+- On a bot, each picker is one message: the custom-model-ID hint, the
+  buttons, and a last `❌ Cancel` row. Cancel drops the custom-ID prompt that
+  this menu armed (matched by the menu message, so a newer prompt survives),
+  then closes the menu and names the model in effect. A model already picked
+  from the menu stays picked. Typing `cancel` closes the menu as well. In a
+  group, Cancel on a `/setModelHere` menu needs the same admin rights as its
+  other buttons. On a user account the pickers are unchanged.
 - The bot-admin `.codex-users` model panel uses the same menu state for a target
   user's personal model. It keeps full model IDs in that panel and appends only
   the levels supported by the selected model; changes are saved in the target's

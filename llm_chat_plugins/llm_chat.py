@@ -1493,6 +1493,39 @@ class InputTopic:
     topic_id: int
 
 
+#: The flow key holding the `InputMenu` whose message asked for the flow.
+INPUT_MENU_KEY = "menu"
+
+
+@dataclass(frozen=True)
+class InputMenu:
+    """The bot message whose inline menu armed a pending input flow."""
+
+    chat_id: int
+    message_id: int
+
+
+def cancel_menu_input_flows(
+    menu: InputMenu, *, pending_inputs: Optional[dict] = None
+) -> list:
+    """Drops the pending flows MENU armed, and returns their owners' ids.
+
+    A flow is matched by its menu, not by who presses: in a group another admin
+    may close the menu, and a user's newer flow is not this menu's to cancel.
+    PENDING_INPUTS defaults to `AWAITING_INPUT_FROM_USERS`.
+    """
+    if pending_inputs is None:
+        pending_inputs = AWAITING_INPUT_FROM_USERS
+    owners = [
+        user_id
+        for user_id, flow in pending_inputs.items()
+        if flow.get(INPUT_MENU_KEY) == menu
+    ]
+    for user_id in owners:
+        pending_inputs.pop(user_id, None)
+    return owners
+
+
 def _input_topic(event) -> Optional[InputTopic]:
     """The private topic EVENT's message sits in, or None outside topics."""
     if not getattr(event, "is_private", False):
@@ -2594,6 +2627,147 @@ def _model_menu_buttons(
             label = f"✅ {label}"
         buttons.append(tg_compat.callback_button(label, data=callback_data(key)))
     return buttons
+
+
+MODEL_MENU_CALLBACK_PREFIXES = {
+    REASONING_SCOPE_PERSONAL: "model_",
+    REASONING_SCOPE_CHAT: "chatmodel_",
+}
+#: Followed by the scope. It must not start like a model callback prefix.
+MODEL_MENU_CANCEL_PREFIX = "mm:cancel:"
+MODEL_MENU_TITLE = "**Set Chat Model**"
+MODEL_MENU_CUSTOM_ID_HINTS = {
+    REASONING_SCOPE_PERSONAL: "Or, send a custom model ID below.\n(Type `cancel` to stop.)",
+    REASONING_SCOPE_CHAT: (
+        "Or, send a custom model ID below."
+        "\n(Type `cancel` or `not set` to stop/clear.)"
+    ),
+}
+
+
+def _model_menu_rows(menu: ModelMenu, *, scope: str) -> list:
+    """The keyboard of a bot's model menu: its choices, then a Cancel row."""
+    prefix = MODEL_MENU_CALLBACK_PREFIXES[scope]
+    buttons = _model_menu_buttons(
+        menu,
+        callback_data=lambda key: f"{prefix}{bot_util.sanitize_callback_data(key)}",
+    )
+    return util.build_menu(buttons, n_cols=2) + [
+        [
+            tg_compat.callback_button(
+                "❌ Cancel", data=f"{MODEL_MENU_CANCEL_PREFIX}{scope}"
+            )
+        ]
+    ]
+
+
+def _model_menu_text(*, scope: str) -> str:
+    return (
+        f"{BOT_META_INFO_PREFIX}{MODEL_MENU_TITLE}\n\n"
+        f"{MODEL_MENU_CUSTOM_ID_HINTS[scope]}"
+    )
+
+
+def _model_menu_closed_text(*, scope: str, chat_id, user_id: int) -> str:
+    """A closed model menu's text: it says the model that is now in effect."""
+    if scope == REASONING_SCOPE_PERSONAL:
+        current = f"`{user_manager.get_prefs(user_id).model}`"
+    elif scope == REASONING_SCOPE_CHAT:
+        chat_model = chat_manager.get_model(chat_id)
+        current = (
+            f"`{chat_model}`" if chat_model else "not set (personal defaults apply)"
+        )
+    else:
+        raise ValueError(f"Unknown model menu scope: {scope}")
+    return f"{BOT_META_INFO_PREFIX}{MODEL_MENU_TITLE}\n\nCancelled. Current model: {current}."
+
+
+async def _present_model_menu(event, *, scope: str, menu: ModelMenu, flow: dict):
+    """Sends a bot's model menu, and arms FLOW for a custom model ID.
+
+    The menu message carries the custom-ID hint and a Cancel row, and the flow
+    records that message, so Cancel drops exactly the flow it armed.
+    """
+    message = await event.reply(
+        _model_menu_text(scope=scope),
+        buttons=_model_menu_rows(menu, scope=scope),
+        parse_mode="md",
+    )
+    start_input_flow(
+        event,
+        {
+            **flow,
+            INPUT_MENU_KEY: InputMenu(chat_id=event.chat_id, message_id=message.id),
+        },
+    )
+
+
+async def _model_menu_cancel_handler(event, *, scope: str):
+    """A press on a model menu's Cancel: drop the flow it armed, close it.
+
+    A model already picked from the menu stays: its buttons apply at once.
+    """
+    if scope == REASONING_SCOPE_CHAT:
+        if not event.is_private and not (
+            await util.isAdmin(event) or await util.is_group_admin(event)
+        ):
+            await event.answer(
+                "You must be a group admin or bot admin to change this chat's"
+                " settings.",
+                show_alert=True,
+            )
+            return
+    elif scope == REASONING_SCOPE_PERSONAL:
+        pass
+    else:
+        #: Wire input from a button: an unknown scope is answered, not raised.
+        await event.answer("This menu is invalid.", show_alert=True)
+        return
+
+    cancel_menu_input_flows(
+        InputMenu(chat_id=event.chat_id, message_id=event.message_id)
+    )
+    #: Before the edit: `edit` answers the press itself, which would swallow
+    #: this answer.
+    await event.answer("Cancelled.")
+    try:
+        await event.edit(
+            _model_menu_closed_text(
+                scope=scope, chat_id=event.chat_id, user_id=event.sender_id
+            ),
+            buttons=None,
+            parse_mode="md",
+        )
+    except errors.rpcerrorlist.MessageNotModifiedError:
+        pass
+
+
+async def _close_model_menu_of(event, flow: dict):
+    """Best-effort: close the menu that armed FLOW, after a typed cancel."""
+    menu = flow.get(INPUT_MENU_KEY)
+    if menu is None:
+        return
+    flow_type = flow.get("type")
+    if flow_type == "model":
+        scope = REASONING_SCOPE_PERSONAL
+    elif flow_type == "chatmodel":
+        scope = REASONING_SCOPE_CHAT
+    else:
+        raise ValueError(f"A menu armed an unknown flow: {flow_type}")
+    try:
+        await event.client.edit_message(
+            menu.chat_id,
+            menu.message_id,
+            _model_menu_closed_text(
+                scope=scope,
+                chat_id=flow.get("chat_id", menu.chat_id),
+                user_id=event.sender_id,
+            ),
+            buttons=None,
+            parse_mode="md",
+        )
+    except Exception:
+        print(f"Could not close model menu {menu}: {traceback.format_exc()}")
 
 
 def _apply_reasoning_choice(
@@ -8290,6 +8464,11 @@ async def set_model_handler(event):
             admin_p=await util.isAdmin(event),
             codex_p=codex_p,
         )
+        if IS_BOT:
+            await _present_model_menu(
+                event, scope=REASONING_SCOPE_PERSONAL, menu=menu, flow={"type": "model"}
+            )
+            return
         await bot_util.present_options(
             event,
             title="Set Chat Model",
@@ -8436,6 +8615,14 @@ async def set_model_here_handler(event):
             admin_p=await util.isAdmin(event),
             codex_p=codex_p,
         )
+        if IS_BOT:
+            await _present_model_menu(
+                event,
+                scope=REASONING_SCOPE_CHAT,
+                menu=menu,
+                flow={"type": "chatmodel", "chat_id": chat_id},
+            )
+            return
         await bot_util.present_options(
             event,
             title="Set Chat Model",
@@ -8955,6 +9142,12 @@ async def callback_handler(event):
     user_id = event.sender_id
     #: @Claude Based on the Telethon documentation, I can now confirm that event.sender_id in a CallbackQuery event is indeed the ID of the person who clicked the button, not the original sender of the menu message.
 
+    if data_str.startswith(MODEL_MENU_CANCEL_PREFIX):
+        await _model_menu_cancel_handler(
+            event, scope=data_str[len(MODEL_MENU_CANCEL_PREFIX) :]
+        )
+        return
+
     if data_str.startswith(CODEX_USERS_CALLBACK_PREFIX):
         parts = data_str.split(":")
         if parts == ["cu", "add"]:
@@ -9315,11 +9508,7 @@ async def callback_handler(event):
             admin_p=admin_p,
             codex_p=codex_p,
         )
-        buttons = _model_menu_buttons(
-            menu,
-            callback_data=lambda key: (f"model_{bot_util.sanitize_callback_data(key)}"),
-        )
-        await event.edit(buttons=util.build_menu(buttons, n_cols=2))
+        await event.edit(buttons=_model_menu_rows(menu, scope=REASONING_SCOPE_PERSONAL))
         await event.answer(feedback)
 
     elif data_str.startswith("chatmodel_"):
@@ -9376,13 +9565,7 @@ async def callback_handler(event):
             admin_p=admin_p,
             codex_p=codex_p,
         )
-        buttons = _model_menu_buttons(
-            menu,
-            callback_data=lambda key: (
-                f"chatmodel_{bot_util.sanitize_callback_data(key)}"
-            ),
-        )
-        await event.edit(buttons=util.build_menu(buttons, n_cols=2))
+        await event.edit(buttons=_model_menu_rows(menu, scope=REASONING_SCOPE_CHAT))
         await event.answer(feedback_msg)
 
     elif data_str.startswith("thinkhere_") or data_str.startswith("think_"):
@@ -9706,6 +9889,7 @@ async def generic_input_handler(event):
 
     if text.lower() in CANCEL_KEYWORDS:
         cancel_input_flow(user_id)
+        await _close_model_menu_of(event, flow_data)
         await send_info_message(event, "Process cancelled.")
         return
 

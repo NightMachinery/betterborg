@@ -19,11 +19,12 @@ import importlib
 import unittest
 from contextlib import ExitStack
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from telethon.tl.types import Message, MessageReplyHeader, PeerChannel, PeerUser
 
-from uniborg import llm_db
+from uniborg import llm_db, tg_compat
+from uniborg.constants import BOT_META_INFO_PREFIX
 
 
 class _FakeLoop:
@@ -295,6 +296,179 @@ class FlowStartingHandlerTests(_IsolatedStateTest):
                 self.assertEqual(
                     self.run_handler(handler, _outside_topics("/command")), expected
                 )
+
+
+MENU_ID = 700
+
+
+def _press(data, *, message_id=MENU_ID, chat_id=USER_ID, is_private=True):
+    """A press on a button of message MESSAGE_ID; ORDER logs answer and edit."""
+    order = Mock()
+    order.attach_mock(AsyncMock(), "answer")
+    order.attach_mock(AsyncMock(), "edit")
+    return SimpleNamespace(
+        data=data.encode(),
+        sender_id=USER_ID,
+        chat_id=chat_id,
+        message_id=message_id,
+        is_private=is_private,
+        answer=order.answer,
+        edit=order.edit,
+        order=order,
+    )
+
+
+class ModelMenuCancelTests(_IsolatedStateTest):
+    """A bot's model menus carry a Cancel row that drops the flow they armed."""
+
+    def setUp(self):
+        super().setUp()
+        enter = self.stack.enter_context
+        self.menu = plugin.ModelMenu(
+            options={"model/a": "Model A", "model/b": "Model B"},
+            current_value="model/a",
+            think_state=None,
+        )
+        enter(patch.object(plugin, "IS_BOT", True))
+        enter(patch.object(plugin.llm_chat_config, "load_config", return_value=None))
+        enter(
+            patch.object(
+                plugin.llm_chat_config,
+                "can_use_codex",
+                new=AsyncMock(return_value=False),
+            )
+        )
+        self.admin = enter(
+            patch.object(plugin.util, "isAdmin", new=AsyncMock(return_value=False))
+        )
+        enter(
+            patch.object(
+                plugin.util, "is_group_admin", new=AsyncMock(return_value=False)
+            )
+        )
+        enter(patch.object(plugin, "_build_model_menu", return_value=self.menu))
+        enter(patch.object(plugin.chat_manager, "get_model", return_value=None))
+        enter(
+            patch.object(
+                plugin.user_manager,
+                "get_prefs",
+                return_value=SimpleNamespace(model="model/a"),
+            )
+        )
+        enter(patch.object(plugin, "send_info_message", new=AsyncMock()))
+
+    def open_menu(self, handler=None, event=None):
+        event = event or _in_topic("/setmodel")
+        event.reply = AsyncMock(return_value=SimpleNamespace(id=MENU_ID))
+        asyncio.run((handler or plugin.set_model_handler)(event))
+        return event
+
+    def test_the_menu_is_one_message_with_a_cancel_row(self):
+        event = self.open_menu()
+
+        ((text,), kwargs) = event.reply.await_args
+        self.assertTrue(text.startswith(BOT_META_INFO_PREFIX))
+        self.assertIn("send a custom model ID", text)
+        (cancel,) = kwargs["buttons"][-1]
+        self.assertEqual(tg_compat.button_data(cancel), b"mm:cancel:personal")
+        flow = self.pending[USER_ID]
+        self.assertEqual(flow["type"], "model")
+        self.assertEqual(
+            flow[plugin.INPUT_MENU_KEY], plugin.InputMenu(USER_ID, MENU_ID)
+        )
+        self.assertEqual(flow[plugin.INPUT_TOPIC_KEY].topic_id, TOPIC_ID)
+
+    def test_the_chat_menu_cancel_names_its_scope(self):
+        event = self.open_menu(plugin.set_model_here_handler, _in_topic("/smh"))
+
+        (cancel,) = event.reply.await_args.kwargs["buttons"][-1]
+        self.assertEqual(tg_compat.button_data(cancel), b"mm:cancel:chat")
+        self.assertEqual(self.pending[USER_ID]["chat_id"], USER_ID)
+
+    def test_cancel_drops_the_flow_then_closes_the_menu(self):
+        self.open_menu()
+        press = _press("mm:cancel:personal")
+
+        asyncio.run(plugin.callback_handler(press))
+
+        self.assertNotIn(USER_ID, self.pending)
+        self.assertEqual(
+            [call[0] for call in press.order.mock_calls], ["answer", "edit"]
+        )
+        ((text,), kwargs) = press.edit.await_args
+        self.assertTrue(text.startswith(BOT_META_INFO_PREFIX))
+        self.assertIn("Cancelled. Current model: `model/a`.", text)
+        self.assertIsNone(kwargs["buttons"])
+
+    def test_cancel_on_an_older_menu_keeps_the_newer_flow(self):
+        self.open_menu()
+        press = _press("mm:cancel:personal", message_id=MENU_ID - 1)
+
+        asyncio.run(plugin.callback_handler(press))
+
+        self.assertIn(USER_ID, self.pending)
+        press.edit.assert_awaited_once()
+
+    def test_cancel_with_no_flow_still_closes_the_menu(self):
+        press = _press("mm:cancel:chat")
+
+        asyncio.run(plugin.callback_handler(press))
+
+        self.assertIn("not set", press.edit.await_args.args[0])
+
+    def test_a_group_menu_needs_an_admin_and_a_bogus_scope_is_refused(self):
+        group_menu = {"type": "chatmodel", "chat_id": GROUP_CHAT_ID}
+        group_menu[plugin.INPUT_MENU_KEY] = plugin.InputMenu(GROUP_CHAT_ID, MENU_ID)
+        self.pending[USER_ID] = group_menu
+        for data in ("mm:cancel:chat", "mm:cancel:bogus"):
+            with self.subTest(data=data):
+                press = _press(data, chat_id=GROUP_CHAT_ID, is_private=False)
+                asyncio.run(plugin.callback_handler(press))
+                self.assertTrue(press.answer.await_args.kwargs["show_alert"])
+                press.edit.assert_not_awaited()
+        self.assertIn(USER_ID, self.pending)
+
+        self.admin.return_value = True
+        asyncio.run(
+            plugin.callback_handler(
+                _press("mm:cancel:chat", chat_id=GROUP_CHAT_ID, is_private=False)
+            )
+        )
+        self.assertNotIn(USER_ID, self.pending)
+
+    def test_a_typed_cancel_closes_the_menu_too(self):
+        self.open_menu()
+        typed = _in_topic("cancel", msg_id=501)
+        typed.client = SimpleNamespace(edit_message=AsyncMock())
+
+        asyncio.run(plugin.generic_input_handler(typed))
+
+        self.assertNotIn(USER_ID, self.pending)
+        args, kwargs = typed.client.edit_message.await_args
+        self.assertEqual(args[:2], (USER_ID, MENU_ID))
+        self.assertIn("Cancelled.", args[2])
+        self.assertIsNone(kwargs["buttons"])
+
+    def test_picking_a_model_keeps_the_cancel_row(self):
+        self.stack.enter_context(
+            patch.object(
+                plugin,
+                "_model_choices_for_access",
+                return_value={"model/b": "Model B"},
+            )
+        )
+        self.stack.enter_context(
+            patch.object(
+                plugin, "_can_user_access_model", new=AsyncMock(return_value=True)
+            )
+        )
+        self.stack.enter_context(patch.object(plugin, "_apply_personal_model_choice"))
+        press = _press(f"model_{plugin.bot_util.sanitize_callback_data('model/b')}")
+
+        asyncio.run(plugin.callback_handler(press))
+
+        (cancel,) = press.edit.await_args.kwargs["buttons"][-1]
+        self.assertEqual(tg_compat.button_data(cancel), b"mm:cancel:personal")
 
 
 class GenericInputHandlerTests(_IsolatedStateTest):

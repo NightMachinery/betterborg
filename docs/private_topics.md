@@ -250,7 +250,9 @@ no reply, as before.
   prompt by typing there: each such message opens a new topic. They have to
   open the prompt's topic (or, untested, reply to the prompt). The flow also
   has no expiry, so it can wait in its topic until a much later message there
-  is taken as the answer.
+  is taken as the answer. The model pickers' `❌ Cancel` button drops their
+  prompt from wherever it is pressed, since it matches the menu message, not
+  the topic.
 - **API key prompts stay chat-wide.** `llm_db.request_api_key_message` sends
   its prompt without a reply target, so it lands in "All", outside every
   topic, and the next text message in any topic is taken as the key. A
