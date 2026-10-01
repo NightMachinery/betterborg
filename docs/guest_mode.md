@@ -219,6 +219,30 @@ chat. The handler keeps queries for at most 120 seconds.
   sends. Media cache keys of guest messages include the caller, since their
   chat and message ids are the caller's view of the chat.
 
+## The STT bot (`stt_plugins/stt.py`)
+
+A mention of the bot in a reply to a voice note, audio, video or image, in a
+chat the bot is not in, posts the transcript there, made with the caller's
+own Gemini key. Media in the trigger itself counts too.
+
+- **Only an explicit mention is a request.** A reply to a transcript without
+  a mention gets nothing.
+- **Every explicit call is answered**: "No voice note, audio, video or image
+  in your message or the one you replied to." when there is nothing to
+  transcribe; an invite with a start button when the caller has no Gemini
+  key (checked before anything is downloaded); a note past 30 transcripts per
+  caller per hour (admins are exempt).
+- **The answer** starts as "🎙 Transcribing…", which also shows retry
+  progress, and ends as classic Telegram Markdown when the transcript fits one
+  message. The transcript prompt asks for Telegram Markdown (`__italic__`),
+  which rich Markdown would read as bold. A longer transcript ends as rich
+  Markdown, cut at 32000 UTF-8 bytes; if Telegram refuses that, as classic
+  Markdown cut to one message.
+- **Guest transcripts are not logged**, unlike private ones
+  (`~/.borg/stt/log/`): they are other people's media.
+- The same checks as in a private chat (`prepare_stt_job`) come after the
+  download; a failure is told in the answer.
+
 ## The chat bot's guest policy
 
 The chat bot reads its guest policy from the optional `guest` section of

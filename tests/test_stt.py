@@ -6,12 +6,19 @@ sees for one outcome.
 
 import asyncio
 import builtins
+import datetime
 import importlib
 import json
+import logging
 from contextlib import ExitStack
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
+
+from telethon import types
+from telethon._updates import EntityCache
+
+from uniborg import guest_util, tg_compat
 
 
 class _FakeLoop:
@@ -161,6 +168,199 @@ class LlmSttTests(unittest.TestCase):
             error["base_error_message"], "An error occurred during the API call."
         )
         calls.edit.assert_not_awaited()
+
+
+BOT_ID = 5151
+BOT_USERNAME = "llm_test_stt_bot"
+CALLER = 888001
+OTHER = 888002
+NOW = datetime.datetime.now(datetime.timezone.utc)
+
+
+def _voice():
+    return types.MessageMediaDocument(
+        document=types.Document(
+            id=9,
+            access_hash=1,
+            file_reference=b"",
+            date=NOW,
+            mime_type="audio/ogg",
+            size=10,
+            dc_id=2,
+            attributes=[types.DocumentAttributeAudio(duration=3, voice=True)],
+        )
+    )
+
+
+def _query(text, *, reference_media=None, query_id=1):
+    client = SimpleNamespace(
+        _self_id=BOT_ID, _mb_entity_cache=EntityCache(), parse_mode=None
+    )
+    trigger = types.Message(
+        id=20,
+        peer_id=types.PeerUser(OTHER),
+        date=NOW,
+        message=text,
+        from_id=types.PeerUser(CALLER),
+        out=True,
+    )
+    reference = types.Message(
+        id=19,
+        peer_id=types.PeerUser(OTHER),
+        date=NOW,
+        message="",
+        from_id=types.PeerUser(OTHER),
+        media=reference_media,
+    )
+    update = SimpleNamespace(
+        query_id=query_id, message=trigger, reference_messages=[reference]
+    )
+    update._entities = {CALLER: types.User(id=CALLER, first_name="C")}
+    return guest_util.guest_query_from_update(update, client=client)
+
+
+class _Editor:
+    def __init__(self, log):
+        self.log = log
+
+    def __call__(self, client, inline_id):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def edit(self, **kwargs):
+        self.log.append(kwargs)
+        return True
+
+
+class _GuestBorg:
+    me = types.User(id=BOT_ID, bot=True, first_name="STT", username=BOT_USERNAME)
+
+    def __init__(self):
+        self.forbidden = []
+
+    def __getattr__(self, name):
+        if name in ("send_message", "send_file", "get_messages"):
+
+            async def refuse(*args, **kwargs):
+                self.forbidden.append(name)
+
+            return refuse
+        raise AttributeError(name)
+
+
+class GuestSttTests(unittest.TestCase):
+    api_key = "caller-key"
+    transcript = "hello"
+
+    def setUp(self):
+        self.answers = []
+        self.edits = []
+        self.downloaded = []
+        self.borg = _GuestBorg()
+
+        async def answer_guest(client, *, query_id, title, text=None, **kwargs):
+            self.answers.append(SimpleNamespace(text=text, **kwargs))
+            return types.InputBotInlineMessageID(dc_id=2, id=1, access_hash=1)
+
+        async def run_and_get(event, to_await, cwd=None, *, messages=None):
+            self.downloaded.append([m.id for m in messages])
+            await to_await(cwd=cwd, event=event)
+            return cwd
+
+        async def run_stt_job(job, *, user_id, status_message, italics_marker="__"):
+            self.jobs.append((job, user_id))
+            return stt.Transcription(text=self.transcript, raw="{}")
+
+        self.jobs = []
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        for target, name, value in (
+            (builtins, "borg", self.borg),
+            (stt.tg_raw, "answer_guest", answer_guest),
+            (stt.tg_raw, "InlineEditor", _Editor(self.edits)),
+            (stt.util, "isAdmin", AsyncMock(return_value=False)),
+            (stt.util, "run_and_get", run_and_get),
+            (stt, "get_effective_gemini_api_key", lambda user_id: self.api_key),
+            (stt.llm, "get_async_model", lambda name: _Model("")),
+            (
+                stt.llm_util,
+                "create_attachments_from_dir",
+                lambda cwd: ["voice.ogg"],
+            ),
+            (stt, "run_stt_job", run_stt_job),
+            (stt, "_log_transcription", AssertionError),
+            (stt.llm_db, "request_api_key_message", AssertionError),
+            (stt, "_guest_limiter", guest_util.CallLimiter()),
+        ):
+            stack.enter_context(patch.object(target, name, value))
+        stack.enter_context(
+            patch.object(builtins, "logger", logging.getLogger("test.stt"), create=True)
+        )
+
+    def run_query(self, query):
+        asyncio.run(stt.guest_stt_handler(query))
+        self.assertEqual(self.borg.forbidden, [])
+
+    def test_a_mention_on_a_voice_note_is_transcribed_with_the_callers_key(self):
+        self.run_query(_query(f"@{BOT_USERNAME}", reference_media=_voice()))
+
+        self.assertEqual([a.text for a in self.answers], [stt.GUEST_PLACEHOLDER])
+        self.assertEqual(self.downloaded, [[19]])
+        ((job, user_id),) = self.jobs
+        self.assertEqual((job.api_key, user_id), ("caller-key", CALLER))
+        self.assertEqual(self.edits, [{"text": "hello", "parse_mode": "md"}])
+
+    def test_a_long_transcript_ends_as_rich_markdown(self):
+        self.transcript = "word " * 2000
+
+        self.run_query(_query(f"@{BOT_USERNAME}", reference_media=_voice()))
+
+        self.assertEqual(self.edits[-1], {"markdown": self.transcript})
+
+    def test_a_reply_without_a_mention_is_ignored(self):
+        self.run_query(_query("thanks", reference_media=_voice()))
+
+        self.assertEqual(self.answers, [])
+
+    def test_a_mention_without_media_says_so(self):
+        self.run_query(_query(f"@{BOT_USERNAME} hi"))
+
+        self.assertEqual([a.text for a in self.answers], [stt.GUEST_NO_MEDIA_TEXT])
+        self.assertEqual(self.jobs, [])
+
+    def test_a_caller_without_a_key_is_invited_and_nothing_is_downloaded(self):
+        self.api_key = None
+
+        self.run_query(_query(f"@{BOT_USERNAME}", reference_media=_voice()))
+
+        (invite,) = self.answers
+        self.assertEqual(invite.text, stt.GUEST_INVITE_TEXT)
+        ((button,),) = invite.buttons
+        self.assertEqual(
+            tg_compat.button_url(button), f"https://t.me/{BOT_USERNAME}?start=guest"
+        )
+        self.assertEqual(self.downloaded, [])
+
+    def test_unusable_files_are_told_in_the_answer(self):
+        with patch.object(stt.llm_util, "create_attachments_from_dir", lambda cwd: []):
+            self.run_query(_query(f"@{BOT_USERNAME}", reference_media=_voice()))
+
+        self.assertEqual(
+            self.edits, [{"text": "No valid media files found to transcribe."}]
+        )
+
+    def test_an_echoed_answer_is_not_media_to_transcribe(self):
+        echo = SimpleNamespace(
+            media=_voice(), out=True, guestchat_via_from=types.PeerUser(CALLER)
+        )
+        event = SimpleNamespace(media=echo.media, sender=object(), message=echo)
+
+        self.assertFalse(stt.is_transcribable_media_event(event))
 
 
 if __name__ == "__main__":

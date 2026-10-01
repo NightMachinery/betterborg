@@ -2,6 +2,11 @@ from icecream import ic
 from uniborg import util
 from uniborg import llm_util
 from uniborg import llm_db
+from uniborg import guest_util
+from uniborg import redis_util
+from uniborg import tg_compat
+from uniborg import tg_format
+from uniborg import tg_raw
 from uniborg.constants import (
     GEMINI_FLASH_LATEST,
     GEMINI_STT_LATEST,
@@ -22,7 +27,8 @@ import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
-from telethon import events
+from telethon import errors, events
+from telethon.extensions import markdown as telethon_markdown
 from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.types import (
     BotCommand,
@@ -569,6 +575,8 @@ Here's how to use me:
     - Or, just type /setGeminiKey and I will guide you.
 3.  **Transcribe Media:**
     Simply send any audio file, voice message, or video. If you send multiple files as an album, I will process them in a single request.
+4.  **In Other Chats:**
+    Reply to a voice note, audio, video or image in any chat, even one I am not in, with a mention of me, and I post the transcript there. It uses your API key, and everyone in that chat sees it.
 **Available Commands:**
 - `/start`: Onboard and set up your API key.
 - `/help`: Shows this help message.
@@ -621,12 +629,18 @@ async def key_submission_handler(event):
 NON_TRANSCRIBABLE_MEDIA_TYPES = (MessageMediaUnsupported, MessageMediaWebPage)
 
 
+def is_transcribable_media(message) -> bool:
+    return message.media is not None and not isinstance(
+        message.media, NON_TRANSCRIBABLE_MEDIA_TYPES
+    )
+
+
 def is_transcribable_media_event(event) -> bool:
     """Whether EVENT carries media `media_handler` should transcribe."""
     return (
-        event.media is not None
-        and not isinstance(event.media, NON_TRANSCRIBABLE_MEDIA_TYPES)
+        is_transcribable_media(event)
         and bool(event.sender)
+        and not guest_util.is_guest_answer(getattr(event, "message", None))
     )
 
 
@@ -662,6 +676,172 @@ async def media_handler(event):
         await util.run_and_upload(event=event, to_await=llm_stt)
 
 
+# --- Guest mode ---
+#: Transcripts of media that a mention replies to, in chats the bot is not in.
+#: The protocol and its safety rules are in docs/guest_mode.md.
+
+GUEST_MAX_AGE_SECONDS = 120
+GUEST_MAX_CALLS_PER_HOUR = 30
+GUEST_CLASSIC_LIMIT_UNITS = 4096
+#: A rich message allows 32768 UTF-8 characters; counting bytes is the safe
+#: reading.
+GUEST_RICH_LIMIT_BYTES = 32000
+GUEST_TRUNCATED_NOTE = (
+    "\n\n_(Truncated; send me the media privately for the whole transcript.)_"
+)
+GUEST_PLACEHOLDER = "🎙 Transcribing…"
+GUEST_NO_MEDIA_TEXT = (
+    "No voice note, audio, video or image in your message or the one you " "replied to."
+)
+GUEST_INVITE_TEXT = (
+    "To use me here, start me in a private chat and set a Gemini API key "
+    "first (it is free)."
+)
+
+_guest_claims = guest_util.QueryClaims(
+    backend=guest_util.redis_claim_backend(redis_util.get_redis)
+)
+_guest_limiter = guest_util.CallLimiter(
+    backend=guest_util.redis_counter_backend(redis_util.get_redis)
+)
+
+
+def _guest_title() -> str:
+    #: Required by Telegram but never shown.
+    return getattr(borg.me, "first_name", None) or "Transcriber"
+
+
+async def _guest_note(query, text, *, buttons=None):
+    await guest_util.answer_note(
+        borg, query, text, title=_guest_title(), buttons=buttons, logger=logger
+    )
+
+
+async def _finalize_guest_transcript(answer, text: str) -> None:
+    """Classic Markdown when it fits one message, else rich, else cut short.
+
+    The transcript prompt asks for Telegram Markdown (`__italic__`), which
+    rich Markdown reads as bold, so classic is preferred.
+    """
+    parsed, _entities = telethon_markdown.parse(text)
+    if tg_format.utf16_len(parsed) <= GUEST_CLASSIC_LIMIT_UNITS:
+        await answer.finalize(text=text, parse_mode="md")
+        return
+    try:
+        await answer.finalize(
+            markdown=tg_format.truncate_utf8(
+                text, GUEST_RICH_LIMIT_BYTES, suffix=GUEST_TRUNCATED_NOTE
+            )
+        )
+        return
+    except errors.FloodWaitError:
+        raise
+    except errors.RPCError as e:
+        logger.warning("Telegram refused a rich transcript (%s); cutting it", e)
+    #: The raw Markdown is never shorter than what it renders.
+    await answer.finalize(
+        text=tg_format.truncate_utf16(
+            text, GUEST_CLASSIC_LIMIT_UNITS - 96, suffix=GUEST_TRUNCATED_NOTE
+        ),
+        parse_mode="md",
+    )
+
+
+async def guest_stt_handler(query):
+    """Transcribes the media of a guest mention and its reference, if any.
+
+    Only an explicit mention is a request; a reply to our transcript is not.
+    Transcripts of guest chats are not logged.
+    """
+    username = borg.me.username
+    if not (username and guest_util.mentions(query.text, username=username)):
+        return
+    caller_id = query.caller_id
+    if caller_id is None:
+        await _guest_note(query, "I can only answer people, not channels.")
+        return
+    media = [m for m in query.messages if is_transcribable_media(m)]
+    if not media:
+        await _guest_note(query, GUEST_NO_MEDIA_TEXT)
+        return
+    event = guest_util.GuestEvent(query)
+    if not await util.isAdmin(event) and not await _guest_limiter.allow(
+        f"stt:{borg.me.id}:{caller_id}", limit=GUEST_MAX_CALLS_PER_HOUR
+    ):
+        await _guest_note(
+            query,
+            f"You have had {GUEST_MAX_CALLS_PER_HOUR} transcripts this hour; "
+            "try again later, or send me the media privately.",
+        )
+        return
+    if not get_effective_gemini_api_key(caller_id):
+        await _guest_note(
+            query,
+            GUEST_INVITE_TEXT,
+            buttons=[
+                [
+                    tg_compat.url_button(
+                        "Start a private chat",
+                        f"https://t.me/{username}?start=guest",
+                    )
+                ]
+            ],
+        )
+        return
+
+    try:
+        inline_id = await tg_raw.answer_guest(
+            borg, query_id=query.query_id, title=_guest_title(), text=GUEST_PLACEHOLDER
+        )
+    except Exception:
+        #: Not retried: a second answer could post twice.
+        logger.exception("Could not answer guest query %s", query.query_id)
+        return
+
+    async with tg_raw.InlineEditor(borg, inline_id) as editor:
+        answer = guest_util.GuestAnswerMessage(editor, logger=logger)
+
+        async def transcribe(*, cwd, event):
+            try:
+                job = prepare_stt_job(cwd, user_id=caller_id)
+            except SttRequestError as e:
+                await answer.finalize(text=str(e))
+                return
+            except SttModelLoadError as e:
+                raise e.__cause__
+            transcription = await run_stt_job(
+                job, user_id=caller_id, status_message=answer
+            )
+            await _finalize_guest_transcript(answer, transcription.text)
+
+        cwd = f"{util.dl_base}{uuid.uuid4()}/"
+        try:
+            await util.run_and_get(None, transcribe, cwd, messages=media)
+        except Exception as e:
+            await llm_util.handle_llm_error(
+                event=event,
+                exception=e,
+                response_message=answer,
+                service="gemini",
+                base_error_message="An error occurred during the API call.",
+                error_id_p=True,
+            )
+        finally:
+            await util.remove_potential_file(cwd)
+
+
+async def register_guest_mode():
+    """Answers guest queries; a no-op on a user account or Telethon 1.43."""
+    guest_util.register_guest_handler(
+        borg,
+        guest_stt_handler,
+        claims=_guest_claims,
+        max_age_seconds=GUEST_MAX_AGE_SECONDS,
+        logger=logger,
+    )
+
+
 # --- Initialization ---
 # Schedule the command menu setup to run on the bot's event loop upon loading.
 borg.loop.create_task(set_bot_menu_commands())
+borg.loop.create_task(register_guest_mode())

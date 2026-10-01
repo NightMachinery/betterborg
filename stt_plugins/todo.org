@@ -9,6 +9,9 @@
 transcribe (stt): add inline support to this Telegram plugin, so that the user can reply to a media file and write `@bot_username` and the bot will give back the transcription. Search for relevant documentation first. Is this possible at all? I am not sure if the inline thingy can support getting the replied to media files.
 #+END_SRC
 
+*** Update 2026-10-01: possible now, through guest mode
+Bot API 10.0's guest mode delivers the replied-to message with the mention, so a reply to a voice note with =@bot_username= is now transcribed in place, even in chats the bot is not in. See =docs/guest_mode.md= (the STT bot section). The analysis below predates it.
+
 *** @G25 Inline Transcription Not Possible With Current Telegram API, But A Convenient Alternative Exists
 An inline version of the transcription bot that would allow users to reply to a media file with =@bot_username= to get a transcription is not feasible with the current Telegram Bot API. Inline queries, which are triggered by typing =@bot_username=, do not have access to the context of the message they are replying to. This means the bot cannot identify which media file to transcribe.
 
