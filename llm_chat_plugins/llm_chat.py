@@ -7103,7 +7103,7 @@ async def help_handler(event):
         "`.asxx` / `.اسخخ` → Codex GPT-6 Astra "
         "(low / high / extra high / max)"
         if has_codex_access
-        else "- `.c` → GPT-6.1 Sol (OpenRouter): Latest OpenAI model on OpenRouter"
+        else "- `.c` → GPT Sol Latest (OpenRouter): Latest OpenAI model on OpenRouter"
     )
     if has_codex_imagegen_access:
         codex_shortcuts_text += (

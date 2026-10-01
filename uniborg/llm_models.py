@@ -127,7 +127,7 @@ MODEL_SPECS = [
     ## OpenAI
     ModelSpec(
         OR_OPENAI_SOL,
-        "GPT-6.1 Sol (OpenRouter)",
+        "GPT Sol Latest (OpenRouter)",
         OPENROUTER_REASONING_LEVELS,
         emoji="🌞",
     ),
@@ -201,6 +201,7 @@ MODEL_SPECS_BY_ID: Dict[str, ModelSpec] = {spec.id: spec for spec in MODEL_SPECS
 #: on 2026-10-14, and Codex names GPT-6.1 Sol its successor.
 RETIRED_MODELS: Dict[str, str] = {
     "openrouter/openai/gpt-5.6-sol": OR_OPENAI_SOL,
+    "openrouter/openai/gpt-6.1-sol": OR_OPENAI_SOL,
     "openai-codex/gpt-5.6-sol": OPENAI_CODEX_SOL,
     "openai-codex/gpt-5.6-terra": OPENAI_CODEX_SOL,
     "openai-codex/gpt-5.6-luna": OPENAI_CODEX_LUNA,

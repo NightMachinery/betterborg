@@ -17,7 +17,8 @@ GEMINI_PRO_LATEST = "gemini/gemini-3-pro-preview"
 
 #: The OpenAI families are named without a version, so an upgrade changes only
 #: the id here. `llm_models.RETIRED_MODELS` moves saved settings forward.
-OR_OPENAI_SOL = "openrouter/openai/gpt-6.1-sol"
+#: OpenRouter's router alias for the newest GPT Sol, so it upgrades by itself.
+OR_OPENAI_SOL = "openrouter/~openai/gpt-sol-latest"
 OR_OPENAI_LATEST = OR_OPENAI_SOL
 
 #: Codex models are reached through the ChatGPT OAuth backend, not the public API.

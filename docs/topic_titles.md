@@ -54,7 +54,7 @@ distinct.
 - 🌩️ Gemini 2.5 Flash
 - 💥 Gemini 3 Flash
 - 💎 Gemini 3 Pro
-- 🌞 GPT-6.1 Sol through OpenRouter
+- 🌞 GPT Sol Latest (OpenRouter), `openrouter/~openai/gpt-sol-latest`
 - ☀️ GPT-6.1 Sol (Codex)
 - ✨ GPT-6 Astra (Codex)
 - 🌙 Luna Reserve (Codex)

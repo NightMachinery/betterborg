@@ -223,7 +223,8 @@ retirement. GPT-6 Astra answers live requests
 
 The families are named without a version in `uniborg/constants.py`
 (`OPENAI_CODEX_SOL`, `OPENAI_CODEX_LUNA`, `OR_OPENAI_SOL`), so an upgrade
-changes one id there. `llm_models.RETIRED_MODELS` maps each id that was once
+changes one id there. The OpenRouter one is OpenRouter's own router alias,
+`~openai/gpt-sol-latest`, so it needs no change at all. `llm_models.RETIRED_MODELS` maps each id that was once
 registered to its replacement, and saved settings (personal, chat and topic
 models, the title model, a quota stand-in, and the per-model efforts) load
 with the replacement and are saved that way on their next write
