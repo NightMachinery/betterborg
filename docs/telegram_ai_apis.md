@@ -337,10 +337,10 @@ Identity and addressing:
   field]. There the answer has `from_id` equal to the bot, `guestchat_via_from`
   equal to its original caller, and no outgoing flag. A caller posting as a
   channel should have that channel as `from_id` [untested].
-- **In a private chat, the peer id is not the caller.** Field evidence points
-  to the other participant as the caller sees them, so the value flips
-  depending on who summons [field, untested]. Key private-chat state by the
-  unordered pair {from_id, peer_id}, and group state by the chat id.
+- **In a private chat, the peer id is not the caller.** It is the other
+  participant as the caller sees them, so the value flips depending on who
+  summons (seen live on the canary). Key private-chat state by the unordered
+  pair {from_id, peer_id}, and group state by the chat id.
 - **Never send to that chat id.** In a group the bot is not in, `sendMessage`
   fails ("bot was kicked"). In a private chat it succeeded but landed in the
   bot's own DM with another user instead of the chat where it was summoned,
@@ -367,6 +367,31 @@ Media:
 - Attaching newly generated media (TTS audio, images) to a guest answer should
   work over MTProto by uploading with `messages.uploadMedia(InputPeerSelf)`
   first [untested].
+
+Seen live on the canary (@sugarwellbot, Telethon 1.45.0, layer 229,
+2026-09-29):
+
+- An article result without a title fails with `ARTICLE_TITLE_EMPTY`.
+- Answers took 0.04 to 0.11 s, and every returned inline id was on the home
+  data center, in private chats and in a supergroup.
+- Eleven plain edits about 1.25 s apart, then a rich final edit over the plain
+  answer, hit no flood wait. The rich answer reads back as empty text with a
+  `rich_message`.
+- A private-chat trigger arrives with `out` set, and its message ids are local
+  to the caller's side (1241353 on one side was 29 on the other). A group
+  trigger has no `out` flag.
+- **In a group, the bot receives its own guest answer** as a new outgoing
+  channel message (`from_id` the bot, `guestchat_via_from` the caller,
+  replying to the trigger), and an edit update for each streaming edit. No such
+  echo arrived in a private chat. Handlers must ignore it.
+- `download_media` on a 3.5 MB audio reference worked at once, in about 2.3 s.
+- A bot that is a member of a group gets no guest query there, and with
+  privacy mode on it does not see the mention either. So there are no
+  duplicates, but a member bot is deaf to "@bot text" in that group.
+
+Status: the shell, @vlm_chat_bot and @llm_stt_bot answer guest mentions, on
+Telethon 1.45 with the qts re-dispatch and at-most-once safety nets. The flow,
+safety rules and per-bot behaviour are in [guest_mode.md](guest_mode.md).
 
 ### 2.4 Topics in private chats
 
@@ -673,13 +698,14 @@ Never do:
 
 ## 5. Open questions that need live tests
 
-- **Guest mode:** the peer id of a private-chat guest query, seen from both
-  sides; the real answer deadline; the inline edit rate for plain and rich
-  edits; media download from reference messages through Telethon, at once and
-  an hour later; callback routing on guest answers; whether `reply_markup`
-  survives in `reference_messages`; duplicate updates when the bot is also a
-  member or has inline mode; whether `get_me().bot_guestchat` tracks the
-  BotFather toggle.
+- **Guest mode:** the real answer deadline; the inline edit rate past one
+  edit per 1.25 s; media download from a reference an hour later, and of voice
+  notes and video; callback routing on guest answers; whether `reply_markup`
+  survives in `reference_messages`; which updates arrive when the bot also has
+  inline mode; whether `get_me().bot_guestchat` tracks the BotFather toggle; a
+  query recovered through the re-dispatch net after a gap. Answered on the
+  canary (section 2.3): the private-chat peer id, the home data center,
+  immediate reference downloads, and member bots.
 - **Drafts:** the FloodWait threshold at 0.5, 0.8 and 1.0 s cadence mixed with
   typing actions; whether identical heartbeats keep a draft alive; lingering
   drafts with and without the sync draft, and ghosts after finalize; whether

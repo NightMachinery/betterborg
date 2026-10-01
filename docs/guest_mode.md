@@ -105,9 +105,10 @@ Each rule is enforced in code; this is why.
 ### `uniborg/guest_util.py`
 
 - `register_guest_handler(client, handler, *, claims, max_age_seconds=120,
-  allow_forwarded=False)`: call it from a plugin's module body. It registers
-  nothing on a user account or on a Telethon without guest types, and the
-  callback takes the handler's module name, so a plugin reload removes it.
+  allow_forwarded=False, logger=None)`: call it from a plugin's module body.
+  It registers nothing on a user account or on a Telethon without guest
+  types, and the callback takes the handler's module name, so a plugin reload
+  removes it.
 - `GuestQuery`: `query_id`, `trigger`, `references`, `messages` (references
   then trigger), `caller_id`, `chat_kind` (`ChatKind.PRIVATE` or `GROUP`),
   `thread_key` (`pair:<lo>:<hi>` of the two users in a private chat, which
@@ -143,10 +144,11 @@ Each rule is enforced in code; this is why.
 
 ## The guest shell (`stdplugins/advanced_get.py`)
 
-`@<bot> .a CMD`, sent to the bot of the `stdplugins` instance (julia), runs `CMD` the way `.a` does in a chat with the bot, with
-the same flags (`.aa` without Brish, `.af` without forking, `.ad` without
-albums, `.an` with `noglob`). The handler keeps queries for at most 60
-seconds; a later one is dropped, never run late.
+`@<bot> .a CMD`, sent to the bot of the `stdplugins` instance (julia), runs
+`CMD` the way `.a` does in a chat with the bot, with the same flags (`.aa`
+without Brish, `.af` without forking, `.ad` without albums, `.an` with
+`noglob`). The handler keeps queries for at most 60 seconds; a later one is
+dropped, never run late.
 
 - **Only a strict trigger runs.** The text must start with the bot's mention,
   followed directly by `.a`, and no code block may cover the mention. The
@@ -212,9 +214,10 @@ chat. The handler keeps queries for at most 120 seconds.
   etiquette). Past 32000 UTF-8 bytes the answer is cut with a note. If
   Telegram refuses the rich edit, the answer is sent as classic Markdown.
 - **Errors** never carry the "admin only" details
-  (`llm_util.may_show_admin_details`): the answer is public. A Codex usage limit gets one line instead
-  of the quota panel, which needs buttons and a message of its own. A model
-  that returns nothing is retried twice, not thirty times.
+  (`llm_util.may_show_admin_details`): the answer is public. A Codex usage
+  limit gets one line instead of the quota panel, which needs buttons and a
+  message of its own. A model that returns nothing is retried twice, not
+  thirty times.
 - **Privacy**: the log records the caller, the model and the lengths, not the
   text; guest answers are not written to the conversation logs that `/log`
   sends. Media cache keys of guest messages include the caller, since their
@@ -268,6 +271,23 @@ A malformed section (an unknown key, policy or type) turns guest mode off and
 logs the error; the rest of the file still applies. A file that does not parse
 at all also turns guest mode off, as it turns Codex off, so a typo elsewhere
 cannot undo `policy: "off"`.
+
+## What is kept in Redis
+
+Every key is in the bot user's `borg:` namespace ([redis.md](redis.md)). When
+Redis is unreachable, each falls back to the process's memory, which a restart
+forgets.
+
+- `borg:guest:claim:q:<bot id>:<query id>`, for a day: the query was handled,
+  so a redelivered copy is dropped. All three bots.
+- `borg:guest:claim:invite:<bot id>:<caller>`, for a day: the chat bot invited
+  this caller after an implicit call.
+- `borg:guest:count:chat:<bot id>:<caller>:<hour>` and
+  `borg:guest:count:stt:<bot id>:<caller>:<hour>`, for an hour: the caller's
+  calls in the current wall-clock hour (`<hour>` is Unix time divided by
+  3600).
+- `borg:guest:thread:<bot id>:<thread key>`, the newest 50 records, kept until
+  7 days after the latest answer: the chat bot's answers, for continuation.
 
 ## Enabling guest mode for a bot
 
