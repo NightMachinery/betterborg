@@ -493,6 +493,18 @@ class GuestThreadStoreTests(unittest.TestCase):
         now[0] = 111.0
         self.assertEqual(asyncio.run(store.records("t")), [])
 
+    def test_expired_records_stay_gone_after_a_new_answer(self):
+        now = [100.0]
+        store = guest_util.GuestThreadStore(ttl_seconds=10, clock=lambda: now[0])
+        asyncio.run(store.add("t", {"id": "old"}))
+        asyncio.run(store.add("u", {"id": "other"}))
+        now[0] = 120.0
+
+        asyncio.run(store.add("t", {"id": "new"}))
+
+        self.assertEqual([r["id"] for r in asyncio.run(store.records("t"))], ["new"])
+        self.assertNotIn("u", store._memory)
+
     def test_the_redis_list_is_used_when_there_is_a_connection(self):
         calls = []
 

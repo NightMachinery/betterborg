@@ -528,6 +528,11 @@ class GuestThreadStore:
 
     async def add(self, thread: str, record: dict) -> None:
         now = self._clock()
+        #: Expired threads go, so the memory copy keeps nothing past the TTL
+        #: (the turns can quote other people) and does not grow for ever.
+        self._memory = {
+            key: value for key, value in self._memory.items() if value[0] > now
+        }
         _expires, records = self._memory.get(thread, (now, []))
         self._memory[thread] = (
             now + self._ttl_seconds,
