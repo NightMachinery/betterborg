@@ -368,8 +368,7 @@ Media:
   work over MTProto by uploading with `messages.uploadMedia(InputPeerSelf)`
   first [untested].
 
-Seen live on the canary (@sugarwellbot, Telethon 1.45.0, layer 229,
-2026-09-29):
+Seen live on a canary bot (Telethon 1.45.0, layer 229, 2026-09-29):
 
 - An article result without a title fails with `ARTICLE_TITLE_EMPTY`.
 - Answers took 0.04 to 0.11 s, and every returned inline id was on the home
