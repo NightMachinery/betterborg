@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Telegram Remote Shell</title>
+<meta name="description" content="User guide for betterborg's advanced_get plugin: a Unix shell in Telegram that runs commands for the bot's admins and exchanges files.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231e293b'/%3E%3Cpath d='M8 9.5l6.5 6.5L8 22.5' fill='none' stroke='%234ade80' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M17.5 23h7' stroke='%234ade80' stroke-width='3.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAb1BMVEUAAAAjLjofKTweKTseKTseKTsdKToeKjweKTseKzoeKTseKTsYJD0dKTsdKDseKTseKjseKTwaJkAfKDseKToeKTsiO0IsY1FJ3H8wc1c7oGhK3oBK3X8wc1gsZFIvcFYwdlgvcVcwdVg7oWk7omngE0DmAAAAFXRSTlMAFoTP9M6DVfJU/vEVgtDzgfAUUs1Xa/zlAAAAw0lEQVQ4y6XT2RKCMAwF0Isslk1QaCkCbvj/32gpCKOY8OB9YqaHNtAEAJyd68lVPD9wYLMXkogI7XokyURGOEIyiRPsJJsUBx74yHggMD0oRYgJVFrXLDg3Tdtx4NJS4l3DVRtxYwApZkCJBchuqKNmgBVa/QG2jrgPRT7oIon1GVDr619d9U+bvvoA82Ups9OY6Xu+r5sCS8OsjmCb2rQ1XB74CHiQbwzO8QSE3OgVw3CGMfl+MY53kpY/xicrc7M/XsJgU3AsaIfoAAAAAElFTkSuQmCC">
+<link rel="apple-touch-icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAMAAAAKE/YAAAABEVBMVEUeKTseLD0iOUIgMz8xeVlAtXBJ2X5K3oAtaVNGz3o2i2A2jmIeKjszfls3k2QmSkdJ3H88p2siOkEuaFM5lmQ0g102jGE0gF0sYlAhNUBJ2H46nGckQURI1n0ubFQyfFsyeloyfVstaVRG0HsgNEAxeFkfKzwxe1ohOEEfLDwjPkMmS0gnTUkkQkUfLz0sY1E9qWtAt3ExdlkgMD4lQ0VFyngqXU8oUktI1HxK3X8kQUVI03ssZFI/s29H0nsiN0ArXE41iWA7oWlGzXpHz3olR0YtZ1MjPUMgMT5ExnY4kWNCv3QmSUgxdFc5l2VDwHUfLT1I1XxCu3I2imA8pGojPEMiO0Iye1o+qmxExndAtHBrGVuHAAAB7UlEQVR42u3c107DQBBAUZOQTEINvfcSem+hhw4JvfP/H8ILDyCwhEcDeMS9X3AUbey1vOMgICIiIiIiIiIiIiIiIiIi+pEqEokKX+JkZSotkk5VJv2YM1l5K5vxYq6Sd1XXuDDXyofqPKjrc+JP3SDiTt2YE3/qJvmi5pirW75Cx/23bhWH6jZxqG4PQcd6XXd0isPfukscqrt7PKp7xaO6z6W6P1zdjBo1atSoUaNGjRo1atSoUaP+vQbC1dWBR/Vg4HCFDA17VI8EDldIKnCoTo96VCfijM6HoMdYHv/+j5h3eMkLN2eT7tZGjG/jHjdMeYdbU8yYMWPGjBkzZsyYMWPGjNmLWX9sc3xicup7Tc/YmrUHZGtm58IPBH8qN7+waGfWHkVempeILa+YoZWHvlfXJHKFBSOz8nj9+oYoKmzaoGd1140tUbW9Y4LWjYzsirKiCVo3nLOnRe+bvPbQjUEdaNFyaIE+0twHO9RmabdAq0b7jvVom3cImiHKk4IabXODUY2rnqrRxzZXas1g8JnWXLK6kStGsMs5JfrcbPuhGHa/0Jkvr+x2etE/K3BS0pivy7a76qgfcEjcRDcPrf71887MbWdE8919DB7THh6fnre/2fJLsRwQEREREREREREREREREf2fXgGz/ovLsVEHKQAAAABJRU5ErkJggg==">
+<style>
+:root {
+  --bg: #fafaf8;
+  --fg: #1d2127;
+  --muted: #5d6571;
+  --card: #ffffff;
+  --border: #e1e4e8;
+  --code-bg: #f1f3f5;
+  --accent: #157347;
+  --accent-soft: #d8efe2;
+  --link: #0b5cc4;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418;
+    --fg: #e5e8eb;
+    --muted: #9aa3ae;
+    --card: #181c22;
+    --border: #2b313a;
+    --code-bg: #1f252d;
+    --accent: #4ade80;
+    --accent-soft: #1d3a29;
+    --link: #82b8ff;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  overflow-wrap: break-word;
+}
+.wrap { max-width: 46rem; margin: 0 auto; padding: 16px 16px 48px; }
+a { color: var(--link); }
+.kicker { color: var(--muted); font-size: .9rem; margin: .75rem 0 0; }
+h1 { font-size: 1.65rem; line-height: 1.2; margin: .2rem 0 .6rem; }
+h3 { font-size: 1.02rem; margin: 1.2rem 0 .3rem; }
+.lede { font-size: 1.05rem; margin: 0 0 1rem; }
+code, pre, kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+:not(pre) > code {
+  font-size: .88em;
+  background: var(--code-bg);
+  padding: .08em .3em;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: .65rem .8rem;
+  margin: .5rem 0 1rem;
+  overflow-x: auto;
+  max-width: 100%;
+  line-height: 1.45;
+  font-size: .85rem;
+}
+pre code { white-space: pre; }
+.controls { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 1rem; }
+.controls button {
+  font: inherit;
+  font-size: .9rem;
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: .3rem .9rem;
+  cursor: pointer;
+}
+.controls button:hover { border-color: var(--accent); }
+nav.toc {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: .6rem .9rem;
+  margin: 0 0 1rem;
+}
+nav.toc p { margin: 0 0 .3rem; font-weight: 600; }
+nav.toc ol { margin: 0; padding-left: 1.3rem; }
+nav.toc li { margin: .1rem 0; }
+details.sec {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin: 0 0 .75rem;
+  scroll-margin-top: 8px;
+}
+details.sec > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .7rem .9rem;
+}
+details.sec > summary::-webkit-details-marker { display: none; }
+details.sec > summary::before {
+  content: "";
+  flex: none;
+  width: .5rem;
+  height: .5rem;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform .15s ease;
+}
+details.sec[open] > summary::before { transform: rotate(45deg); }
+details.sec > summary h2 { font-size: 1.15rem; line-height: 1.3; margin: 0; }
+.body { padding: 0 .9rem .5rem; }
+.body > :first-child { margin-top: 0; }
+ul, ol { padding-left: 1.3rem; }
+li { margin: .25rem 0; }
+dl { margin: .5rem 0 1rem; }
+dt { font-weight: 600; margin-top: .85rem; }
+dd {
+  margin: .2rem 0 0;
+  padding-left: .8rem;
+  border-left: 3px solid var(--accent-soft);
+}
+dd > p:first-child { margin-top: 0; }
+dd > p:last-child, dd > pre:last-child { margin-bottom: 0; }
+footer { color: var(--muted); font-size: .9rem; margin-top: 1.5rem; }
+footer p { margin: .3rem 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<p class="kicker"><a href="../">betterborg</a> · the <code>advanced_get</code> plugin</p>
+<h1>Telegram Remote Shell</h1>
+<p class="lede">Send <code>.a</code> and a shell command to the bot. It runs the command with zsh on the machine the bot runs on and replies with the output. Files travel both ways: files you send become the command's input, and files the command writes come back to the chat. Only the bot's admins can use it.</p>
+</header>
+
+<div class="controls">
+<button type="button" id="expand-all">Expand all</button>
+<button type="button" id="collapse-all">Collapse all</button>
+</div>
+
+<nav class="toc" aria-label="Contents">
+<p>Contents</p>
+<ol>
+<li><a href="#quick-start">Quick start</a></li>
+<li><a href="#access">Who can use it</a></li>
+<li><a href="#commands">Commands</a></li>
+<li><a href="#files-in">Sending files in</a></li>
+<li><a href="#output">Output and files back</a></li>
+<li><a href="#caveats">Caveats</a></li>
+<li><a href="#running">How commands run</a></li>
+<li><a href="#long-running">Long commands and restarts</a></li>
+<li><a href="#guest">Guest mode: running from any chat</a></li>
+<li><a href="#developers">For developers</a></li>
+</ol>
+</nav>
+
+<main>
+
+<details class="sec" id="quick-start" open>
+<summary><h2>Quick start</h2></summary>
+<div class="body">
+<p>Open a private chat with the bot. (On a <a href="#access">userbot</a>, you can also type these in any chat from the userbot's own account.) Each line below is one message:</p>
+<pre><code>.a uname -a
+.a df -h
+.a seq 1 5000</code></pre>
+<p>The first two reply with the command's output. The third prints more than 4000 characters, so its output arrives as a <code>.txt</code> file.</p>
+<p>To work on a file, send it with a caption that starts with <code>.a</code>, or reply with a <code>.a</code> message to a message that has the file:</p>
+<pre><code>.a wc -l *
+.a gzip -k *</code></pre>
+<p>The bot saves the file into an empty directory made for this command and runs the command there, so <code>*</code> picks the file up. <code>wc -l</code> replies with a line count. <code>gzip -k</code> writes a <code>.gz</code> next to the original, and the bot sends that <code>.gz</code> back. The original is not sent back, because the command did not change it.</p>
+<p>To fetch a file from the machine, copy it into the current directory:</p>
+<pre><code>.a cp /path/to/report.pdf .</code></pre>
+</div>
+</details>
+
+<details class="sec" id="access" open>
+<summary><h2>Who can use it</h2></summary>
+<div class="body">
+<p>Only the bot's <b>admins</b>. Messages from anyone else are ignored, with no reply.</p>
+<p>On this page, <b>the bot</b> is the betterborg instance that runs this plugin. It can log in as a Telegram bot account, or as an ordinary user account; an instance logged in as a user is called a <b>userbot</b>. Its admins have nothing to do with Telegram's group admins: they are set in the bot's own configuration.</p>
+<p>A <code>.a</code> message runs when both of these hold:</p>
+<ul>
+<li>It is not a forwarded message. A forwarded command never runs, whoever forwarded it.</li>
+<li>At least one of these is true:
+<ul>
+<li>the sender is listed as an admin in the bot's configuration, by user id or by username;</li>
+<li>the message comes from the account the bot runs as. On a userbot, that means everything you send from that account, in any chat;</li>
+<li>the message was sent in a group or channel that the configuration trusts as an admin chat. In such a chat, every member counts as an admin.</li>
+</ul>
+</li>
+</ul>
+<p>The restart commands (<code>.x</code>, <code>.sbb</code> and <code>.xf</code>) are stricter: only listed admins and the bot's own account may use them, and admin chats do not count. <a href="#guest">Guest mode</a> is stricter again: it accepts only admins listed by numeric user id.</p>
+</div>
+</details>
+
+<details class="sec" id="commands" open>
+<summary><h2>Commands</h2></summary>
+<div class="body">
+<p>A command message starts with <code>.a</code>, then optional flag letters, then at least one space or line break, then the shell command. Everything after that, over as many lines as you like, is the command. A one-line message:</p>
+<pre><code>.a ls -la</code></pre>
+<p>And a message that spans several lines:</p>
+<pre><code>.a
+for f in *.txt; do
+  echo "$f has $(wc -l &lt; "$f") lines"
+done</code></pre>
+<p>A file's caption works the same way as a text message.</p>
+
+<dl>
+<dt><code>.a CMD</code></dt>
+<dd>Run <code>CMD</code> in the <a href="#running">shell pool</a>, in its own <a href="#files-in">scratch directory</a>. This is the plain form; each flag below changes one thing about it.</dd>
+
+<dt><code>.aa CMD</code></dt>
+<dd>Run <code>CMD</code> in a new <code>zsh -c</code> process instead of the shell pool. Such a shell reads only the startup files zsh reads for non-interactive shells (like <code>.zshenv</code>), so functions and aliases set up for interactive use may be missing. Useful when every pool shell is busy or the pool is stuck.</dd>
+
+<dt><code>.af CMD</code></dt>
+<dd>Run <code>CMD</code> without a fork, in the first shell of the pool itself. Variables, functions, aliases and options it sets stay for the next <code>.af</code> command. The directory does not: each command still starts in its own scratch directory. <code>.af</code> commands run one at a time, so a stuck one holds up every later one.</dd>
+
+<dt><code>.ad CMD</code></dt>
+<dd>Turn off <a href="#output">album mode</a>: send each file the command leaves behind as its own reply, and honour the file name prefixes.</dd>
+
+<dt><code>.an CMD</code></dt>
+<dd>
+<p>Put <code>noglob</code> in front of <code>CMD</code>, so zsh does not expand <code>*</code>, <code>?</code> or <code>[…]</code> in its first command. Handy for URLs:</p>
+<pre><code>.an curl -sL https://example.com/api?q=1</code></pre>
+</dd>
+
+<dt><code>.x</code> or <code>.sbb</code></dt>
+<dd>Restart the shell pool. See <a href="#long-running">Long commands and restarts</a>.</dd>
+
+<dt><code>.xf</code></dt>
+<dd>The same restart, with a different reply.</dd>
+</dl>
+
+<h3>Combining flags</h3>
+<p>Flags combine, but only in the order <code>a</code>, <code>f</code>, <code>d</code>, <code>n</code>. So <code>.afd</code>, <code>.adn</code> and <code>.afdn</code> work, while <code>.adf</code> or <code>.ana</code> is not recognised and the message is ignored. The <code>f</code> flag only matters in the shell pool, so <code>.aaf</code> behaves like <code>.aa</code>.</p>
+
+<h3>Details</h3>
+<ul>
+<li>Letter case does not matter for <code>.a</code> and its flags: <code>.A ls</code> works. The restart commands must be lowercase and alone in their message.</li>
+<li>Smart punctuation is undone before the command runs: curly quotes (<code>“ ” ‘ ’</code>) become straight quotes and an em dash (<code>—</code>) becomes <code>--</code>. Phone keyboards that "fix" punctuation therefore do not break commands. An en dash (<code>–</code>) is left as it is.</li>
+<li>The message must start with <code>.a</code>. The only exception: lines of the form <code>[In reply to …]</code> or <code>[Forwarded from …]</code> at the very top are skipped.</li>
+<li>The bot reacts to new messages only. Editing a command message does not run it again; send it as a new message.</li>
+</ul>
+</div>
+</details>
+
+<details class="sec" id="files-in" open>
+<summary><h2>Sending files in</h2></summary>
+<div class="body">
+<p>Every command gets a new, empty directory to run in, called its <b>scratch directory</b> on this page. It is a randomly named directory under <code>dls/</code> in the directory the bot was started from. After sending the results, the bot deletes it with everything in it.</p>
+<p>Before the command runs, the bot downloads these files into the scratch directory:</p>
+<ul>
+<li>the file attached to the command message itself (a file sent with a caption that starts with <code>.a</code>);</li>
+<li>the file in the message the command replies to;</li>
+<li>every file in the same album as either of those.</li>
+</ul>
+<p>Each file is saved as <code>&lt;message id&gt;_&lt;original name&gt;</code>. A file without a name, such as a photo, gets a generated one. Since the names are hard to predict, refer to inputs with wildcards such as <code>*</code> or <code>*.zip</code>:</p>
+<pre><code>.a unzip -l *.zip</code></pre>
+<p>Any program installed on the machine can be used this way.</p>
+<p>The plugin sets no size limit of its own. Telegram's own limits on downloads and uploads still apply.</p>
+</div>
+</details>
+
+<details class="sec" id="output" open>
+<summary><h2>Output and files back</h2></summary>
+<div class="body">
+<h3>Text output</h3>
+<ul>
+<li>The bot replies to the command with what it printed, as plain text (Markdown is not rendered). Errors (standard error) are mixed into the same text.</li>
+<li>Leading and trailing whitespace is trimmed. If 4000 characters or more remain, the output comes as a <code>.txt</code> file instead, with the caption "This message is too long, so it has been sent as a text file."</li>
+<li>If the command printed nothing, the reply is <code>The process exited N.</code>, where <code>N</code> is the exit code. When there is output, the exit code is not shown. End the command with <code>; echo "exit $?"</code> to see it.</li>
+<li>Nothing arrives until the command exits: output is not streamed while the command runs.</li>
+<li>If something fails inside the bot rather than in your command, the reply starts with "Julia encountered an exception. :(" followed by a Python traceback.</li>
+</ul>
+
+<h3>Files</h3>
+<p>After the text, the bot sends every file left at the top level of the scratch directory, including files whose names start with a dot. Directories are skipped with everything inside them, so pack a directory with <code>zip</code> or <code>tar</code> to get it back.</p>
+<p>Downloaded inputs that the command left untouched are deleted first, so they are not echoed back. "Untouched" means the file's modification time did not change. To get an input back as it is, <code>touch</code> it or copy it under another name.</p>
+<p><b>Album mode</b> is how several files are sent by default: the bot groups them by extension and sends each group as one album (GIFs go one by one). These albums are not replies to your command.</p>
+<p>When there is exactly one file, or with the <code>.ad</code> flag (album mode off), each file goes as its own message, in name order, as a reply to your command. In this mode a prefix in the file name chooses how Telegram shows the file:</p>
+<dl>
+<dt><code>voicenote-</code></dt>
+<dd>a voice message</dd>
+<dt><code>videonote-</code></dt>
+<dd>a round video message</dd>
+<dt><code>fdoc-</code></dt>
+<dd>a plain file (a document). A photo sent this way is not compressed.</dd>
+<dt><code>streaming-</code></dt>
+<dd>a video marked as streamable, so it can start playing before it has downloaded</dd>
+</dl>
+<p>For example, reply to an audio file with this to get it back as a voice message (if <code>ffmpeg</code> is installed on the machine):</p>
+<pre><code>.a ffmpeg -i * -c:a libopus voicenote-reply.ogg</code></pre>
+<p>The input is untouched, so it is deleted, and the one file left goes out as a voice message.</p>
+</div>
+</details>
+
+<details class="sec" id="caveats" open>
+<summary><h2>Caveats</h2></summary>
+<div class="body">
+<ul>
+<li><b>Everyone in the chat sees the results.</b> In a group, every member sees the command, its output and its files.</li>
+<li><b>Commands have full permissions.</b> They run with all the permissions of the operating-system user the bot runs as. A mistyped <code>rm</code> does the same damage here as in a terminal.</li>
+<li><b>Bots in groups.</b> This is Telegram's rule, not the plugin's: in its default privacy mode, a bot account in a group sees only some messages, such as <code>/commands</code> and replies to its own messages. For <code>.a</code> messages to reach it, turn privacy mode off or make the bot a group admin.</li>
+<li><b>Smart punctuation is replaced inside quotes too.</b> <code>.a echo "a—b"</code> prints <code>a--b</code>.</li>
+<li><b>The scratch directory is temporary.</b> Write anything you want to keep to an absolute path outside it.</li>
+<li><b>Exit codes are hidden</b> whenever there is output.</li>
+<li><b>No input, no live output, no time limit.</b> See <a href="#running">How commands run</a> and <a href="#long-running">Long commands and restarts</a>.</li>
+<li><b>Forwarded and edited messages never run.</b></li>
+<li><b>Binary output with <code>.aa</code>.</b> Printing raw binary data under <code>.aa</code> makes the bot report an exception instead of the output. Write binary data to a file.</li>
+</ul>
+</div>
+</details>
+
+<details class="sec" id="running">
+<summary><h2>How commands run</h2></summary>
+<div class="body">
+<p>Commands run with zsh, on the machine where the bot runs, as the operating-system user the bot runs as.</p>
+<p><b>Shell pool.</b> The bot keeps a set of long-lived zsh processes ready, managed by the <a href="https://github.com/NightMachinery/brish">Brish</a> library. There are 16 of them unless the bot's operator sets another number. These shells started once, so whatever their startup files loaded (functions, aliases, environment variables) is already in place for every command.</p>
+<p><b>Fork.</b> For a plain <code>.a</code>, a free shell in the pool forks: it makes a throwaway copy of itself, and the command runs in the copy. A <code>cd</code>, a variable or a function that the command sets is gone when it ends, and the next command starts clean. <code>.af</code> skips the fork, and <code>.aa</code> skips the pool altogether (see <a href="#commands">Commands</a>).</p>
+<p>When every shell in the pool is busy, a new command waits until one is free.</p>
+<p>Before each command, the shell changes into the scratch directory and sets the variable <code>$jd</code> to its path. If the shell has a function named <code>jinit</code>, it calls it there. Every pool shell has the environment variable <code>JBRISH=y</code>, so startup files can tell that they are serving the bot.</p>
+<p>There is no way to send input to a running command, so programs that wait for typing (editors, pagers, password prompts) do not work.</p>
+</div>
+</details>
+
+<details class="sec" id="long-running">
+<summary><h2>Long commands and restarts</h2></summary>
+<div class="body">
+<ul>
+<li>The plugin sets no time limit. A command that never exits keeps its shell busy, and you get no reply for it.</li>
+<li>There is no command that cancels a running command. Find its process id and stop it from a second command. <code>.aa</code> works even when every pool shell is busy:
+<pre><code>.aa pgrep -l ffmpeg
+.aa kill 12345</code></pre>
+</li>
+<li><code>.x</code> or <code>.sbb</code> starts a fresh shell pool for the commands that follow, and replies "Restarted brishes." <code>.xf</code> does the same and replies "Reinitialized brishes. Note that old running instances can still rejoin."</li>
+<li>The new shells read their startup files afresh. Restart after changing those files, or after an <code>.af</code> command left the shared shell in a bad state.</li>
+<li>A restart does not cancel commands that are already running. With the current Brish library, the old pool shuts down in the background once those commands finish.</li>
+</ul>
+</div>
+</details>
+
+<details class="sec" id="guest">
+<summary><h2>Guest mode: running from any chat</h2></summary>
+<div class="body">
+<p><b>Guest mode</b> is a Telegram feature that lets a bot answer where it is mentioned, even in a chat it is not a member of. With it, an admin can run a command from any chat by starting a message with the bot's username (written <code>BOT</code> below):</p>
+<pre><code>@BOT .a uptime</code></pre>
+<ul>
+<li>It works only when the bot is a bot account (not a userbot) and its operator has turned guest mode on for it.</li>
+<li>The message must start with the mention, then at least one space, then <code>.a</code> with any <a href="#commands">flags</a>. <code>@BOT: .a …</code> and <code>@BOT.a …</code> get a usage hint instead of running. A mention inside a code block or inline code does not count.</li>
+<li>Only admins listed by numeric user id may use it. Anyone else who mentions the bot gets "Not available here."</li>
+<li>A forwarded message, or one sent through another bot or a connected Business bot, never runs.</li>
+<li>A command is dropped, never run, if the bot receives it more than 60 seconds after it was sent (for example because the bot was offline).</li>
+<li>The bot first answers "⏳ Running…" in the chat, then edits that answer into the result. If it cannot post that first answer, the command does not run at all.</li>
+<li>Input files come from your message and from the message it replies to. Other files of an album are not fetched.</li>
+<li>The answer is the output as plain text, cut to fit one Telegram message (4096 UTF-16 code units, which are roughly characters, with most emoji counting as two). A cut ends in "…". Lines under the output report a non-zero exit code (<code>exit N</code>), how many files were sent to your private chat, and whether the output was cut.</li>
+<li>When the output is longer than about 3800 code units (the answer keeps room for the lines under it), the bot saves the whole output as <code>output.txt</code> in the scratch directory (under another name if the command made its own <code>output.txt</code>) and sends it with the other files.</li>
+<li>Files go to your private chat with the bot, never to the chat where you called it, after a message that names the command. You need to have started the bot in a private chat first; if you have not, the answer says so. When there is exactly one file and the output is short enough for a caption (1024 UTF-16 code units), the file is also attached to the answer itself.</li>
+<li>A reply to the bot's answer does nothing unless it mentions the bot again.</li>
+<li>On a userbot, betterborg replaces the "@" in outgoing text that looks like a guest shell call with a full-width "＠", so text the userbot sends (command output, for instance) cannot run a command by accident. Text you type in a Telegram app is not affected.</li>
+</ul>
+</div>
+</details>
+
+<details class="sec" id="developers">
+<summary><h2>For developers</h2></summary>
+<div class="body">
+<dl>
+<dt>Where the code lives</dt>
+<dd>
+<p><a href="https://github.com/NightMachinery/betterborg/blob/master/stdplugins/advanced_get.py"><code>stdplugins/advanced_get.py</code></a> holds the <code>.a</code> handler, the restart commands and the guest shell.</p>
+<p><code>uniborg/util.py</code> holds the shared pieces: running commands (<code>brishz_capture</code>, <code>simple_run_capture</code>), downloading inputs (<code>run_and_get</code>), sending output (<code>send_output</code>, <code>discreet_send</code>) and files (<code>upload_output_files</code>, <code>send_files</code>), the shell pool (<code>init_brishes</code>) and the admin checks (<code>isAdmin</code>, <code>admin_cmd</code>, <code>is_admin_by_id</code>). The built-in admin list is <code>admins</code> in that file.</p>
+<p><code>uniborg/guest_util.py</code> and <code>uniborg/tg_raw.py</code> implement guest mode. Its design and safety rules are in <a href="https://github.com/NightMachinery/betterborg/blob/master/docs/guest_mode.md"><code>docs/guest_mode.md</code></a>.</p>
+</dd>
+
+<dt>Requirements</dt>
+<dd>Python with the packages in <code>requirements.txt</code> (they include <code>brish</code>), and zsh on the <code>PATH</code>.</dd>
+
+<dt>Running an instance</dt>
+<dd>
+<pre><code>git clone https://github.com/NightMachinery/betterborg.git
+cd betterborg
+pip3 install -r requirements.txt
+
+python3 stdborg.py         # standalone
+python3 start_server.py    # or with the FastAPI server</code></pre>
+<p><code>stdplugins</code> is the default plugin directory, so both load the shell with no extra settings. <code>start_server.py</code> serves <code>stdborg:app</code> with uvicorn on 127.0.0.1; <code>uvicorn stdborg:app</code> works too.</p>
+<p>On the first start, Telethon asks on the terminal for a phone number (to log in as a user) or a bot token, and saves the login in a session file named after <code>borg_session</code>. Saving a <code>.py</code> file in the plugin directory reloads that plugin without a restart.</p>
+</dd>
+
+<dt>Environment variables</dt>
+<dd>
+<dl>
+<dt><code>borg_plugin_path</code></dt>
+<dd>The plugin directory to load. Default <code>stdplugins</code>, which contains this plugin.</dd>
+<dt><code>borg_session</code></dt>
+<dd>The session name, and so the session file. Default <code>stdborg</code>.</dd>
+<dt><code>borg_brish_count</code></dt>
+<dd>How many shells the pool has. Default 16.</dd>
+<dt><code>borg_admins</code></dt>
+<dd>Extra admins, comma-separated: numeric user ids, or usernames without the "@". Guest mode counts only the ids.</dd>
+<dt><code>borg_log_chat</code></dt>
+<dd>The numeric id of the chat that gets the bot's log messages. A bot account should set it. Without a usable log chat, a user account logs to its Saved Messages, and a bot account tries its admins' private chats.</dd>
+<dt><code>borgp</code></dt>
+<dd>The port of a SOCKS5 proxy on 127.0.0.1 to connect through.</dd>
+<dt><code>borg_api_id</code>, <code>borg_api_hash</code></dt>
+<dd>Telegram API credentials (<code>TELEGRAM_API_ID</code> and <code>TELEGRAM_API_HASH</code> also work). Built-in defaults are used when unset.</dd>
+<dt><code>borg_guest_trigger_guard</code></dt>
+<dd><code>0</code> turns off the "＠" rewriting described under <a href="#guest">Guest mode</a>.</dd>
+</dl>
+<p>For example, an instance with its own session, a smaller pool and one extra admin:</p>
+<pre><code>borg_session=session_shell \
+  borg_brish_count=4 \
+  borg_admins=YOUR_USER_ID \
+  python3 stdborg.py</code></pre>
+</dd>
+</dl>
+</div>
+</details>
+
+</main>
+
+<footer>
+<p>Source: <a href="https://github.com/NightMachinery/betterborg">NightMachinery/betterborg</a>, licensed under the Mozilla Public License 2.0. This page describes the code on the <code>master</code> branch; where the two disagree, the code is right.</p>
+<p>Page source: <code>pages/telegram_remote_shell/index.html</code>.</p>
+</footer>
+</div>
+
+<script>
+(function () {
+  var sections = Array.prototype.slice.call(document.querySelectorAll("details.sec"));
+  function setAll(open) {
+    sections.forEach(function (d) { d.open = open; });
+  }
+  document.getElementById("expand-all").addEventListener("click", function () { setAll(true); });
+  document.getElementById("collapse-all").addEventListener("click", function () { setAll(false); });
+
+  function reveal(hash, scroll) {
+    if (!hash || hash.length < 2) return;
+    var id;
+    try { id = decodeURIComponent(hash.slice(1)); } catch (e) { return; }
+    var el = document.getElementById(id);
+    if (!el) return;
+    for (var d = el.closest("details"); d; d = d.parentElement ? d.parentElement.closest("details") : null) {
+      d.open = true;
+    }
+    if (scroll) el.scrollIntoView();
+  }
+  window.addEventListener("hashchange", function () { reveal(location.hash, true); });
+  document.addEventListener("click", function (ev) {
+    var a = ev.target.closest ? ev.target.closest('a[href^="#"]') : null;
+    if (a) reveal(a.getAttribute("href"), false);
+  });
+  reveal(location.hash, true);
+})();
+</script>
+</body>
+</html>
