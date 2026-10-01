@@ -164,6 +164,22 @@ class InlineEditor:
             raise RuntimeError("InlineEditor used outside its async with block")
         return await self.client(request)
 
+    async def upload_photo(self, data: bytes, *, file_name: str) -> Any:
+        """An `InputMediaPhoto` of DATA, for `edit(media=...)`.
+
+        Inline edits cannot upload, so the photo goes up through the bot's own
+        DC with `messages.uploadMedia` on `InputPeerSelf`, which stores it and
+        sends nothing.
+        """
+        uploaded = await self.client.upload_file(data, file_name=file_name)
+        result = await self.client(
+            functions.messages.UploadMediaRequest(
+                peer=types.InputPeerSelf(),
+                media=types.InputMediaUploadedPhoto(file=uploaded),
+            )
+        )
+        return utils.get_input_media(result.photo)
+
     async def edit(
         self,
         *,

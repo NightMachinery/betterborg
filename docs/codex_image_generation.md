@@ -60,6 +60,9 @@ validates each image immediately, then sends every preview as a separate
 Telegram image replying to the current request. Previews are retained; a later
 preview or final image does not edit or delete an earlier one.
 
+A guest answer (docs/guest_mode.md) cannot send messages, so there each image
+is edited into the answer itself instead, and the last one stays.
+
 Preview events are deduplicated by image item ID and preview index. Final
 images, which can appear in both `response.output_item.done` and the terminal
 response output, are deduplicated by image item ID. Deduplication is based on

@@ -773,6 +773,9 @@ class GuestEvent:
 
 _ANSWER_IDS = itertools.count(-1, -1)
 
+#: Telegram's limit for a caption, in UTF-16 code units.
+CAPTION_LIMIT_UNITS = 1024
+
 
 class GuestAnswerMessage:
     """Stands in for the response `Message` that streaming code edits.
@@ -784,6 +787,9 @@ class GuestAnswerMessage:
     blocks partial edits until it ends; `finalize` waits it out instead.
     `reply`, `respond`, `get_chat` and `delete` raise `GuestContextError`, so
     text past the first 4096 units is dropped rather than posted anywhere.
+
+    `show_image` turns the answer into a photo, `media`; the text is then its
+    caption, so later edits are cut to `CAPTION_LIMIT_UNITS`.
     """
 
     reply_to_msg_id = None
@@ -808,6 +814,10 @@ class GuestAnswerMessage:
         self.id = next(_ANSWER_IDS)
         self.chat_id = f"guest-answer:{self.id}"
         self.text = ""
+        #: The parse mode `text` was last sent with.
+        self.parse_mode = None
+        #: The `InputMedia` the answer shows, once `show_image` has run.
+        self.media = None
         self.blocked_until = 0.0
         self._min_interval = min_interval
         self._max_final_wait = max_final_wait
@@ -828,11 +838,55 @@ class GuestAnswerMessage:
             wait = max(wait, self._last_edit_at + self._min_interval - now)
         return max(0.0, wait)
 
+    def _blocked(self) -> bool:
+        return self._clock() < self.blocked_until
+
+    def _fit(self, text: str) -> str:
+        if self.media is None:
+            return text
+        return tg_format.truncate_utf16(text, CAPTION_LIMIT_UNITS)
+
     async def _edit(self, **kwargs) -> bool:
         try:
             return await self.editor.edit(**kwargs)
         finally:
             self._last_edit_at = self._clock()
+
+    async def _edit_unless_blocked(self, **kwargs) -> bool:
+        """An edit, or False when a flood wait is running or starts. Hold the lock."""
+        if self._blocked():
+            return False
+        wait = self._wait_seconds()
+        if wait:
+            await self._sleep(wait)
+        try:
+            await self._edit(**kwargs)
+        except errors.FloodWaitError as e:
+            self.blocked_until = self._clock() + e.seconds
+            self._log.warning(
+                "Guest answer flood wait of %ss; skipping edits", e.seconds
+            )
+            return False
+        return True
+
+    async def _edit_patiently(self, **kwargs) -> bool:
+        """An edit that waits out a flood wait of up to `max_final_wait` seconds.
+
+        Then tries once more. Hold the lock. Other errors propagate.
+        """
+        for attempt in range(2):
+            wait = self._wait_seconds()
+            if wait > self._max_final_wait:
+                raise errors.FloodWaitError(request=None, capture=int(wait))
+            if wait:
+                await self._sleep(wait)
+            try:
+                return await self._edit(**kwargs)
+            except errors.FloodWaitError as e:
+                self.blocked_until = self._clock() + e.seconds
+                if attempt:
+                    raise
+        raise AssertionError("unreachable")
 
     async def edit(
         self,
@@ -844,26 +898,40 @@ class GuestAnswerMessage:
     ) -> "GuestAnswerMessage":
         """A streaming edit; skipped while a flood wait is running."""
         async with self._lock:
-            if self._clock() < self.blocked_until:
-                return self
-            wait = self._wait_seconds()
-            if wait:
-                await self._sleep(wait)
-            try:
-                await self._edit(
-                    text=text,
-                    parse_mode=parse_mode,
-                    link_preview=link_preview,
-                    buttons=buttons,
-                )
-            except errors.FloodWaitError as e:
-                self.blocked_until = self._clock() + e.seconds
-                self._log.warning(
-                    "Guest answer flood wait of %ss; skipping edits", e.seconds
-                )
-                return self
-            self.text = text
+            text = self._fit(text)
+            if await self._edit_unless_blocked(
+                text=text,
+                parse_mode=parse_mode,
+                link_preview=link_preview,
+                buttons=buttons,
+            ):
+                self.text = text
+                self.parse_mode = parse_mode
             return self
+
+    async def show_image(
+        self, data: bytes, *, file_name: str, preview: bool = False
+    ) -> bool:
+        """Shows DATA as the answer's photo, with the text so far as its caption.
+
+        The answer holds one photo, so each image replaces the one before. A
+        PREVIEW is skipped, returning False, while a flood wait runs; any
+        other image waits it out like `finalize`. Errors propagate.
+        """
+        if preview and self._blocked():
+            return False
+        media = await self.editor.upload_photo(data, file_name=file_name)
+        async with self._lock:
+            caption = tg_format.truncate_utf16(self.text, CAPTION_LIMIT_UNITS)
+            kwargs = dict(text=caption, parse_mode=self.parse_mode, media=media)
+            if preview:
+                if not await self._edit_unless_blocked(**kwargs):
+                    return False
+            else:
+                await self._edit_patiently(**kwargs)
+            self.media = media
+            self.text = caption
+            return True
 
     async def finalize(self, **kwargs) -> bool:
         """The last edit (`tg_raw.InlineEditor.edit` arguments); never skipped.
@@ -872,22 +940,9 @@ class GuestAnswerMessage:
         once more. Other errors propagate, so the caller can fall back.
         """
         async with self._lock:
-            for attempt in range(2):
-                wait = self._wait_seconds()
-                if wait > self._max_final_wait:
-                    raise errors.FloodWaitError(request=None, capture=int(wait))
-                if wait:
-                    await self._sleep(wait)
-                try:
-                    changed = await self._edit(**kwargs)
-                except errors.FloodWaitError as e:
-                    self.blocked_until = self._clock() + e.seconds
-                    if attempt:
-                        raise
-                    continue
-                self.text = kwargs.get("markdown") or kwargs.get("text") or ""
-                return changed
-        raise AssertionError("unreachable")
+            changed = await self._edit_patiently(**kwargs)
+            self.text = kwargs.get("markdown") or kwargs.get("text") or ""
+            return changed
 
 
 TRIGGER_GUARD_ENV = "borg_guest_trigger_guard"

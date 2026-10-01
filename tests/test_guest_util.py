@@ -407,6 +407,7 @@ class GuestEventTests(unittest.TestCase):
 class _Editor:
     def __init__(self, errors_=()):
         self.edits = []
+        self.uploads = []
         self.errors = list(errors_)
 
     async def edit(self, **kwargs):
@@ -414,6 +415,10 @@ class _Editor:
             raise self.errors.pop(0)
         self.edits.append(kwargs)
         return True
+
+    async def upload_photo(self, data, *, file_name):
+        self.uploads.append(file_name)
+        return f"photo:{file_name}"
 
 
 class GuestAnswerMessageTests(unittest.TestCase):
@@ -470,6 +475,41 @@ class GuestAnswerMessageTests(unittest.TestCase):
 
         with self.assertRaises(errors.FloodWaitError):
             asyncio.run(run())
+
+    def test_an_image_takes_the_text_as_its_caption_and_cuts_later_edits(self):
+        editor, now = _Editor(), [0.0]
+        answer, _slept = self._answer(editor, now)
+
+        async def run():
+            await answer.edit("**so far**", parse_mode="md")
+            await answer.show_image(b"png", file_name="a.png")
+            await answer.edit("y" * 2000, parse_mode="md")
+
+        asyncio.run(run())
+
+        _text, shown, later = editor.edits
+        self.assertEqual(
+            shown, {"text": "**so far**", "parse_mode": "md", "media": "photo:a.png"}
+        )
+        self.assertEqual(answer.media, "photo:a.png")
+        self.assertEqual(len(later["text"]), guest_util.CAPTION_LIMIT_UNITS)
+        self.assertTrue(later["text"].endswith("…"))
+
+    def test_a_flood_wait_skips_previews_but_not_the_final_image(self):
+        flood = errors.FloodWaitError(request=None, capture=90)
+        editor, now = _Editor([flood]), [0.0]
+        answer, slept = self._answer(editor, now)
+
+        async def run():
+            await answer.edit("a")
+            preview = await answer.show_image(b"p", file_name="p.png", preview=True)
+            final = await answer.show_image(b"f", file_name="f.png")
+            return preview, final
+
+        self.assertEqual(asyncio.run(run()), (False, True))
+        self.assertEqual(editor.uploads, ["f.png"])
+        self.assertEqual(slept, [90.0])
+        self.assertEqual(editor.edits[-1]["media"], "photo:f.png")
 
     def test_util_edit_message_streams_into_it_without_posting_elsewhere(self):
         editor, now = _Editor(), [0.0]

@@ -108,6 +108,10 @@ Each rule is enforced in code; this is why.
   (edits from any other data center fail with `MESSAGE_ID_INVALID`) and
   returns False when Telegram says nothing changed. Inline edits cannot upload
   files, so `media` must be a file Telegram already has.
+  `await editor.upload_photo(data, file_name=…)` makes one: it uploads through
+  the bot's own data center with `messages.uploadMedia` on `InputPeerSelf`,
+  which stores the photo and sends nothing (seen on the canary), and returns
+  the `InputMediaPhoto` to pass as `media`.
 
 ### `uniborg/guest_util.py`
 
@@ -217,9 +221,17 @@ chat. The handler keeps queries for at most 120 seconds.
   exchanges of that chain replace the reference in the history. Without a
   match, the reference alone is read, as the assistant's turn. The stored
   turns can quote other people's messages, which is why they expire.
-- **No generated images**: an image model is replaced by the default model,
-  and `.i` is ignored. A guest answer can only reuse files Telegram already
-  has.
+- **Generated images become the answer's photo.** An image model answers as
+  itself, and `.i` is checked and resolved as in a private chat
+  (`_image_generation_model`): without image generation access, an explicit
+  call is told so and nothing runs. Each image, preview or final, is uploaded
+  with `upload_photo` and edited into the answer (`GuestAnswerMessage.
+  show_image`), so a later image replaces an earlier one and the last one
+  stays. A preview is skipped during a flood wait; a final image waits it out.
+  While the answer shows a photo, its text is the caption: streaming edits are
+  cut to 1024 UTF-16 units, and the last edit is classic Markdown cut to that
+  limit with the truncation note, empty when the model wrote nothing.
+  Editing an answer into an uploaded photo has not yet been seen live.
 - **The answer** starts as "💭 Thinking…", streams as classic Markdown edits
   (the first 4096 UTF-16 units), and ends as one rich Markdown edit, which the
   server renders: headings, tables, LaTeX. The prompt says so

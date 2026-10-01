@@ -366,7 +366,9 @@ Media:
 - MTProto downloads have no 20 MB cap, unlike Bot API `getFile`.
 - Attaching newly generated media (TTS audio, images) to a guest answer should
   work over MTProto by uploading with `messages.uploadMedia(InputPeerSelf)`
-  first [untested].
+  first. From a bot, that upload returns a `MessageMediaPhoto` with a reusable
+  photo and sends nothing [field, canary]; editing a guest answer into it is
+  what the chat bot does (docs/guest_mode.md) but is [untested] live.
 
 Seen live on a canary bot (Telethon 1.45.0, layer 229, 2026-09-29):
 

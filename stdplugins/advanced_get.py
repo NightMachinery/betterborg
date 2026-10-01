@@ -80,7 +80,7 @@ GUEST_TITLE = "Shell"
 #: A late command should not run; Telegram also rejects late answers.
 GUEST_MAX_AGE_SECONDS = 60
 GUEST_TEXT_LIMIT = 4096
-GUEST_CAPTION_LIMIT = 1024
+GUEST_CAPTION_LIMIT = guest_util.CAPTION_LIMIT_UNITS
 #: Room left for the footer after the output block.
 GUEST_FOOTER_RESERVE = 300
 GUEST_OUTPUT_FILE = "output.txt"

@@ -1109,6 +1109,25 @@ def _resolve_image_generation_model(
     return OPENAI_CODEX_SOL
 
 
+async def _image_generation_model(event, *, config, prefix_model: Optional[str]) -> str:
+    """The model an `.i` request in EVENT generates on.
+
+    Raises `ValueError` with the text to show the user when they may not
+    generate images, or PREFIX_MODEL is a model that cannot.
+    """
+    if not await llm_chat_config.can_use_codex_imagegen(event, config):
+        raise ValueError(CODEX_IMAGEGEN_ACCESS_DENIED)
+    selected_model, _ = _get_effective_model_and_service(
+        event.chat_id, event.sender_id, topic_id=_thread_topic_id(event)
+    )
+    quota_fallback = user_manager.get_codex_quota_fallback(event.sender_id)
+    return _resolve_image_generation_model(
+        prefix_model=prefix_model,
+        selected_model=selected_model,
+        stand_in=(quota_fallback.model if quota_fallback is not None else None),
+    )
+
+
 def _codex_tools_for_request(enabled_tools, *, image_generation: bool) -> list:
     tools = []
     if "googleSearch" in enabled_tools:
@@ -4244,7 +4263,7 @@ async def _retry_on_no_response_with_reasons(
                 and model_capabilities.get("image_generation", False)
             ):
                 response_text, has_image = await _process_image_response(
-                    event, response_text
+                    event, response_text, response_message=response_message
                 )
 
             # Check if we got a meaningful response
@@ -4407,6 +4426,8 @@ async def _send_image_to_telegram(
     file_extension: str = ".png",
     file_index: Optional[int] = None,
     caption: Optional[str] = None,
+    response_message: Any = None,
+    preview: bool = False,
 ) -> bool:
     """
     Send image data to Telegram with proper resource management.
@@ -4417,6 +4438,11 @@ async def _send_image_to_telegram(
         filename_base: Base name for the file (keyword-only)
         file_extension: File extension including dot (keyword-only)
         file_index: Optional index to append to filename (keyword-only)
+        response_message: The answer being streamed. A guest answer cannot
+            send messages, so it becomes the image instead, and CAPTION is
+            not used: its text is the caption.
+        preview: Whether this is a preview a later image replaces; a guest
+            answer skips one during a flood wait.
 
     Returns:
         bool: True if image was sent successfully, False otherwise
@@ -4427,6 +4453,12 @@ async def _send_image_to_telegram(
             filename = f"{filename_base}_{file_index}{file_extension}"
         else:
             filename = f"{filename_base}{file_extension}"
+
+        if isinstance(response_message, guest_util.GuestAnswerMessage):
+            await response_message.show_image(
+                image_data, file_name=filename, preview=preview
+            )
+            return True
 
         # Create BytesIO object for Telegram
         image_io = io.BytesIO(image_data)
@@ -4451,8 +4483,12 @@ async def _send_image_to_telegram(
         return False
 
 
-async def _process_image_response(event, response_content: str) -> tuple[str, bool]:
+async def _process_image_response(
+    event, response_content: str, *, response_message: Any = None
+) -> tuple[str, bool]:
     """Process response content that may contain base64 image data.
+
+    RESPONSE_MESSAGE is passed on to `_send_image_to_telegram`.
 
     Returns:
         tuple: (text_content, has_image) where has_image indicates if an image was sent
@@ -4495,6 +4531,7 @@ async def _process_image_response(event, response_content: str) -> tuple[str, bo
             image_bytes,
             filename_base="generated_image",
             file_extension=f".{image_format}",
+            response_message=response_message,
         )
 
         if image_sent:
@@ -4662,6 +4699,7 @@ async def _handle_native_gemini_image_generation(
                         filename_base="generated_image",
                         file_extension=file_extension,
                         file_index=file_index,
+                        response_message=response_message,
                     )
 
                     if image_sent:
@@ -11953,7 +11991,7 @@ class GenerationSurface(str, Enum):
     #: A message in a chat the bot is in.
     CHAT = "chat"
     #: A guest answer: one inline message, edited in place, that can carry
-    #: no generated images and no buttons.
+    #: no buttons, and of generated images only the last.
     GUEST = "guest"
 
 
@@ -12039,12 +12077,6 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
             no_response_retries_max=GUEST_NO_RESPONSE_RETRIES_MAX,
             sleep=GUEST_NO_RESPONSE_RETRY_SLEEP,
         )
-        if (
-            req.image_generation
-            or model_capabilities.get("image_generation", False)
-            or is_native_gemini_image_generation(model_in_use)
-        ):
-            raise ValueError("A guest answer cannot carry generated images")
     else:
         raise ValueError(f"Unknown generation surface: {req.surface!r}")
 
@@ -12216,6 +12248,8 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
                 file_extension=image.file_extension,
                 file_index=image_sequence,
                 caption=caption,
+                response_message=response_message,
+                preview=image.is_preview,
             )
             if not sent:
                 raise RuntimeError("Telegram could not deliver a generated image.")
@@ -12442,18 +12476,9 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
         prefix_result.model = forced_model
 
     if prefix_result.image_generation:
-        if not await llm_chat_config.can_use_codex_imagegen(event, config):
-            await send_info_message(event, CODEX_IMAGEGEN_ACCESS_DENIED)
-            return
-        selected_model, _ = _get_effective_model_and_service(
-            chat_id, user_id, topic_id=_thread_topic_id(event)
-        )
-        quota_fallback = user_manager.get_codex_quota_fallback(user_id)
         try:
-            prefix_result.model = _resolve_image_generation_model(
-                prefix_model=prefix_result.model,
-                selected_model=selected_model,
-                stand_in=(quota_fallback.model if quota_fallback is not None else None),
+            prefix_result.model = await _image_generation_model(
+                event, config=config, prefix_model=prefix_result.model
             )
         except ValueError as exc:
             await send_info_message(event, str(exc))
@@ -12702,6 +12727,12 @@ class GuestRequestPlan:
     model_capabilities: Dict[str, bool]
     prefix_effort: Optional[str]
     warnings: list
+    #: An `.i` request, which the guest answer shows as its photo.
+    image_generation: bool = False
+
+
+class GuestRequestRefused(Exception):
+    """A guest request the caller may not make; the message says why."""
 
 
 def _guest_title() -> str:
@@ -12736,28 +12767,30 @@ async def _guest_invite(query, *, explicit: bool, policy) -> None:
 async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestPlan:
     """The model, service and key for a guest answer, as a chat message would get.
 
-    Image models are swapped for the default: a guest answer cannot carry
-    generated images.
+    An `.i` request is checked and resolved as in `chat_handler`; one the
+    caller may not make raises `GuestRequestRefused`.
     """
     user_id = event.sender_id
-    warnings = []
     prefix = _detect_and_process_message_prefix(
         event.text or "",
         admin_p=is_admin,
         codex_p=await llm_chat_config.can_use_codex(event, config),
     )
+    prefix_model = prefix.model
+    if prefix.image_generation:
+        try:
+            prefix_model = await _image_generation_model(
+                event, config=config, prefix_model=prefix.model
+            )
+        except ValueError as exc:
+            raise GuestRequestRefused(str(exc)) from exc
     model = _resolve_request_model(
-        event.chat_id, user_id, prefix_model=prefix.model
+        event.chat_id, user_id, prefix_model=prefix_model
     ).model
     if not await _can_user_access_model(event, model, config=config):
+        if prefix.image_generation:
+            raise GuestRequestRefused(CODEX_IMAGEGEN_ACCESS_DENIED)
         model = DEFAULT_MODEL
-    if is_native_gemini_image_generation(model) or get_model_capabilities(model).get(
-        "image_generation", False
-    ):
-        model = DEFAULT_MODEL
-        warnings.append("Image models are not available in guest answers.")
-    if prefix.image_generation:
-        warnings.append("Image generation is not available in guest answers.")
     service = llm_util.get_service_from_model(model)
     return GuestRequestPlan(
         model=model,
@@ -12765,7 +12798,8 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
         api_key=get_effective_api_key(user_id, service),
         model_capabilities=get_model_capabilities(model),
         prefix_effort=prefix.reasoning_effort,
-        warnings=warnings,
+        warnings=[],
+        image_generation=prefix.image_generation,
     )
 
 
@@ -12829,7 +12863,19 @@ def _chain_turns(chain: list) -> list:
 
 
 async def _finalize_guest_answer(answer, text: str) -> None:
-    """The last edit: rich Markdown, or classic Markdown if Telegram refuses it."""
+    """The last edit: rich Markdown, or classic Markdown if Telegram refuses it.
+
+    An answer showing an image keeps it, with TEXT as its caption: classic
+    Markdown, cut to the caption limit, and empty when TEXT is.
+    """
+    if answer.media is not None:
+        await answer.finalize(
+            text=tg_format.truncate_utf16(
+                text, guest_util.CAPTION_LIMIT_UNITS, suffix=GUEST_TRUNCATED_NOTE
+            ),
+            parse_mode="md",
+        )
+        return
     text = text or "_(The model returned no answer.)_"
     try:
         await answer.finalize(
@@ -12898,7 +12944,7 @@ async def _run_guest_answer(
                 api_key=plan.api_key,
                 prefs=user_manager.get_prefs(event.sender_id),
                 prefix_effort=plan.prefix_effort,
-                image_generation=False,
+                image_generation=plan.image_generation,
                 warnings=warnings,
                 surface=GenerationSurface.GUEST,
             )
@@ -12982,7 +13028,12 @@ async def guest_chat_handler(query) -> None:
             )
         return
 
-    plan = await _plan_guest_request(event, config=config, is_admin=is_admin)
+    try:
+        plan = await _plan_guest_request(event, config=config, is_admin=is_admin)
+    except GuestRequestRefused as e:
+        if explicit:
+            await _guest_note(query, str(e))
+        return
     if plan.api_key is None:
         await _guest_invite(query, explicit=explicit, policy=policy)
         return

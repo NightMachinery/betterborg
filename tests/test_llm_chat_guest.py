@@ -137,6 +137,9 @@ class _FakeEditor:
             raise errors.RPCError(request=None, message="RICH_MESSAGE_INVALID")
         return True
 
+    async def upload_photo(self, data, *, file_name):
+        return f"photo:{file_name}"
+
 
 class _GuestTestCase(unittest.TestCase):
     """Runs `guest_chat_handler` with Telegram, the config and the model faked."""
@@ -227,15 +230,23 @@ class AnswerTests(_GuestTestCase):
         self.assertIn("what does this mean?", text)
         self.assertNotIn(BOT_USERNAME, text)
 
-    def test_an_image_model_is_swapped_for_the_default(self):
-        with patch.object(
-            plugin,
-            "_resolve_request_model",
-            return_value=SimpleNamespace(model=IMAGE_MODEL),
-        ):
+    def test_an_image_model_answers_as_itself(self):
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(
+                    plugin,
+                    "_resolve_request_model",
+                    return_value=SimpleNamespace(model=IMAGE_MODEL),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    plugin, "_can_user_access_model", AsyncMock(return_value=True)
+                )
+            )
             self.run_query(_query(f"{BOT_USERNAME} draw a cat"))
 
-        self.assertEqual(self.request().model, plugin.DEFAULT_MODEL)
+        self.assertEqual(self.request().model, IMAGE_MODEL)
 
     def test_an_empty_answer_says_so(self):
         self.answer_text = ""
@@ -243,6 +254,66 @@ class AnswerTests(_GuestTestCase):
         self.run_query(_query(f"{BOT_USERNAME} hi"))
 
         self.assertIn("no answer", self.edits[-1]["markdown"])
+
+
+class _ImageGenerationCase(_GuestTestCase):
+    imagegen = True
+
+    def setUp(self):
+        super().setUp()
+        for name in ("can_use_codex", "can_use_codex_imagegen"):
+            patcher = patch.object(
+                plugin.llm_chat_config, name, AsyncMock(return_value=self.imagegen)
+            )
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def answer_with_image(self, text):
+        async def generate(req):
+            await req.response_message.show_image(b"png", file_name="cat.png")
+            return plugin.GenerationResult(
+                text=text, finish_reason="stop", has_image=True
+            )
+
+        self.generate.side_effect = generate
+        self.run_query(_query(f"{BOT_USERNAME} .i draw a cat"))
+
+
+class ImageGenerationTests(_ImageGenerationCase):
+    def test_dot_i_generates_on_codex(self):
+        self.run_query(_query(f"{BOT_USERNAME} .i draw a cat"))
+
+        request = self.request()
+        self.assertTrue(request.image_generation)
+        self.assertEqual(request.model, plugin.OPENAI_CODEX_SOL)
+
+    def test_the_image_stays_and_the_answer_is_its_caption(self):
+        self.answer_with_image("x" * 3000)
+
+        shown, final = self.edits
+        self.assertEqual(shown["media"], "photo:cat.png")
+        self.assertEqual(final["parse_mode"], "md")
+        self.assertNotIn("media", final)
+        self.assertLessEqual(len(final["text"]), guest_util.CAPTION_LIMIT_UNITS)
+        self.assertTrue(final["text"].endswith(plugin.GUEST_TRUNCATED_NOTE))
+
+    def test_an_image_without_text_gets_no_caption(self):
+        self.answer_with_image("")
+
+        self.assertEqual(self.edits[-1], {"text": "", "parse_mode": "md"})
+
+
+class ImageGenerationRefusedTests(_ImageGenerationCase):
+    imagegen = False
+
+    def test_dot_i_without_access_is_refused_where_explicit(self):
+        self.run_query(_query(f"{BOT_USERNAME} .i draw a cat", query_id=1))
+        self.run_query(_query(".i draw a dog", query_id=2))
+
+        self.assertEqual(
+            [a.text for a in self.answers], [plugin.CODEX_IMAGEGEN_ACCESS_DENIED]
+        )
+        self.generate.assert_not_awaited()
 
 
 class ContinuationTests(_GuestTestCase):
@@ -435,15 +506,38 @@ class SurfaceTests(unittest.TestCase):
         fields.update(overrides)
         return plugin.GenerationRequest(**fields)
 
-    def test_a_guest_request_for_an_image_model_is_refused(self):
-        for overrides in (
-            {"model": IMAGE_MODEL},
-            {"image_generation": True},
-            {"model_capabilities": {"image_generation": True}},
-        ):
-            with self.subTest(**overrides):
-                with self.assertRaises(ValueError):
-                    asyncio.run(plugin._generate_response(self._request(**overrides)))
+    def test_codex_images_become_the_guest_answers_photo(self):
+        edits = []
+        answer = guest_util.GuestAnswerMessage(
+            _FakeEditor(edits), min_interval=0, logger=logging.getLogger("test")
+        )
+
+        async def stream(*, image_callback, **kwargs):
+            await image_callback(codex_util.CodexImage(b"p", "a", preview_index=0))
+            await image_callback(codex_util.CodexImage(b"f", "a"))
+            return codex_util.CodexResponse(text="", images_delivered=1)
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(plugin.codex_util, "stream_codex_response", stream)
+            )
+            stack.enter_context(patch.object(plugin, "ACTIVE_LLM_TASKS", {}))
+            result = asyncio.run(
+                plugin._generate_response(
+                    self._request(
+                        model=plugin.OPENAI_CODEX_SOL,
+                        image_generation=True,
+                        response_message=answer,
+                    )
+                )
+            )
+
+        self.assertTrue(result.has_image)
+        self.assertEqual(
+            [e["media"] for e in edits],
+            ["photo:codex_preview_1.png", "photo:codex_generated_image_2.png"],
+        )
+        self.assertEqual(answer.media, "photo:codex_generated_image_2.png")
 
     def test_an_unknown_surface_is_refused(self):
         with self.assertRaises(ValueError):
