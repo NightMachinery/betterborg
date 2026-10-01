@@ -154,6 +154,7 @@ from uniborg import tts_util
 from uniborg import history_util
 from uniborg.history_util import LAST_N_MAX
 from uniborg import bot_util
+from uniborg import callback_util
 from uniborg import tg_compat
 from uniborg.topics import (
     ReplyTarget,
@@ -9154,6 +9155,7 @@ async def gemini_voice_here_handler(event):
     )
 
 
+@callback_util.hold_bare_answers
 async def callback_handler(event):
     """Handles all inline button presses for the plugin (BOT MODE ONLY)."""
     data_str = event.data.decode("utf-8")

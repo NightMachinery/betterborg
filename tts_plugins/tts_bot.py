@@ -12,7 +12,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from telethon import events
 
-from uniborg import bot_util, llm_db, llm_util, tts_util, util
+from uniborg import bot_util, callback_util, llm_db, llm_util, tts_util, util
 from uniborg.storage import UserStorage
 
 # --- Bot Configuration ---
@@ -342,6 +342,7 @@ async def gemini_model_handler(event):
     )
 
 
+@callback_util.hold_bare_answers
 async def voice_callback_handler(event):
     """Handles the user's voice selection from the inline keyboard."""
     voice = _menu_choice(event)
@@ -363,6 +364,7 @@ async def voice_callback_handler(event):
     await event.answer(f"Voice set to {voice}")
 
 
+@callback_util.hold_bare_answers
 async def model_callback_handler(event):
     """Handles the user's model selection from the inline keyboard."""
     model = _menu_choice(event)

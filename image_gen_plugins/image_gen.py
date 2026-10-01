@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from uniborg import util
 from uniborg import llm_db
 from uniborg import bot_util
+from uniborg import callback_util
 from uniborg.storage import UserStorage
 from uniborg.constants import BOT_META_INFO_PREFIX
 
@@ -343,6 +344,7 @@ async def set_gemini_key_handler(event):
 
 
 # --- Callback Handler ---
+@callback_util.hold_bare_answers
 async def callback_handler(event):
     """Handle inline button presses."""
     data_str = event.data.decode("utf-8")
