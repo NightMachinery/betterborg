@@ -266,6 +266,9 @@ Reserve is spent too, =/codexStatus= reports the account's live meters and can
 park a user's saved default on another provider until the window resets. See
 [[file:docs/codex_luna_reserve.md][docs/codex_luna_reserve.md]] and
 [[file:docs/codex_quota_fallback.md][docs/codex_quota_fallback.md]].
+File titles and summaries come from each user's title model (=/setTitleModel=):
+by default the Luna Reserve with Codex access, else Gemini Flash Lite; see
+[[file:docs/title_model.md][docs/title_model.md]].
 Codex quick prefixes have matching Persian aliases: =.چ*= for GPT-5.6 Sol and
 =.اس*= for GPT-6 Astra; see [[file:docs/codex_models.md][the complete mapping]].
 Use =.i= on the current message to enable Codex image generation, for example

@@ -582,5 +582,161 @@ class ChatHandlerInterceptTests(_IsolatedStateTest):
         )
 
 
+class TitleModelMenuTests(_IsolatedStateTest):
+    """/setTitleModel: an Auto choice, then the models this user may use."""
+
+    def setUp(self):
+        super().setUp()
+        enter = self.stack.enter_context
+        self.title_models = {}
+        self.codex_p = False
+        enter(patch.object(plugin, "IS_BOT", True))
+        enter(patch.object(plugin.llm_chat_config, "load_config", return_value=None))
+        enter(
+            patch.object(
+                plugin.llm_chat_config,
+                "can_use_codex",
+                new=AsyncMock(side_effect=lambda *args: self.codex_p),
+            )
+        )
+        enter(patch.object(plugin.util, "isAdmin", new=AsyncMock(return_value=False)))
+        enter(
+            patch.object(
+                plugin,
+                "_model_choices_for_access",
+                return_value={"model/a": "Model A", "model/b": "Model B"},
+            )
+        )
+        enter(
+            patch.object(
+                plugin, "_can_user_access_model", new=AsyncMock(return_value=True)
+            )
+        )
+        enter(
+            patch.object(
+                plugin.user_manager,
+                "get_title_model",
+                side_effect=lambda user_id: self.title_models.get(user_id, "auto"),
+            )
+        )
+        enter(
+            patch.object(
+                plugin.user_manager,
+                "set_title_model",
+                side_effect=self.title_models.__setitem__,
+            )
+        )
+        self.info = enter(patch.object(plugin, "send_info_message", new=AsyncMock()))
+
+    def open_menu(self, argument=None):
+        event = _in_topic("/setTitleModel")
+        event.pattern_match = SimpleNamespace(group=lambda _index: argument)
+        event.reply = AsyncMock(return_value=SimpleNamespace(id=MENU_ID))
+        asyncio.run(plugin.set_title_model_handler(event))
+        return event
+
+    def menu_buttons(self, event):
+        rows = event.reply.await_args.kwargs["buttons"]
+        return [
+            (button.text, tg_compat.button_data(button))
+            for row in rows
+            for button in row
+        ]
+
+    def test_the_menu_offers_auto_then_the_models_and_a_cancel_row(self):
+        event = self.open_menu()
+
+        self.assertIn("Set Title Model", event.reply.await_args.args[0])
+        buttons = self.menu_buttons(event)
+        flash_lite = plugin._model_display_name(plugin.GEMINI_FLASH_LITE_LATEST)
+        self.assertEqual(
+            buttons,
+            [
+                (f"✅ Auto ({flash_lite})", b"titlemodel_auto"),
+                ("Model A", b"titlemodel_model/a"),
+                ("Model B", b"titlemodel_model/b"),
+                ("❌ Cancel", b"mm:cancel:title"),
+            ],
+        )
+        self.assertEqual(self.pending[USER_ID]["type"], "titlemodel")
+
+    def test_with_codex_auto_names_the_reserve(self):
+        self.codex_p = True
+
+        (auto, *_rest) = self.menu_buttons(self.open_menu())
+
+        reserve = plugin._model_display_name(plugin.OPENAI_CODEX_LUNA_RESERVE)
+        self.assertEqual(auto[0], f"✅ Auto ({reserve})")
+
+    def test_picking_a_model_saves_it_and_ticks_it(self):
+        self.open_menu()
+        press = _press("titlemodel_model/b")
+
+        asyncio.run(plugin.callback_handler(press))
+
+        self.assertEqual(self.title_models, {USER_ID: "model/b"})
+        self.assertNotIn(USER_ID, self.pending)
+        press.answer.assert_awaited_once_with("Title model set to Model B")
+        rows = press.edit.await_args.kwargs["buttons"]
+        self.assertEqual(rows[1][0].text, "✅ Model B")
+        self.assertEqual(tg_compat.button_data(rows[-1][0]), b"mm:cancel:title")
+
+    def test_a_model_outside_the_menu_is_refused(self):
+        press = _press("titlemodel_model/z")
+
+        asyncio.run(plugin.callback_handler(press))
+
+        self.assertEqual(self.title_models, {})
+        self.assertTrue(press.answer.await_args.kwargs["alert"])
+        press.edit.assert_not_awaited()
+
+    def test_typed_reset_words_and_auto_mean_auto(self):
+        for text in ("auto", "reset", "Not Set"):
+            with self.subTest(text=text):
+                self.title_models[USER_ID] = "model/a"
+                self.open_menu()
+
+                asyncio.run(plugin.generic_input_handler(_in_topic(text, msg_id=501)))
+
+                self.assertEqual(self.title_models[USER_ID], "auto")
+                self.assertNotIn(USER_ID, self.pending)
+
+    def test_a_typed_model_id_is_saved(self):
+        self.open_menu()
+
+        asyncio.run(plugin.generic_input_handler(_in_topic("custom/model", msg_id=501)))
+
+        self.assertEqual(self.title_models[USER_ID], "custom/model")
+
+    def test_a_typed_cancel_closes_the_title_menu(self):
+        self.title_models[USER_ID] = "model/a"
+        self.open_menu()
+        typed = _in_topic("cancel", msg_id=501)
+        typed.client = SimpleNamespace(edit_message=AsyncMock())
+
+        asyncio.run(plugin.generic_input_handler(typed))
+
+        args, _kwargs = typed.client.edit_message.await_args
+        self.assertIn("Set Title Model", args[2])
+        self.assertIn("Current model: `model/a`", args[2])
+
+    def test_the_cancel_button_closes_the_title_menu(self):
+        self.open_menu()
+        press = _press("mm:cancel:title")
+
+        asyncio.run(plugin.callback_handler(press))
+
+        self.assertNotIn(USER_ID, self.pending)
+        self.assertIn("Current model: `auto`", press.edit.await_args.args[0])
+
+    def test_an_argument_sets_the_model_without_a_menu(self):
+        event = self.open_menu(argument=" model/a ")
+        self.assertEqual(self.title_models[USER_ID], "model/a")
+
+        self.open_menu(argument="AUTO")
+        self.assertEqual(self.title_models[USER_ID], "auto")
+        self.assertIn("`model/a`", event.reply.await_args.args[0])
+
+
 if __name__ == "__main__":
     unittest.main()

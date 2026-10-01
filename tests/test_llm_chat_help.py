@@ -105,6 +105,7 @@ class HelpTests(unittest.TestCase):
         prefs = SimpleNamespace(
             group_activation_mode="mention_and_reply",
             model="gemini/gemini-3-flash-preview",
+            title_model="auto",
         )
         with ExitStack() as stack:
             stack.enter_context(patch.object(plugin, "BOT_USERNAME", "@vlm_chat_bot"))

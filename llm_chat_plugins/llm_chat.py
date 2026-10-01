@@ -189,6 +189,7 @@ from uniborg.constants import (
 # Import live mode utilities
 from uniborg import gemini_live_util
 from uniborg import codex_util
+from uniborg import title_util
 from uniborg import pioneer_util
 from uniborg import llm_models
 from uniborg import llm_chat_config
@@ -1202,6 +1203,10 @@ BOT_COMMANDS = [
     },
     {"command": "setmodel", "description": "Set your preferred chat model"},
     {
+        "command": "settitlemodel",
+        "description": "Set the model that writes file titles and summaries",
+    },
+    {
         "command": "codexstatus",
         "description": "Codex usage limits and temporary stand-in model",
     },
@@ -1717,6 +1722,9 @@ class UserPrefs(BaseModel):
     group_metadata_mode: str = Field(default="full_metadata")
     tts_global_voice: str = Field(default=tts_util.DEFAULT_VOICE)
     live_model: str = Field(default="gemini-2.5-flash-preview-native-audio-dialog")
+    #: Writes the titles and summaries of files: a model id, or "auto"
+    #: (`title_util.resolve_title_model`). Set with /setTitleModel.
+    title_model: str = Field(default=title_util.AUTO_TITLE_MODEL)
     last_n_messages_limit: Optional[int] = Field(default=None)
     thread_last_n_messages_limit: Optional[int] = Field(default=None)
     include_reply_chain: bool = Field(default=True)
@@ -1863,6 +1871,14 @@ class UserManager:
     def set_live_model(self, user_id: int, model: str):
         prefs = self.get_prefs(user_id)
         prefs.live_model = model
+        self._save_prefs(user_id, prefs)
+
+    def get_title_model(self, user_id: int) -> str:
+        return self.get_prefs(user_id).title_model
+
+    def set_title_model(self, user_id: int, model: str):
+        prefs = self.get_prefs(user_id)
+        prefs.title_model = model
         self._save_prefs(user_id, prefs)
 
     def get_last_n_messages_limit(self, user_id: int) -> Optional[int]:
@@ -2574,7 +2590,39 @@ class ModelMenu:
 
     options: Dict[str, str]
     current_value: str
-    think_state: ThinkMenuState
+    #: None for a picker without reasoning levels (the title model's).
+    think_state: Optional[ThinkMenuState]
+
+
+#: The model menu of /setTitleModel. It is not a reasoning scope: titles take
+#: no reasoning setting.
+MODEL_MENU_SCOPE_TITLE = "title"
+
+
+def _build_title_model_menu(user_id: int, *, admin_p: bool, codex_p: bool) -> ModelMenu:
+    """Title model choices: Auto, then the chat models this user may use."""
+    auto_model = title_util.resolve_title_model(
+        title_util.AUTO_TITLE_MODEL, codex_p=codex_p
+    )
+    options = {
+        title_util.AUTO_TITLE_MODEL: f"Auto ({_model_display_name(auto_model)})",
+        **_model_choices_for_access(admin_p=admin_p, codex_p=codex_p),
+    }
+    return ModelMenu(
+        options=options,
+        current_value=user_manager.get_title_model(user_id),
+        think_state=None,
+    )
+
+
+def _file_title_generator(user_id: int, *, codex_p: bool) -> util.TitleGenerator:
+    """Titles and summaries of the files sent to USER_ID, by their title model."""
+    return title_util.file_title_generator(
+        choice=user_manager.get_title_model(user_id),
+        codex_p=codex_p,
+        api_keys={"gemini": get_effective_gemini_api_key(user_id)},
+        api_user_id=user_id,
+    )
 
 
 def _build_model_menu(
@@ -2634,15 +2682,26 @@ def _model_menu_buttons(
 MODEL_MENU_CALLBACK_PREFIXES = {
     REASONING_SCOPE_PERSONAL: "model_",
     REASONING_SCOPE_CHAT: "chatmodel_",
+    MODEL_MENU_SCOPE_TITLE: "titlemodel_",
 }
 #: Followed by the scope. It must not start like a model callback prefix.
 MODEL_MENU_CANCEL_PREFIX = "mm:cancel:"
-MODEL_MENU_TITLE = "**Set Chat Model**"
+MODEL_MENU_TITLES = {
+    REASONING_SCOPE_PERSONAL: "**Set Chat Model**",
+    REASONING_SCOPE_CHAT: "**Set Chat Model**",
+    MODEL_MENU_SCOPE_TITLE: (
+        "**Set Title Model**\n\nIt writes the titles and summaries of files."
+    ),
+}
 MODEL_MENU_CUSTOM_ID_HINTS = {
     REASONING_SCOPE_PERSONAL: "Or, send a custom model ID below.\n(Type `cancel` to stop.)",
     REASONING_SCOPE_CHAT: (
         "Or, send a custom model ID below."
         "\n(Type `cancel` or `not set` to stop/clear.)"
+    ),
+    MODEL_MENU_SCOPE_TITLE: (
+        "Or, send a custom model ID below."
+        "\n(Type `auto` to reset, `cancel` to stop.)"
     ),
 }
 #: A group menu arms no prompt: only private text can answer one, and a
@@ -2675,7 +2734,7 @@ def _model_menu_text(*, scope: str, prompt_p: bool = True) -> str:
         if prompt_p
         else MODEL_MENU_GROUP_CUSTOM_ID_HINT
     )
-    return f"{BOT_META_INFO_PREFIX}{MODEL_MENU_TITLE}\n\n{hint}"
+    return f"{BOT_META_INFO_PREFIX}{MODEL_MENU_TITLES[scope]}\n\n{hint}"
 
 
 def _model_menu_closed_text(*, scope: str, chat_id, user_id: int) -> str:
@@ -2687,9 +2746,11 @@ def _model_menu_closed_text(*, scope: str, chat_id, user_id: int) -> str:
         current = (
             f"`{chat_model}`" if chat_model else "not set (personal defaults apply)"
         )
+    elif scope == MODEL_MENU_SCOPE_TITLE:
+        current = f"`{user_manager.get_title_model(user_id)}`"
     else:
         raise ValueError(f"Unknown model menu scope: {scope}")
-    return f"{BOT_META_INFO_PREFIX}{MODEL_MENU_TITLE}\n\nCancelled. Current model: {current}."
+    return f"{BOT_META_INFO_PREFIX}{MODEL_MENU_TITLES[scope]}\n\nCancelled. Current model: {current}."
 
 
 async def _present_model_menu(
@@ -2732,7 +2793,7 @@ async def _model_menu_cancel_handler(event, *, scope: str):
                 alert=True,
             )
             return
-    elif scope == REASONING_SCOPE_PERSONAL:
+    elif scope in (REASONING_SCOPE_PERSONAL, MODEL_MENU_SCOPE_TITLE):
         pass
     else:
         #: Wire input from a button: an unknown scope is answered, not raised.
@@ -2767,6 +2828,8 @@ async def _close_model_menu_of(event, flow: dict):
         scope = REASONING_SCOPE_PERSONAL
     elif flow_type == "chatmodel":
         scope = REASONING_SCOPE_CHAT
+    elif flow_type == "titlemodel":
+        scope = MODEL_MENU_SCOPE_TITLE
     else:
         raise ValueError(f"A menu armed an unknown flow: {flow_type}")
     try:
@@ -5960,6 +6023,12 @@ def register_handlers():
     )(set_model_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^/settitlemodel{bot_username_suffix_re}(?:\s+(.*))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(set_title_model_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/setsystemprompt{bot_username_suffix_re}(?:\s+([\s\S]+))?\s*$",
             func=lambda e: e.is_private,
         )
@@ -6353,6 +6422,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /asfile or ..: Export conversation history as markdown file.
 - /setgeminikey: Sets or updates your Gemini API key.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
+- /setTitleModel: The model that writes file titles and summaries. Current: `{prefs.title_model}`.
 - /codexStatus: Codex usage limits and the temporary stand-in model.
 - /setSystemPrompt: Change my core instructions or reset to default.
 - /setModelHere: Set the AI model for the current chat only.
@@ -6652,6 +6722,7 @@ async def status_handler(event):
     status_message = (
         f"**Your Personal Bot Settings**\n\n"
         f"• **Model:** {model_status}\n"
+        f"• **Title Model:** `{prefs.title_model}`\n"
         f"{codex_quota_line}"
         f"• **Reasoning Effort ({_model_display_name(effective_model)}):** {thinking_status}\n"
         f"• **Enabled Tools:** `{enabled_tools_str}`\n"
@@ -8501,6 +8572,43 @@ async def set_model_handler(event):
         start_input_flow(event, {"type": "model"})
 
 
+async def set_title_model_handler(event):
+    """Sets the model that writes the titles and summaries of files."""
+    user_id = event.sender_id
+    choice_match = event.pattern_match.group(1)
+    config = llm_chat_config.load_config()
+    codex_p = await llm_chat_config.can_use_codex(event, config)
+
+    if choice_match:
+        choice = choice_match.strip()
+        if choice.lower() in (title_util.AUTO_TITLE_MODEL, *RESET_KEYWORDS):
+            choice = title_util.AUTO_TITLE_MODEL
+        elif not await _guard_model_access(event, choice, config=config):
+            return
+        user_manager.set_title_model(user_id, choice)
+        cancel_input_flow(user_id)
+        await event.reply(
+            f"{BOT_META_INFO_PREFIX}Your title model has been set to: `{choice}`"
+        )
+        return
+
+    menu = _build_title_model_menu(
+        user_id, admin_p=await util.isAdmin(event), codex_p=codex_p
+    )
+    if IS_BOT:
+        await _present_model_menu(
+            event,
+            scope=MODEL_MENU_SCOPE_TITLE,
+            menu=menu,
+            flow={"type": "titlemodel"},
+        )
+        return
+    await event.reply(
+        f"{BOT_META_INFO_PREFIX}Current title model: `{menu.current_value}`.\n"
+        "Set it with `/setTitleModel MODEL_ID`, or `/setTitleModel auto`."
+    )
+
+
 async def set_system_prompt_handler(event):
     """Sets the user's custom system prompt or resets it, now with an interactive flow."""
     user_id = event.sender_id
@@ -9525,6 +9633,23 @@ async def callback_handler(event):
         await event.answer(feedback)
         await event.edit(buttons=_model_menu_rows(menu, scope=REASONING_SCOPE_PERSONAL))
 
+    elif data_str.startswith(MODEL_MENU_CALLBACK_PREFIXES[MODEL_MENU_SCOPE_TITLE]):
+        choice = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
+        menu = _build_title_model_menu(
+            user_id, admin_p=await util.isAdmin(event), codex_p=codex_p
+        )
+        if choice not in menu.options or (
+            choice != title_util.AUTO_TITLE_MODEL
+            and not await _can_user_access_model(event, choice, config=config)
+        ):
+            await event.answer(_model_access_denial(choice), alert=True)
+            return
+        user_manager.set_title_model(user_id, choice)
+        cancel_input_flow(user_id)
+        menu.current_value = choice
+        await event.answer(f"Title model set to {menu.options[choice]}")
+        await event.edit(buttons=_model_menu_rows(menu, scope=MODEL_MENU_SCOPE_TITLE))
+
     elif data_str.startswith("chatmodel_"):
         admin_p = await util.isAdmin(event)
         chat_id = event.chat_id
@@ -9944,6 +10069,14 @@ async def generic_input_handler(event):
             return
         _apply_personal_model_choice(user_id, text)
         await send_info_message(event, f"✅ Model updated to: `{text}`")
+    elif input_type == "titlemodel":
+        if text.lower() in (title_util.AUTO_TITLE_MODEL, *RESET_KEYWORDS):
+            text = title_util.AUTO_TITLE_MODEL
+        elif not await _guard_model_access(event, text, config=config):
+            cancel_input_flow(user_id)
+            return
+        user_manager.set_title_model(user_id, text)
+        await send_info_message(event, f"✅ Title model updated to: `{text}`")
     elif input_type == "chatmodel":
         chat_id = flow_data.get("chat_id", event.chat_id)
         if text.lower() in RESET_KEYWORDS:
@@ -10450,12 +10583,16 @@ async def as_file_handler(event):
             #: Inside a private topic, the export answers there.
             reply_to = _topic_reply_target(event)
             # Send as file with auto-generated title and description
+            codex_p = await llm_chat_config.can_use_codex(
+                event, llm_chat_config.load_config()
+            )
             sent_file = await util.send_as_file_with_filename(
                 text=markdown_content,
                 parse_mode="md",
                 file_name_mode="llm",
                 message_obj=event,
                 reply_to=reply_to,
+                title_generator=_file_title_generator(user_id, codex_p=codex_p),
                 default_caption="",
             )
 
@@ -11625,9 +11762,9 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
                 file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
                 file_only_threshold=file_only_threshold,
                 file_name_mode="llm",
-                api_keys={
-                    "gemini": get_effective_gemini_api_key(user_id),
-                },
+                title_generator=_file_title_generator(
+                    user_id, codex_p=user_has_codex_access
+                ),
                 reply_to=event.message,
                 #: The final answer must survive a head it can no longer edit.
                 send_new_on_head_failure=True,

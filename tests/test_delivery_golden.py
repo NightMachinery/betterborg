@@ -215,7 +215,7 @@ def final_edit(
             "file_length_threshold": DEFAULT_FILE_LENGTH_THRESHOLD,
             "file_only_threshold": file_only_threshold,
             "file_name_mode": "llm",
-            "api_keys": {"gemini": _GEMINI_KEY},
+            "title_generator": f"title_generator(user={_USER_ID}, codex=True)",
             "reply_to": "event.message",
             "send_new_on_head_failure": True,
         },
@@ -582,6 +582,16 @@ def _run_chat(
         enter(
             patch.object(
                 plugin, "get_effective_gemini_api_key", return_value=_GEMINI_KEY
+            )
+        )
+        #: The generator is a closure; the log names it by what it was built for.
+        enter(
+            patch.object(
+                plugin,
+                "_file_title_generator",
+                side_effect=lambda user_id, *, codex_p: log.token(
+                    object(), f"title_generator(user={user_id}, codex={codex_p})"
+                ),
             )
         )
         #: Keeps litellm's model map out of the goldens; text-only means the
