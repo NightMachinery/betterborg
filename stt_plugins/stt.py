@@ -32,6 +32,7 @@ from telethon.tl.types import (
 )
 from pydantic import BaseModel, Field
 from typing import Optional
+from dataclasses import dataclass
 
 # --- Bot Commands Registration ---
 BOT_COMMANDS = [
@@ -282,6 +283,161 @@ async def _transcribe_with_retry(
                 await asyncio.sleep(delay)
 
 
+class SttRequestError(Exception):
+    """A request that cannot be transcribed; the message is for the user."""
+
+
+class MissingSttKeyError(SttRequestError):
+    pass
+
+
+class SttModelLoadError(Exception):
+    """Loading the model failed unexpectedly; the cause is chained."""
+
+
+@dataclass
+class SttJob:
+    """A transcription that passed its checks: the key, model and files."""
+
+    model_name: str
+    api_key: str
+    attachments: list
+
+
+@dataclass
+class Transcription:
+    #: Markdown for the user.
+    text: str
+    #: What the model returned, for the log.
+    raw: str
+
+
+def prepare_stt_job(cwd, *, user_id: int, model_name: str = STT_MODELS[0]) -> SttJob:
+    """Checks the key, the model and the files in CWD before any status message.
+
+    Raises `MissingSttKeyError`, `SttRequestError` (with a message for the
+    user) or `SttModelLoadError`.
+    """
+    api_key = get_effective_gemini_api_key(user_id)
+    if not api_key:
+        raise MissingSttKeyError("No Gemini API key is set.")
+    try:
+        model = llm.get_async_model(model_name)
+    except llm.UnknownModelError:
+        raise SttRequestError(
+            f"Error: '{model_name}' model not found. Perhaps the relevant LLM plugin has not been installed."
+        ) from None
+    except Exception as e:
+        raise SttModelLoadError(model_name) from e
+    if not getattr(model, "supports_schema", False):
+        raise SttRequestError(
+            f"Error: The model '{model_name}' does not support structured output (schemas)."
+        )
+    attachments = llm_util.create_attachments_from_dir(Path(cwd))
+    if not attachments:
+        raise SttRequestError("No valid media files found to transcribe.")
+    return SttJob(model_name=model_name, api_key=api_key, attachments=attachments)
+
+
+def format_transcription(json_response_text: str, *, italics_marker: str) -> str:
+    """The model's JSON answer as the message the user gets."""
+    final_output_message = ""
+    try:
+        clean_json_text = (
+            json_response_text.strip()
+            .removeprefix("```json")
+            .removesuffix("```")
+            .strip()
+        )
+        # The entire data blob is our result object
+        result_data = json.loads(clean_json_text)
+        result = TranscriptionResult.model_validate(result_data)
+
+        output_parts = []
+        if result.transcription:
+            # output_parts.append(f"**Transcription:**\n{result.transcription}")
+            output_parts.append(f"{result.transcription}")
+
+        if result.visual_description:
+            output_parts.append(f"\n**Visuals:**\n{result.visual_description}")
+
+        if not output_parts:
+            message = result.error_message or "[No speech or text detected]"
+            output_parts.append(f"{italics_marker}{message}{italics_marker}")
+
+        final_output_message = "\n\n".join(output_parts)
+
+    except (json.JSONDecodeError, Exception) as parse_error:
+        print(f"Error parsing model's JSON response: {parse_error}")
+        final_output_message = f"**Could not parse structured response, showing raw output:**\n\n```json\n{json_response_text}\n```"
+
+    return (
+        final_output_message
+        or f"{italics_marker}No content was generated.{italics_marker}"
+    )
+
+
+async def run_stt_job(
+    job: SttJob, *, user_id: int, status_message, italics_marker: str = "__"
+) -> Transcription:
+    """Transcribes JOB, showing retry progress on STATUS_MESSAGE."""
+    # Route this request's Gemini traffic through GEMINI_SPECIAL_HTTP_PROXY if configured.
+    # Honors the admin-only gate (may raise ProxyRestrictedException for blocked users).
+    proxy_url, _ = llm_util.get_proxy_config_or_error(user_id)
+    proxy_token = llm_util.set_llm_gemini_proxy(proxy_url)
+    try:
+        # Transcribe, cycling through fallback models on transient upstream errors.
+        json_response_text = await _transcribe_with_retry(
+            model_name=job.model_name,
+            attachments=job.attachments,
+            api_key=job.api_key,
+            status_message=status_message,
+            italics_marker=italics_marker,
+        )
+    finally:
+        llm_util.reset_llm_gemini_proxy(proxy_token)
+    return Transcription(
+        text=format_transcription(json_response_text, italics_marker=italics_marker),
+        raw=json_response_text,
+    )
+
+
+def _log_transcription(event, *, model_name: str, raw: str) -> None:
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        unique_id = str(uuid.uuid4())
+        log_filename = f"{timestamp}_{unique_id}.txt"
+
+        user = event.sender
+        user_id = user.id
+        first_name = user.first_name or ""
+        last_name = user.last_name or ""
+        username = user.username or "N/A"
+        full_name = f"{first_name} {last_name}".strip()
+
+        log_content = (
+            f"Date: {timestamp}\n"
+            f"User ID: {user_id}\n"
+            f"Name: {full_name}\n"
+            f"Username: @{username}\n"
+            f"model: {model_name}\n"
+        )
+        print(f"\n{log_content}\n---")
+
+        log_content += f"--- Transcription ---\n" f"{raw}"
+
+        log_dir = os.path.expanduser(f"~/.borg/stt/log/{user_id}")
+        os.makedirs(log_dir, exist_ok=True)
+        log_file_path = os.path.join(log_dir, log_filename)
+
+        with open(log_file_path, "w", encoding="utf-8") as f:
+            f.write(log_content)
+
+    except Exception as log_e:
+        print(f"Failed to write transcription log: {log_e}")
+        print(traceback.format_exc())
+
+
 async def llm_stt(*, cwd, event, model_name=STT_MODELS[0], log=True):
     """
     Performs speech-to-text on media, enforcing a single structured JSON output
@@ -290,99 +446,35 @@ async def llm_stt(*, cwd, event, model_name=STT_MODELS[0], log=True):
     parse_mode = "md"
     italics_marker = "__"
 
-    api_key = get_effective_gemini_api_key(event.sender_id)
-    if not api_key:
+    try:
+        job = prepare_stt_job(cwd, user_id=event.sender_id, model_name=model_name)
+    except MissingSttKeyError:
         await llm_db.request_api_key_message(event, "gemini")
         return
-
-    try:
-        model = llm.get_async_model(model_name)
-        if not getattr(model, "supports_schema", False):
-            await event.reply(
-                f"Error: The model '{model_name}' does not support structured output (schemas)."
-            )
-            return
-    except llm.UnknownModelError:
-        await event.reply(
-            f"Error: '{model_name}' model not found. Perhaps the relevant LLM plugin has not been installed."
-        )
+    except SttRequestError as e:
+        await event.reply(str(e))
         return
-    except Exception as e:
+    except SttModelLoadError as e:
         await llm_util.handle_llm_error(
             event=event,
-            exception=e,
+            exception=e.__cause__,
             base_error_message="An unexpected error occurred while loading the model.",
             error_id_p=True,
         )
         return
 
-    # --- Refactored Attachment Creation ---
-    # The complex logic of iterating files, checking MIME types, and reading
-    # content is now handled by the centralized utility function.
-    attachments = llm_util.create_attachments_from_dir(Path(cwd))
-
-    if not attachments:
-        await event.reply("No valid media files found to transcribe.")
-        return
-
     status_message = await event.reply("Transcribing...")
 
-    json_response_text = None
     try:
-        # Route this request's Gemini traffic through GEMINI_SPECIAL_HTTP_PROXY if configured.
-        # Honors the admin-only gate (may raise ProxyRestrictedException for blocked users).
-        proxy_url, _ = llm_util.get_proxy_config_or_error(event.sender_id)
-        proxy_token = llm_util.set_llm_gemini_proxy(proxy_url)
-        try:
-            # Transcribe, cycling through fallback models on transient upstream errors.
-            json_response_text = await _transcribe_with_retry(
-                model_name=model_name,
-                attachments=attachments,
-                api_key=api_key,
-                status_message=status_message,
-                italics_marker=italics_marker,
-            )
-        finally:
-            llm_util.reset_llm_gemini_proxy(proxy_token)
-
-        # Parse the single JSON object and format it for the user
-        final_output_message = ""
-        try:
-            clean_json_text = (
-                json_response_text.strip()
-                .removeprefix("```json")
-                .removesuffix("```")
-                .strip()
-            )
-            # The entire data blob is our result object
-            result_data = json.loads(clean_json_text)
-            result = TranscriptionResult.model_validate(result_data)
-
-            output_parts = []
-            if result.transcription:
-                # output_parts.append(f"**Transcription:**\n{result.transcription}")
-                output_parts.append(f"{result.transcription}")
-
-            if result.visual_description:
-                output_parts.append(f"\n**Visuals:**\n{result.visual_description}")
-
-            if not output_parts:
-                message = result.error_message or "[No speech or text detected]"
-                output_parts.append(f"{italics_marker}{message}{italics_marker}")
-
-            final_output_message = "\n\n".join(output_parts)
-
-        except (json.JSONDecodeError, Exception) as parse_error:
-            print(f"Error parsing model's JSON response: {parse_error}")
-            final_output_message = f"**Could not parse structured response, showing raw output:**\n\n```json\n{json_response_text}\n```"
-
-        final_output_message = (
-            final_output_message
-            or f"{italics_marker}No content was generated.{italics_marker}"
+        transcription = await run_stt_job(
+            job,
+            user_id=event.sender_id,
+            status_message=status_message,
+            italics_marker=italics_marker,
         )
         await util.edit_message(
             status_message,
-            final_output_message,
+            transcription.text,
             reply_to=event.message,
             link_preview=False,
             parse_mode=parse_mode,
@@ -391,46 +483,14 @@ async def llm_stt(*, cwd, event, model_name=STT_MODELS[0], log=True):
             file_length_threshold=STT_FILE_LENGTH_THRESHOLD,
             file_only_threshold=STT_FILE_ONLY_LENGTH_THRESHOLD,
             api_keys={
-                "gemini": api_key,
+                "gemini": job.api_key,
             },
             #: The transcript must survive a status message it can no longer edit.
             send_new_on_head_failure=True,
         )
 
         if log:
-            try:
-                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                unique_id = str(uuid.uuid4())
-                log_filename = f"{timestamp}_{unique_id}.txt"
-
-                user = event.sender
-                user_id = user.id
-                first_name = user.first_name or ""
-                last_name = user.last_name or ""
-                username = user.username or "N/A"
-                full_name = f"{first_name} {last_name}".strip()
-
-                log_content = (
-                    f"Date: {timestamp}\n"
-                    f"User ID: {user_id}\n"
-                    f"Name: {full_name}\n"
-                    f"Username: @{username}\n"
-                    f"model: {model_name}\n"
-                )
-                print(f"\n{log_content}\n---")
-
-                log_content += f"--- Transcription ---\n" f"{json_response_text}"
-
-                log_dir = os.path.expanduser(f"~/.borg/stt/log/{user_id}")
-                os.makedirs(log_dir, exist_ok=True)
-                log_file_path = os.path.join(log_dir, log_filename)
-
-                with open(log_file_path, "w", encoding="utf-8") as f:
-                    f.write(log_content)
-
-            except Exception as log_e:
-                print(f"Failed to write transcription log: {log_e}")
-                print(traceback.format_exc())
+            _log_transcription(event, model_name=model_name, raw=transcription.raw)
 
     except Exception as e:
         await llm_util.handle_llm_error(
