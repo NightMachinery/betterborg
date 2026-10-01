@@ -66,8 +66,7 @@ response output, are deduplicated by image item ID. Deduplication is based on
 event identity rather than bytes, so distinct image items with identical image
 data are still delivered separately.
 
-Captions distinguish previews from final images and associate them with the
-current request. Text can arrive as deltas, terminal text fields, or not at all;
+Previews are captioned "Codex preview N"; a final image has no caption. Text can arrive as deltas, terminal text fields, or not at all;
 image-only responses are valid. Terminal text fills a missing text part but
 does not duplicate text already accumulated from deltas.
 
@@ -81,7 +80,7 @@ closed on success, failure, and cancellation.
 The stream helper has local tests for ordering, deduplication, decoding,
 terminal text, failure, cancellation, and resource cleanup. The live files were
 also replayed through `_send_image_to_telegram()` with Telegram calls mocked;
-all three retained valid bytes, separate captions, and the triggering reply ID.
+all three retained valid bytes and the triggering reply ID.
 No messages were sent to a live Telegram chat.
 
 ## Live backend verification

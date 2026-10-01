@@ -821,11 +821,7 @@ class FinalDeliveryGoldenTests(unittest.TestCase):
                 (
                     "send_file",
                     _CHAT_ID,
-                    {
-                        "file": "codex_generated_image_1.png",
-                        "reply_to": _EVENT_ID,
-                        "caption": "Codex generated image",
-                    },
+                    {"file": "codex_generated_image_1.png", "reply_to": _EVENT_ID},
                 ),
                 PLACEHOLDER_DELETED,
             ],

@@ -546,9 +546,7 @@ class CodexTelegramDeliveryTests(unittest.TestCase):
             ],
         )
         send_image.assert_awaited_once()
-        self.assertEqual(
-            send_image.await_args.kwargs["caption"], "Codex generated image"
-        )
+        self.assertIsNone(send_image.await_args.kwargs["caption"])
         response_message.delete.assert_awaited_once()
         load_config.assert_called_once_with()
 

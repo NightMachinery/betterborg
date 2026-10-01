@@ -12207,7 +12207,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
                 caption = f"Codex preview {image.preview_index + 1}"
                 filename_base = "codex_preview"
             else:
-                caption = "Codex generated image"
+                caption = None
                 filename_base = "codex_generated_image"
             sent = await _send_image_to_telegram(
                 event,
