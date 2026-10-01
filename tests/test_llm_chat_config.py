@@ -166,6 +166,8 @@ class GuestConfigTests(unittest.TestCase):
             '"onboarded"',
             '{policy: "everyone"}',
             '{policy: "admins", typo: 1}',
+            '{policy: ["admins"]}',
+            "{policy: {}}",
             "{max_calls_per_hour: 0}",
             "{max_calls_per_hour: true}",
             '{invite: "yes"}',

@@ -116,7 +116,7 @@ def _parse_guest(value) -> GuestConfig:
         raise ValueError(f"guest has unknown key(s): {', '.join(sorted(extra))}")
     defaults = GuestConfig()
     policy = value.get("policy", defaults.policy.value)
-    if policy not in {p.value for p in GuestPolicy}:
+    if not isinstance(policy, str) or policy not in {p.value for p in GuestPolicy}:
         allowed = ", ".join(f'"{p.value}"' for p in GuestPolicy)
         raise ValueError(f"guest.policy must be one of {allowed}")
     max_calls = value.get("max_calls_per_hour", defaults.max_calls_per_hour)
