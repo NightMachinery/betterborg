@@ -207,7 +207,7 @@ class CodexTelegramDeliveryTests(unittest.TestCase):
                 patch.object(
                     llm_chat,
                     "_get_effective_model_and_service",
-                    side_effect=lambda *args, prefix_model=None: (
+                    side_effect=lambda *args, prefix_model=None, topic_id=None: (
                         (prefix_model, "codex")
                         if prefix_model
                         else (selected_model, "codex")
@@ -482,7 +482,7 @@ class CodexTelegramDeliveryTests(unittest.TestCase):
                 patch.object(
                     llm_chat,
                     "_get_effective_model_and_service",
-                    side_effect=lambda *args, prefix_model=None: (
+                    side_effect=lambda *args, prefix_model=None, topic_id=None: (
                         (prefix_model, "codex")
                         if prefix_model
                         else (GEMINI_FLASH_LATEST, "gemini")

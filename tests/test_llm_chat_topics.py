@@ -1135,6 +1135,148 @@ class ThreadLimitCommandTests(_BotChatCase):
         self.assertLessEqual({"setthreadlastn", "getthreadlastn"}, commands)
 
 
+class _MemoryStorage:
+    """`UserStorage`'s get and set, in memory."""
+
+    def __init__(self):
+        self.data = {}
+
+    def get(self, key):
+        return dict(self.data.get(key, {}))
+
+    def set(self, key, value):
+        self.data[key] = dict(value)
+        return True
+
+
+class _TopicSettingsCase(unittest.TestCase):
+    """A bot's private chat with topics, and fresh chat and topic stores."""
+
+    CHAT_MODEL = "gemini/gemini-flash-latest"
+    TOPIC_MODEL = plugin.OPENAI_CODEX_LUNA_RESERVE
+    PERSONAL_MODEL = "gemini/gemini-flash-lite-latest"
+
+    def setUp(self):
+        self.prefs = plugin.UserPrefs(model=self.PERSONAL_MODEL)
+        self.chats = plugin.ChatManager(storage=_MemoryStorage())
+        self.topics = plugin.TopicManager(storage=_MemoryStorage())
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        enter = stack.enter_context
+        enter(patch.object(plugin, "IS_BOT", True))
+        enter(patch.object(plugin, "chat_manager", self.chats))
+        enter(patch.object(plugin, "topic_manager", self.topics))
+        enter(patch.object(plugin.user_manager, "get_prefs", return_value=self.prefs))
+        enter(patch.object(plugin.user_manager, "_save_prefs"))
+
+    def key(self, topic_id=TOPIC_ID):
+        return plugin.TopicManager.key(USER_ID, topic_id)
+
+    def event(self, *, top_id=TOPIC_ID):
+        parent = ROOT_ID if top_id is not None else None
+        return _Event(
+            _said(330, "hi", top_id=top_id, parent=parent),
+            client=None,
+            chat_id=USER_ID,
+            sender_id=USER_ID,
+            is_private=True,
+        )
+
+
+class TopicSettingsResolutionTests(_TopicSettingsCase):
+    """prefix > topic > chat > personal > default, for each first-cut setting."""
+
+    def model(self, topic_id=TOPIC_ID, **kwargs):
+        return plugin._get_effective_model_and_service(
+            USER_ID, USER_ID, topic_id=topic_id, **kwargs
+        )[0]
+
+    def test_the_topic_model_beats_the_chat_model_only_in_its_topic(self):
+        self.chats.set_model(USER_ID, self.CHAT_MODEL)
+        self.topics.set_model(self.key(), self.TOPIC_MODEL)
+
+        self.assertEqual(self.model(), self.TOPIC_MODEL)
+        self.assertEqual(self.model(OTHER_TOPIC_ID), self.CHAT_MODEL)
+        self.assertEqual(self.model(None), self.CHAT_MODEL)
+        self.assertEqual(self.model(prefix_model="x/y"), "x/y")
+
+    def test_an_unset_topic_falls_through_to_the_personal_model(self):
+        self.assertEqual(self.model(), self.PERSONAL_MODEL)
+
+    def test_the_topic_effort_beats_the_chat_effort(self):
+        model = self.TOPIC_MODEL
+        self.chats.set_thinking(USER_ID, model=model, level="low")
+        self.topics.set_thinking(self.key(), model=model, level="high")
+
+        def resolve(topic_id, **kwargs):
+            reasoning = plugin._get_effective_reasoning(
+                USER_ID, USER_ID, model=model, topic_id=topic_id, **kwargs
+            )
+            return reasoning.level, reasoning.source
+
+        self.assertEqual(resolve(TOPIC_ID), ("high", "topic"))
+        self.assertEqual(resolve(OTHER_TOPIC_ID), ("low", "chat"))
+        self.assertEqual(resolve(TOPIC_ID, prefix_effort="max"), ("max", "prefix"))
+        self.assertEqual(plugin.REASONING_SOURCE_NAMES["topic"], "this topic")
+
+    def test_a_topic_effort_the_model_does_not_accept_is_skipped(self):
+        self.topics.set_thinking(self.key(), model=self.TOPIC_MODEL, level="disable")
+
+        reasoning = plugin._get_effective_reasoning(
+            USER_ID, USER_ID, model=self.TOPIC_MODEL, topic_id=TOPIC_ID
+        )
+
+        self.assertNotEqual(reasoning.source, "topic")
+
+    def test_the_topic_prompt_beats_the_chat_prompt(self):
+        self.chats.set_system_prompt(USER_ID, "chat prompt")
+        self.topics.set_system_prompt(self.key(), "topic prompt")
+
+        inside = plugin.get_system_prompt_info(self.event())
+        outside = plugin.get_system_prompt_info(self.event(top_id=None))
+
+        self.assertEqual(
+            (inside.source, inside.topic_prompt, inside.chat_prompt),
+            ("topic", "topic prompt", "chat prompt"),
+        )
+        self.assertTrue(inside.effective_prompt.startswith("topic prompt"))
+        self.assertEqual((outside.source, outside.topic_prompt), ("chat", None))
+
+    def test_a_topic_codex_model_is_a_saved_model_for_the_quota_fallback(self):
+        self.topics.set_model(self.key(), plugin.OPENAI_CODEX_GPT_5_6_SOL)
+        stand_in = plugin.CodexQuotaFallback(
+            model=self.CHAT_MODEL, until=T0 + timedelta(days=1)
+        )
+        with patch.object(
+            plugin.user_manager, "get_codex_quota_fallback", return_value=stand_in
+        ):
+            request = plugin._resolve_request_model(USER_ID, USER_ID, topic_id=TOPIC_ID)
+
+        self.assertEqual(request.model, self.CHAT_MODEL)
+        self.assertEqual(request.quota_fallback_from, plugin.OPENAI_CODEX_GPT_5_6_SOL)
+
+    def test_a_topic_model_choice_ends_the_quota_fallback(self):
+        with patch.object(
+            plugin.user_manager, "clear_codex_quota_fallback"
+        ) as clear_fallback:
+            plugin._apply_topic_model_choice(
+                USER_ID, TOPIC_ID, user_id=USER_ID, model=self.TOPIC_MODEL
+            )
+
+        self.assertEqual(self.topics.get_model(self.key()), self.TOPIC_MODEL)
+        clear_fallback.assert_called_once_with(USER_ID)
+
+    def test_topics_are_stored_apart_from_chats(self):
+        self.topics.set_model(self.key(), self.TOPIC_MODEL)
+
+        self.assertEqual(
+            self.topics.storage.data,
+            {f"{USER_ID}:{TOPIC_ID}": {"model": self.TOPIC_MODEL}},
+        )
+        self.assertEqual(self.chats.storage.data, {})
+        self.assertIsNone(self.chats.get_model(USER_ID))
+
+
 class TopicTitleHookTests(_BotChatCase):
     """`_schedule_topic_title`: which answers hand their topic a title."""
 

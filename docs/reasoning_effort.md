@@ -37,9 +37,11 @@ than storing a null, so `exclude_defaults=True` keeps the JSON files small.
 order:
 
 1. a message prefix (`.th`, `.cx`, ...)
-2. this chat's setting for that model
-3. the user's personal setting for that model
-4. the model's declared default
+2. this private topic's setting for that model, inside a bot's private topic
+   (`docs/private_topics.md`, "Per-topic settings")
+3. this chat's setting for that model
+4. the user's personal setting for that model
+5. the model's declared default
 
 A stored level the model does not accept is skipped rather than sent, so a
 preference kept from a different model can never produce an invalid request.

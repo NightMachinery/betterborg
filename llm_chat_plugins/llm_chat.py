@@ -1749,6 +1749,16 @@ class ChatPrefs(BaseModel):
     include_reply_chain: Optional[bool] = Field(default=None)
 
 
+class TopicPrefs(BaseModel):
+    """Settings of one private topic, layered between the message prefix and
+    the chat's settings (docs/private_topics.md, "Per-topic settings")."""
+
+    model: Optional[str] = Field(default=None)
+    #: Reasoning effort is per-model: {model_id: level}.
+    thinking_by_model: Dict[str, str] = Field(default_factory=dict)
+    system_prompt: Optional[str] = Field(default=None)
+
+
 @dataclass(frozen=True)
 class CodexQuotaFallback:
     """One user's temporary redirect away from Codex, and when it lapses."""
@@ -1945,38 +1955,59 @@ class UserManager:
         return True
 
 
-class ChatManager:
-    """High-level manager for chat-specific settings."""
+class _LayerManager:
+    """The model, reasoning and system-prompt settings of one layer, by key.
 
-    def __init__(self):
-        # We reuse UserStorage, but the key is a chat_id, not a user_id.
-        self.storage = UserStorage(purpose="llm_chat_chats")
+    ChatManager keys them by chat id and TopicManager by (chat, topic). The
+    storage is injectable; by default it is a `UserStorage` for PURPOSE.
+    """
 
-    def get_prefs(self, chat_id: int) -> ChatPrefs:
-        data = self.storage.get(chat_id)
-        return ChatPrefs.model_validate(data or {})
+    prefs_class: type = None
+    purpose: str = None
 
-    def _save_prefs(self, chat_id: int, prefs: ChatPrefs):
-        self.storage.set(chat_id, prefs.model_dump(exclude_defaults=True))
+    def __init__(self, *, storage=None):
+        self.storage = storage or UserStorage(purpose=self.purpose)
 
-    def get_thinking(self, chat_id: int, *, model: str) -> Optional[str]:
-        return self.get_prefs(chat_id).thinking_by_model.get(model)
+    def get_prefs(self, key):
+        data = self.storage.get(key)
+        return self.prefs_class.model_validate(data or {})
 
-    def set_thinking(self, chat_id: int, *, model: str, level: Optional[str]):
-        prefs = self.get_prefs(chat_id)
+    def _save_prefs(self, key, prefs):
+        self.storage.set(key, prefs.model_dump(exclude_defaults=True))
+
+    def get_thinking(self, key, *, model: str) -> Optional[str]:
+        return self.get_prefs(key).thinking_by_model.get(model)
+
+    def set_thinking(self, key, *, model: str, level: Optional[str]):
+        prefs = self.get_prefs(key)
         if level is None:
             prefs.thinking_by_model.pop(model, None)
         else:
             prefs.thinking_by_model[model] = level
-        self._save_prefs(chat_id, prefs)
+        self._save_prefs(key, prefs)
 
-    def get_system_prompt(self, chat_id: int) -> Optional[str]:
-        return self.get_prefs(chat_id).system_prompt
+    def get_system_prompt(self, key) -> Optional[str]:
+        return self.get_prefs(key).system_prompt
 
-    def set_system_prompt(self, chat_id: int, prompt: Optional[str]):
-        prefs = self.get_prefs(chat_id)
+    def set_system_prompt(self, key, prompt: Optional[str]):
+        prefs = self.get_prefs(key)
         prefs.system_prompt = prompt
-        self._save_prefs(chat_id, prefs)
+        self._save_prefs(key, prefs)
+
+    def get_model(self, key) -> Optional[str]:
+        return self.get_prefs(key).model
+
+    def set_model(self, key, model: Optional[str]):
+        prefs = self.get_prefs(key)
+        prefs.model = model
+        self._save_prefs(key, prefs)
+
+
+class ChatManager(_LayerManager):
+    """High-level manager for chat-specific settings, keyed by chat id."""
+
+    prefs_class = ChatPrefs
+    purpose = "llm_chat_chats"
 
     def get_context_mode(self, chat_id: int) -> Optional[str]:
         return self.get_prefs(chat_id).context_mode
@@ -1988,14 +2019,6 @@ class ChatManager:
 
         prefs = self.get_prefs(chat_id)
         prefs.context_mode = mode
-        self._save_prefs(chat_id, prefs)
-
-    def get_model(self, chat_id: int) -> Optional[str]:
-        return self.get_prefs(chat_id).model
-
-    def set_model(self, chat_id: int, model: Optional[str]):
-        prefs = self.get_prefs(chat_id)
-        prefs.model = model
         self._save_prefs(chat_id, prefs)
 
     def get_tts_model(self, chat_id: int) -> str:
@@ -2056,8 +2079,29 @@ class ChatManager:
         return self.get_prefs(chat_id).include_reply_chain
 
 
+class TopicManager(_LayerManager):
+    """Settings of private topics, keyed by `TopicManager.key(chat, topic)`."""
+
+    prefs_class = TopicPrefs
+    purpose = "llm_chat_topics"
+
+    @staticmethod
+    def key(chat_id: int, topic_id: int) -> str:
+        #: T comes from the chat's own user's message box, so the pair is
+        #: unique (docs/private_topics.md).
+        return f"{chat_id}:{topic_id}"
+
+
 user_manager = UserManager()
 chat_manager = ChatManager()
+topic_manager = TopicManager()
+
+
+def _topic_setting(chat_id: int, topic_id: Optional[int], read: Callable):
+    """READ(key) for the topic layer, or None outside topics."""
+    if topic_id is None:
+        return None
+    return read(TopicManager.key(chat_id, topic_id))
 
 
 # Plugin-specific wrapper that provides chat_manager integration
@@ -2425,12 +2469,14 @@ class ReasoningResolution:
     """The reasoning effort in force for a model, and where it came from."""
 
     level: Optional[str]
-    source: str  #: "prefix" | "chat" | "personal" | "model_default" | "unsupported"
+    #: "prefix" | "topic" | "chat" | "personal" | "model_default" | "unsupported"
+    source: str
     spec: ModelSpec
 
 
 REASONING_SOURCE_NAMES = {
     "prefix": "message prefix",
+    "topic": "this topic",
     "chat": "this chat",
     "personal": "personal",
     "model_default": "model default",
@@ -2444,8 +2490,10 @@ def _get_effective_reasoning(
     *,
     model: str,
     prefix_effort: Optional[str] = None,
+    topic_id: Optional[int] = None,
 ) -> ReasoningResolution:
-    """Resolve reasoning effort for `model`: prefix > chat > personal > default.
+    """Resolve reasoning effort for `model`: prefix > topic > chat > personal >
+    default. TOPIC_ID is the private topic the request is in, if any.
 
     Stored levels that the model does not accept are skipped, so a preference
     kept from another model never produces an invalid API request.
@@ -2456,6 +2504,14 @@ def _get_effective_reasoning(
 
     candidates = (
         ("prefix", prefix_effort),
+        (
+            "topic",
+            _topic_setting(
+                chat_id,
+                topic_id,
+                lambda key: topic_manager.get_thinking(key, model=model),
+            ),
+        ),
         ("chat", chat_manager.get_thinking(chat_id, model=model)),
         ("personal", user_manager.get_thinking(user_id, model=model)),
     )
@@ -3328,17 +3384,25 @@ async def _process_audio_url_magic(event, url: str) -> bool:
 
 
 def _get_effective_model_and_service(
-    chat_id: int, user_id: int, *, prefix_model: str = None
+    chat_id: int,
+    user_id: int,
+    *,
+    prefix_model: str = None,
+    topic_id: Optional[int] = None,
 ) -> tuple[str, str]:
     """
     Gets the effective model and the corresponding service ('gemini' or 'openrouter').
-    Prioritizes prefix model > chat-specific settings > user-default settings.
+    Prioritizes prefix model > topic > chat-specific settings > user-default
+    settings. TOPIC_ID is the private topic the request is in, if any.
     """
     prefs = user_manager.get_prefs(user_id)
-    chat_model = chat_manager.get_model(chat_id)
 
-    # Priority: prefix_model > chat_model > user default model
-    model_in_use = prefix_model or chat_model or prefs.model
+    model_in_use = (
+        prefix_model
+        or _topic_setting(chat_id, topic_id, topic_manager.get_model)
+        or chat_manager.get_model(chat_id)
+        or prefs.model
+    )
 
     service_needed = llm_util.get_service_from_model(model_in_use)
 
@@ -3356,7 +3420,12 @@ class RequestModel:
 
 
 def _resolve_request_model(
-    chat_id: int, user_id: int, *, prefix_model: Optional[str] = None, now=None
+    chat_id: int,
+    user_id: int,
+    *,
+    prefix_model: Optional[str] = None,
+    topic_id: Optional[int] = None,
+    now=None,
 ) -> RequestModel:
     """Apply a temporary Codex quota fallback to saved defaults only.
 
@@ -3368,7 +3437,7 @@ def _resolve_request_model(
     so `.c`/`.ch`/`.as*`/`.cr` and their Persian aliases still reach Codex.
     """
     model, service = _get_effective_model_and_service(
-        chat_id, user_id, prefix_model=prefix_model
+        chat_id, user_id, prefix_model=prefix_model, topic_id=topic_id
     )
     if prefix_model or not codex_util.is_codex_model(model):
         return RequestModel(model=model, service=service)
@@ -3392,6 +3461,14 @@ def _apply_personal_model_choice(user_id: int, model: str):
 
 def _apply_chat_model_choice(chat_id: int, user_id: int, *, model: Optional[str]):
     chat_manager.set_model(chat_id, model)
+    user_manager.clear_codex_quota_fallback(user_id)
+
+
+def _apply_topic_model_choice(
+    chat_id: int, topic_id: int, *, user_id: int, model: Optional[str]
+):
+    """Save a topic's model; like any explicit choice, it ends a redirect."""
+    topic_manager.set_model(TopicManager.key(chat_id, topic_id), model)
     user_manager.clear_codex_quota_fallback(user_id)
 
 
@@ -4088,7 +4165,7 @@ async def _handle_native_gemini_image_generation(
 
         # Get streaming delay for updating message
         model_in_use, _ = _get_effective_model_and_service(
-            event.chat_id, event.sender_id
+            event.chat_id, event.sender_id, topic_id=_thread_topic_id(event)
         )
         edit_interval = get_streaming_delay(model_in_use)
         last_edit_time = asyncio.get_event_loop().time()
@@ -4427,7 +4504,9 @@ class SystemPromptInfo:
     user_prompt: Optional[str]
     default_prompt: str
     effective_prompt: str
-    source: str  # "chat", "user", or "default"
+    source: str  # "topic", "chat", "user", or "default"
+    #: The private topic's own prompt; None outside topics.
+    topic_prompt: Optional[str] = None
 
 
 def get_system_prompt_info(
@@ -4440,12 +4519,18 @@ def get_system_prompt_info(
 ) -> SystemPromptInfo:
     """Returns comprehensive system prompt information for the given event."""
     user_id = event.sender_id
+    topic_prompt = _topic_setting(
+        event.chat_id, _thread_topic_id(event), topic_manager.get_system_prompt
+    )
     chat_prompt = chat_manager.get_system_prompt(event.chat_id)
     user_prefs = user_manager.get_prefs(user_id)
     user_prompt = user_prefs.system_prompt
 
     # Determine effective prompt and source
-    if chat_prompt:
+    if topic_prompt:
+        effective_prompt = topic_prompt
+        source = "topic"
+    elif chat_prompt:
         effective_prompt = chat_prompt
         source = "chat"
     elif user_prompt:
@@ -4462,13 +4547,7 @@ def get_system_prompt_info(
     if guest_p:
         additional_sections.append(GUEST_CHAT_PROMPT)
     # Add group chat etiquette for group chats using default prompt
-    elif (
-        source
-        not in [
-            "chat",
-        ]
-        and not event.is_private
-    ):
+    elif source not in ("topic", "chat") and not event.is_private:
         additional_sections.append(GROUP_CHAT_ETIQUETTE_PROMPT)
 
     if include_username_p and BOT_USERNAME:
@@ -4502,6 +4581,7 @@ def get_system_prompt_info(
         default_prompt=DEFAULT_SYSTEM_PROMPT,
         effective_prompt=final_effective_prompt,
         source=source,
+        topic_prompt=topic_prompt,
     )
 
 
@@ -8274,15 +8354,18 @@ def _codex_quota_scope_lines(*, limit_in_evidence_p: bool = True) -> list:
     ]
 
 
-def _codex_quota_saved_model(user_id: int, *, chat_id: Optional[int] = None) -> str:
+def _codex_quota_saved_model(
+    user_id: int, *, chat_id: Optional[int] = None, topic_id: Optional[int] = None
+) -> str:
     """The model this user's saved settings resolve to, ignoring any stand-in.
 
     `chat_id` is optional because the panel is built from places that have no
     chat in hand; without it the chat-specific override is invisible and the
-    personal default is the best answer available.
+    personal default is the best answer available. `topic_id` adds the
+    private topic's model.
     """
     if chat_id is not None:
-        model, _ = _get_effective_model_and_service(chat_id, user_id)
+        model, _ = _get_effective_model_and_service(chat_id, user_id, topic_id=topic_id)
         return model
     return user_manager.get_prefs(user_id).model
 
@@ -8319,6 +8402,7 @@ def _codex_quota_panel(
     quota=None,
     *,
     chat_id: Optional[int] = None,
+    topic_id: Optional[int] = None,
     usage=None,
     fallback=None,
     source_message_id: Optional[int] = None,
@@ -8328,7 +8412,7 @@ def _codex_quota_panel(
     """Render the quota panel for whichever state this user is actually in."""
     now = now or datetime.now(timezone.utc)
     candidates = _codex_quota_candidates(user_id, usage=usage)
-    saved_model = _codex_quota_saved_model(user_id, chat_id=chat_id)
+    saved_model = _codex_quota_saved_model(user_id, chat_id=chat_id, topic_id=topic_id)
     usable = [candidate for candidate in candidates if candidate.usable_p]
     deadline, reported_p = _codex_quota_deadline(quota, usage, now=now)
     recommended = _codex_quota_recommended_model(candidates, fallback=fallback)
@@ -8539,6 +8623,7 @@ async def codex_status_handler(event):
     panel = _codex_quota_panel(
         user_id,
         chat_id=event.chat_id,
+        topic_id=_thread_topic_id(event),
         usage=usage,
         fallback=fallback,
         buttons_p=bool(IS_BOT),
@@ -9636,6 +9721,7 @@ async def callback_handler(event):
         panel = _codex_quota_panel(
             user_id,
             chat_id=event.chat_id,
+            topic_id=await _thread_topic_id_for_display(event),
             usage=await codex_util.fetch_codex_usage(),
             fallback=user_manager.get_codex_quota_fallback(user_id),
         )
@@ -11299,6 +11385,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
         user_id,
         model=model_in_use,
         prefix_effort=req.prefix_effort,
+        topic_id=_thread_topic_id(event),
     )
     if reasoning.level:
         api_kwargs["reasoning_effort"] = reasoning.level
@@ -11499,6 +11586,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
                     user_id,
                     e.usage_limit,
                     chat_id=chat_id,
+                    topic_id=_thread_topic_id(event),
                     usage=await codex_util.fetch_codex_usage(),
                     fallback=user_manager.get_codex_quota_fallback(user_id),
                     #: Only when there is something the Reserve could still
@@ -11661,7 +11749,9 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
         if not await llm_chat_config.can_use_codex_imagegen(event, config):
             await send_info_message(event, CODEX_IMAGEGEN_ACCESS_DENIED)
             return
-        selected_model, _ = _get_effective_model_and_service(chat_id, user_id)
+        selected_model, _ = _get_effective_model_and_service(
+            chat_id, user_id, topic_id=_thread_topic_id(event)
+        )
         quota_fallback = user_manager.get_codex_quota_fallback(user_id)
         try:
             prefix_result.model = _resolve_image_generation_model(
@@ -11692,7 +11782,10 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
     #: Resolved before the access check so a redirected request presents its
     #: stand-in model there and does not also draw the access notice.
     request_model = _resolve_request_model(
-        chat_id, user_id, prefix_model=prefix_result.model
+        chat_id,
+        user_id,
+        prefix_model=prefix_result.model,
+        topic_id=_thread_topic_id(event),
     )
     model_in_use, service_needed = request_model.model, request_model.service
     if not await _can_user_access_model(event, model_in_use, config=config):

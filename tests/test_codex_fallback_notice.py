@@ -29,41 +29,75 @@ class CodexFallbackNoticeTests(unittest.TestCase):
     def run_request(self, *, text="hello", trusted=False, selected=None):
         selected = selected or OPENAI_CODEX_GPT_5_6_SOL
         event = SimpleNamespace(
-            sender_id=123, chat_id=456, grouped_id=None,
-            is_private=True, text=text, file=None,
+            sender_id=123,
+            chat_id=456,
+            grouped_id=None,
+            is_private=True,
+            text=text,
+            file=None,
         )
         config = llm_chat_config.LLMChatConfig(
-            ("MAGIC_ADMINS",), (),
+            ("MAGIC_ADMINS",),
+            (),
             codex_users=(llm_chat_config.CodexUser(123, "Test user", False, False),),
         )
         with ExitStack() as stack:
             for name in ("cleanup_completed_tasks",):
                 stack.enter_context(patch.object(plugin, name))
             stack.enter_context(patch.object(plugin, "AWAITING_INPUT_FROM_USERS", {}))
-            stack.enter_context(patch.object(plugin.llm_db, "is_awaiting_key", return_value=False))
-            stack.enter_context(patch.object(
-                plugin.gemini_live_util.live_session_manager,
-                "is_live_mode_active", return_value=False,
-            ))
-            stack.enter_context(patch.object(plugin.user_manager, "get_prefs", return_value=SimpleNamespace()))
+            stack.enter_context(
+                patch.object(plugin.llm_db, "is_awaiting_key", return_value=False)
+            )
+            stack.enter_context(
+                patch.object(
+                    plugin.gemini_live_util.live_session_manager,
+                    "is_live_mode_active",
+                    return_value=False,
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    plugin.user_manager, "get_prefs", return_value=SimpleNamespace()
+                )
+            )
             save = stack.enter_context(patch.object(plugin.user_manager, "set_model"))
-            stack.enter_context(patch.object(plugin.util, "isAdmin", new=AsyncMock(return_value=trusted)))
-            stack.enter_context(patch.object(plugin.llm_chat_config, "load_config", return_value=config))
-            stack.enter_context(patch.object(
-                plugin, "_determine_context_mode_and_handle_transitions",
-                new=AsyncMock(return_value="recent"),
-            ))
-            stack.enter_context(patch.object(
-                plugin, "_get_effective_model_and_service",
-                side_effect=lambda *args, prefix_model=None: (
-                    prefix_model or selected,
-                    plugin.llm_util.get_service_from_model(prefix_model or selected),
-                ),
-            ))
+            stack.enter_context(
+                patch.object(
+                    plugin.util, "isAdmin", new=AsyncMock(return_value=trusted)
+                )
+            )
+            stack.enter_context(
+                patch.object(plugin.llm_chat_config, "load_config", return_value=config)
+            )
+            stack.enter_context(
+                patch.object(
+                    plugin,
+                    "_determine_context_mode_and_handle_transitions",
+                    new=AsyncMock(return_value="recent"),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    plugin,
+                    "_get_effective_model_and_service",
+                    side_effect=lambda *args, prefix_model=None, topic_id=None: (
+                        prefix_model or selected,
+                        plugin.llm_util.get_service_from_model(
+                            prefix_model or selected
+                        ),
+                    ),
+                )
+            )
             # Stop after model selection, before any provider or Telegram request.
-            api_key = stack.enter_context(patch.object(plugin, "get_effective_api_key", return_value=None))
-            key_prompt = stack.enter_context(patch.object(plugin.llm_db, "request_api_key_message", new=AsyncMock()))
-            info = stack.enter_context(patch.object(plugin, "send_info_message", new=AsyncMock()))
+            api_key = stack.enter_context(
+                patch.object(plugin, "get_effective_api_key", return_value=None)
+            )
+            key_prompt = stack.enter_context(
+                patch.object(plugin.llm_db, "request_api_key_message", new=AsyncMock())
+            )
+            info = stack.enter_context(
+                patch.object(plugin, "send_info_message", new=AsyncMock())
+            )
             asyncio.run(plugin.chat_handler(event))
         return info, api_key, key_prompt, save
 
