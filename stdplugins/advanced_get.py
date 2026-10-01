@@ -126,6 +126,14 @@ def _plain_answer(output, *, footer_lines, limit=GUEST_TEXT_LIMIT):
     return f"{body}\n\n{footer}" if footer else body
 
 
+def _free_output_path(cwd):
+    """Where the whole output goes in CWD, never over a file the command made."""
+    path = Path(cwd, GUEST_OUTPUT_FILE)
+    if not path.exists():
+        return path
+    return path.with_name(f"{path.stem}-{uuid.uuid4().hex[:8]}{path.suffix}")
+
+
 async def _send_files_to_dm(caller_id, *, request, files):
     """Sends the command's files to the caller's own DM with the bot.
 
@@ -198,7 +206,7 @@ async def _run_guest_shell(query, request, answer):
             tg_format.utf16_len(output) > GUEST_TEXT_LIMIT - GUEST_FOOTER_RESERVE
         )
         if truncated:
-            Path(cwd, GUEST_OUTPUT_FILE).write_text(output)
+            _free_output_path(cwd).write_text(output)
         files = sorted(p for p in Path(cwd).glob("*") if not p.is_dir())
 
         footer_lines = []

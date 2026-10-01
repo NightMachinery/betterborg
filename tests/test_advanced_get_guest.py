@@ -209,6 +209,22 @@ class GuestShellTests(unittest.TestCase):
         self.assertTrue(final["text"].startswith("y" * 2000))
         self.assertIn("1 file(s) sent to your DM", final["text"])
 
+    def test_the_whole_output_never_replaces_the_commands_own_output_txt(self):
+        self._run(
+            _query(
+                f"@{BOT_USERNAME} .aa printf mine > output.txt;"
+                " printf 'y%.0s' $(seq 5000)"
+            )
+        )
+
+        ((caller, names),) = self.uploads
+        self.assertEqual(caller, ADMIN)
+        self.assertEqual(len(names), 2)
+        self.assertIn("output.txt", names)
+        self.assertTrue(
+            any(n.startswith("output-") and n.endswith(".txt") for n in names)
+        )
+
     def test_a_failed_attachment_falls_back_to_the_text_answer(self):
         self.dm_media = True
         _FakeEditor.fail_media = True

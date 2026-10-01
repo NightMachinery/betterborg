@@ -172,7 +172,8 @@ dropped, never run late.
   reads "The process exited N.". An exception becomes the traceback.
 - **Files go to the caller's DM**, after a header message naming the command:
   the files the command left in its working directory, plus `output.txt` with
-  the whole output when it was cut. The answer says how many were sent. They
+  the whole output when it was cut (`output-<random>.txt` when the command
+  made an `output.txt` of its own). The answer says how many were sent. They
   never go to the guest chat, whose id in a private chat is the other person.
   The caller must have started the bot for the DM to work; the answer says so
   when it does not.
