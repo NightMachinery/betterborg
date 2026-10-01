@@ -6,12 +6,15 @@ inherits `DEFAULT_REASONING_EFFORT` unless it declares its own, so the operator
 has a single knob for the global default.
 """
 
+import dataclasses
 import re
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
+from uniborg import codex_aliases
 from uniborg import codex_util
 from uniborg import pioneer_util
+from uniborg.codex_aliases import OPENAI_REASONING_LEVELS
 from uniborg.constants import (
     GEMINI_FLASH_2_5,
     GEMINI_FLASH_3,
@@ -31,12 +34,8 @@ DEFAULT_REASONING_EFFORT = "medium"
 #: Level sets, ordered from cheapest to most expensive.
 NO_REASONING_LEVELS: Tuple[str, ...] = ()
 GEMINI_REASONING_LEVELS = ("disable", "low", "medium", "high")
-#: Verified against the ChatGPT Codex backend: the Responses API accepts
-#: none/minimal/low/medium/high/xhigh/max. `ultra` is a Codex-app subagent mode
-#: and is rejected by the API, so it is deliberately absent.
-OPENAI_REASONING_LEVELS = ("none", "low", "medium", "high", "xhigh", "max")
-#: GPT-6 Astra and GPT-6.1 Sol reject `none` (probed live, 2026-10-01).
-OPENAI_NO_NONE_REASONING_LEVELS = ("low", "medium", "high", "xhigh", "max")
+#: `OPENAI_REASONING_LEVELS` comes from `codex_aliases`, which also resolves
+#: each Codex family's levels.
 OPENROUTER_REASONING_LEVELS = ("low", "medium", "high")
 #: Pioneer's OpenAI-compatible Responses endpoint. Not probed directly; these
 #: match what Pioneer's own model list advertises for its Claude models.
@@ -98,6 +97,33 @@ class ModelSpec:
         return None
 
 
+def _codex_alias_fields(resolution: "codex_aliases.Resolution") -> dict:
+    return {
+        "display_name": f"{resolution.display_name} (Codex)",
+        "reasoning_levels": resolution.reasoning_levels,
+    }
+
+
+def _codex_alias_spec(model: str, *, emoji: str, hidden: bool = False) -> ModelSpec:
+    """The Codex alias MODEL at its pinned model; `_live` shows the current one."""
+    pinned = codex_aliases.pinned(codex_aliases.family_for(model))
+    return ModelSpec(
+        model,
+        codex_access=True,
+        hidden=hidden,
+        emoji=emoji,
+        **_codex_alias_fields(pinned),
+    )
+
+
+def _live(spec: ModelSpec) -> ModelSpec:
+    """SPEC, with a Codex alias's current model and levels (`codex_aliases`)."""
+    resolution = codex_aliases.resolution_for(spec.id)
+    if resolution is None:
+        return spec
+    return dataclasses.replace(spec, **_codex_alias_fields(resolution))
+
+
 def is_gemini_model_p(model: str) -> bool:
     return bool(model and re.search(r"\bgemini\b", model, re.IGNORECASE))
 
@@ -153,20 +179,9 @@ MODEL_SPECS = [
     ),
     ModelSpec("mistral/pixtral-large-latest", "Pixtral Large (Latest)", emoji="🖼️"),
     ## Codex (configurable access, ChatGPT OAuth)
-    ModelSpec(
-        OPENAI_CODEX_SOL,
-        "GPT-6.1 Sol (Codex)",
-        OPENAI_NO_NONE_REASONING_LEVELS,
-        codex_access=True,
-        emoji="☀️",
-    ),
-    ModelSpec(
-        OPENAI_CODEX_ASTRA,
-        "GPT-6 Astra (Codex)",
-        OPENAI_NO_NONE_REASONING_LEVELS,
-        codex_access=True,
-        emoji="✨",
-    ),
+    #: Aliases for each family's newest model; their names show which one.
+    _codex_alias_spec(OPENAI_CODEX_SOL, emoji="☀️"),
+    _codex_alias_spec(OPENAI_CODEX_ASTRA, emoji="✨"),
     #: Billed to the Luna Reserve meter, so it keeps answering once the regular
     #: plan allowance is spent. Every level was verified against the backend.
     ModelSpec(
@@ -183,14 +198,7 @@ MODEL_SPECS = [
     # ModelSpec(PIONEER_GPT_5_5, "Pioneer GPT-5.5 (Admin)", PIONEER_GPT_REASONING_LEVELS, admin_only=True),
     # ModelSpec(PIONEER_SONNET_4_6, "Pioneer Sonnet 4.6 (Admin)", PIONEER_REASONING_LEVELS, admin_only=True),
     ## Codex models known to the registry but kept out of the pickers.
-    ModelSpec(
-        OPENAI_CODEX_LUNA,
-        "GPT-6 Luna (Codex)",
-        OPENAI_REASONING_LEVELS,
-        codex_access=True,
-        hidden=True,
-        emoji="🌕",
-    ),
+    _codex_alias_spec(OPENAI_CODEX_LUNA, emoji="🌕", hidden=True),
 ]
 
 MODEL_SPECS_BY_ID: Dict[str, ModelSpec] = {spec.id: spec for spec in MODEL_SPECS}
@@ -206,6 +214,10 @@ RETIRED_MODELS: Dict[str, str] = {
     "openai-codex/gpt-5.6-terra": OPENAI_CODEX_SOL,
     "openai-codex/gpt-5.6-luna": OPENAI_CODEX_LUNA,
     "openai-codex/gpt-5.5": OPENAI_CODEX_SOL,
+    #: Pinned until the families became aliases (`codex_aliases`).
+    "openai-codex/gpt-6.1-sol": OPENAI_CODEX_SOL,
+    "openai-codex/gpt-6-astra": OPENAI_CODEX_ASTRA,
+    "openai-codex/gpt-6-luna": OPENAI_CODEX_LUNA,
 }
 
 
@@ -218,7 +230,7 @@ def public_model_choices() -> Dict[str, str]:
     """Picker entries available to everyone, as {model_id: display_name}."""
     return {
         spec.id: spec.display_name
-        for spec in MODEL_SPECS
+        for spec in map(_live, MODEL_SPECS)
         if not spec.admin_only and not spec.codex_access and not spec.hidden
     }
 
@@ -227,7 +239,7 @@ def admin_model_choices() -> Dict[str, str]:
     """Picker entries available only to bot admins."""
     return {
         spec.id: spec.display_name
-        for spec in MODEL_SPECS
+        for spec in map(_live, MODEL_SPECS)
         if spec.admin_only and not spec.hidden
     }
 
@@ -236,7 +248,7 @@ def codex_model_choices() -> Dict[str, str]:
     """Picker entries controlled by the Codex access policy."""
     return {
         spec.id: spec.display_name
-        for spec in MODEL_SPECS
+        for spec in map(_live, MODEL_SPECS)
         if spec.codex_access and not spec.hidden
     }
 
@@ -277,7 +289,7 @@ def spec_for_model(model: Optional[str]) -> ModelSpec:
         return ModelSpec("", "", NO_REASONING_LEVELS, hidden=True)
     spec = MODEL_SPECS_BY_ID.get(model)
     if spec is not None:
-        return spec
+        return _live(spec)
     return _synthesized_spec(model)
 
 

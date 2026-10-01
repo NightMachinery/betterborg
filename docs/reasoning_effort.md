@@ -18,9 +18,11 @@ level" cannot serve them all.
 Level sets in use:
 
 - Gemini: `disable`, `low`, `medium`, `high`
-- Codex GPT-6 Luna, and custom Codex ids: `none`, `low`, `medium`, `high`,
+- Codex GPT Luna, and custom Codex ids: `none`, `low`, `medium`, `high`,
   `xhigh`, `max`
-- Codex GPT-6.1 Sol and GPT-6 Astra: same, minus `none`
+- Codex GPT Sol and GPT Astra: same, minus `none`. The three Codex families
+  are aliases whose levels follow the model they point at
+  (`docs/codex_models.md`, "Aliases").
 - OpenRouter: `low`, `medium`, `high`
 
 Models not in the registry (custom IDs typed by the user) get a spec

@@ -201,6 +201,7 @@ from uniborg.llm_models import DEFAULT_REASONING_EFFORT, ModelSpec
 from uniborg import redis_util
 from uniborg import common_util
 from uniborg import topics
+from uniborg import codex_aliases
 from uniborg import draft_stream
 from uniborg import guest_util
 from uniborg import media_store
@@ -1014,6 +1015,14 @@ CODEX_MODEL_CHOICES = llm_models.codex_model_choices()
 # Chat model options including "Not Set" option for removing chat-specific model
 CHAT_MODEL_OPTIONS = {"": "Not Set (Use Personal Default)"}
 CHAT_MODEL_OPTIONS.update(MODEL_CHOICES)
+
+
+def _refresh_codex_model_names() -> None:
+    """Names each Codex alias after the model it points at now (`codex_aliases`).
+
+    Updated in place, as the ids stay the same and readers hold this dict.
+    """
+    CODEX_MODEL_CHOICES.update(llm_models.codex_model_choices())
 
 
 def _model_display_name(model: str, *, include_restricted: bool = True) -> str:
@@ -6994,6 +7003,15 @@ async def initialize_llm_chat():
     # Load smart context states from Redis on startup (both bot and userbot)
     await load_smart_context_states()
 
+    await codex_aliases.load()
+    _refresh_codex_model_names()
+    _restart_background_task(
+        CODEX_ALIASES_REFRESH_ATTRIBUTE,
+        codex_aliases.refresh_forever(
+            notify=borg.send_log_alert, on_change=_refresh_codex_model_names
+        ),
+    )
+
     # Populate callback hash map for persistent button handling
     bot_util.populate_callback_hash_map(
         MODEL_CHOICES, ADMIN_MODEL_CHOICES, CODEX_MODEL_CHOICES
@@ -7092,15 +7110,17 @@ async def help_handler(event):
         else ""
     )
 
+    sol = codex_aliases.resolution_for(OPENAI_CODEX_SOL).display_name
+    astra = codex_aliases.resolution_for(OPENAI_CODEX_ASTRA).display_name
     codex_shortcuts_text = (
-        "- `.c` / `.چ` / `.cm` / `.چم` → Codex GPT-6.1 Sol (medium)\n"
+        f"- `.c` / `.چ` / `.cm` / `.چم` → Codex's newest Sol, now {sol} (medium)\n"
         "- `.cl` / `.چل` / `.ch` / `.چه` / `.cx` / `.چخ` / "
-        "`.cxx` / `.چخخ` → Codex GPT-6.1 Sol "
+        f"`.cxx` / `.چخخ` → {sol} "
         "(low / high / extra high / max)\n"
         "- `.cr` / `.چر` → Codex Luna Reserve (medium)\n"
-        "- `.as` / `.اس` / `.asm` / `.اسم` → Codex GPT-6 Astra (medium)\n"
+        f"- `.as` / `.اس` / `.asm` / `.اسم` → Codex's newest Astra, now {astra} (medium)\n"
         "- `.asl` / `.اسل` / `.ash` / `.اسه` / `.asx` / `.اسخ` / "
-        "`.asxx` / `.اسخخ` → Codex GPT-6 Astra "
+        f"`.asxx` / `.اسخخ` → {astra} "
         "(low / high / extra high / max)"
         if has_codex_access
         else "- `.c` → GPT Sol Latest (OpenRouter): Latest OpenAI model on OpenRouter"
@@ -13412,6 +13432,19 @@ async def guest_chat_handler(query) -> None:
 #: Where the hourly cleanup of `_guest_media` is kept, on `borg`, so that a
 #: reloaded plugin can stop the old one.
 GUEST_MEDIA_CLEANUP_ATTRIBUTE = "_llm_chat_guest_media_cleanup"
+#: The same for the hourly refresh of the Codex aliases.
+CODEX_ALIASES_REFRESH_ATTRIBUTE = "_llm_chat_codex_aliases_refresh"
+
+
+def _restart_background_task(attribute: str, coro) -> None:
+    """Runs CORO as a task kept on `borg` at ATTRIBUTE, cancelling the one there.
+
+    A reloaded plugin thus replaces its old task instead of adding one.
+    """
+    previous = getattr(borg, attribute, None)
+    if previous is not None:
+        previous.cancel()
+    setattr(borg, attribute, borg.loop.create_task(coro))
 
 
 def register_guest_handlers():
@@ -13429,13 +13462,8 @@ def register_guest_handlers():
     )
     if registered is None:
         return
-    previous = getattr(borg, GUEST_MEDIA_CLEANUP_ATTRIBUTE, None)
-    if previous is not None:
-        previous.cancel()
-    setattr(
-        borg,
-        GUEST_MEDIA_CLEANUP_ATTRIBUTE,
-        borg.loop.create_task(_guest_media.cleanup_forever()),
+    _restart_background_task(
+        GUEST_MEDIA_CLEANUP_ATTRIBUTE, _guest_media.cleanup_forever()
     )
 
 

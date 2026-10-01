@@ -15,16 +15,18 @@ GEMINI_PRO_LATEST = "gemini/gemini-3-pro-preview"
 # GEMINI_FLASH_2_5 = "gemini/gemini-2.5-flash"
 # GEMINI_FLASH_LITE_2_5 = "gemini/gemini-2.5-flash-lite"
 
-#: The OpenAI families are named without a version, so an upgrade changes only
-#: the id here. `llm_models.RETIRED_MODELS` moves saved settings forward.
-#: OpenRouter's router alias for the newest GPT Sol, so it upgrades by itself.
+#: The OpenAI families are aliases that follow each family's newest model:
+#: OpenRouter's own router alias here, and this repo's for Codex below.
+#: `llm_models.RETIRED_MODELS` moves settings saved with older ids forward.
 OR_OPENAI_SOL = "openrouter/~openai/gpt-sol-latest"
 OR_OPENAI_LATEST = OR_OPENAI_SOL
 
-#: Codex models are reached through the ChatGPT OAuth backend, not the public API.
-OPENAI_CODEX_SOL = "openai-codex/gpt-6.1-sol"
-OPENAI_CODEX_LUNA = "openai-codex/gpt-6-luna"
-OPENAI_CODEX_ASTRA = "openai-codex/gpt-6-astra"
+#: Codex models are reached through the ChatGPT OAuth backend, not the public
+#: API. Codex has no aliases of its own, so `uniborg/codex_aliases.py` resolves
+#: these three from its catalog.
+OPENAI_CODEX_SOL = "openai-codex/gpt-sol-latest"
+OPENAI_CODEX_LUNA = "openai-codex/gpt-luna-latest"
+OPENAI_CODEX_ASTRA = "openai-codex/gpt-astra-latest"
 #: The Luna Reserve routing slug. `gpt-5.6-luna` is the model it presents as,
 #: but only `gpt-reserve` bills to the separate reserve meter, which stays
 #: usable after the regular plan allowance is spent. The Codex catalog marks it

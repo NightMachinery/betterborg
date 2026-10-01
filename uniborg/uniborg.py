@@ -102,7 +102,7 @@ class Uniborg(
         #: patch Telethon. It still runs before `_async_init` first connects.
         self.safety_stats = telethon_safety.install_safety_nets(
             client=self,
-            alert=self.send_safety_alert,
+            alert=self.send_log_alert,
         )
         #: Also before the first connect, so the first updates are filed too.
         self.topic_placement = topic_placement or topics.TopicPlacement()
@@ -177,11 +177,12 @@ class Uniborg(
         self._bot_id = self.me.id
         self._bot_username = f"@{self.me.username}" if self.me.username else None
 
-    async def send_safety_alert(self, text):
-        """Posts a safety-net alert to the log chat, if there is one.
+    async def send_log_alert(self, text):
+        """Posts an alert to the log chat (the admins), if there is one.
 
-        `telethon_safety` has already logged the event, so a missing log chat
-        or a failed send is only logged.
+        Callers (`telethon_safety`, the Codex alias refresh) have already
+        logged the event, so a missing log chat or a failed send is only
+        logged.
         """
         if self.log_chat is None:
             return
@@ -189,7 +190,7 @@ class Uniborg(
             await self.send_message(self.log_chat, f"{BOT_META_INFO_PREFIX}{text}")
         except Exception:
             self._logger.warning(
-                "Could not send a safety-net alert to the log chat", exc_info=True
+                "Could not send an alert to the log chat", exc_info=True
             )
 
     def load_plugin(self, shortname):

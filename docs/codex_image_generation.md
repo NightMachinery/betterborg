@@ -9,13 +9,13 @@ model, the chat model, or any future request.
 `.i` is recognized as a leading, whitespace-delimited token. It can be combined
 with a Codex model prefix and a reasoning prefix in either order. For example,
 `.i .cl draw a fox` and `.cl .i draw a fox` both request image generation with
-GPT-6.1 Sol at low reasoning effort.
+the newest GPT Sol at low reasoning effort.
 
 The model is selected in this order:
 
 1. An explicit Codex model prefix on the current message.
 2. The already selected model, when it is a Codex model.
-3. GPT-6.1 Sol as the image-generation default.
+3. The newest GPT Sol (`openai-codex/gpt-sol-latest`) as the image-generation default.
 
 An explicit non-Codex model prefix conflicts with `.i`; the request is rejected
 instead of silently changing providers. Merely mentioning `.i` later in natural

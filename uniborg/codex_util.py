@@ -15,7 +15,7 @@ import httpx
 import openai
 from PIL import Image
 
-from uniborg import draft_stream, util
+from uniborg import codex_aliases, draft_stream, util
 from uniborg.constants import OPENAI_CODEX_LUNA_RESERVE
 
 
@@ -369,7 +369,8 @@ def is_codex_model(model: str) -> bool:
 
 
 def codex_model_name(model: str) -> str:
-    return model.removeprefix(CODEX_MODEL_PREFIX)
+    """The slug sent for MODEL: for an alias, the model it points at now."""
+    return codex_aliases.slug_for(model) or model.removeprefix(CODEX_MODEL_PREFIX)
 
 
 def is_luna_reserve_model(model: str) -> bool:
@@ -403,6 +404,24 @@ def _get_codex_auth():
     if account_id:
         headers["ChatGPT-Account-ID"] = account_id
     return token, headers, CODEX_BASE_URL
+
+
+#: The catalog's models can depend on the client version; this is the one
+#: `llm-openai-via-codex` sends.
+CODEX_CATALOG_CLIENT_VERSION = "1.0.0"
+
+
+async def fetch_codex_catalog(*, timeout: float = 30.0) -> list:
+    """The backend's model catalog (docs/codex_models.md): a list of dicts."""
+    token, headers, base_url = await asyncio.to_thread(_get_codex_auth)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.get(
+            f"{base_url}/models",
+            params={"client_version": CODEX_CATALOG_CLIENT_VERSION},
+            headers={"Authorization": f"Bearer {token}", **headers},
+        )
+        response.raise_for_status()
+    return response.json().get("models") or []
 
 
 def _is_image_data_url(url: str) -> bool:

@@ -2,10 +2,14 @@
 
 `llm_chat` exposes the ChatGPT Codex backend as access-controlled models:
 
-- `openai-codex/gpt-6.1-sol` (GPT-6.1 Sol)
-- `openai-codex/gpt-6-astra`
+- `openai-codex/gpt-sol-latest`, the newest GPT Sol (GPT-6.1 Sol today)
+- `openai-codex/gpt-astra-latest`, the newest GPT Astra (GPT-6 Astra today)
 - `openai-codex/gpt-reserve` (Luna Reserve; see
   [Codex Luna Reserve](codex_luna_reserve.md))
+
+The first two, and the hidden `openai-codex/gpt-luna-latest`, are this repo's
+own aliases (see "Aliases" below). The pickers name each after the model it
+points at now.
 
 Users without Codex access do not see them in `/setModel` or `/setModelHere`,
 and direct selection attempts are rejected server-side.
@@ -214,25 +218,52 @@ are a retiring model's `upgrade` field and the descriptions above. OpenRouter,
 by contrast, has router aliases such as `~openai/gpt-sol-latest` and
 `~openai/gpt-luna-latest`.
 
-The bot registers `gpt-6.1-sol` (in the pickers), `gpt-6-astra`, the Reserve,
-and, hidden, `gpt-6-luna`. GPT-5.5 was dropped on 2026-10-01, ahead of its
-retirement. GPT-6 Astra answers live requests
-(guest answers on eva, 2026-10-01).
+GPT-6 Astra answers live requests (guest answers on eva, 2026-10-01).
+
+### Aliases
+
+Since Codex has none, the bot keeps its own (`uniborg/codex_aliases.py`):
+`openai-codex/gpt-sol-latest`, `gpt-astra-latest` and `gpt-luna-latest`.
+Each points at a slug of its family, `gpt-<version>-<family>`:
+
+- At first, the pinned slug in `FAMILIES` (`gpt-6.1-sol`, `gpt-6-astra`,
+  `gpt-6-luna`).
+- At startup and every hour, llm_chat reads the catalog, and each alias moves
+  to the highest version of its family that the catalog lists
+  (`visibility: list`) as served by the API (`supported_in_api`). Versions
+  compare as numbers, so `6.10` is above `6.9`.
+- `codex_util.codex_model_name` sends the slug an alias points at, so a
+  request, the prompt cache key and the image path all follow it.
+- An alias's reasoning levels are the catalog's for that model, minus
+  `ultra` (which the API rejects), plus `none` only for a family whose pinned
+  model was probed to take it (Luna). The catalog never lists `none`.
+
+Whenever an alias moves, or its levels change, or its family vanishes from
+the catalog (the alias then stays where it was), the admins get one message
+in the log chat (`Uniborg.send_log_alert`). The resolution is kept in Redis
+(`borg:codex_aliases`), so a restart, or a second process, neither forgets it
+nor says it again. Without Redis, each restart compares against the pinned
+slugs, so a move is announced again after every restart.
 
 ### Upgrades
 
-The families are named without a version in `uniborg/constants.py`
-(`OPENAI_CODEX_SOL`, `OPENAI_CODEX_LUNA`, `OR_OPENAI_SOL`), so an upgrade
-changes one id there. The OpenRouter one is OpenRouter's own router alias,
-`~openai/gpt-sol-latest`, so it needs no change at all. `llm_models.RETIRED_MODELS` maps each id that was once
-registered to its replacement, and saved settings (personal, chat and topic
-models, the title model, a quota stand-in, and the per-model efforts) load
-with the replacement and are saved that way on their next write
-(`_SavedSettings` in `llm_chat.py`). On 2026-10-01: GPT-5.6 Sol moved to
-GPT-6.1 Sol, GPT-5.6 Luna to GPT-6 Luna, and GPT-5.6 Terra, which has no
-GPT-6 successor, to GPT-6.1 Sol. A saved effort the new model lacks (`none`
-on Sol) is skipped, so the next layer's effort applies. GPT-5.5, dropped on
-2026-10-01, moved to GPT-6.1 Sol, the successor its `upgrade` field names.
+The OpenAI families are aliases: OpenRouter's own router alias
+`~openai/gpt-sol-latest` for `OR_OPENAI_SOL`, and the Codex aliases above. So
+a new model needs no change here. `llm_models.RETIRED_MODELS` maps each id
+that was once registered to its replacement, and saved settings (personal,
+chat and topic models, the title model, a quota stand-in, and the per-model
+efforts) load with the replacement and are saved that way on their next write
+(`_SavedSettings` in `llm_chat.py`). History:
+
+- 2026-10-01: GPT-5.6 Sol moved to GPT-6.1 Sol, GPT-5.6 Luna to GPT-6 Luna,
+  and GPT-5.6 Terra, which has no GPT-6 successor, to GPT-6.1 Sol.
+- 2026-10-01: GPT-5.5 was dropped ahead of its retirement and moved to
+  GPT-6.1 Sol, the successor its `upgrade` field names.
+- 2026-10-01: the pinned GPT-6 ids moved to the aliases, and OpenRouter's
+  GPT-6.1 Sol to `~openai/gpt-sol-latest`.
+
+A saved effort the new model lacks (`none` on Sol) is skipped, so the next
+layer's effort applies.
 
 ## Reasoning effort
 

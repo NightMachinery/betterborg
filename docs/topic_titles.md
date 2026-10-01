@@ -55,10 +55,10 @@ distinct.
 - 💥 Gemini 3 Flash
 - 💎 Gemini 3 Pro
 - 🌞 GPT Sol Latest (OpenRouter), `openrouter/~openai/gpt-sol-latest`
-- ☀️ GPT-6.1 Sol (Codex)
-- ✨ GPT-6 Astra (Codex)
+- ☀️ GPT Sol (Codex), the newest; named after its model, such as GPT-6.1 Sol
+- ✨ GPT Astra (Codex), the newest
 - 🌙 Luna Reserve (Codex)
-- 🌕 GPT-6 Luna (Codex)
+- 🌕 GPT Luna (Codex), the newest
 - 🐋 DeepSeek Chat
 - 🐳 DeepSeek Reasoner
 - 🌬️ Mistral Medium
