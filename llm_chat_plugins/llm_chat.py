@@ -5768,10 +5768,6 @@ async def build_conversation_history(
     # If include_reply_chain is enabled and we're not already in reply_chain mode,
     # merge the reply chain of the triggering message into the message set.
     if context_mode != "reply_chain":
-        #: Taken before twins are dropped, so a twin the window held stays
-        #: dropped when the reply chain reaches it too, while one that only the
-        #: chain reaches is kept: its text is likely out of the window as well.
-        window_ids = {m.id for m in messages_to_process}
         messages_to_process = _without_twin_files(messages_to_process)
         user_prefs = user_manager.get_prefs(user_id)
         chat_include_reply_chain = chat_manager.get_include_reply_chain(chat_id)
@@ -5783,6 +5779,10 @@ async def build_conversation_history(
         if effective_include_reply_chain:
             chain_messages = await _get_initial_messages_for_reply_chain(event)
             if chain_messages:
+                #: The chain keeps its twins, as Reply Chain mode does, so a
+                #: twin dropped from the window comes back when the chain
+                #: reaches it.
+                window_ids = {m.id for m in messages_to_process}
                 new_chain = [m for m in chain_messages if m.id not in window_ids]
                 messages_to_process = new_chain + messages_to_process
 

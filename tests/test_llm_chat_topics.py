@@ -806,9 +806,11 @@ class TwinFileContextTests(_BotChatCase):
             self.after(reply, mode="reply_chain"), ("reply_chain", [340, 342, 343])
         )
 
-    def test_a_twin_in_the_window_stays_out_when_the_chain_reaches_it(self):
+    def test_a_twin_the_chain_reaches_comes_back_into_the_window(self):
         reply = _said(343, "Why?", top_id=None, parent=342)
-        self.assertEqual(self.after(reply, mode="last_N"), ("last_N", [340, 341, 343]))
+        self.assertEqual(
+            self.after(reply, mode="last_N"), ("last_N", [340, 341, 342, 343])
+        )
 
     def test_a_twin_only_the_chain_reaches_is_kept(self):
         self.see(_said(343, plugin.CONTEXT_SEPARATOR, top_id=None, parent=None))

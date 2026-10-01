@@ -55,11 +55,10 @@ Reply Chain never skips: a reply to a twin brings in only the question and the
 twin, since the text head is a sibling, not a parent.
 
 When "Include Reply Chain" merges the trigger's reply chain into a window,
-the chain is checked against the window as it was before twins were dropped.
-So a twin the window held stays out even when the chain reaches it too,
-while a twin that only the chain reaches (an older one, replied to on purpose
-to bring it back) is kept, since its text is most likely outside the window
-as well.
+the chain keeps its twins, as Reply Chain mode does. A twin the window dropped
+comes back when the chain reaches it, which happens only when someone replies
+to the twin (or to a reply to it): that reply asks about the file, so the file
+should be there even if its text head is too.
 
 `/asfile` exports go through the same builder, so they skip twins in window
 modes and keep them in Reply Chain.
