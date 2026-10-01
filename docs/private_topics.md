@@ -59,6 +59,15 @@ same fields.
 - Bots cannot read history (`messages.getHistory` and
   `messages.getForumTopics` fail with `BOT_METHOD_INVALID`), but they can load
   single messages by id.
+- Bots can read and rename a topic by T: `messages.getForumTopicsByID` returns
+  its title, `title_missing` and creation `date`, and
+  `messages.editForumTopic(topic_id=T)` renames it, posting a
+  `MessageActionTopicEdit` service message in the topic. Given R, the first
+  answers `ForumTopicDeleted` and the second `TOPIC_ID_INVALID`. A loaded
+  message's `messages.Messages.topics` carries its topic too.
+- A topic opened by typing in "All" is named after its message, cut short
+  (`/status`, `Hi What's Bitcoi...`), and carries `title_missing`; every such
+  topic on the canary did. The flag stays set after a bot renames the topic.
 
 ## Reply detection
 
@@ -259,6 +268,12 @@ no reply, as before.
   message that does not match the service's key format is refused and never
   stored.
 
+## Automatic titles
+
+After the first answer in a topic Telegram named, llm_chat renames it once,
+with the answering model's emoji, the effort's alias and a short title. See
+`docs/topic_titles.md`.
+
 ## Related files
 
 - `uniborg/topics.py`: reply detection, `TopicRegistry`, `TopicPlacement`
@@ -268,6 +283,7 @@ no reply, as before.
 - `uniborg/telethon_safety.py`: the difference fallback the mixin stacks on.
 - `uniborg/history_util.py`: the recorded history, its `topic_id` field,
   `record_message` and `get_last_n_topic_ids`.
+- `uniborg/topic_titles.py`: automatic titles for new topics.
 - `llm_chat_plugins/llm_chat.py`: `start_input_flow` and
   `pending_input_flow`, which bind pending input to its topic; and thread
   context (`THREAD_CONTEXT_MODE`, `_thread_topic_id`, and its branch in

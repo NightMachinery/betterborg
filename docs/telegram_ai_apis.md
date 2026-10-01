@@ -406,10 +406,15 @@ safety rules and per-bot behaviour are in [guest_mode.md](guest_mode.md).
   a bot reply lands in the topic only when it carries `top_msg_id` set to the
   topic id from the replied message's header (the root's own message id does
   not work, and neither does a reply to the root).
-- Status: bot replies are placed in their topic and pending inputs are bound
-  to the topic that asked for them, see [private_topics.md](private_topics.md).
-  Chat history is still not topic-aware: history items carry no topic, so
-  the topics of one DM share one conversation.
+- Also seen live: `messages.editForumTopic` and `messages.getForumTopicsByID`
+  work for a bot in its private chat with that same topic id, and refuse the
+  root's id. A rename posts a `MessageActionTopicEdit` service message, and
+  `title_missing` (MTProto's `is_name_implicit`) stays set after it.
+- Status: bot replies are placed in their topic, pending inputs are bound to
+  the topic that asked for them, each topic is its own conversation (thread
+  context), and a topic Telegram named is renamed after its first answer.
+  See [private_topics.md](private_topics.md) and
+  [topic_titles.md](topic_titles.md).
 
 ### 2.5 Button styles
 

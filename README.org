@@ -152,6 +152,10 @@ Inside a topic, llm_chat always uses that topic's own earlier messages as the
 conversation (thread context), whatever the context mode, up to its own topic
 limit (200 by default, =/setThreadLastN=); =---= does nothing there. See
 [[file:docs/private_topics.md][docs/private_topics.md]].
+After the first answer in a topic that Telegram named (one opened by typing in
+"All"), the bot renames it once: the answering model's emoji, the reasoning
+effort's alias, then a short title, as in =⚡h Monads explained=. See
+[[file:docs/topic_titles.md][docs/topic_titles.md]].
 
 ** timetracker time zones
 The timetracker stores each activity's local times together with its IANA
@@ -266,8 +270,9 @@ Reserve is spent too, =/codexStatus= reports the account's live meters and can
 park a user's saved default on another provider until the window resets. See
 [[file:docs/codex_luna_reserve.md][docs/codex_luna_reserve.md]] and
 [[file:docs/codex_quota_fallback.md][docs/codex_quota_fallback.md]].
-File titles and summaries come from each user's title model (=/setTitleModel=):
-by default the Luna Reserve with Codex access, else Gemini Flash Lite; see
+File titles and summaries, and the names of new private topics, come from
+each user's title model (=/setTitleModel=): by default the Luna Reserve with
+Codex access, else Gemini Flash Lite; see
 [[file:docs/title_model.md][docs/title_model.md]].
 Codex quick prefixes have matching Persian aliases: =.چ*= for GPT-5.6 Sol and
 =.اس*= for GPT-6 Astra; see [[file:docs/codex_models.md][the complete mapping]].

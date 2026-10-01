@@ -85,9 +85,9 @@ Reserve, effort being a per-model preference.
 - `.cr` / `.چر` selects the Reserve for one message at medium effort.
 - It also appears in `/setModel` and `/setModelHere` for users with Codex
   access, like any other Codex model.
-- It writes file titles and summaries by default for users with Codex
-  access: the one place it is used without a per-message choice. See
-  `docs/title_model.md`.
+- It writes file titles and summaries, and names new private topics, by
+  default for users with Codex access: the one place it is used without a
+  per-message choice. See `docs/title_model.md`.
 
 ## Reading the meters
 

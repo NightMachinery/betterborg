@@ -2,8 +2,9 @@
 
 The chat bot names some of the files it sends with a short LLM call. That call
 writes three things: a title, a file name and a summary of at most 70 words,
-which becomes the caption. The **title model** is the model that makes this
-call. Each user picks theirs with `/setTitleModel`.
+which becomes the caption. It also names new private topics. The **title
+model** is the model that makes these calls. Each user picks theirs with
+`/setTitleModel`.
 
 ## Where titles are written
 
@@ -12,6 +13,8 @@ call. Each user picks theirs with `/setTitleModel`.
   goes out only as a file (`docs/twin_files.md`). When the text was also
   sent, the title is written after it, so a slow title delays only the file.
 - **`/asfile` exports** of the conversation.
+- **New private topics** that Telegram named, after their first answer
+  (`docs/topic_titles.md`). Only the title is written there.
 
 The STT bot names its transcript files with Gemini Flash Lite, as before. It
 runs as a separate instance and does not read the chat bot's settings.
@@ -72,5 +75,7 @@ another title model.
   `title_generator`. Without one they keep using `title_model` (default
   `CHAT_TITLE_MODEL`) and the sender's stored key.
 - `llm_chat_plugins/llm_chat.py`: `UserPrefs.title_model`,
-  `_file_title_generator`, `_build_title_model_menu`, and the
-  `MODEL_MENU_SCOPE_TITLE` scope of the model menus.
+  `_title_settings` (the user's choice, Codex access and Gemini key), the
+  `_file_title_generator` and `_topic_title_generator` built from it,
+  `_build_title_model_menu`, and the `MODEL_MENU_SCOPE_TITLE` scope of the
+  model menus.

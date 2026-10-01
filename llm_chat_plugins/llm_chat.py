@@ -190,6 +190,7 @@ from uniborg.constants import (
 from uniborg import gemini_live_util
 from uniborg import codex_util
 from uniborg import title_util
+from uniborg import topic_titles
 from uniborg import pioneer_util
 from uniborg import llm_models
 from uniborg import llm_chat_config
@@ -1200,7 +1201,7 @@ BOT_COMMANDS = [
     {"command": "setmodel", "description": "Set your preferred chat model"},
     {
         "command": "settitlemodel",
-        "description": "Set the model that writes file titles and summaries",
+        "description": "Set the model for file titles, summaries and topic names",
     },
     {
         "command": "codexstatus",
@@ -1718,8 +1719,9 @@ class UserPrefs(BaseModel):
     group_metadata_mode: str = Field(default="full_metadata")
     tts_global_voice: str = Field(default=tts_util.DEFAULT_VOICE)
     live_model: str = Field(default="gemini-2.5-flash-preview-native-audio-dialog")
-    #: Writes the titles and summaries of files: a model id, or "auto"
-    #: (`title_util.resolve_title_model`). Set with /setTitleModel.
+    #: Writes the titles and summaries of files, and the names of new private
+    #: topics: a model id, or "auto" (`title_util.resolve_title_model`). Set
+    #: with /setTitleModel.
     title_model: str = Field(default=title_util.AUTO_TITLE_MODEL)
     last_n_messages_limit: Optional[int] = Field(default=None)
     thread_last_n_messages_limit: Optional[int] = Field(default=None)
@@ -2611,14 +2613,71 @@ def _build_title_model_menu(user_id: int, *, admin_p: bool, codex_p: bool) -> Mo
     )
 
 
-def _file_title_generator(user_id: int, *, codex_p: bool) -> util.TitleGenerator:
-    """Titles and summaries of the files sent to USER_ID, by their title model."""
-    return title_util.file_title_generator(
+def _title_settings(user_id: int, *, codex_p: bool) -> dict:
+    """USER_ID's title model, as keyword arguments of `title_util.generate_title`."""
+    return dict(
         choice=user_manager.get_title_model(user_id),
         codex_p=codex_p,
         api_keys={"gemini": get_effective_gemini_api_key(user_id)},
         api_user_id=user_id,
     )
+
+
+def _file_title_generator(user_id: int, *, codex_p: bool) -> util.TitleGenerator:
+    """Titles and summaries of the files sent to USER_ID, by their title model."""
+    return title_util.file_title_generator(**_title_settings(user_id, codex_p=codex_p))
+
+
+def _topic_title_generator(
+    user_id: int, *, codex_p: bool
+) -> topic_titles.TopicTitleGenerator:
+    """Titles of USER_ID's new private topics, by their title model."""
+    settings = _title_settings(user_id, codex_p=codex_p)
+
+    async def generate(prompt: str) -> topic_titles.TopicTitle:
+        return await title_util.generate_title(
+            prompt, topic_titles.TopicTitle, **settings
+        )
+
+    return generate
+
+
+async def _schedule_topic_title(
+    event,
+    *,
+    question: str,
+    answer: str,
+    model: str,
+    reasoning_level: Optional[str],
+    codex_p: bool,
+) -> None:
+    """Name EVENT's private topic in the background, if this was its first
+    answer (docs/topic_titles.md).
+
+    Never raises: the answer is already delivered.
+    """
+    topic_id = _thread_topic_id(event)
+    if topic_id is None or answer.startswith(BOT_META_INFO_PREFIX):
+        return
+    if not (question.strip() or answer.strip()):
+        return
+    try:
+        topic_titles.schedule_title_new_topic(
+            event.client,
+            topic_titles.TopicTitleRequest(
+                peer=await event.get_input_chat(),
+                chat_id=event.chat_id,
+                topic_id=topic_id,
+                message_date=event.message.date,
+                question=question,
+                answer=answer,
+                model_emoji=llm_models.model_emoji(model),
+                effort_alias=llm_models.reasoning_level_alias(reasoning_level),
+            ),
+            generate=_topic_title_generator(event.sender_id, codex_p=codex_p),
+        )
+    except Exception:
+        logger.exception("Could not schedule the title of topic %s", topic_id)
 
 
 def _build_model_menu(
@@ -2686,7 +2745,8 @@ MODEL_MENU_TITLES = {
     REASONING_SCOPE_PERSONAL: "**Set Chat Model**",
     REASONING_SCOPE_CHAT: "**Set Chat Model**",
     MODEL_MENU_SCOPE_TITLE: (
-        "**Set Title Model**\n\nIt writes the titles and summaries of files."
+        "**Set Title Model**\n\nIt writes the titles and summaries of files, "
+        "and the names of new topics."
     ),
 }
 MODEL_MENU_CUSTOM_ID_HINTS = {
@@ -6418,7 +6478,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /asfile or ..: Export conversation history as markdown file.
 - /setgeminikey: Sets or updates your Gemini API key.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
-- /setTitleModel: The model that writes file titles and summaries. Current: `{prefs.title_model}`.
+- /setTitleModel: The model that writes file titles and summaries, and names new topics. Current: `{prefs.title_model}`.
 - /codexStatus: Codex usage limits and the temporary stand-in model.
 - /setSystemPrompt: Change my core instructions or reset to default.
 - /setModelHere: Set the AI model for the current chat only.
@@ -8569,7 +8629,7 @@ async def set_model_handler(event):
 
 
 async def set_title_model_handler(event):
-    """Sets the model that writes the titles and summaries of files."""
+    """Sets the model for file titles and summaries, and topic names."""
     user_id = event.sender_id
     choice_match = event.pattern_match.group(1)
     config = llm_chat_config.load_config()
@@ -11162,6 +11222,8 @@ class GenerationResult:
     #: The response message already shows the outcome (a Codex error or the
     #: quota panel), so the caller must not deliver anything else.
     delivered: bool = False
+    #: The reasoning effort sent with the request, if any.
+    reasoning_level: Optional[str] = None
 
 
 _ALREADY_DELIVERED = GenerationResult(
@@ -11527,7 +11589,10 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
         has_image = getattr(llm_response, "has_image", False)
 
     return GenerationResult(
-        text=response_text, finish_reason=finish_reason, has_image=has_image
+        text=response_text,
+        finish_reason=finish_reason,
+        has_image=has_image,
+        reasoning_level=reasoning.level,
     )
 
 
@@ -11771,6 +11836,15 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
                 await response_message.delete()
             except Exception as e:
                 print(f"Error deleting placeholder message: {e}")
+
+        await _schedule_topic_title(
+            event,
+            question=prefix_result.processed_text or event.text or "",
+            answer=response_text,
+            model=model_in_use,
+            reasoning_level=generation.reasoning_level,
+            codex_p=user_has_codex_access,
+        )
 
         # TTS Integration Hook
         await _handle_tts_response(event, final_text)

@@ -1135,5 +1135,117 @@ class ThreadLimitCommandTests(_BotChatCase):
         self.assertLessEqual({"setthreadlastn", "getthreadlastn"}, commands)
 
 
+class TopicTitleHookTests(_BotChatCase):
+    """`_schedule_topic_title`: which answers hand their topic a title."""
+
+    PEER = object()
+    QUESTION = "What is a monad?"
+    ANSWER = "A way to chain computations."
+
+    def setUp(self):
+        super().setUp()
+        schedule = patch.object(plugin.topic_titles, "schedule_title_new_topic")
+        self.schedule = schedule.start()
+        self.addCleanup(schedule.stop)
+
+    def hand_over(self, message, *, answer=ANSWER, get_input_chat=None):
+        event = _Event(
+            message,
+            client=self.chat.client,
+            chat_id=USER_ID,
+            sender_id=USER_ID,
+            is_private=True,
+            get_input_chat=get_input_chat or AsyncMock(return_value=self.PEER),
+        )
+        asyncio.run(
+            plugin._schedule_topic_title(
+                event,
+                question=self.QUESTION,
+                answer=answer,
+                model=plugin.OPENAI_CODEX_LUNA_RESERVE,
+                reasoning_level="low",
+                codex_p=True,
+            )
+        )
+        return event
+
+    def test_an_answer_in_a_topic_schedules_its_title(self):
+        message = _said(330, self.QUESTION)
+
+        event = self.hand_over(message)
+
+        self.schedule.assert_called_once()
+        client, request = self.schedule.call_args.args
+        self.assertIs(client, event.client)
+        self.assertEqual(
+            request,
+            plugin.topic_titles.TopicTitleRequest(
+                peer=self.PEER,
+                chat_id=USER_ID,
+                topic_id=TOPIC_ID,
+                message_date=message.date,
+                question=self.QUESTION,
+                answer=self.ANSWER,
+                model_emoji="🌙",
+                effort_alias="l",
+            ),
+        )
+        self.assertTrue(callable(self.schedule.call_args.kwargs["generate"]))
+
+    def test_no_title_outside_topics_for_meta_answers_or_on_user_accounts(self):
+        cases = {
+            "outside topics": dict(message=_said(330, "hi", top_id=None, parent=None)),
+            "a meta answer": dict(
+                message=_said(330, "hi"),
+                answer=f"{plugin.BOT_META_INFO_PREFIX}__[No response]__",
+            ),
+        }
+        for name, kwargs in cases.items():
+            with self.subTest(name):
+                self.hand_over(**kwargs)
+        with patch.object(plugin, "IS_BOT", False):
+            self.hand_over(_said(330, "hi"))
+
+        self.schedule.assert_not_called()
+
+    def test_a_failure_to_schedule_does_not_reach_the_answer(self):
+        with patch.object(plugin, "logger", create=True) as logger:
+            self.hand_over(
+                _said(330, "hi"),
+                get_input_chat=AsyncMock(side_effect=ConnectionError("gone")),
+            )
+
+        logger.exception.assert_called_once()
+        self.schedule.assert_not_called()
+
+    def test_the_title_model_writes_the_title(self):
+        generate_title = AsyncMock(
+            return_value=plugin.topic_titles.TopicTitle(title="Monads")
+        )
+        with patch.object(
+            plugin.title_util, "generate_title", generate_title
+        ), patch.object(
+            plugin.user_manager, "get_title_model", return_value="auto"
+        ), patch.object(
+            plugin, "get_effective_gemini_api_key", return_value="gemini-key"
+        ):
+            generate = plugin._topic_title_generator(USER_ID, codex_p=True)
+            title = asyncio.run(generate("prompt"))
+
+        self.assertEqual(title.title, "Monads")
+        self.assertEqual(
+            generate_title.await_args.args, ("prompt", plugin.topic_titles.TopicTitle)
+        )
+        self.assertEqual(
+            generate_title.await_args.kwargs,
+            dict(
+                choice="auto",
+                codex_p=True,
+                api_keys={"gemini": "gemini-key"},
+                api_user_id=USER_ID,
+            ),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
