@@ -195,6 +195,9 @@ from uniborg.llm_models import DEFAULT_REASONING_EFFORT, ModelSpec
 from uniborg import redis_util
 from uniborg import common_util
 from uniborg import topics
+from uniborg import guest_util
+from uniborg import tg_format
+from uniborg import tg_raw
 
 # --- Constants and Configuration ---
 GEMINI_NATIVE_FILE_MODE = os.getenv(
@@ -860,6 +863,15 @@ This is a group chat with multiple participants. Be EXTREMELY concise:
 - Avoid long lists, verbose explanations, or unnecessary context
 - In group settings, brevity shows respect for everyone's time
 """
+
+#: For guest answers (see docs/guest_mode.md), in place of the etiquette above.
+GUEST_CHAT_PROMPT = """
+# Guest Answer
+Someone mentioned you in a Telegram chat you are not a member of: a group, or a private chat between two people. You see only the message that mentioned you and the message it replies to, if any, and everyone in that chat sees your answer. Be concise: answer what was asked, without preamble.
+"""
+
+#: Guest answers are rich messages: Telegram's server renders the Markdown.
+RICH_MARKDOWN_PROMPT = r"""Your answer is rendered as GitHub Flavored Markdown. Use standard Markdown: `**bold**`, `*italic*`, `` `code` ``, fenced code blocks with a language, `[links](url)`, headings, lists and tables (only inline formatting inside table cells). Math renders as LaTeX: `$...$` inline and `$$...$$` for display."""
 
 
 # --- Event Proxy ---
@@ -3122,7 +3134,7 @@ async def _create_server_error_message(
     base_message = "The AI model's server is currently unavailable. This is likely an upstream issue. Please try again later."
     base_message += message_postfix
 
-    if await util.isAdmin(event):
+    if await llm_util.may_show_admin_details(event):
         base_message += f"\n\n**Error:**\n```{str(exception)}\n```"
     return base_message
 
@@ -4126,9 +4138,12 @@ def get_system_prompt_info(
 
     # Build additional context sections
     additional_sections = [METADATA_CONTEXT_PROMPT]
+    guest_p = guest_util.is_guest_event(event)
 
+    if guest_p:
+        additional_sections.append(GUEST_CHAT_PROMPT)
     # Add group chat etiquette for group chats using default prompt
-    if (
+    elif (
         source
         not in [
             "chat",
@@ -4143,7 +4158,9 @@ def get_system_prompt_info(
         )
 
     if include_telegram_markdown_p:
-        additional_sections.append(TELEGRAM_MARKDOWN_PROMPT)
+        additional_sections.append(
+            RICH_MARKDOWN_PROMPT if guest_p else TELEGRAM_MARKDOWN_PROMPT
+        )
 
     if include_current_time_p:
         # Get current time in specified timezone
@@ -4329,6 +4346,16 @@ def _check_media_capability(
     return result
 
 
+def _media_cache_key(message: Message) -> str:
+    media_id = getattr(message.media, "id", "unknown")
+    if guest_util.is_guest_message(message):
+        #: Its chat id and message id are the caller's view of the chat, and
+        #: can equal those of a message in one of the bot's own chats.
+        caller_id = guest_util.caller_id_of(message)
+        return f"guest_{caller_id}_{message.chat_id}_{message.id}_{media_id}"
+    return f"{message.chat_id}_{message.id}_{media_id}"
+
+
 async def _process_media(
     message: Message,
     temp_dir: Path,
@@ -4350,9 +4377,7 @@ async def _process_media(
         return ProcessMediaResult(media_part=None, warnings=[])
 
     try:
-        file_id = (
-            f"{message.chat_id}_{message.id}_{getattr(message.media, 'id', 'unknown')}"
-        )
+        file_id = _media_cache_key(message)
 
         # --- Branch 1: Gemini Files API Mode ---
         if is_native_gemini_files_mode(model_in_use):
@@ -5630,7 +5655,8 @@ def register_handlers():
     # Command Handlers
     borg.on(
         events.NewMessage(
-            pattern=rf"(?i)^/start{bot_username_suffix_re}\s*$",
+            #: A payload comes from deep links, such as the guest invite's.
+            pattern=rf"(?i)^/start{bot_username_suffix_re}(?:\s+\S+)?\s*$",
             func=lambda e: e.is_private,
         )
     )(start_handler)
@@ -5944,6 +5970,7 @@ async def initialize_llm_chat():
     )
 
     register_handlers()
+    register_guest_handlers()
 
     #: Registering the history event handlers last, as uniborg monkey patches `._event_builders` to be a ReverseList.
     #: [[zf:~\[borg\]/uniborg/uniborg.py::self._event_builders = hacks.ReverseList()]]
@@ -6026,6 +6053,14 @@ async def help_handler(event):
         )
 
     group_trigger_text = " or ".join(activation_instructions)
+    guest_help_text = (
+        "\n**▶️ In Chats I Am Not In**\n"
+        f"Mention me (`{BOT_USERNAME}`) in any chat, even one I am not a member of, "
+        "and I answer right there with your settings and API key. Mention me in a "
+        "reply to make me read that message too. Everyone in the chat sees my answer.\n"
+        if BOT_USERNAME
+        else ""
+    )
 
     codex_shortcuts_text = (
         "- `.c` / `.چ` / `.cm` / `.چم` → Codex GPT-5.6 Sol (medium)\n"
@@ -6071,7 +6106,7 @@ With topics (threaded mode), each topic is its own conversation: inside a topic 
 
 **▶️ In Group Chats**
 To talk to me in a group, {group_trigger_text}. Conversation history works the same way (e.g., reply to my last message in the group to continue a thread).
-
+{guest_help_text}
 **▶️ Understanding Conversation Context**
 I remember our conversations based on your chosen settings. You can configure these separately for private and group chats.
 
@@ -10362,6 +10397,9 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
         return False
     if event.forward:
         return False
+    if guest_util.is_guest_answer(getattr(event, "message", None)):
+        #: Our own guest answer, echoed back into a group we are not in.
+        return False
 
     if _is_known_command(event.text):
         return False
@@ -10696,6 +10734,35 @@ def get_streaming_delay(model_name: str) -> float:
     return 0.8
 
 
+class GenerationSurface(str, Enum):
+    """Where an answer is delivered."""
+
+    #: A message in a chat the bot is in.
+    CHAT = "chat"
+    #: A guest answer: one inline message, edited in place, that can carry
+    #: no generated images and no buttons.
+    GUEST = "guest"
+
+
+#: A guest answer should not show "retrying" for long in someone's chat.
+GUEST_NO_RESPONSE_RETRIES_MAX = 2
+GUEST_NO_RESPONSE_RETRY_SLEEP = 5
+
+
+def _append_warnings(text: str, warnings: list, *, event) -> str:
+    """TEXT with the unique WARNINGS as a note, where they are shown at all."""
+    should_warn = WARN_UNSUPPORTED_TO_USER_P == "always" or (
+        WARN_UNSUPPORTED_TO_USER_P == "private_only"
+        and getattr(event, "is_private", False)
+    )
+    if not (should_warn and warnings):
+        return text
+    unique_warnings = sorted(list(set(warnings)))
+    return f"{text}\n\n{BOT_META_INFO_LINE}\n**Note:**\n" + "\n".join(
+        f"- {w}" for w in unique_warnings
+    )
+
+
 @dataclass
 class GenerationRequest:
     """What `_generate_response` needs for one model call."""
@@ -10713,6 +10780,7 @@ class GenerationRequest:
     image_generation: bool
     #: Notes for the user; `_generate_response` appends to it.
     warnings: list
+    surface: GenerationSurface = GenerationSurface.CHAT
 
 
 @dataclass(frozen=True)
@@ -10747,6 +10815,23 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
     prefs = req.prefs
     user_id = event.sender_id
     chat_id = event.chat_id
+    if req.surface is GenerationSurface.CHAT:
+        guest_p = False
+        no_response_retry = {}
+    elif req.surface is GenerationSurface.GUEST:
+        guest_p = True
+        no_response_retry = dict(
+            no_response_retries_max=GUEST_NO_RESPONSE_RETRIES_MAX,
+            sleep=GUEST_NO_RESPONSE_RETRY_SLEEP,
+        )
+        if (
+            req.image_generation
+            or model_capabilities.get("image_generation", False)
+            or is_native_gemini_image_generation(model_in_use)
+        ):
+            raise ValueError("A guest answer cannot carry generated images")
+    else:
+        raise ValueError(f"Unknown generation surface: {req.surface!r}")
 
     # --- Context Caching for Native Gemini Models ---
     # Free-tier keys have a per-model cached-content storage limit of 0; once we've seen
@@ -10960,6 +11045,22 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
             has_image = codex_response.has_image
         except codex_util.CodexStreamError as e:
             partial = e.response.text.strip()
+            if e.usage_limit is not None and guest_p:
+                #: The quota panel needs buttons and a message of its own.
+                notice = (
+                    f"{BOT_META_INFO_PREFIX}❌ Codex usage limit reached; "
+                    "try again later, or ask me in a private chat."
+                )
+                await util.edit_message(
+                    response_message,
+                    (
+                        f"{partial}\n\n{BOT_META_INFO_LINE}\n{notice}"
+                        if partial
+                        else notice
+                    ),
+                    parse_mode="md",
+                )
+                return _ALREADY_DELIVERED
             if e.usage_limit is not None:
                 panel = _codex_quota_panel(
                     user_id,
@@ -11030,6 +11131,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
                 edit_interval,
                 model_capabilities,
                 streaming_p=use_streaming,
+                **no_response_retry,
             )
 
         try:
@@ -11267,19 +11369,7 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
         response_text = generation.text
 
         # Final text processing (now handles both success and failure cases)
-        final_text = response_text.strip()
-
-        should_warn = WARN_UNSUPPORTED_TO_USER_P == "always" or (
-            WARN_UNSUPPORTED_TO_USER_P == "private_only"
-            and getattr(event, "is_private", False)
-        )
-
-        if should_warn and warnings:
-            unique_warnings = sorted(list(set(warnings)))
-            warning_text = f"\n\n{BOT_META_INFO_LINE}\n**Note:**\n" + "\n".join(
-                f"- {w}" for w in unique_warnings
-            )
-            final_text += warning_text
+        final_text = _append_warnings(response_text.strip(), warnings, event=event)
 
         # Only send text message if there's actual content
         if final_text.strip():
@@ -11334,6 +11424,287 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
             bot_util.PROCESSED_GROUP_IDS.discard(group_id)
         if temp_dir.exists():
             rmtree(temp_dir, ignore_errors=True)
+
+
+# --- Guest mode ---
+#: Answers to mentions in chats the bot is not in, with the caller's own model
+#: and API key. The protocol and its safety rules are in docs/guest_mode.md.
+
+GUEST_MAX_AGE_SECONDS = 120
+#: A rich message allows 32768 UTF-8 characters; counting bytes is the safe
+#: reading.
+GUEST_RICH_LIMIT_BYTES = 32000
+#: The classic fallback; the raw Markdown is never shorter than what it renders.
+GUEST_CLASSIC_LIMIT_UNITS = 4000
+GUEST_TRUNCATED_NOTE = "\n\n_(Truncated; ask me in a private chat for the rest.)_"
+GUEST_PLACEHOLDER = "💭 Thinking…"
+GUEST_INVITE_TEXT = (
+    "To use me here, start me in a private chat and set an API key first "
+    "(Gemini keys are free)."
+)
+GUEST_INVITE_TTL_SECONDS = 24 * 60 * 60
+
+_guest_claims = guest_util.QueryClaims(
+    backend=guest_util.redis_claim_backend(redis_util.get_redis)
+)
+_guest_limiter = guest_util.CallLimiter(
+    backend=guest_util.redis_counter_backend(redis_util.get_redis)
+)
+
+
+@dataclass
+class GuestRequestPlan:
+    """The model and key a guest answer will use, decided before answering."""
+
+    model: str
+    service: str
+    #: None when the caller has no key for `service`.
+    api_key: Optional[str]
+    model_capabilities: Dict[str, bool]
+    prefix_effort: Optional[str]
+    warnings: list
+
+
+def _guest_title() -> str:
+    #: Required by Telegram but never shown.
+    return getattr(borg.me, "first_name", None) or "Chat"
+
+
+async def _guest_note(query, text: str, *, buttons=None) -> None:
+    """Answers QUERY with a short note: an explicit call is never ignored."""
+    try:
+        await tg_raw.answer_guest(
+            borg,
+            query_id=query.query_id,
+            title=_guest_title(),
+            text=text,
+            buttons=buttons,
+        )
+    except Exception:
+        logger.warning("Could not answer guest query %s", query.query_id, exc_info=True)
+
+
+async def _guest_invite(query, *, explicit: bool, policy) -> None:
+    """Invites a caller without a key: on every explicit call, else once a day."""
+    if not policy.invite:
+        if explicit:
+            await _guest_note(query, "Not available here.")
+        return
+    if not explicit and not await _guest_claims.claim(
+        f"invite:{BOT_ID}:{query.caller_id}", ttl_seconds=GUEST_INVITE_TTL_SECONDS
+    ):
+        return
+    url = f"https://t.me/{BOT_USERNAME.lstrip('@')}?start=guest"
+    await _guest_note(
+        query,
+        GUEST_INVITE_TEXT,
+        buttons=[[tg_compat.url_button("Start a private chat", url)]],
+    )
+
+
+async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestPlan:
+    """The model, service and key for a guest answer, as a chat message would get.
+
+    Image models are swapped for the default: a guest answer cannot carry
+    generated images.
+    """
+    user_id = event.sender_id
+    warnings = []
+    prefix = _detect_and_process_message_prefix(
+        event.text or "",
+        admin_p=is_admin,
+        codex_p=await llm_chat_config.can_use_codex(event, config),
+    )
+    model = _resolve_request_model(
+        event.chat_id, user_id, prefix_model=prefix.model
+    ).model
+    if not await _can_user_access_model(event, model, config=config):
+        model = DEFAULT_MODEL
+    if is_native_gemini_image_generation(model) or get_model_capabilities(model).get(
+        "image_generation", False
+    ):
+        model = DEFAULT_MODEL
+        warnings.append("Image models are not available in guest answers.")
+    if prefix.image_generation:
+        warnings.append("Image generation is not available in guest answers.")
+    service = llm_util.get_service_from_model(model)
+    return GuestRequestPlan(
+        model=model,
+        service=service,
+        api_key=get_effective_api_key(user_id, service),
+        model_capabilities=get_model_capabilities(model),
+        prefix_effort=prefix.reasoning_effort,
+        warnings=warnings,
+    )
+
+
+def _fit_utf8(text: str, limit_bytes: int, *, note: str) -> str:
+    data = text.encode("utf-8")
+    if len(data) <= limit_bytes:
+        return text
+    kept = data[: limit_bytes - len(note.encode("utf-8"))]
+    return kept.decode("utf-8", errors="ignore").rstrip() + note
+
+
+async def _finalize_guest_answer(answer, text: str) -> None:
+    """The last edit: rich Markdown, or classic Markdown if Telegram refuses it."""
+    text = text or "_(The model returned no answer.)_"
+    try:
+        await answer.finalize(
+            markdown=_fit_utf8(text, GUEST_RICH_LIMIT_BYTES, note=GUEST_TRUNCATED_NOTE)
+        )
+        return
+    except errors.FloodWaitError:
+        raise
+    except errors.RPCError as e:
+        logger.warning(
+            "Telegram refused a rich guest answer (%s); sending it classic", e
+        )
+    await answer.finalize(
+        text=tg_format.truncate_utf16(
+            text, GUEST_CLASSIC_LIMIT_UNITS, suffix=GUEST_TRUNCATED_NOTE
+        ),
+        parse_mode="md",
+    )
+
+
+async def _run_guest_answer(event, answer, *, plan: GuestRequestPlan) -> None:
+    """Builds the history from the guest query's own messages and answers."""
+    temp_dir = Path(tempfile.gettempdir()) / f"temp_llm_chat_guest_{uuid.uuid4().hex}"
+    temp_dir.mkdir()
+    try:
+        history, warnings = await _process_turns_to_history(
+            event,
+            event.query.messages,
+            temp_dir,
+            plan.model_capabilities,
+            plan.api_key,
+            plan.model,
+            is_private=False,
+        )
+        warnings = plan.warnings + warnings
+        if not any(entry["role"] != "system" for entry in history):
+            await answer.finalize(
+                text="I couldn't find any text or supported media to answer."
+            )
+            return
+        append_runtime_context_to_latest_user_message(
+            history, get_runtime_context_text()
+        )
+        generation = await _generate_response(
+            GenerationRequest(
+                event=event,
+                response_message=answer,
+                messages=history,
+                model=plan.model,
+                model_capabilities=plan.model_capabilities,
+                api_key=plan.api_key,
+                prefs=user_manager.get_prefs(event.sender_id),
+                prefix_effort=plan.prefix_effort,
+                image_generation=False,
+                warnings=warnings,
+                surface=GenerationSurface.GUEST,
+            )
+        )
+        if generation.delivered:
+            return
+        await _finalize_guest_answer(
+            answer, _append_warnings(generation.text.strip(), warnings, event=event)
+        )
+        #: Lengths only: the references are other people's messages.
+        logger.info(
+            "Guest answer for %s with %s: %d turns in, %d characters out",
+            event.sender_id,
+            plan.model,
+            len(history),
+            len(generation.text),
+        )
+    except asyncio.CancelledError:
+        #: /stop from the caller's private chat; the backend has said so.
+        pass
+    except Exception as e:
+        await llm_util.handle_llm_error(
+            event=event,
+            exception=e,
+            response_message=answer,
+            service=plan.service,
+            base_error_message="An error occurred.",
+            error_id_p=True,
+        )
+    finally:
+        rmtree(temp_dir, ignore_errors=True)
+
+
+async def guest_chat_handler(query) -> None:
+    """Answers a guest query, as the caller's own chat with the bot would."""
+    explicit = bool(BOT_USERNAME) and guest_util.mentions(
+        query.text, username=BOT_USERNAME
+    )
+    if query.caller_id is None:
+        if explicit:
+            await _guest_note(query, "I can only answer people, not channels.")
+        return
+    config = llm_chat_config.load_config()
+    policy = config.guest
+    if BOT_USERNAME:
+        guest_util.strip_mention(query.trigger, username=BOT_USERNAME)
+    event = guest_util.GuestEvent(query)
+    is_admin = await util.isAdmin(event)
+
+    if policy.policy is llm_chat_config.GuestPolicy.OFF:
+        refusal = "Guest answers are turned off for this bot."
+    elif policy.policy is llm_chat_config.GuestPolicy.ADMINS:
+        refusal = None if is_admin else "Not available here."
+    elif policy.policy is llm_chat_config.GuestPolicy.ONBOARDED:
+        refusal = None
+    else:
+        raise ValueError(f"Unknown guest policy: {policy.policy!r}")
+    if refusal is not None:
+        if explicit:
+            await _guest_note(query, refusal)
+        return
+
+    if not is_admin and not await _guest_limiter.allow(
+        f"chat:{BOT_ID}:{query.caller_id}", limit=policy.max_calls_per_hour
+    ):
+        if explicit:
+            await _guest_note(
+                query,
+                f"You have had {policy.max_calls_per_hour} answers this hour; "
+                "try again later, or ask me in a private chat.",
+            )
+        return
+
+    plan = await _plan_guest_request(event, config=config, is_admin=is_admin)
+    if plan.api_key is None:
+        await _guest_invite(query, explicit=explicit, policy=policy)
+        return
+
+    try:
+        inline_id = await tg_raw.answer_guest(
+            borg,
+            query_id=query.query_id,
+            title=_guest_title(),
+            text=GUEST_PLACEHOLDER,
+        )
+    except Exception:
+        #: Not retried: a second answer could post twice.
+        logger.exception("Could not answer guest query %s", query.query_id)
+        return
+    async with tg_raw.InlineEditor(borg, inline_id) as editor:
+        answer = guest_util.GuestAnswerMessage(editor, logger=logger)
+        await _run_guest_answer(event, answer, plan=plan)
+
+
+def register_guest_handlers():
+    """Answers guest queries; a no-op on a user account or Telethon 1.43."""
+    guest_util.register_guest_handler(
+        borg,
+        guest_chat_handler,
+        claims=_guest_claims,
+        max_age_seconds=GUEST_MAX_AGE_SECONDS,
+        logger=logger,
+    )
 
 
 # --- Initialization ---

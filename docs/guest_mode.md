@@ -120,6 +120,10 @@ Each rule is enforced in code; this is why.
 - `QueryClaims(backend=redis_claim_backend(redis_util.get_redis))`: claim a
   key once per TTL, across restarts with Redis (keys under
   `borg:guest:claim:`), in memory without it.
+- `CallLimiter(backend=redis_counter_backend(redis_util.get_redis))`:
+  `await limiter.allow(key, limit=n)` counts a call and says whether it is
+  within `n` per hour. Windows follow the wall clock, so Redis (keys under
+  `borg:guest:count:`) keeps the counts across restarts.
 - `GuestEvent(query, text=…)`: a stand-in for a `NewMessage` event, for code
   written against events. `chat_id` is the synthetic string
   `guest:<thread_key>`, so per-chat settings and caches get their own
@@ -164,6 +168,44 @@ seconds; a later one is dropped, never run late.
   upload, so the answer reuses the DM copy, with the output as its caption
   (1024 UTF-16 units, so less of it shows than in a text answer). If Telegram
   refuses, the answer stays text. Several files are only in the DM.
+
+## The chat bot (`llm_chat_plugins/llm_chat.py`)
+
+`@vlm_chat_bot hi` in a chat the bot is not in answers there, as the caller's
+own chat with the bot would: with their default model, reasoning effort and
+API key. Model and reasoning prefixes (`.f`, `.th`, …) work as in a private
+chat. The handler keeps queries for at most 120 seconds.
+
+- **Who may use it** is the guest policy below. Admins are exempt from the
+  hourly limit.
+- **Every explicit call is answered.** With the policy off, the caller gets
+  "Guest answers are turned off"; with `admins`, a non-admin gets "Not
+  available here."; over the hourly limit, the caller is told so. Implicit
+  calls get none of these.
+- **A caller without an API key is invited** to start the bot, with a button
+  to `t.me/<bot>?start=guest`: on every explicit call, and on implicit calls
+  at most once a day (a claim on `invite:<bot id>:<caller>`). With `invite:
+  false`, an explicit call gets "Not available here." instead.
+- **What it reads**: the trigger, with the mention removed, and the reference.
+  Nothing else of the chat. A reply quote that would need a fetch is dropped,
+  since `GuestClient` refuses the fetch.
+- **No generated images**: an image model is replaced by the default model,
+  and `.i` is ignored. A guest answer can only reuse files Telegram already
+  has.
+- **The answer** starts as "💭 Thinking…", streams as classic Markdown edits
+  (the first 4096 UTF-16 units), and ends as one rich Markdown edit, which the
+  server renders: headings, tables, LaTeX. The prompt says so
+  (`RICH_MARKDOWN_PROMPT`, with `GUEST_CHAT_PROMPT` in place of the group
+  etiquette). Past 32000 UTF-8 bytes the answer is cut with a note. If
+  Telegram refuses the rich edit, the answer is sent as classic Markdown.
+- **Errors** never carry the "admin only" details
+  (`llm_util.may_show_admin_details`): the answer is public. A Codex usage limit gets one line instead
+  of the quota panel, which needs buttons and a message of its own. A model
+  that returns nothing is retried twice, not thirty times.
+- **Privacy**: the log records the caller, the model and the lengths, not the
+  text; guest answers are not written to the conversation logs that `/log`
+  sends. Media cache keys of guest messages include the caller, since their
+  chat and message ids are the caller's view of the chat.
 
 ## The chat bot's guest policy
 

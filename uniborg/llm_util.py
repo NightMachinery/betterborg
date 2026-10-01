@@ -2,6 +2,7 @@ from pynight.common_icecream import ic
 import traceback
 from uniborg import util
 from uniborg import llm_db
+from uniborg import guest_util
 from uniborg.constants import BOT_META_INFO_PREFIX
 import llm
 from pathlib import Path
@@ -568,14 +569,14 @@ async def _handle_common_error_cases(
 
             finally:
                 # Show full JSON for admins
-                is_admin = await util.isAdmin(event)
+                is_admin = await may_show_admin_details(event)
                 if is_admin:
                     formatted_json = json.dumps(error_data, indent=2)
                     error_message += f"**Full error details (admin only):**\n```\n{formatted_json}\n```"
 
         else:
             # Fallback if no JSON found - put whole message in code block for admins
-            is_admin = await util.isAdmin(event)
+            is_admin = await may_show_admin_details(event)
             if is_admin:
                 error_message += (
                     f"**Raw error message (admin only):**\n```\n{original_msg}\n```"
@@ -739,6 +740,16 @@ async def _handle_common_error_cases(
         return True
 
     return False
+
+
+async def may_show_admin_details(event) -> bool:
+    """Whether an error reply may carry the details meant for bot admins.
+
+    Never in a guest answer: everyone in that chat sees it, whoever asked.
+    """
+    if guest_util.is_guest_event(event):
+        return False
+    return await util.isAdmin(event)
 
 
 def _should_show_error_details(

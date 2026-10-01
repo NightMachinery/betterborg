@@ -45,6 +45,7 @@ GUEST_MESSAGE_ATTR = "_borg_guest_query_id"
 #: Where `redis_claim_backend` keeps its keys. The bots' Redis user may only
 #: touch `borg:*` keys.
 REDIS_CLAIM_PREFIX = "borg:guest:claim:"
+REDIS_COUNTER_PREFIX = "borg:guest:count:"
 
 DEFAULT_CLAIM_TTL_SECONDS = 24 * 60 * 60
 
@@ -382,6 +383,69 @@ def redis_claim_backend(
         return bool(await client.set(f"{prefix}{key}", "1", nx=True, ex=ttl_seconds))
 
     return claim
+
+
+CounterBackend = Callable[[str, int], Awaitable[Optional[int]]]
+
+
+class CallLimiter:
+    """At most `limit` calls per key in each fixed window of `window_seconds`.
+
+    `allow(key, limit=…)` counts the call and says whether it is within the
+    limit; the limit is an argument so a reloaded config applies at once.
+    Windows are aligned to the wall clock, so `backend` (see
+    `redis_counter_backend`) shares the counts across restarts. A backend that
+    fails, or has no connection, falls back to the memory count.
+    """
+
+    def __init__(
+        self,
+        *,
+        backend: Optional[CounterBackend] = None,
+        window_seconds: int = 3600,
+        clock: Callable[[], float] = time.time,
+        logger: Optional[logging.Logger] = None,
+    ):
+        self._backend = backend
+        self._window_seconds = window_seconds
+        self._clock = clock
+        self._log = logger or _log
+        self._counts = {}
+
+    async def allow(self, key: str, *, limit: int) -> bool:
+        window = int(self._clock() // self._window_seconds)
+        self._counts = {k: n for k, n in self._counts.items() if k[1] == window}
+        count = self._counts[(key, window)] = self._counts.get((key, window), 0) + 1
+        if self._backend is not None:
+            try:
+                shared = await self._backend(f"{key}:{window}", self._window_seconds)
+            except Exception:
+                self._log.warning(
+                    "Guest counter backend failed for %s; using memory",
+                    key,
+                    exc_info=True,
+                )
+            else:
+                if shared is not None:
+                    count = shared
+        return count <= limit
+
+
+def redis_counter_backend(
+    get_redis: Callable[[], Awaitable[Any]], *, prefix: str = REDIS_COUNTER_PREFIX
+) -> CounterBackend:
+    """A `CallLimiter` backend doing `INCR` and `EXPIRE` on `get_redis()`."""
+
+    async def count(key: str, ttl_seconds: int) -> Optional[int]:
+        client = await get_redis()
+        if client is None:
+            return None
+        name = f"{prefix}{key}"
+        value = await client.incr(name)
+        await client.expire(name, ttl_seconds)
+        return int(value)
+
+    return count
 
 
 GuestHandler = Callable[[GuestQuery], Awaitable[None]]
