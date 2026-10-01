@@ -23,6 +23,9 @@ exist. Set `LLM_CHAT_CONFIG_PATH` to use another path. The default is:
 }
 ```
 
+The same file can hold the guest-mode policy; see
+[guest_mode.md](guest_mode.md).
+
 The two policy arrays accept numeric Telegram user IDs and the exact string
 `"MAGIC_ADMINS"`. The sentinel delegates to Betterborg's existing
 `util.isAdmin(event)` check, including trusted-chat access. Remove it to remove

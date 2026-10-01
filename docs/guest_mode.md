@@ -165,6 +165,31 @@ seconds; a later one is dropped, never run late.
   (1024 UTF-16 units, so less of it shows than in a text answer). If Telegram
   refuses, the answer stays text. Several files are only in the DM.
 
+## The chat bot's guest policy
+
+The chat bot reads its guest policy from the optional `guest` section of
+`~/.borg/llm_chat_config.json5` (or `LLM_CHAT_CONFIG_PATH`), the file that
+holds Codex access ([codex_models.md](codex_models.md)). It is reloaded when
+the file changes.
+
+```json5
+guest: {policy: "onboarded", max_calls_per_hour: 30, invite: true},
+```
+
+- `policy`: who may use the bot through guest mentions. `"onboarded"` (the
+  default when the section is absent) means callers who have set an API key,
+  as in a private chat with the bot; `"admins"` means bot admins only; `"off"`
+  turns guest answers off.
+- `max_calls_per_hour`: answers per caller per hour, from 1 to 10000; default
+  30.
+- `invite`: whether a caller the policy refuses is invited to start the bot;
+  default true.
+
+A malformed section (an unknown key, policy or type) turns guest mode off and
+logs the error; the rest of the file still applies. A file that does not parse
+at all also turns guest mode off, as it turns Codex off, so a typo elsewhere
+cannot undo `policy: "off"`.
+
 ## Enabling guest mode for a bot
 
 1. Run the instance on Telethon 1.45.0 (`.tgcaps`: `layer: 229`,

@@ -281,6 +281,42 @@ class UpdateTests(unittest.TestCase):
         self.assertNotIn("\n  codex_users:", text)
 
 
+class GuestSectionUpdateTests(unittest.TestCase):
+    """Roster edits must keep the guest section, and not trip the semantic check."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "config.json5"
+        self.path.write_text(
+            BASE.replace(
+                "  codex_users: [",
+                '  guest: {policy: "admins", invite: false},\n  codex_users: [',
+            )
+        )
+        patcher = mock.patch.object(
+            llm_chat_config, "config_path", return_value=self.path
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.guest = llm_chat_config.GuestConfig(
+            policy=llm_chat_config.GuestPolicy.ADMINS, invite=False
+        )
+
+    def test_update_user_access_keeps_the_guest_section(self):
+        result = llm_chat_config.update_user_access(7, "codex_enabled", True)
+
+        self.assertTrue(result.codex_users[0].codex_enabled)
+        self.assertEqual(result.guest, self.guest)
+        self.assertIn('guest: {policy: "admins", invite: false}', self.path.read_text())
+
+    def test_add_user_keeps_the_guest_section(self):
+        result = llm_chat_config.add_user(9, name="Nine")
+
+        self.assertEqual([user.id for user in result.codex_users], [7, 9])
+        self.assertEqual(result.guest, self.guest)
+
+
 class AddUserTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

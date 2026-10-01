@@ -8,7 +8,9 @@ import fcntl
 import json
 import stat as stat_module
 import tempfile
+import dataclasses
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
@@ -25,6 +27,9 @@ DEFAULT_CONFIG_TEXT = """// Betterborg llm_chat access policy.
   codex_allowed_users: ["MAGIC_ADMINS"],
   codex_imagegen_allowed_users: ["MAGIC_ADMINS"],
   codex_users: [],
+  // Guest mentions (@bot in a chat it is not in). policy: "onboarded"
+  // (callers with an API key), "admins" or "off".
+  // guest: {policy: "onboarded", max_calls_per_hour: 30, invite: true},
 }
 """
 
@@ -39,15 +44,40 @@ class CodexUser:
     imagegen_enabled: bool
 
 
+class GuestPolicy(str, Enum):
+    """Who may use the chat bot through guest mentions."""
+
+    #: Callers who have set an API key, as in a private chat with the bot.
+    ONBOARDED = "onboarded"
+    ADMINS = "admins"
+    OFF = "off"
+
+
+@dataclass(frozen=True)
+class GuestConfig:
+    policy: GuestPolicy = GuestPolicy.ONBOARDED
+    #: Answers per caller per hour.
+    max_calls_per_hour: int = 30
+    #: Whether a caller the policy refuses is invited to start the bot.
+    invite: bool = True
+
+
+GUEST_OFF = GuestConfig(policy=GuestPolicy.OFF)
+GUEST_KEYS = frozenset({"policy", "max_calls_per_hour", "invite"})
+GUEST_MAX_CALLS_PER_HOUR_LIMIT = 10000
+
+
 @dataclass(frozen=True)
 class LLMChatConfig:
     codex_allowed_users: Tuple[PolicyEntry, ...]
     codex_imagegen_allowed_users: Tuple[PolicyEntry, ...]
     valid: bool = True
     codex_users: Tuple[CodexUser, ...] = ()
+    guest: GuestConfig = GuestConfig()
 
 
-DENY_ALL_CONFIG = LLMChatConfig((), (), valid=False)
+#: Guest mode is off too: a typo elsewhere must not undo `policy: "off"`.
+DENY_ALL_CONFIG = LLMChatConfig((), (), valid=False, guest=GUEST_OFF)
 
 
 def config_path() -> Path:
@@ -76,6 +106,35 @@ def _validate_policy(value, key: str) -> Tuple[PolicyEntry, ...]:
             )
         result.append(entry)
     return tuple(result)
+
+
+def _parse_guest(value) -> GuestConfig:
+    if not isinstance(value, dict):
+        raise ValueError("guest must be an object")
+    extra = set(value) - GUEST_KEYS
+    if extra:
+        raise ValueError(f"guest has unknown key(s): {', '.join(sorted(extra))}")
+    defaults = GuestConfig()
+    policy = value.get("policy", defaults.policy.value)
+    if policy not in {p.value for p in GuestPolicy}:
+        allowed = ", ".join(f'"{p.value}"' for p in GuestPolicy)
+        raise ValueError(f"guest.policy must be one of {allowed}")
+    max_calls = value.get("max_calls_per_hour", defaults.max_calls_per_hour)
+    if (
+        isinstance(max_calls, bool)
+        or not isinstance(max_calls, int)
+        or not 1 <= max_calls <= GUEST_MAX_CALLS_PER_HOUR_LIMIT
+    ):
+        raise ValueError(
+            "guest.max_calls_per_hour must be an integer from 1 to "
+            f"{GUEST_MAX_CALLS_PER_HOUR_LIMIT}"
+        )
+    invite = value.get("invite", defaults.invite)
+    if type(invite) is not bool:
+        raise ValueError("guest.invite must be a boolean")
+    return GuestConfig(
+        policy=GuestPolicy(policy), max_calls_per_hour=max_calls, invite=invite
+    )
 
 
 def parse_config(text: str) -> LLMChatConfig:
@@ -115,10 +174,22 @@ def parse_config(text: str) -> LLMChatConfig:
         users.append(
             CodexUser(user_id, name, value["codex_enabled"], value["imagegen_enabled"])
         )
+    guest = GuestConfig()
+    if "guest" in data:
+        #: On its own: a bad guest section turns guest mode off, not Codex.
+        try:
+            guest = _parse_guest(data["guest"])
+        except ValueError as exc:
+            logger.error(
+                "Invalid guest section in llm_chat config, so guest mode is off: %s",
+                exc,
+            )
+            guest = GUEST_OFF
     return LLMChatConfig(
         codex_allowed_users=_validate_policy(data[required[0]], required[0]),
         codex_imagegen_allowed_users=_validate_policy(data[required[1]], required[1]),
         codex_users=tuple(users),
+        guest=guest,
     )
 
 
@@ -591,12 +662,8 @@ def update_user_access(user_id: int, capability: str, enabled: bool) -> LLMChatC
                     ),
                 )
             )
-        expected = LLMChatConfig(
-            config.codex_allowed_users,
-            config.codex_imagegen_allowed_users,
-            valid=True,
-            codex_users=tuple(roster),
-        )
+        #: `replace` keeps every other field, so the semantic check holds.
+        expected = dataclasses.replace(config, codex_users=tuple(roster))
         return updated, expected
 
     return _write_config_update(transform)
@@ -618,12 +685,7 @@ def add_user(user_id: int, *, name: Optional[str] = None) -> LLMChatConfig:
             return original, config
         user = CodexUser(user_id, name, False, False)
         updated = _added_user_source(original, user_id, name)
-        expected = LLMChatConfig(
-            config.codex_allowed_users,
-            config.codex_imagegen_allowed_users,
-            valid=True,
-            codex_users=config.codex_users + (user,),
-        )
+        expected = dataclasses.replace(config, codex_users=config.codex_users + (user,))
         return updated, expected
 
     return _write_config_update(transform)

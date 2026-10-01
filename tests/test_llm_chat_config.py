@@ -135,5 +135,61 @@ class LLMChatConfigTests(unittest.TestCase):
         )
 
 
+ROOT = "codex_allowed_users: [1], codex_imagegen_allowed_users: [1]"
+
+
+class GuestConfigTests(unittest.TestCase):
+    def _guest(self, section):
+        return llm_chat_config.parse_config(f"{{{ROOT}, guest: {section}}}").guest
+
+    def test_a_missing_section_means_onboarded_callers(self):
+        config = llm_chat_config.parse_config(f"{{{ROOT}}}")
+
+        self.assertEqual(config.guest, llm_chat_config.GuestConfig())
+        self.assertIs(config.guest.policy, llm_chat_config.GuestPolicy.ONBOARDED)
+
+    def test_a_valid_section_is_read(self):
+        guest = self._guest('{policy: "admins", max_calls_per_hour: 5, invite: false}')
+
+        self.assertEqual(
+            guest,
+            llm_chat_config.GuestConfig(
+                policy=llm_chat_config.GuestPolicy.ADMINS,
+                max_calls_per_hour=5,
+                invite=False,
+            ),
+        )
+        self.assertEqual(self._guest('{policy: "off"}'), llm_chat_config.GUEST_OFF)
+
+    def test_a_malformed_section_turns_only_guest_mode_off(self):
+        for section in (
+            '"onboarded"',
+            '{policy: "everyone"}',
+            '{policy: "admins", typo: 1}',
+            "{max_calls_per_hour: 0}",
+            "{max_calls_per_hour: true}",
+            '{invite: "yes"}',
+        ):
+            with self.subTest(section=section):
+                with self.assertLogs(llm_chat_config.logger, level="ERROR"):
+                    config = llm_chat_config.parse_config(
+                        f"{{{ROOT}, guest: {section}}}"
+                    )
+
+                self.assertTrue(config.valid)
+                self.assertEqual(config.codex_allowed_users, (1,))
+                self.assertEqual(config.guest, llm_chat_config.GUEST_OFF)
+
+    def test_an_unreadable_config_turns_guest_mode_off(self):
+        self.assertEqual(
+            llm_chat_config.DENY_ALL_CONFIG.guest, llm_chat_config.GUEST_OFF
+        )
+
+    def test_the_default_file_parses_with_the_default_guest_policy(self):
+        config = llm_chat_config.parse_config(llm_chat_config.DEFAULT_CONFIG_TEXT)
+
+        self.assertEqual(config.guest, llm_chat_config.GuestConfig())
+
+
 if __name__ == "__main__":
     unittest.main()
