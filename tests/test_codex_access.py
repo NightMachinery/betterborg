@@ -219,7 +219,7 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         ) as set_model:
             asyncio.run(llm_chat.callback_handler(event))
         set_model.assert_not_called()
-        event.answer.assert_awaited_with(llm_chat.CODEX_ACCESS_DENIED, show_alert=True)
+        event.answer.assert_awaited_with(llm_chat.CODEX_ACCESS_DENIED, alert=True)
 
     def test_revoked_stale_model_menu_cannot_change_codex_reasoning(self):
         event = Event()

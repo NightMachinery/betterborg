@@ -431,7 +431,7 @@ class ModelMenuCancelTests(_IsolatedStateTest):
             with self.subTest(data=data):
                 press = _press(data, chat_id=GROUP_CHAT_ID, is_private=False)
                 asyncio.run(plugin.callback_handler(press))
-                self.assertTrue(press.answer.await_args.kwargs["show_alert"])
+                self.assertTrue(press.answer.await_args.kwargs["alert"])
                 press.edit.assert_not_awaited()
         self.assertIn(USER_ID, self.pending)
 

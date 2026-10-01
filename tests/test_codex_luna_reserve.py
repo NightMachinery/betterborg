@@ -312,7 +312,7 @@ class LunaReserveButtonTests(unittest.TestCase):
             asyncio.run(plugin._answer_from_luna_reserve(event, message_id=99))
 
         handler.assert_not_awaited()
-        self.assertTrue(event.answer.await_args.kwargs["show_alert"])
+        self.assertTrue(event.answer.await_args.kwargs["alert"])
 
 
 def _usage_with_reserve(*, allowed=True):

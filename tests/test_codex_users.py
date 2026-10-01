@@ -473,7 +473,7 @@ class CodexUsersTests(unittest.TestCase):
             asyncio.run(llm_chat.callback_handler(event))
         update.assert_not_called()
         event.answer.assert_awaited_with(
-            llm_chat.ADMIN_ONLY_COMMAND_IGNORED, show_alert=True
+            llm_chat.ADMIN_ONLY_COMMAND_IGNORED, alert=True
         )
 
     def test_enabling_images_does_not_enable_codex(self):
@@ -534,7 +534,7 @@ class CodexUsersTests(unittest.TestCase):
                 if error is None and cfg.codex_users and not entity.is_self:
                     self.fail("case should be rejected or raise an update error")
                 if error is not None:
-                    event.answer.assert_awaited_with("write failed", show_alert=True)
+                    event.answer.assert_awaited_with("write failed", alert=True)
                 else:
                     update.assert_not_called()
 
@@ -559,7 +559,7 @@ class CodexUsersTests(unittest.TestCase):
         ):
             asyncio.run(llm_chat.callback_handler(event))
         self.assertEqual(len(event.answer.await_args.args[0]), 200)
-        self.assertTrue(event.answer.await_args.kwargs["show_alert"])
+        self.assertTrue(event.answer.await_args.kwargs["alert"])
 
     def test_pagination_and_callback_lengths(self):
         users = [
@@ -768,7 +768,7 @@ class CodexUsersTests(unittest.TestCase):
                     asyncio.run(llm_chat.callback_handler(event))
                 set_thinking.assert_not_called()
                 event.answer.assert_awaited_with(
-                    "This Codex user menu is invalid or stale.", show_alert=True
+                    "This Codex user menu is invalid or stale.", alert=True
                 )
 
     def test_unauthorized_effort_callback_does_not_read_target_preferences(self):
@@ -1552,7 +1552,7 @@ class CodexUsersTests(unittest.TestCase):
                 await task
             add.assert_not_called()
             confirm.answer.assert_awaited_with(
-                "This add-user confirmation is stale.", show_alert=True
+                "This add-user confirmation is stale.", alert=True
             )
 
         asyncio.run(scenario())
@@ -1720,7 +1720,7 @@ class CodexUsersTests(unittest.TestCase):
         stale.data = b"cu:add:yes:wrong"
         asyncio.run(llm_chat.callback_handler(stale))
         stale.answer.assert_awaited_with(
-            "This add-user confirmation is stale.", show_alert=True
+            "This add-user confirmation is stale.", alert=True
         )
         self.assertIn((900, 901), llm_chat.CODEX_USERS_ADD_PENDING)
 
@@ -1784,7 +1784,7 @@ class CodexUsersTests(unittest.TestCase):
         ):
             asyncio.run(llm_chat.callback_handler(event))
         event.answer.assert_awaited_with(
-            llm_chat.ADMIN_ONLY_COMMAND_IGNORED, show_alert=True
+            llm_chat.ADMIN_ONLY_COMMAND_IGNORED, alert=True
         )
         event.respond.assert_not_awaited()
 
@@ -1799,7 +1799,7 @@ class CodexUsersTests(unittest.TestCase):
             asyncio.run(llm_chat.callback_handler(event))
         event.respond.assert_not_awaited()
         event.answer.assert_awaited_with(
-            "The LLM chat access configuration is invalid.", show_alert=True
+            "The LLM chat access configuration is invalid.", alert=True
         )
 
     def test_unknown_numeric_bot_id_is_rejected(self):
@@ -1823,7 +1823,7 @@ class CodexUsersTests(unittest.TestCase):
         wrong_chat.data = b"cu:add:cancel:right"
         asyncio.run(llm_chat.callback_handler(wrong_chat))
         wrong_chat.answer.assert_awaited_with(
-            "This add-user prompt is stale.", show_alert=True
+            "This add-user prompt is stale.", alert=True
         )
         self.assertIn((900, 901), llm_chat.CODEX_USERS_ADD_PENDING)
 
@@ -1923,7 +1923,7 @@ class CodexUsersTests(unittest.TestCase):
                 await task
             add.assert_not_called()
             confirm.answer.assert_awaited_with(
-                "This add-user confirmation is stale.", show_alert=True
+                "This add-user confirmation is stale.", alert=True
             )
 
         asyncio.run(scenario())
@@ -1973,7 +1973,7 @@ class CodexUsersTests(unittest.TestCase):
                 await task
             add.assert_called_once_with(123)
             second.answer.assert_awaited_with(
-                "This add-user confirmation is stale.", show_alert=True
+                "This add-user confirmation is stale.", alert=True
             )
 
         asyncio.run(scenario())

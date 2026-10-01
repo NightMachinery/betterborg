@@ -2728,14 +2728,14 @@ async def _model_menu_cancel_handler(event, *, scope: str):
             await event.answer(
                 "You must be a group admin or bot admin to change this chat's"
                 " settings.",
-                show_alert=True,
+                alert=True,
             )
             return
     elif scope == REASONING_SCOPE_PERSONAL:
         pass
     else:
         #: Wire input from a button: an unknown scope is answered, not raised.
-        await event.answer("This menu is invalid.", show_alert=True)
+        await event.answer("This menu is invalid.", alert=True)
         return
 
     cancel_menu_input_flows(
@@ -7494,7 +7494,7 @@ async def _start_codex_user_add(event):
     key = _codex_add_key(event)
     pending = CODEX_USERS_ADD_PENDING.get(key)
     if pending is not None:
-        await event.answer("An add-user prompt is already open.", show_alert=True)
+        await event.answer("An add-user prompt is already open.", alert=True)
         return
     token = secrets.token_urlsafe(12)
     private = bool(getattr(event, "is_private", False))
@@ -8351,7 +8351,7 @@ async def _answer_from_luna_reserve(event, *, message_id: int) -> None:
     """
     source = await borg.get_messages(event.chat_id, ids=message_id)
     if source is None:
-        await event.answer("That message is no longer available.", show_alert=True)
+        await event.answer("That message is no longer available.", alert=True)
         return
 
     await event.answer("Answering from the Luna Reserve…")
@@ -9170,12 +9170,12 @@ async def callback_handler(event):
         parts = data_str.split(":")
         if parts == ["cu", "add"]:
             if not await _codex_users_admin(event):
-                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, alert=True)
                 return
             config = llm_chat_config.load_config()
             if not config.valid:
                 await event.answer(
-                    "The LLM chat access configuration is invalid.", show_alert=True
+                    "The LLM chat access configuration is invalid.", alert=True
                 )
                 return
             await _start_codex_user_add(event)
@@ -9185,7 +9185,7 @@ async def callback_handler(event):
             if pending is None or not secrets.compare_digest(
                 pending["token"], parts[3]
             ):
-                await event.answer("This add-user prompt is stale.", show_alert=True)
+                await event.answer("This add-user prompt is stale.", alert=True)
                 return
             CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
             await event.answer("Add-user flow cancelled")
@@ -9209,26 +9209,22 @@ async def callback_handler(event):
                 or pending.get("phase") != "confirm"
                 or not secrets.compare_digest(pending["token"], parts[3])
             ):
-                await event.answer(
-                    "This add-user confirmation is stale.", show_alert=True
-                )
+                await event.answer("This add-user confirmation is stale.", alert=True)
                 return
             pending["phase"] = "confirming"
             if not await _codex_users_admin(event):
                 if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is pending:
                     CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
-                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, alert=True)
                 return
             if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is not pending:
-                await event.answer(
-                    "This add-user confirmation is stale.", show_alert=True
-                )
+                await event.answer("This add-user confirmation is stale.", alert=True)
                 return
             config = llm_chat_config.load_config()
             if not config.valid:
                 CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
                 await event.answer(
-                    "The LLM chat access configuration is invalid.", show_alert=True
+                    "The LLM chat access configuration is invalid.", alert=True
                 )
                 return
             target_id = pending["target_id"]
@@ -9237,14 +9233,14 @@ async def callback_handler(event):
                 CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
                 await event.answer(
                     "Bot administrators cannot be added to the explicit-user roster.",
-                    show_alert=True,
+                    alert=True,
                 )
                 return
             if target_id in _codex_user_ids(config):
                 CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
                 if not await _show_codex_user_detail(event, target_id, edit=True):
                     await event.answer(
-                        "That existing user can no longer be opened.", show_alert=True
+                        "That existing user can no longer be opened.", alert=True
                     )
                     return
                 await event.answer(
@@ -9255,23 +9251,23 @@ async def callback_handler(event):
                 checked_id, _, error = await _resolve_codex_add_target(str(target_id))
                 if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is not pending:
                     await event.answer(
-                        "This add-user confirmation is stale.", show_alert=True
+                        "This add-user confirmation is stale.", alert=True
                     )
                     return
                 if error or checked_id != target_id:
                     CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
                     await event.answer(
-                        error or "The target identity changed.", show_alert=True
+                        error or "The target identity changed.", alert=True
                     )
                     return
                 if not await _codex_users_admin(event):
                     if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is pending:
                         CODEX_USERS_ADD_PENDING.pop(_codex_add_key(event), None)
-                    await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                    await event.answer(ADMIN_ONLY_COMMAND_IGNORED, alert=True)
                     return
                 if CODEX_USERS_ADD_PENDING.get(_codex_add_key(event)) is not pending:
                     await event.answer(
-                        "This add-user confirmation is stale.", show_alert=True
+                        "This add-user confirmation is stale.", alert=True
                     )
                     return
                 # Claim the mutation synchronously. Cancellation and a second
@@ -9282,19 +9278,19 @@ async def callback_handler(event):
                 except llm_chat_config.ConfigUpdateError as exc:
                     await event.answer(
                         _truncate_utf16(str(exc) or "Could not add user.", 200),
-                        show_alert=True,
+                        alert=True,
                     )
                     return
             if not await _show_codex_user_detail(event, target_id, edit=True):
                 await event.answer(
                     "The user was added, but the panel could not be refreshed.",
-                    show_alert=True,
+                    alert=True,
                 )
                 return
             await event.answer(f"User {target_id} is in the roster; opened settings")
             return
         if not await _codex_users_admin(event):
-            await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+            await event.answer(ADMIN_ONLY_COMMAND_IGNORED, alert=True)
             return
         try:
             if parts == ["cu", "no"]:
@@ -9340,7 +9336,7 @@ async def callback_handler(event):
                     error_text = str(exc) or "Could not update the Codex user roster."
                     await event.answer(
                         error_text[:200],
-                        show_alert=True,
+                        alert=True,
                     )
                     return
                 if not await _show_codex_user_detail(event, target_id, edit=True):
@@ -9391,7 +9387,7 @@ async def callback_handler(event):
                 return
         except (ValueError, OverflowError):
             pass
-        await event.answer("This Codex user menu is invalid or stale.", show_alert=True)
+        await event.answer("This Codex user menu is invalid or stale.", alert=True)
         return
 
     if data_str.startswith(CODEX_QUOTA_CALLBACK_PREFIX):
@@ -9399,16 +9395,16 @@ async def callback_handler(event):
         #: Owner and deadline travel in the payload, so both checks survive a
         #: restart and need no server-side record of the panel.
         if len(parts) < 3 or not parts[2].lstrip("-").isdigit():
-            await event.answer("This quota panel is invalid.", show_alert=True)
+            await event.answer("This quota panel is invalid.", alert=True)
             return
         if int(parts[2]) != user_id:
-            await event.answer("This panel belongs to another user.", show_alert=True)
+            await event.answer("This panel belongs to another user.", alert=True)
             return
 
         action = parts[1]
         if action == "r":
             if len(parts) != 4 or not parts[3].lstrip("-").isdigit():
-                await event.answer("This quota panel is invalid.", show_alert=True)
+                await event.answer("This quota panel is invalid.", alert=True)
                 return
             await _answer_from_luna_reserve(event, message_id=int(parts[3]))
             return
@@ -9421,14 +9417,14 @@ async def callback_handler(event):
                     if current is not None
                     else "That stand-in is no longer active."
                 ),
-                show_alert=True,
+                alert=True,
             )
             return
         if action == "u":
             feedback = _apply_codex_quota_choice(user_id, key="")
         elif action == "s":
             if len(parts) != 5 or not parts[4].lstrip("-").isdigit():
-                await event.answer("This quota panel is invalid.", show_alert=True)
+                await event.answer("This quota panel is invalid.", alert=True)
                 return
             candidate = next(
                 (
@@ -9439,7 +9435,7 @@ async def callback_handler(event):
                 None,
             )
             if candidate is None:
-                await event.answer("That option is no longer offered.", show_alert=True)
+                await event.answer("That option is no longer offered.", alert=True)
                 return
             if not candidate.usable_p:
                 await event.answer(
@@ -9450,18 +9446,16 @@ async def callback_handler(event):
                         else f"{_model_display_name(candidate.model)} is not"
                         " available right now."
                     ),
-                    show_alert=True,
+                    alert=True,
                 )
                 return
             try:
                 deadline = datetime.fromtimestamp(int(parts[4]), tz=timezone.utc)
             except (OverflowError, OSError, ValueError):
-                await event.answer("This quota panel is invalid.", show_alert=True)
+                await event.answer("This quota panel is invalid.", alert=True)
                 return
             if deadline <= datetime.now(timezone.utc):
-                await event.answer(
-                    "That quota window has already passed.", show_alert=True
-                )
+                await event.answer("That quota window has already passed.", alert=True)
                 deadline = None
             if deadline is not None:
                 feedback = _apply_codex_quota_choice(
@@ -9470,7 +9464,7 @@ async def callback_handler(event):
             else:
                 feedback = None
         else:
-            await event.answer("This quota panel is invalid.", show_alert=True)
+            await event.answer("This quota panel is invalid.", alert=True)
             return
 
         panel = _codex_quota_panel(
@@ -9498,22 +9492,20 @@ async def callback_handler(event):
                 event.chat_id, user_id, scope=REASONING_SCOPE_PERSONAL
             )
             if not await _can_user_access_model(event, selected_model, config=config):
-                await event.answer(
-                    _model_access_denial(selected_model), show_alert=True
-                )
+                await event.answer(_model_access_denial(selected_model), alert=True)
                 return
             feedback = await _apply_reasoning_menu_choice(
                 event, scope=REASONING_SCOPE_PERSONAL, level_key=level_key
             )
             if feedback is None:
-                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, alert=True)
                 return
         else:
             model_choices = _model_choices_for_access(admin_p=admin_p, codex_p=codex_p)
             if model_id not in model_choices or not await _can_user_access_model(
                 event, model_id, config=config
             ):
-                await event.answer(_model_access_denial(model_id), show_alert=True)
+                await event.answer(_model_access_denial(model_id), alert=True)
                 return
             _apply_personal_model_choice(user_id, model_id)
             cancel_input_flow(user_id)  # Cancel the custom input flow
@@ -9541,7 +9533,7 @@ async def callback_handler(event):
             await event.answer(
                 "You must be a group admin or bot admin to change this chat's"
                 " settings.",
-                show_alert=True,
+                alert=True,
             )
             return
 
@@ -9550,15 +9542,13 @@ async def callback_handler(event):
                 chat_id, user_id, scope=REASONING_SCOPE_CHAT
             )
             if not await _can_user_access_model(event, selected_model, config=config):
-                await event.answer(
-                    _model_access_denial(selected_model), show_alert=True
-                )
+                await event.answer(_model_access_denial(selected_model), alert=True)
                 return
             feedback_msg = await _apply_reasoning_menu_choice(
                 event, scope=REASONING_SCOPE_CHAT, level_key=level_key
             )
             if feedback_msg is None:
-                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, show_alert=True)
+                await event.answer(ADMIN_ONLY_COMMAND_IGNORED, alert=True)
                 return
         else:
             chat_model_options = _chat_model_options_for_access(
@@ -9567,7 +9557,7 @@ async def callback_handler(event):
             if model_id not in chat_model_options or not await _can_user_access_model(
                 event, model_id, config=config
             ):
-                await event.answer(_model_access_denial(model_id), show_alert=True)
+                await event.answer(_model_access_denial(model_id), alert=True)
                 return
             # Handle "Not Set" option (empty string means remove chat-specific model)
             if model_id == "":
@@ -9601,19 +9591,19 @@ async def callback_handler(event):
                 await event.answer(
                     "You must be a group admin or bot admin to change this chat's"
                     " reasoning effort.",
-                    show_alert=True,
+                    alert=True,
                 )
                 return
 
         level = data_str.split("_", 1)[1]
         state = _think_menu_state(event.chat_id, user_id, scope=scope)
         if not await _can_user_access_model(event, state.model, config=config):
-            await event.answer(_model_access_denial(state.model), show_alert=True)
+            await event.answer(_model_access_denial(state.model), alert=True)
             return
         if level != REASONING_CLEAR_KEY and not state.spec.supports_level_p(level):
             await event.answer(
                 f"{level} is not supported by {_model_display_name(state.model)}.",
-                show_alert=True,
+                alert=True,
             )
             return
 
@@ -9842,7 +9832,7 @@ async def callback_handler(event):
         is_group_admin = await util.is_group_admin(event)
 
         if not event.is_private and not (is_bot_admin or is_group_admin):
-            await event.answer("Admin access required.", show_alert=True)
+            await event.answer("Admin access required.", alert=True)
             return
 
         chat_manager.set_tts_voice_override(event.chat_id, voice if voice else None)
