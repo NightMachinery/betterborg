@@ -333,7 +333,7 @@ done</code></pre>
 <p><b>Fork.</b> For a plain <code>.a</code>, a free shell in the pool forks: it makes a throwaway copy of itself, and the command runs in the copy. A <code>cd</code>, a variable or a function that the command sets is gone when it ends, and the next command starts clean. <code>.af</code> skips the fork, and <code>.aa</code> skips the pool altogether (see <a href="#commands">Commands</a>).</p>
 <p>When every shell in the pool is busy, a new command waits until one is free.</p>
 <p>Before each command, the shell changes into the scratch directory and sets the variable <code>$jd</code> to its path. If the shell has a function named <code>jinit</code>, it calls it there. Every pool shell has the environment variable <code>JBRISH=y</code>, so startup files can tell that they are serving the bot.</p>
-<p>There is no way to send input to a running command, so programs that wait for typing (editors, pagers, password prompts) do not work.</p>
+<p>There is no way to send input to a running command, so programs that wait for typing (editors, pagers, password prompts) do not work. Under <code>.aa</code> the command's input is empty, so such a program reaches the end of its input at once and usually exits instead of waiting.</p>
 </div>
 </details>
 

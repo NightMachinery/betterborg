@@ -141,6 +141,22 @@ class CaptureTests(unittest.TestCase):
 
         self.assertEqual(result, util.CommandResult(output="outerr", retcode=3))
 
+    def test_simple_run_capture_gives_the_command_no_input(self):
+        read_end, write_end = os.pipe()
+        os.write(write_end, b"leaked")
+        os.close(write_end)
+        saved_stdin = os.dup(0)
+        os.dup2(read_end, 0)
+        os.close(read_end)
+        try:
+            with tempfile.TemporaryDirectory() as cwd:
+                result = asyncio.run(util.simple_run_capture(cwd=cwd, command="cat"))
+        finally:
+            os.dup2(saved_stdin, 0)
+            os.close(saved_stdin)
+
+        self.assertEqual(result, util.CommandResult(output="", retcode=0))
+
     def test_brishz_capture_reads_the_brish_result(self):
         calls = []
 

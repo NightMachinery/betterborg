@@ -736,13 +736,18 @@ class CommandResult:
 
 
 async def simple_run_capture(*, cwd, command, shell=True) -> CommandResult:
-    """Runs `command` (through zsh when `shell`) in `cwd` and captures it."""
+    """Runs `command` (through zsh when `shell`) in `cwd` and captures it.
+
+    Its input is empty: the bot's own stdin is no one's to type into, and a
+    command reading it would wait forever.
+    """
     sp = await subprocess_aio.run(
         command,
         shell=shell,
         cwd=cwd,
         text=True,
         executable="zsh" if shell else None,
+        stdin=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
         stdout=subprocess.PIPE,
     )
