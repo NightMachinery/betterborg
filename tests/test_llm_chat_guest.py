@@ -1132,7 +1132,7 @@ class GuestThreadStoreTests(unittest.TestCase):
             2 * plugin.GUEST_THREAD_MAX_RECORDS, plugin.HISTORY_MESSAGE_LIMIT
         )
 
-    def test_answer_chain_follows_parents_oldest_first_within_the_limit(self):
+    def test_answer_chain_follows_parents_oldest_first(self):
         records = [
             {"id": "c", "parent": "b"},
             {"id": "b", "parent": "a"},
@@ -1143,9 +1143,13 @@ class GuestThreadStoreTests(unittest.TestCase):
             [r["id"] for r in guest_util.answer_chain(records, records[0])],
             ["a", "b", "c"],
         )
+
+    def test_answer_chain_stops_at_a_cycle(self):
+        records = [{"id": "b", "parent": "a"}, {"id": "a", "parent": "b"}]
+
         self.assertEqual(
-            [r["id"] for r in guest_util.answer_chain(records, records[0], limit=2)],
-            ["b", "c"],
+            [r["id"] for r in guest_util.answer_chain(records, records[0])],
+            ["a", "b"],
         )
 
 

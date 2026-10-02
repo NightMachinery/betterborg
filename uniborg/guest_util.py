@@ -711,14 +711,11 @@ def find_answer(
     return None if best is None else best[1]
 
 
-def answer_chain(records: list, record: dict, *, limit: Optional[int] = None) -> list:
-    """`record` and the records it continued, oldest first.
-
-    At most `limit` records; None means no limit.
-    """
+def answer_chain(records: list, record: dict) -> list:
+    """`record` and the records it continued, oldest first."""
     by_id = {r["id"]: r for r in records}
     chain = [record]
-    while limit is None or len(chain) < limit:
+    while True:
         parent = by_id.get(chain[-1].get("parent"))
         if parent is None or parent in chain:
             break
