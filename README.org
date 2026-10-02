@@ -143,7 +143,8 @@ Telegram refuses drafts there. See
 ** Guest mode
 The bots answer where they are mentioned, even in chats they are not in.
 =@bot .a CMD= runs a shell command for an admin, with any files sent to the
-caller's DM; =@vlm_chat_bot question= answers with the caller's own model and
+caller's DM (see the
+[[https://nightmachinery.github.io/betterborg/telegram_remote_shell/#guest][shell guide]]); =@vlm_chat_bot question= answers with the caller's own model and
 API key, can generate images into its answer, and replies to the answer
 continue the exchange, media included; =@llm_stt_bot= in a
 reply to a voice note posts its transcript. The flow, the safety rules (never
