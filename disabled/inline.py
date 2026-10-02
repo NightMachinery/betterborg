@@ -18,8 +18,8 @@ Dropped with it:
 
 It is written for python-telegram-bot 13 (`telegram.ParseMode`,
 `telegram.utils.helpers`, `Updater(use_context=True)`), so it no longer
-imports on 20.x. It is a standalone script, not a borg plugin, kept here in
-`disabled_plugins/` for reference.
+imports on 20.x. It is a standalone script, not a borg plugin, so it is kept
+in `disabled/` rather than `disabled_plugins/`.
 """
 import logging
 import os

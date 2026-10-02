@@ -27,7 +27,8 @@
 - **`image_gen_plugins/`**: Image generation plugins
 - **`papersonegai_plugins/`**: Research/papers integration
 - **`jlib_plugins/`**: Java library integration
-- **`disabled_plugins/`**: Inactive plugins, and `inline.py`, the deprecated Bot API inline bot (python-telegram-bot 13, a standalone script, not a plugin), which guest mode in `stdplugins/advanced_get.py` replaces
+- **`disabled_plugins/`**: Inactive plugins
+- **`disabled/`**: Retired standalone scripts that are not plugins, such as `inline.py`, the deprecated Bot API inline bot (python-telegram-bot 13), which guest mode in `stdplugins/advanced_get.py` replaces
 
 ## Plugin Architecture
 - Plugins get automatic injection of `borg`, `logger`, `storage` variables
