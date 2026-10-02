@@ -1,8 +1,7 @@
 * betterborg
-The crust of this fork is the advanced_get plugin, which gives you a unix shell in Telegram, with the ability to exchange files. I'll update the README when I have the time to document it.
-Its user guide is at [[https://nightmachinery.github.io/betterborg/telegram_remote_shell/][nightmachinery.github.io/betterborg/telegram_remote_shell]]; how that site is published is in [[file:docs/pages.md][docs/pages.md]].
+The crust of this fork is the advanced_get plugin, which gives you a unix shell in Telegram, with the ability to exchange files. Its user guide is at [[https://nightmachinery.github.io/betterborg/telegram_remote_shell/][nightmachinery.github.io/betterborg/telegram_remote_shell]]; how that site is published is in [[file:docs/pages.md][docs/pages.md]].
 
-Needs Python 3.7.2+.
+Needs Python 3.10+.
 
 * Public Instances of Bots
 ** [[https://t.me/llm_stt_bot][Transcribe!]]
@@ -95,7 +94,7 @@ sudo apt-get install -y coreutils fzf zsh python3
 mkdir -p ~/code
 cd ~/code
 
-git clone 'https://github.com/NightMachinary/betterborg.git'
+git clone 'https://github.com/NightMachinery/betterborg.git'
 cd betterborg
 
 pip3 install -r requirements.txt
