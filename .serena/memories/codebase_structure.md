@@ -3,7 +3,6 @@
 ## Entry Points
 - **`stdborg.py`**: Main entry point with standalone mode and FastAPI integration
 - **`start_server.py`**: Server mode startup script
-- **`inline.py`**: Deprecated Bot API inline bot (python-telegram-bot 13); guest mode in `stdplugins/advanced_get.py` replaces it
 
 ## Core Architecture
 
@@ -28,7 +27,7 @@
 - **`image_gen_plugins/`**: Image generation plugins
 - **`papersonegai_plugins/`**: Research/papers integration
 - **`jlib_plugins/`**: Java library integration
-- **`disabled_plugins/`**: Inactive plugins
+- **`disabled_plugins/`**: Inactive plugins, and `inline.py`, the deprecated Bot API inline bot (python-telegram-bot 13, a standalone script, not a plugin), which guest mode in `stdplugins/advanced_get.py` replaces
 
 ## Plugin Architecture
 - Plugins get automatic injection of `borg`, `logger`, `storage` variables
