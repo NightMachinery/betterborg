@@ -64,7 +64,7 @@ def _load_plugin(borg):
         util.borg = previous
 
 
-def _query(text, *, caller=ADMIN, entities=None):
+def _query(text, *, caller=ADMIN, entities=None, reference_grouped_id=None):
     trigger = types.Message(
         id=10,
         peer_id=types.PeerUser(STRANGER),
@@ -75,7 +75,21 @@ def _query(text, *, caller=ADMIN, entities=None):
         entities=entities,
     )
     client = SimpleNamespace(_self_id=BOT_ID, _mb_entity_cache=EntityCache())
-    update = SimpleNamespace(query_id=77, message=trigger, reference_messages=[])
+    references = []
+    if reference_grouped_id is not None:
+        references.append(
+            types.Message(
+                id=9,
+                peer_id=types.PeerUser(STRANGER),
+                date=NOW,
+                message="",
+                from_id=types.PeerUser(STRANGER),
+                grouped_id=reference_grouped_id,
+            )
+        )
+    update = SimpleNamespace(
+        query_id=77, message=trigger, reference_messages=references
+    )
     update._entities = {caller: types.User(id=caller, first_name="C")}
     return guest_util.guest_query_from_update(update, client=client)
 
@@ -173,6 +187,16 @@ class GuestShellTests(unittest.TestCase):
         self.assertIsNone(final.get("parse_mode"))
         self.assertEqual(self.uploads, [])
         self.assertEqual(list(Path(self.dl_base).iterdir()), [])
+
+    def test_a_reply_to_an_album_item_says_only_that_item_was_fetched(self):
+        self._run(
+            _query(f"@{BOT_USERNAME} .aa printf 'hi there'", reference_grouped_id=7)
+        )
+
+        (final,) = self.edits
+        self.assertEqual(
+            final["text"], f"hi there\n\n{guest_util.ALBUM_REFERENCE_NOTE}"
+        )
 
     def test_a_nonzero_exit_and_empty_output_are_reported(self):
         self._run(_query(f"@{BOT_USERNAME} .aa exit 3"))

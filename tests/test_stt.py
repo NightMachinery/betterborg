@@ -299,7 +299,7 @@ def _voice():
     )
 
 
-def _query(text, *, reference_media=None, query_id=1):
+def _query(text, *, reference_media=None, reference_grouped_id=None, query_id=1):
     client = SimpleNamespace(
         _self_id=BOT_ID, _mb_entity_cache=EntityCache(), parse_mode=None
     )
@@ -318,6 +318,7 @@ def _query(text, *, reference_media=None, query_id=1):
         message="",
         from_id=types.PeerUser(OTHER),
         media=reference_media,
+        grouped_id=reference_grouped_id,
     )
     update = SimpleNamespace(
         query_id=query_id, message=trigger, reference_messages=[reference]
@@ -563,6 +564,21 @@ class GuestSttTests(unittest.TestCase):
         ((job, user_id),) = self.jobs
         self.assertEqual((job.api_key, user_id), ("caller-key", CALLER))
         self.assertEqual(self.edits, [{"text": "hello", "parse_mode": "md"}])
+
+    def test_a_voice_note_of_an_album_says_only_it_was_transcribed(self):
+        self.run_query(
+            _query(f"@{BOT_USERNAME}", reference_media=_voice(), reference_grouped_id=7)
+        )
+
+        self.assertEqual(
+            self.edits,
+            [
+                {
+                    "text": f"hello\n\n{guest_util.ALBUM_REFERENCE_NOTE}",
+                    "parse_mode": "md",
+                }
+            ],
+        )
 
     def test_a_long_transcript_ends_as_rich_markdown(self):
         self.transcript = "word " * 2000

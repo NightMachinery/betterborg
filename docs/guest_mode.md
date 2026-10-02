@@ -120,8 +120,10 @@ Each rule is enforced in code; this is why.
   It registers nothing on a user account or on a Telethon without guest
   types, and the callback takes the handler's module name, so a plugin reload
   removes it.
-- `GuestQuery`: `query_id`, `trigger`, `references`, `messages` (references
-  then trigger), `caller_id`, `chat_kind` (`ChatKind.PRIVATE` or `GROUP`),
+- `GuestQuery`: `query_id`, `trigger`, `references`, `album_items` (the
+  rest of the trigger's album, when `AlbumBatcher` folded its queries in),
+  `triggers` (the trigger and `album_items`, in order), `messages`
+  (references then triggers), `caller_id`, `chat_kind` (`ChatKind.PRIVATE` or `GROUP`),
   `thread_key` (`pair:<lo>:<hi>` of the two users in a private chat, which
   does not flip with who summons; `chat:<id>` in a group), `text`, `client`.
   Rich messages (the Premium editor, our own rich answers) read as the
@@ -141,6 +143,12 @@ Each rule is enforced in code; this is why.
   (a record and the ones it continued, oldest first). Every bound guest
   message carries its fingerprint (`fingerprint_of`), taken before a handler
   strips the mention.
+- Albums: `AlbumBatcher().collect(query, prefer=…)` folds the queries of one
+  album (same thread, caller and `grouped_id`) into the first, which waits
+  until a second passes with no new item (5 s at most), and returns None for
+  the others. The lead is the first query `prefer` accepts, else the
+  earliest item. `album_note(query)` is the line an answer ends with when an
+  album item came without the rest of its album.
 - `CallLimiter(backend=redis_counter_backend(redis_util.get_redis))`:
   `await limiter.allow(key, limit=n)` counts a call and says whether it is
   within `n` per hour. Windows follow the wall clock, so Redis (keys under
@@ -178,7 +186,9 @@ dropped, never run late.
   fails, including `DeliveryUnknownError`, the command does not run: it must
   not run unseen, or twice.
 - **Media**: the trigger's and the reference's files are downloaded into the
-  command's working directory, as with `.a` on a reply.
+  command's working directory, as with `.a` on a reply. Of an album, only
+  the item replied to arrives, and the answer's footer says so
+  (`album_note`).
 - **The answer** is the output as plain text, as `.a` sends it, cut to fit
   one message and followed by the exit code when it is not 0. Empty output
   reads "The process exited N.". An exception becomes the traceback.
@@ -215,6 +225,14 @@ chat. The handler keeps queries for at most 120 seconds.
 - **What it reads**: the trigger, with the mention removed, and the reference.
   Nothing else of the chat. A reply quote that would need a fetch is dropped,
   since `GuestClient` refuses the fetch.
+- **An album is one call.** An album sent as a reply to a guest answer
+  brings one query per item, in the same second. `AlbumBatcher` answers the
+  first (the item that mentions the bot, if any, else the earliest) with
+  every item, and leaves the others unanswered; they expire. A reference that
+  is an album item comes alone: Telegram sends no other item of it, and
+  nothing may fetch them, so the answer ends with a line saying so
+  (`album_note`), as it does for an album item that arrived as the trigger
+  with no other item. The line is not stored with the answer.
 - **Replies continue the exchange.** Each final answer is stored as a
   *record*: the turns it answered, the record it continued (`parent`), the
   caller's id, and a fingerprint of each message its turns hold (our own
@@ -312,6 +330,8 @@ own Gemini key. Media in the trigger itself counts too.
   which rich Markdown would read as bold. A longer transcript ends as rich
   Markdown, cut at 32000 UTF-8 bytes; if Telegram refuses that, as classic
   Markdown cut to one message.
+- **Of an album, only the item replied to arrives**, and the transcript
+  ends with a line saying so (`album_note`).
 - **Guest transcripts are not logged**, unlike private ones
   (`~/.borg/stt/log/`): they are other people's media.
 - The same checks as in a private chat (`prepare_stt_job`) come after the

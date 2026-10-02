@@ -96,8 +96,12 @@ def _query(
     reference_date=None,
     reference_via_guest=False,
     reference_edited=False,
+    reference_grouped_id=None,
     query_id=1,
+    trigger_id=20,
     trigger_photo=None,
+    photo_id=55,
+    grouped_id=None,
 ):
     client = SimpleNamespace(
         _self_id=BOT_ID, _mb_entity_cache=EntityCache(), parse_mode=None
@@ -105,16 +109,17 @@ def _query(
     #: The chat as the caller sees it: in a private chat, the other person.
     chat = chat or types.PeerUser(OTHER)
     trigger = types.Message(
-        id=20,
+        id=trigger_id,
         peer_id=chat,
         date=NOW,
         message=text,
         from_id=types.PeerUser(caller),
         out=True,
+        grouped_id=grouped_id,
         media=(
             types.MessageMediaPhoto(
                 photo=types.Photo(
-                    id=55,
+                    id=photo_id,
                     access_hash=1,
                     file_reference=b"",
                     date=NOW,
@@ -133,6 +138,7 @@ def _query(
             peer_id=chat,
             date=reference_date or NOW,
             edit_date=NOW if reference_edited else None,
+            grouped_id=reference_grouped_id,
             message=reference_text,
             from_id=(
                 types.PeerUser(reference_from) if reference_from is not None else None
@@ -162,7 +168,7 @@ def _query(
     if trigger_photo is not None:
 
         async def download_media(file):
-            path = Path(file) / "photo.png"
+            path = Path(file) / f"photo{photo_id}.png"
             path.write_bytes(trigger_photo)
             return str(path)
 
@@ -245,12 +251,22 @@ class _GuestTestCase(unittest.TestCase):
             (plugin, "_guest_claims", guest_util.QueryClaims()),
             (plugin, "_guest_limiter", guest_util.CallLimiter()),
             (plugin, "_guest_threads", guest_util.GuestThreadStore()),
+            (plugin, "_guest_albums", guest_util.AlbumBatcher(wait_seconds=0.01)),
             (plugin, "_guest_media", self.media),
         ):
             stack.enter_context(patch.object(target, name, value))
 
     def run_query(self, query):
         asyncio.run(plugin.guest_chat_handler(query))
+        self.assertEqual(self.borg.forbidden, [])
+
+    def run_queries(self, *queries):
+        """Runs QUERIES at once, as an album's queries arrive."""
+
+        async def run():
+            await asyncio.gather(*(plugin.guest_chat_handler(q) for q in queries))
+
+        asyncio.run(run())
         self.assertEqual(self.borg.forbidden, [])
 
     def request(self):
@@ -633,8 +649,8 @@ class SeenMessageContinuationTests(_GuestTestCase):
         self.assertEqual([r["id"] for r in kept], ["3", "4"])
 
 
-class MediaContinuationTests(_GuestTestCase):
-    """A reply brings back the media of its exchange, from the store on disk."""
+class _MediaTestCase(_GuestTestCase):
+    """Turns media into model parts without python-magic or the history cache."""
 
     answer_text = "A dot."
 
@@ -650,6 +666,72 @@ class MediaContinuationTests(_GuestTestCase):
             patcher = patch.object(target, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+
+
+class AlbumTests(_MediaTestCase):
+    """An album sends a query per item; a reply to an item brings that item alone."""
+
+    def test_an_album_sent_as_a_reply_to_the_answer_gets_one_answer(self):
+        self.run_query(_query(f"{BOT_USERNAME} hi", query_id=1))
+        replied_at = datetime.datetime.now(datetime.timezone.utc)
+
+        self.run_queries(
+            *(
+                _query(
+                    "",
+                    reference_text=self.answer_text,
+                    reference_from=BOT_ID,
+                    reference_date=replied_at,
+                    query_id=10 + n,
+                    trigger_id=30 + n,
+                    trigger_photo=PNG,
+                    photo_id=60 + n,
+                    grouped_id=99,
+                )
+                for n in range(3)
+            )
+        )
+
+        self.assertEqual(len(self.answers), 2)
+        self.assertEqual(len(self.generate.await_args_list), 2)
+        _system, *turns = self.generate.await_args_list[-1].args[0].messages
+        images = [
+            part
+            for turn in turns[2:]
+            if isinstance(turn["content"], list)
+            for part in turn["content"]
+            if part["type"] == "image_url"
+        ]
+        self.assertEqual(len(images), 3)
+        self.assertEqual(turns[1]["content"], self.answer_text)
+        self.assertNotIn(guest_util.ALBUM_TRIGGER_NOTE, self.edits[-1]["markdown"])
+
+    def test_a_reply_to_an_album_item_says_only_that_item_was_seen(self):
+        self.run_query(
+            _query(
+                f"{BOT_USERNAME} what is this?",
+                reference_text="",
+                reference_grouped_id=7,
+            )
+        )
+
+        self.assertEqual(
+            self.edits[-1]["markdown"],
+            f"{self.answer_text}\n\n{guest_util.ALBUM_REFERENCE_NOTE}",
+        )
+
+    def test_a_lone_album_item_says_so(self):
+        self.run_query(
+            _query(f"{BOT_USERNAME} what is this?", trigger_photo=PNG, grouped_id=7)
+        )
+
+        self.assertTrue(
+            self.edits[-1]["markdown"].endswith(guest_util.ALBUM_TRIGGER_NOTE)
+        )
+
+
+class MediaContinuationTests(_MediaTestCase):
+    """A reply brings back the media of its exchange, from the store on disk."""
 
     def reply(self, text):
         self.run_query(

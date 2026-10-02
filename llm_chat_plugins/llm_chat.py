@@ -12993,6 +12993,8 @@ _guest_threads = guest_util.GuestThreadStore(
     get_redis=redis_util.get_redis, max_records=GUEST_THREAD_MAX_RECORDS
 )
 GUEST_ANSWER_DATE_TOLERANCE_SECONDS = 5.0
+#: Folds an album's queries (one per item) into one answer.
+_guest_albums = guest_util.AlbumBatcher()
 
 
 @dataclass
@@ -13115,7 +13117,8 @@ def _guest_seen(query, *, messages) -> list:
         if fingerprint is not None:
             seen.append(
                 guest_util.seen_entry(
-                    fingerprint, reference=message is not query.trigger
+                    fingerprint,
+                    reference=not any(message is t for t in query.triggers),
                 )
             )
     return seen
@@ -13333,7 +13336,7 @@ async def _run_guest_answer(
 
     try:
         chain = await _guest_continuation(query)
-        messages = [query.trigger] if chain else query.messages
+        messages = query.triggers if chain else query.messages
         history, warnings = await _process_turns_to_history(
             event,
             messages,
@@ -13374,9 +13377,9 @@ async def _run_guest_answer(
         )
         if generation.delivered:
             return
-        await _finalize_guest_answer(
-            answer, _append_warnings(generation.text.strip(), warnings, event=event)
-        )
+        text = _append_warnings(generation.text.strip(), warnings, event=event)
+        note = guest_util.album_note(query)
+        await _finalize_guest_answer(answer, f"{text}\n\n{note}" if note else text)
         record_id = uuid.uuid4().hex
         await _guest_threads.add(
             _guest_thread_name(query),
@@ -13416,11 +13419,21 @@ async def _run_guest_answer(
         rmtree(temp_dir, ignore_errors=True)
 
 
+def _mentions_bot(query) -> bool:
+    return bool(BOT_USERNAME) and guest_util.mentions(query.text, username=BOT_USERNAME)
+
+
 async def guest_chat_handler(query) -> None:
-    """Answers a guest query, as the caller's own chat with the bot would."""
-    explicit = bool(BOT_USERNAME) and guest_util.mentions(
-        query.text, username=BOT_USERNAME
-    )
+    """Answers a guest query, as the caller's own chat with the bot would.
+
+    An album's queries are answered once, by the one that mentions the bot,
+    else the first item (`_guest_albums`).
+    """
+    query = await _guest_albums.collect(query, prefer=_mentions_bot)
+    if query is None:
+        #: Another item of its album answers for it.
+        return
+    explicit = _mentions_bot(query)
     if query.caller_id is None:
         if explicit:
             await _guest_note(query, "I can only answer people, not channels.")

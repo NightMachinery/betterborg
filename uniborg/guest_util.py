@@ -24,6 +24,7 @@ This module imports only the standard library, Telethon and `tg_format`,
 never ``uniborg.util``, so ``util`` can import it.
 """
 import asyncio
+import dataclasses
 from dataclasses import dataclass, field
 import enum
 import hashlib
@@ -342,11 +343,19 @@ class GuestQuery:
     thread_key: str
     received_at: float
     client: GuestClient = field(repr=False)
+    #: The other items of the trigger's album, whose queries `AlbumBatcher`
+    #: folded into this one.
+    album_items: list = field(default_factory=list)
+
+    @property
+    def triggers(self) -> list:
+        """The trigger and the rest of its album that came with it, in order."""
+        return sorted([self.trigger, *self.album_items], key=lambda m: m.id)
 
     @property
     def messages(self) -> list:
-        """The references, then the trigger: the conversation in order."""
-        return [*self.references, self.trigger]
+        """The references, then the triggers: the conversation in order."""
+        return [*self.references, *self.triggers]
 
     @property
     def text(self) -> str:
@@ -721,6 +730,98 @@ def answer_chain(records: list, record: dict) -> list:
             break
         chain.append(parent)
     return chain[::-1]
+
+
+# --- Albums ---
+#: Telegram sends a guest query only for a message that mentions the bot or
+#: replies to a guest answer, and a reference is only the message replied to
+#: (both checked live, docs/telegram_ai_apis.md). So a reply to one item of an
+#: album brings that item alone, while an album sent as a reply to a guest
+#: answer brings one query per item, all in the same second.
+
+ALBUM_REFERENCE_NOTE = (
+    "🖼 I can see only the album item you replied to, not the rest of its album."
+)
+ALBUM_TRIGGER_NOTE = "🖼 Only one item of your album reached me."
+
+
+def album_note(query: GuestQuery) -> Optional[str]:
+    """A line for the answer when an album item came without the rest of it."""
+    if any(getattr(m, "grouped_id", None) for m in query.references):
+        return ALBUM_REFERENCE_NOTE
+    if getattr(query.trigger, "grouped_id", None) and not query.album_items:
+        return ALBUM_TRIGGER_NOTE
+    return None
+
+
+@dataclass
+class _AlbumBatch:
+    queries: list
+    first_at: float
+    last_at: float
+
+
+class AlbumBatcher:
+    """Folds the guest queries of one album into one, so one answer covers it.
+
+    `collect` returns a query that is not an album item at once. The first
+    query of an album waits until `wait_seconds` pass without another item
+    (at most `max_wait_seconds` in all), then comes back with the others as
+    its `album_items`; `collect` returns None for those others, which are
+    left unanswered and expire. The lead is the first query for which
+    `prefer` holds (the one that mentions the bot), else the earliest item.
+    """
+
+    def __init__(
+        self,
+        *,
+        wait_seconds: float = 1.0,
+        max_wait_seconds: float = 5.0,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ):
+        self._wait_seconds = wait_seconds
+        self._max_wait_seconds = max_wait_seconds
+        self._clock = clock
+        self._sleep = sleep
+        self._pending = {}
+
+    async def collect(
+        self,
+        query: GuestQuery,
+        *,
+        prefer: Optional[Callable[[GuestQuery], bool]] = None,
+    ) -> Optional[GuestQuery]:
+        grouped_id = getattr(query.trigger, "grouped_id", None)
+        if grouped_id is None:
+            return query
+        key = (query.thread_key, query.caller_id, grouped_id)
+        now = self._clock()
+        batch = self._pending.get(key)
+        if batch is not None:
+            batch.queries.append(query)
+            batch.last_at = now
+            return None
+        batch = _AlbumBatch(queries=[query], first_at=now, last_at=now)
+        self._pending[key] = batch
+        try:
+            while True:
+                deadline = min(
+                    batch.last_at + self._wait_seconds,
+                    batch.first_at + self._max_wait_seconds,
+                )
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    break
+                await self._sleep(remaining)
+        finally:
+            del self._pending[key]
+        preferred = [q for q in batch.queries if prefer is not None and prefer(q)]
+        lead = (preferred or sorted(batch.queries, key=lambda q: q.trigger.id))[0]
+        return dataclasses.replace(
+            lead,
+            album_items=[q.trigger for q in batch.queries if q is not lead],
+        )
 
 
 async def answer_note(

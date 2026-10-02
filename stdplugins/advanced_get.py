@@ -223,6 +223,9 @@ async def _run_guest_shell(query, request, answer):
                 footer_lines.append(error)
         if truncated:
             footer_lines.append("✂️ Output truncated; the full output is a file.")
+        note = guest_util.album_note(query)
+        if note:
+            footer_lines.append(note)
 
         #: A caption holds far less than a text answer; attaching must not cut
         #: output that the text answer would show whole.

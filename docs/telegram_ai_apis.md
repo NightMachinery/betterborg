@@ -296,6 +296,11 @@ Receiving:
   the trigger replies to, and nothing deeper [src]. The bot sees no history and
   no participant list, and gets no later updates unless it is mentioned or
   replied to again.
+- **Albums** [field, 2026-10-02]. A reply to one item of an album brings one
+  reference, that item, with its `grouped_id`; the album's other items are
+  not sent. An album sent as a reply to a guest answer brings one query per
+  item, all in the same second, each with the answer as its reference.
+  Untested: an album whose caption mentions the bot, sent as no reply.
 - **Every reply to the bot's guest answer re-triggers it**, with or without a
   mention [field]. A chat bot can use that for continuation. A transcription
   bot should act only on an explicit mention with media in the trigger or its

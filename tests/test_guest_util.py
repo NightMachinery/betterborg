@@ -523,6 +523,103 @@ class GuestAnswerMessageTests(unittest.TestCase):
             asyncio.run(answer.reply("y"))
 
 
+def _album_query(text="", *, msg_id, query_id, grouped_id=7):
+    return _query(
+        _message(text, msg_id=msg_id, grouped_id=grouped_id), query_id=query_id
+    )
+
+
+class AlbumBatcherTests(unittest.TestCase):
+    def collect_all(self, batcher, queries, **kwargs):
+        async def run():
+            return await asyncio.gather(
+                *(batcher.collect(q, **kwargs) for q in queries)
+            )
+
+        return asyncio.run(run())
+
+    def test_a_query_outside_an_album_comes_back_at_once(self):
+        query = _query()
+
+        (result,) = self.collect_all(guest_util.AlbumBatcher(), [query])
+
+        self.assertIs(result, query)
+
+    def test_an_albums_queries_fold_into_the_one_that_mentions_the_bot(self):
+        queries = [
+            _album_query(msg_id=11, query_id=1),
+            _album_query("@SugarBot what are these?", msg_id=12, query_id=2),
+            _album_query(msg_id=13, query_id=3),
+        ]
+
+        results = self.collect_all(
+            guest_util.AlbumBatcher(wait_seconds=0.01),
+            queries,
+            prefer=lambda q: "@SugarBot" in q.text,
+        )
+
+        lead, *rest = [r for r in results if r is not None]
+        self.assertEqual(rest, [])
+        self.assertEqual(lead.query_id, 2)
+        self.assertEqual([m.id for m in lead.triggers], [11, 12, 13])
+        self.assertEqual([m.id for m in lead.messages], [11, 12, 13])
+
+    def test_the_earliest_item_leads_when_none_is_preferred(self):
+        queries = [
+            _album_query(msg_id=13, query_id=3),
+            _album_query(msg_id=11, query_id=1),
+        ]
+
+        results = self.collect_all(guest_util.AlbumBatcher(wait_seconds=0.01), queries)
+
+        (lead,) = [r for r in results if r is not None]
+        self.assertEqual(lead.query_id, 1)
+
+    def test_other_albums_and_callers_are_not_folded_together(self):
+        queries = [
+            _album_query(msg_id=11, query_id=1, grouped_id=7),
+            _album_query(msg_id=12, query_id=2, grouped_id=8),
+        ]
+
+        results = self.collect_all(guest_util.AlbumBatcher(wait_seconds=0.01), queries)
+
+        self.assertEqual([r.album_items for r in results], [[], []])
+
+    def test_items_still_arriving_extend_the_wait_up_to_its_cap(self):
+        clock = [0.0]
+        late = [_album_query(msg_id=20 + n, query_id=20 + n) for n in range(10)]
+        batcher = guest_util.AlbumBatcher(
+            wait_seconds=1.0, max_wait_seconds=2.0, clock=lambda: clock[0]
+        )
+
+        async def sleep(seconds):
+            #: An item every half second, for longer than the cap allows.
+            clock[0] += min(seconds, 0.5)
+            if late:
+                self.assertIsNone(await batcher.collect(late.pop(0)))
+
+        batcher._sleep = sleep
+        (lead,) = self.collect_all(batcher, [_album_query(msg_id=11, query_id=1)])
+
+        self.assertEqual(clock[0], 2.0)
+        self.assertEqual(len(lead.album_items), 4)
+
+
+class AlbumNoteTests(unittest.TestCase):
+    def test_a_reply_to_an_album_item_says_only_that_item_came(self):
+        query = _query(references=[_message("", msg_id=9, grouped_id=7)])
+
+        self.assertEqual(guest_util.album_note(query), guest_util.ALBUM_REFERENCE_NOTE)
+
+    def test_a_lone_album_item_says_so_but_a_folded_album_does_not(self):
+        lone = _album_query(msg_id=11, query_id=1)
+        folded = guest_util.dataclasses.replace(lone, album_items=[_message(msg_id=12)])
+
+        self.assertEqual(guest_util.album_note(lone), guest_util.ALBUM_TRIGGER_NOTE)
+        self.assertIsNone(guest_util.album_note(folded))
+        self.assertIsNone(guest_util.album_note(_query()))
+
+
 class TriggerGuardTests(unittest.TestCase):
     def test_a_leading_bot_mention_before_dot_a_is_defanged(self):
         mention = types.MessageEntityMention(0, 10)

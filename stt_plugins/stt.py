@@ -1048,7 +1048,11 @@ async def guest_stt_handler(query):
             except SttRequestError as e:
                 await answer.finalize(text=str(e))
                 return
-            await _finalize_guest_transcript(answer, transcription.text)
+            text = transcription.text
+            note = guest_util.album_note(query)
+            await _finalize_guest_transcript(
+                answer, f"{text}\n\n{note}" if note else text
+            )
 
         cwd = f"{util.dl_base}{uuid.uuid4()}/"
         try:
