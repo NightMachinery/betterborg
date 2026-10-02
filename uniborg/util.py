@@ -221,14 +221,24 @@ def brish_server_cleanup(brish_server):
         brish_server.cleanup()
 
 
+persistent_brish = None
+
+
 def init_brishes():
+    """Starts a fresh shell pool and retires the old one in the background.
+
+    The old pool is captured now: `executor` is also the event loop's default
+    executor, so the cleanup can wait behind running commands, and by then
+    `persistent_brish` is the new pool.
+    """
     print(f"Initializing {brish_count} brishes ...")
     global persistent_brish
 
-    executor.submit(lambda: brish_server_cleanup(persistent_brish))
-
+    old_brish = persistent_brish
     boot_cmd = "export JBRISH=y ; unset FORCE_INTERACTIVE"
     persistent_brish = Brish(boot_cmd=boot_cmd, server_count=brish_count)
+    if old_brish is not None:
+        executor.submit(brish_server_cleanup, old_brish)
     ##
     # global brishes
     # brishes = [Brish(boot_cmd=boot_cmd) for i in range(brish_count)] # range includes 0
