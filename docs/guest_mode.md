@@ -135,8 +135,12 @@ Each rule is enforced in code; this is why.
   `borg:guest:claim:`), in memory without it.
 - `GuestThreadStore(get_redis=redis_util.get_redis)`: recent answer records
   per thread (`add`, `records`, newest first), with `find_answer` (the record
-  answered closest to a date, within a tolerance) and `answer_chain` (a record
-  and the ones it continued, oldest first).
+  answered closest to a date, within a tolerance), `find_seen` (the newest
+  record whose turns hold a message, by its `MessageFingerprint`, listed
+  with `seen_entry`) and `answer_chain`
+  (a record and the ones it continued, oldest first). Every bound guest
+  message carries its fingerprint (`fingerprint_of`), taken before a handler
+  strips the mention.
 - `CallLimiter(backend=redis_counter_backend(redis_util.get_redis))`:
   `await limiter.allow(key, limit=n)` counts a call and says whether it is
   within `n` per hour. Windows follow the wall clock, so Redis (keys under
@@ -211,18 +215,47 @@ chat. The handler keeps queries for at most 120 seconds.
 - **What it reads**: the trigger, with the mention removed, and the reference.
   Nothing else of the chat. A reply quote that would need a fetch is dropped,
   since `GuestClient` refuses the fetch.
-- **Replies continue the exchange.** Each final answer is stored with the
-  turns it answered and the answer it continued, for 7 days, in a per-thread
-  list (`borg:guest:thread:<bot id>:<thread key>`, newest 50). A reference is
-  one of our answers when its sender is this bot (`guestchat_via_from` marks
-  every guest bot's answer, so it counts only for a message with no sender).
-  When it is, its date picks the stored answer posted within 5 seconds of it,
-  and up to 10 exchanges of that chain replace the reference in the history.
-  Only that chain comes back, by its `parent` links: other answers in the
-  same chat are never added, so the history follows the replies, not a window
-  of recent messages. Without a match, the reference alone is read, as the
-  assistant's turn. The stored turns can quote other people's messages, which
-  is why they expire.
+- **Replies continue the exchange.** Each final answer is stored as a
+  *record*: the turns it answered, the record it continued (`parent`), the
+  caller's id, and a fingerprint of each message its turns hold (our own
+  answers aside). Records live in a per-thread list
+  (`borg:guest:thread:<bot id>:<thread key>`, newest 500), kept until 7 days
+  after the thread's latest answer. A reply finds the record it continues in
+  one of three ways:
+  - **A reply to one of our answers.** A reference is one of our answers when
+    its sender is this bot (`guestchat_via_from` marks every guest bot's
+    answer, so it counts only for a message with no sender). Its date picks
+    the stored answer posted within 5 seconds of it. Without a match, the
+    reference alone is read, as the assistant's turn.
+  - **A reply to an earlier question**, from anyone: the question is on the
+    reply path, so its exchange comes back.
+  - **A reply to what a question replied to** (that record's reference, say a
+    photo), from the same caller only. Another caller replying to the same
+    photo asks a question beside that exchange, not after it, so they start
+    fresh, as they would in a group's reply chain.
+
+  Message ids cannot identify those messages, since each side of a private
+  chat numbers messages on its own, so the record is found by the message's
+  **fingerprint** (`guest_util.message_fingerprint`): its Unix date, a hash of
+  its text and media (the photo or document id, which tells album items
+  apart), and a hash of its sender. Date and content must match, and so must
+  the sender when both copies name one (the other side's copy of a private
+  message can lack it). An edited message has new content and is not
+  recognised: the reply starts fresh, with the edited text. A continuation
+  lists only its own question, since its reference is in the chain already,
+  so each message belongs to one record, and a second reply to a question
+  does not pull in the first reply's branch.
+
+  The chain of records it continued then replaces the reference in the
+  history, by its `parent` links, with no limit of its own: like a private
+  reply chain, it stops at `HISTORY_MESSAGE_LIMIT` (1000) turns, keeping the
+  newest. Other answers in the same chat are never added, so the history
+  follows the replies, not a window of recent messages. Every chain of a
+  thread shares its 500 records, so in a busy group other chains can push the
+  oldest part of a long chain out. The stored turns can quote other people's
+  messages, which is why they expire. The fingerprints are hashes, not the
+  messages; the sender hash is a pseudonym, though, since a Telegram user id
+  is short enough to recover from it.
 - **Their media comes back too.** A guest message's file reference cannot be
   refreshed, so every file a guest answer downloads is also kept on disk, in
   the media store (`uniborg/media_store.py`), as is the image a guest answer
@@ -323,8 +356,9 @@ forgets.
   `borg:guest:count:stt:<bot id>:<caller>:<hour>`, for an hour: the caller's
   calls in the current wall-clock hour (`<hour>` is Unix time divided by
   3600).
-- `borg:guest:thread:<bot id>:<thread key>`, the newest 50 records, kept until
-  7 days after the latest answer: the chat bot's answers, for continuation.
+- `borg:guest:thread:<bot id>:<thread key>`, the newest 500 records, kept
+  until 7 days after the latest answer: the chat bot's answers, for
+  continuation.
 
 ## What is kept on disk
 

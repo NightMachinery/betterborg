@@ -36,6 +36,7 @@ BOT_ID = 4242
 BOT_USERNAME = "@vlm_test_bot"
 CALLER = 777001
 OTHER = 777002
+GROUP = types.PeerChannel(990011)
 NOW = datetime.datetime.now(datetime.timezone.utc)
 IMAGE_MODEL = "gemini/gemini-2.5-flash-image-preview"
 #: A 1x1 PNG.
@@ -89,19 +90,23 @@ def _query(
     text,
     *,
     caller=CALLER,
+    chat=None,
     reference_text=None,
     reference_from=OTHER,
     reference_date=None,
     reference_via_guest=False,
+    reference_edited=False,
     query_id=1,
     trigger_photo=None,
 ):
     client = SimpleNamespace(
         _self_id=BOT_ID, _mb_entity_cache=EntityCache(), parse_mode=None
     )
+    #: The chat as the caller sees it: in a private chat, the other person.
+    chat = chat or types.PeerUser(OTHER)
     trigger = types.Message(
         id=20,
-        peer_id=types.PeerUser(OTHER),
+        peer_id=chat,
         date=NOW,
         message=text,
         from_id=types.PeerUser(caller),
@@ -125,8 +130,9 @@ def _query(
     if reference_text is not None:
         reference = types.Message(
             id=19,
-            peer_id=types.PeerUser(OTHER),
+            peer_id=chat,
             date=reference_date or NOW,
+            edit_date=NOW if reference_edited else None,
             message=reference_text,
             from_id=(
                 types.PeerUser(reference_from) if reference_from is not None else None
@@ -144,6 +150,14 @@ def _query(
         caller: types.User(id=caller, first_name="Caller"),
         OTHER: types.User(id=OTHER, first_name="Other"),
     }
+    if isinstance(chat, types.PeerChannel):
+        update._entities[chat.channel_id] = types.Channel(
+            id=chat.channel_id,
+            title="Group",
+            photo=types.ChatPhotoEmpty(),
+            date=NOW,
+            megagroup=True,
+        )
     query = guest_util.guest_query_from_update(update, client=client)
     if trigger_photo is not None:
 
@@ -437,6 +451,186 @@ class ContinuationTests(_GuestTestCase):
             [t["role"] for t in turns], ["assistant", "user"], msg=str(turns)
         )
         self.assertIn(self.answer_text, str(turns[0]["content"]))
+
+
+class SeenMessageContinuationTests(_GuestTestCase):
+    """A reply to any message an earlier answer saw, not only to the answer."""
+
+    answer_text = "ETH is at $1."
+    question = f"{BOT_USERNAME} what's eth price?"
+
+    def turns(self, call=-1):
+        _system, *turns = self.generate.await_args_list[call].args[0].messages
+        return turns
+
+    def test_a_reply_to_your_own_earlier_question_continues_its_exchange(self):
+        self.run_query(_query(self.question, query_id=1))
+        self.answer_text = "BTC is at $2."
+
+        #: The question comes back with another id, as the other side sees it.
+        self.run_query(
+            _query(
+                "and btc?",
+                reference_text=self.question,
+                reference_from=CALLER,
+                query_id=2,
+            )
+        )
+
+        turns = self.turns()
+        self.assertEqual([t["role"] for t in turns], ["user", "assistant", "user"])
+        self.assertIn("what's eth price?", str(turns[0]["content"]))
+        self.assertEqual(turns[1]["content"], "ETH is at $1.")
+        self.assertIn("and btc?", str(turns[2]["content"]))
+        records = asyncio.run(
+            plugin._guest_threads.records(plugin._guest_thread_name(_query("x")))
+        )
+        self.assertEqual(records[0]["parent"], records[1]["id"])
+
+    def test_a_reply_to_what_an_earlier_question_replied_to_continues_it(self):
+        self.run_query(_query(self.question, reference_text="Prices today", query_id=1))
+
+        self.run_query(_query("and btc?", reference_text="Prices today", query_id=2))
+
+        turns = self.turns()
+        self.assertEqual(
+            [t["role"] for t in turns], ["user", "user", "assistant", "user"]
+        )
+        self.assertIn("Prices today", str(turns[0]["content"]))
+
+    def test_a_second_reply_to_a_question_leaves_out_the_first_replys_branch(self):
+        self.run_query(_query(self.question, query_id=1))
+        self.answer_text = "BTC is at $2."
+        for query_id, text in ((2, "and btc?"), (3, "in euros?")):
+            self.run_query(
+                _query(
+                    text,
+                    reference_text=self.question,
+                    reference_from=CALLER,
+                    query_id=query_id,
+                )
+            )
+
+        turns = self.turns()
+        self.assertEqual([t["role"] for t in turns], ["user", "assistant", "user"])
+        self.assertEqual(turns[1]["content"], "ETH is at $1.")
+        self.assertNotIn("and btc?", str(turns))
+
+    def assert_another_callers_reply_starts_fresh(self, *, chat, other_chat):
+        """CALLER asks in CHAT about a message; OTHER replies to it from OTHER_CHAT."""
+        self.run_query(
+            _query(self.question, chat=chat, reference_text="Prices today", query_id=1)
+        )
+
+        self.run_query(
+            _query(
+                f"{BOT_USERNAME} is this cheap?",
+                caller=OTHER,
+                chat=other_chat,
+                reference_text="Prices today",
+                query_id=2,
+            )
+        )
+
+        self.assertEqual([t["role"] for t in self.turns()], ["user", "user"])
+
+    def test_another_callers_reply_to_the_same_message_starts_fresh_in_a_group(self):
+        self.assert_another_callers_reply_starts_fresh(chat=GROUP, other_chat=GROUP)
+
+    def test_the_other_persons_reply_to_the_same_message_starts_fresh(self):
+        #: Each side of a private chat sees the other person as the chat.
+        self.assert_another_callers_reply_starts_fresh(
+            chat=types.PeerUser(OTHER), other_chat=types.PeerUser(CALLER)
+        )
+
+    def test_another_caller_can_continue_from_the_question_itself(self):
+        self.run_query(_query(self.question, chat=GROUP, query_id=1))
+
+        self.run_query(
+            _query(
+                f"{BOT_USERNAME} and in euros?",
+                caller=OTHER,
+                chat=GROUP,
+                reference_text=self.question,
+                reference_from=CALLER,
+                query_id=2,
+            )
+        )
+
+        self.assertEqual(
+            [t["role"] for t in self.turns()], ["user", "assistant", "user"]
+        )
+
+    def test_an_edited_question_starts_fresh_with_its_current_text(self):
+        self.run_query(_query(self.question, query_id=1))
+
+        self.run_query(
+            _query(
+                "and btc?",
+                reference_text=f"{BOT_USERNAME} what's sol price?",
+                reference_from=CALLER,
+                reference_edited=True,
+                query_id=2,
+            )
+        )
+
+        turns = self.turns()
+        self.assertEqual([t["role"] for t in turns], ["user", "user"])
+        self.assertIn("what's sol price?", str(turns[0]["content"]))
+
+    def test_an_unedited_message_of_the_same_second_is_not_taken_for_it(self):
+        self.run_query(_query(self.question, query_id=1))
+
+        self.run_query(
+            _query(
+                "is this right?",
+                reference_text="Something else, sent the same second",
+                reference_from=CALLER,
+                query_id=2,
+            )
+        )
+
+        self.assertEqual([t["role"] for t in self.turns()], ["user", "user"])
+
+    def build_chain(self, length):
+        """Answers `question 0`, then replies to each answer LENGTH times."""
+        self.answer_text = "answer 0"
+        self.run_query(_query(f"{BOT_USERNAME} question 0", query_id=1))
+        for n in range(1, length + 1):
+            self.run_query(
+                _query(
+                    f"question {n}",
+                    reference_text=f"answer {n - 1}",
+                    reference_from=BOT_ID,
+                    reference_date=datetime.datetime.now(datetime.timezone.utc),
+                    query_id=n + 1,
+                )
+            )
+            self.answer_text = f"answer {n}"
+
+    def test_a_chain_is_not_cut_at_ten_exchanges(self):
+        self.build_chain(12)
+
+        turns = self.turns()
+        self.assertEqual(len(turns), 2 * 12 + 1)
+        self.assertIn("question 0", str(turns[0]["content"]))
+
+    def test_a_long_chain_reaches_the_model_within_the_history_limit(self):
+        #: Each record is one question and its answer: two turns.
+        with patch.object(plugin, "HISTORY_MESSAGE_LIMIT", 4):
+            self.build_chain(4)
+
+        turns = self.turns()
+        self.assertEqual(len(turns), 2 * 2 + 1)
+        self.assertIn("question 2", str(turns[0]["content"]))
+
+    def test_the_chain_keeps_the_newest_exchanges_within_the_history_limit(self):
+        chain = [{"id": str(n), "turns": [{"role": "user"}]} for n in range(5)]
+
+        with patch.object(plugin, "HISTORY_MESSAGE_LIMIT", 4):
+            kept = plugin._within_history_limit(chain)
+
+        self.assertEqual([r["id"] for r in kept], ["3", "4"])
 
 
 class MediaContinuationTests(_GuestTestCase):
@@ -825,6 +1019,118 @@ class GuestThreadStoreTests(unittest.TestCase):
 
         self.assertEqual(guest_util.find_answer(records, answered_at=102.5)["id"], "b")
         self.assertIsNone(guest_util.find_answer(records, answered_at=120))
+
+    def test_a_message_has_one_fingerprint_on_both_sides_of_a_chat(self):
+        def message(**kwargs):
+            fields = dict(
+                id=20,
+                peer_id=types.PeerUser(OTHER),
+                date=NOW,
+                message="hi",
+                from_id=types.PeerUser(CALLER),
+            )
+            fields.update(kwargs)
+            return types.Message(**fields)
+
+        mine = guest_util.message_fingerprint(message())
+        theirs = guest_util.message_fingerprint(
+            message(id=7, peer_id=types.PeerUser(CALLER))
+        )
+        edited = guest_util.message_fingerprint(message(message="hi!"))
+
+        self.assertEqual(mine, theirs)
+        self.assertNotEqual(mine.content, edited.content)
+        self.assertEqual(mine.sender, edited.sender)
+        self.assertNotIn(str(CALLER), str(mine.to_json()))
+
+    def test_album_items_differ_by_their_photo_and_match_it_across_sides(self):
+        def item(*, message_id, photo_id, peer):
+            return types.Message(
+                id=message_id,
+                peer_id=peer,
+                date=NOW,
+                message="",
+                from_id=types.PeerUser(OTHER),
+                grouped_id=99,
+                media=types.MessageMediaPhoto(
+                    photo=types.Photo(
+                        id=photo_id,
+                        access_hash=1,
+                        file_reference=b"",
+                        date=NOW,
+                        sizes=[],
+                        dc_id=2,
+                    )
+                ),
+            )
+
+        first = guest_util.message_fingerprint(
+            item(message_id=10, photo_id=111, peer=types.PeerUser(OTHER))
+        )
+        second = guest_util.message_fingerprint(
+            item(message_id=11, photo_id=222, peer=types.PeerUser(OTHER))
+        )
+        first_elsewhere = guest_util.message_fingerprint(
+            item(message_id=3, photo_id=111, peer=types.PeerUser(CALLER))
+        )
+        records = [
+            {
+                "id": "first",
+                "seen": [guest_util.seen_entry(first, reference=False)],
+            }
+        ]
+
+        self.assertNotEqual(first.content, second.content)
+        self.assertEqual(first, first_elsewhere)
+        self.assertIsNone(guest_util.find_seen(records, second, caller_id=CALLER))
+        self.assertEqual(
+            guest_util.find_seen(records, first_elsewhere, caller_id=CALLER)["id"],
+            "first",
+        )
+
+    def test_find_seen_wants_date_content_and_any_known_sender(self):
+        fp = guest_util.MessageFingerprint
+        entry = lambda f: guest_util.seen_entry(f, reference=False)
+        records = [
+            {"id": "new", "seen": [entry(fp(date=10, content="other", sender="s1"))]},
+            {"id": "old", "seen": [entry(fp(date=10, content="same", sender="s1"))]},
+            {"id": "pre-seen"},
+        ]
+
+        def found(**kwargs):
+            match = guest_util.find_seen(records, fp(**kwargs), caller_id=CALLER)
+            return match and match["id"]
+
+        self.assertEqual(found(date=10, content="same", sender="s1"), "old")
+        self.assertEqual(found(date=10, content="same", sender=None), "old")
+        self.assertIsNone(found(date=10, content="same", sender="s2"))
+        self.assertIsNone(found(date=10, content="edited", sender="s1"))
+        self.assertIsNone(found(date=11, content="same", sender="s1"))
+
+    def test_find_seen_gives_a_reference_only_to_its_own_caller(self):
+        fingerprint = guest_util.MessageFingerprint(date=10, content="c", sender="s")
+        records = [
+            {
+                "id": "a",
+                "caller_id": CALLER,
+                "seen": [guest_util.seen_entry(fingerprint, reference=True)],
+            }
+        ]
+
+        found = lambda caller_id: guest_util.find_seen(
+            records, fingerprint, caller_id=caller_id
+        )
+        self.assertEqual(found(CALLER)["id"], "a")
+        self.assertIsNone(found(OTHER))
+        self.assertIsNone(found(None))
+
+    def test_the_chat_bot_keeps_enough_records_for_a_full_chain(self):
+        self.assertEqual(
+            plugin._guest_threads._max_records, plugin.GUEST_THREAD_MAX_RECORDS
+        )
+        self.assertGreaterEqual(
+            2 * plugin.GUEST_THREAD_MAX_RECORDS, plugin.HISTORY_MESSAGE_LIMIT
+        )
 
     def test_answer_chain_follows_parents_oldest_first_within_the_limit(self):
         records = [

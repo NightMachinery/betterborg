@@ -12983,10 +12983,15 @@ _guest_claims = guest_util.QueryClaims(
 _guest_limiter = guest_util.CallLimiter(
     backend=guest_util.redis_counter_backend(redis_util.get_redis)
 )
+#: How many answers each guest thread keeps. A record holds two turns or more,
+#: so a chain alone in its thread reaches `HISTORY_MESSAGE_LIMIT`, the cap of a
+#: private reply chain. Every chain of a group shares its thread's records, so
+#: there a busy chat can cut a long chain shorter.
+GUEST_THREAD_MAX_RECORDS = HISTORY_MESSAGE_LIMIT // 2
 #: Earlier answers of each guest thread, for replies that continue one.
-_guest_threads = guest_util.GuestThreadStore(get_redis=redis_util.get_redis)
-#: How many earlier exchanges a continuation brings back.
-GUEST_THREAD_EXCHANGES = 10
+_guest_threads = guest_util.GuestThreadStore(
+    get_redis=redis_util.get_redis, max_records=GUEST_THREAD_MAX_RECORDS
+)
 GUEST_ANSWER_DATE_TOLERANCE_SECONDS = 5.0
 
 
@@ -13097,26 +13102,72 @@ def _is_own_guest_answer(message) -> bool:
     return getattr(message, "guestchat_via_from", None) is not None
 
 
-async def _guest_continuation(query) -> list:
-    """The stored exchanges that a reply to one of our answers continues.
+def _guest_seen(query, *, messages) -> list:
+    """What a guest record keeps to recognise MESSAGES, its turns, later.
 
-    Oldest first; empty when the reference is not our answer, or no record
-    matches its date. Our answer is read as the assistant's either way.
+    Our own answers are left out: they are found by `answered_at`.
+    """
+    seen = []
+    for message in messages:
+        if _is_own_guest_answer(message):
+            continue
+        fingerprint = guest_util.fingerprint_of(message)
+        if fingerprint is not None:
+            seen.append(
+                guest_util.seen_entry(
+                    fingerprint, reference=message is not query.trigger
+                )
+            )
+    return seen
+
+
+def _within_history_limit(chain: list) -> list:
+    """The newest records of CHAIN whose turns fit `HISTORY_MESSAGE_LIMIT`."""
+    kept = []
+    count = 0
+    for record in reversed(chain):
+        count += len(record.get("turns") or ()) + 1
+        if kept and count > HISTORY_MESSAGE_LIMIT:
+            break
+        kept.append(record)
+    return kept[::-1]
+
+
+async def _guest_continuation(query) -> list:
+    """The stored exchanges that a reply continues, oldest first.
+
+    A reply to one of our answers finds its record by date. A reply to an
+    earlier question finds that question's record by the message's
+    fingerprint, and so does a reply to what the caller's own question
+    replied to. Either way the chain of records it continued comes back, as
+    long as a private reply chain may be. Empty when nothing matches. Our
+    answer is read as the assistant's either way.
     """
     own = [m for m in query.references if _is_own_guest_answer(m)]
     for message in own:
         message._role = "assistant"
-    if not own:
+    if not query.references:
         return []
     records = await _guest_threads.records(_guest_thread_name(query))
-    match = guest_util.find_answer(
-        records,
-        answered_at=own[0].date.timestamp(),
-        tolerance_seconds=GUEST_ANSWER_DATE_TOLERANCE_SECONDS,
-    )
+    match = None
+    if own:
+        match = guest_util.find_answer(
+            records,
+            answered_at=own[0].date.timestamp(),
+            tolerance_seconds=GUEST_ANSWER_DATE_TOLERANCE_SECONDS,
+        )
+    else:
+        for message in query.references:
+            match = guest_util.find_seen(
+                records,
+                guest_util.fingerprint_of(message),
+                caller_id=query.caller_id,
+            )
+            if match is not None:
+                break
     if match is None:
         return []
-    return guest_util.answer_chain(records, match, limit=GUEST_THREAD_EXCHANGES)
+    return _within_history_limit(guest_util.answer_chain(records, match))
 
 
 #: Stands for media a guest record could not keep, or no longer has.
@@ -13254,9 +13305,10 @@ async def _run_guest_answer(
 ) -> None:
     """Builds the history from the guest query's own messages and answers.
 
-    A reply to one of our answers continues it: the stored exchanges replace
-    the reference, which is that answer. Only that answer's chain of replies
-    comes back, with the media its turns kept (`_guest_media`).
+    A reply that continues an earlier answer (`_guest_continuation`) gets
+    the stored exchanges in place of the reference, which they hold already.
+    Only that answer's chain of replies comes back, with the media its turns
+    kept (`_guest_media`).
     """
     query = event.query
     temp_dir = Path(tempfile.gettempdir()) / f"temp_llm_chat_guest_{uuid.uuid4().hex}"
@@ -13281,9 +13333,10 @@ async def _run_guest_answer(
 
     try:
         chain = await _guest_continuation(query)
+        messages = [query.trigger] if chain else query.messages
         history, warnings = await _process_turns_to_history(
             event,
-            [query.trigger] if chain else query.messages,
+            messages,
             temp_dir,
             plan.model_capabilities,
             plan.api_key,
@@ -13335,6 +13388,8 @@ async def _run_guest_answer(
                     answer, generation.text.strip(), record_id=record_id
                 ),
                 "parent": chain[-1]["id"] if chain else None,
+                "caller_id": query.caller_id,
+                "seen": _guest_seen(query, messages=messages),
             },
         )
         #: Lengths only: the references are other people's messages.

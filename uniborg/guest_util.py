@@ -26,6 +26,7 @@ never ``uniborg.util``, so ``util`` can import it.
 import asyncio
 from dataclasses import dataclass, field
 import enum
+import hashlib
 import itertools
 import json
 import logging
@@ -42,6 +43,8 @@ _log = logging.getLogger(__name__)
 
 #: Set on every message built from a guest query.
 GUEST_MESSAGE_ATTR = "_borg_guest_query_id"
+#: Where a bound guest message keeps its `MessageFingerprint`.
+GUEST_FINGERPRINT_ATTR = "_borg_guest_fingerprint"
 
 #: Where `redis_claim_backend` keeps its keys. The bots' Redis user may only
 #: touch `borg:*` keys.
@@ -196,7 +199,135 @@ def _bind_guest_message(
         message.message = tg_format.flatten_rich_message(rich)
         message.entities = None
         message._text = None
+    #: Taken now, before a handler strips the mention from the text.
+    setattr(message, GUEST_FINGERPRINT_ATTR, message_fingerprint(message))
     return message
+
+
+# --- Recognising a message seen before ---
+#: Message ids cannot do it: in a private chat each side numbers messages on
+#: its own, and the bot never learns ids on either side. The date (one clock,
+#: the server's) and the content are the same for everyone.
+
+
+def _short_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+def _media_identity(media: Any) -> str:
+    """What names MEDIA for every viewer: the photo or document id."""
+    if media is None:
+        return ""
+    photo = getattr(media, "photo", None)
+    if photo is not None and getattr(photo, "id", None) is not None:
+        return f"photo:{photo.id}"
+    document = getattr(media, "document", None)
+    if document is not None and getattr(document, "id", None) is not None:
+        return f"document:{document.id}"
+    return type(media).__name__
+
+
+def _sender_identity(message: Any) -> Optional[str]:
+    from_id = getattr(message, "from_id", None)
+    if isinstance(from_id, types.PeerUser):
+        return f"user:{from_id.user_id}"
+    if isinstance(from_id, types.PeerChannel):
+        return f"channel:{from_id.channel_id}"
+    if isinstance(from_id, types.PeerChat):
+        return f"chat:{from_id.chat_id}"
+    return None
+
+
+@dataclass(frozen=True)
+class MessageFingerprint:
+    """A guest message, recognisable when it comes back as a reference.
+
+    `date` is the message's Unix time. `content` hashes its text and media,
+    so an edit changes it, and an edited message is not recognised. `sender`
+    hashes its `from_id`, None when the message names none (Telegram omits
+    it on some private messages).
+    """
+
+    date: int
+    content: str
+    sender: Optional[str]
+
+    def to_json(self) -> dict:
+        return {"d": self.date, "c": self.content, "s": self.sender}
+
+    @classmethod
+    def from_json(cls, data: dict) -> "MessageFingerprint":
+        return cls(date=data["d"], content=data["c"], sender=data.get("s"))
+
+
+def message_fingerprint(message: Any) -> Optional[MessageFingerprint]:
+    date = getattr(message, "date", None)
+    if date is None:
+        return None
+    content = (getattr(message, "message", None) or "") + "\0"
+    content += _media_identity(getattr(message, "media", None))
+    sender = _sender_identity(message)
+    return MessageFingerprint(
+        date=int(date.timestamp()),
+        content=_short_hash(content),
+        sender=_short_hash(sender) if sender is not None else None,
+    )
+
+
+def fingerprint_of(message: Any) -> Optional[MessageFingerprint]:
+    """The fingerprint MESSAGE was bound with, else one taken now."""
+    fingerprint = getattr(message, GUEST_FINGERPRINT_ATTR, None)
+    return fingerprint if fingerprint is not None else message_fingerprint(message)
+
+
+#: Marks a `seen` entry as the message a record's question replied to.
+SEEN_REFERENCE_KEY = "r"
+
+
+def seen_entry(fingerprint: MessageFingerprint, *, reference: bool) -> dict:
+    """How a record lists a message its turns hold, for `find_seen`."""
+    entry = fingerprint.to_json()
+    if reference:
+        entry[SEEN_REFERENCE_KEY] = 1
+    return entry
+
+
+def find_seen(
+    records: list,
+    fingerprint: Optional[MessageFingerprint],
+    *,
+    caller_id: Optional[int],
+) -> Optional[dict]:
+    """The newest record whose turns hold FINGERPRINT's message.
+
+    The date and content must match, and so must the sender when both copies
+    name one. A message that a record's question replied to (its reference)
+    counts only for that record's own caller (`caller_id`): another caller
+    replying to the same message asks a question beside that exchange, not
+    after it.
+    """
+    if fingerprint is None:
+        return None
+    for record in records:
+        for item in record.get("seen") or ():
+            try:
+                seen = MessageFingerprint.from_json(item)
+            except (KeyError, TypeError):
+                continue
+            if seen.date != fingerprint.date or seen.content != fingerprint.content:
+                continue
+            if (
+                seen.sender is not None
+                and fingerprint.sender is not None
+                and seen.sender != fingerprint.sender
+            ):
+                continue
+            if item.get(SEEN_REFERENCE_KEY) and (
+                caller_id is None or record.get("caller_id") != caller_id
+            ):
+                continue
+            return record
+    return None
 
 
 @dataclass
@@ -580,11 +711,14 @@ def find_answer(
     return None if best is None else best[1]
 
 
-def answer_chain(records: list, record: dict, *, limit: int = 10) -> list:
-    """`record` and the records it continued, oldest first, at most `limit`."""
+def answer_chain(records: list, record: dict, *, limit: Optional[int] = None) -> list:
+    """`record` and the records it continued, oldest first.
+
+    At most `limit` records; None means no limit.
+    """
     by_id = {r["id"]: r for r in records}
     chain = [record]
-    while len(chain) < limit:
+    while limit is None or len(chain) < limit:
         parent = by_id.get(chain[-1].get("parent"))
         if parent is None or parent in chain:
             break
