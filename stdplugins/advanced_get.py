@@ -41,6 +41,16 @@ async def parse_shell_request(match) -> ShellRequest:
     )
 
 
+async def _brishz_on_shell_pool(*, event, cwd, cmd, fork):
+    """`brishz` on the shell pool that is current when the command runs.
+
+    Not the one of when the message came: `.x` can replace the pool while the
+    replied-to files still download, and the pool it retires takes no more
+    commands.
+    """
+    await util.brishz(event, cwd, cmd, fork=fork, brish=util.persistent_brish)
+
+
 @borg.on(events.NewMessage(pattern=pattern_a))
 async def _(event):
     if guest_util.is_guest_answer(event.message):
@@ -51,10 +61,7 @@ async def _(event):
     request = await parse_shell_request(event.pattern_match)
     if request.brish_mode:
         to_await = partial(
-            brishz,
-            cmd=request.command,
-            fork=request.fork,
-            brish=util.persistent_brish,
+            _brishz_on_shell_pool, cmd=request.command, fork=request.fork
         )
     else:
         to_await = partial(util.simple_run, command=request.command, shell=True)

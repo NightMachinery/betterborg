@@ -28,7 +28,11 @@ is a **pool**. The bot has two:
 
 - The **shell pool**, `util.persistent_brish`: `borg_brish_count` workers (16
   by default), started at import. `.a`, `.af` and the guest shell run here,
-  and the plugin passes it explicitly (`brish=util.persistent_brish`).
+  and the plugin passes it explicitly (`brish=util.persistent_brish`). It
+  reads the global when the command runs, after the replied-to files have
+  downloaded: a `.x` during the download retires the pool of when the
+  message came, and a retired pool refuses commands
+  (UninitializedBrishException).
 - The **plugin pool**, `util.plugin_brish()`: `borg_plugin_brish_count`
   workers (4 by default), started on its first use. `brishz`,
   `brishz_capture` and `brishz_helper` default to it, so

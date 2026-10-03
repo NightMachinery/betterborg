@@ -370,14 +370,14 @@ class ShellHandlerEchoTests(unittest.TestCase):
 
 
 class ShellHandlerPoolTests(unittest.TestCase):
-    def test_dot_a_runs_on_the_shell_pool_and_dot_aa_on_no_pool(self):
+    def setUp(self):
         borg = _FakeBorg()
-        plugin = _load_plugin(borg)
-        (_builder, handler), *_rest = borg.handlers
-        runs = []
+        self.plugin = _load_plugin(borg)
+        (_builder, self.handler), *_rest = borg.handlers
+        self.runs = []
 
         async def run_and_upload(*, event, to_await, album_mode):
-            runs.append(to_await)
+            self.runs.append(to_await)
 
         for name, value in (
             ("isAdmin", AsyncMock(return_value=True)),
@@ -387,17 +387,40 @@ class ShellHandlerPoolTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-        for text in (".a printf hi", ".aa printf hi"):
-            event = SimpleNamespace(
-                message=SimpleNamespace(out=False, forward=None),
-                pattern_match=plugin.pattern_a.match(text),
-            )
-            asyncio.run(handler(event))
+    def _to_await(self, text):
+        event = SimpleNamespace(
+            message=SimpleNamespace(out=False, forward=None),
+            pattern_match=self.plugin.pattern_a.match(text),
+        )
+        asyncio.run(self.handler(event))
+        (to_await,) = self.runs
+        return to_await, event
 
-        brish_run, plain_run = runs
-        self.assertIs(brish_run.func, util.brishz)
-        self.assertIs(brish_run.keywords["brish"], util.persistent_brish)
-        self.assertIs(plain_run.func, util.simple_run)
+    def test_dot_a_runs_on_the_shell_pool_of_when_the_command_runs(self):
+        to_await, event = self._to_await(".af printf hi")
+        seen = []
+
+        async def capture(**kwargs):
+            seen.append(kwargs)
+            return util.CommandResult(output="hi", retcode=0)
+
+        #: `.x` while the replied-to files download: the old pool is retired.
+        new_pool = object()
+        with patch.object(util, "persistent_brish", new_pool), patch.object(
+            util, "brishz_capture", capture
+        ), patch.object(util, "send_output", AsyncMock()):
+            asyncio.run(to_await(cwd="/tmp/x/", event=event))
+
+        (call,) = seen
+        self.assertIs(call["brish"], new_pool)
+        self.assertEqual(
+            (call["cwd"], call["cmd"], call["fork"]), ("/tmp/x/", "printf hi", False)
+        )
+
+    def test_dot_aa_runs_on_no_pool(self):
+        to_await, _event = self._to_await(".aa printf hi")
+
+        self.assertIs(to_await.func, util.simple_run)
 
 
 if __name__ == "__main__":
