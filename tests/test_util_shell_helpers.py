@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from brish import Brish
 
@@ -209,3 +210,63 @@ class BrishzHelperTests(unittest.TestCase):
 
         res = self.run_helper("echo again")
         self.assertEqual((res.retcode, res.outerr), (0, "again\n"))
+
+
+class _AckBorg:
+    async def send_read_acknowledge(self, chat, message):
+        pass
+
+
+class RunAndUploadTests(_BorgTestCase):
+    make_borg = _AckBorg
+
+    def setUp(self):
+        super().setUp()
+        self.reports = []
+
+        async def handle_exc(event, reply_exc=True):
+            self.reports.append(event)
+
+        for name, value in (("handle_exc", handle_exc), ("dl_base", self.cwd)):
+            patcher = patch.object(util, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _event(self):
+        async def get_chat():
+            return "chat"
+
+        message = SimpleNamespace(id=1, reply_to_msg_id=None, grouped_id=None)
+        return SimpleNamespace(get_chat=get_chat, message=message)
+
+    def test_a_cancel_propagates_and_is_not_reported(self):
+        event = self._event()
+
+        async def main():
+            started = asyncio.Event()
+
+            async def to_await(*, cwd, event):
+                started.set()
+                await asyncio.sleep(3600)
+
+            task = asyncio.create_task(
+                util.run_and_upload(event=event, to_await=to_await)
+            )
+            await started.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        asyncio.run(main())
+
+        self.assertEqual(self.reports, [])
+
+    def test_a_failure_is_still_reported(self):
+        event = self._event()
+
+        async def to_await(*, cwd, event):
+            raise RuntimeError("boom")
+
+        asyncio.run(util.run_and_upload(event=event, to_await=to_await))
+
+        self.assertEqual(self.reports, [event])

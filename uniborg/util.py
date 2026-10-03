@@ -721,6 +721,11 @@ async def run_and_upload(event, to_await, quiet=True, reply_exc=True, album_mode
             reply_to=event.message,
             on_error=partial(handle_exc, event, reply_exc),
         )
+    except asyncio.CancelledError:
+        #: A cancel (the client disconnecting, say) is not the request's
+        #: failure: reporting it would send a traceback through a closing
+        #: client, and swallowing it would keep the canceller waiting.
+        raise
     except:
         await handle_exc(event, reply_exc)
     finally:
