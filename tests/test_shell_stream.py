@@ -351,6 +351,11 @@ class ShellJobTests(unittest.TestCase):
         first, second = _job(), _job()
         self.assertLess(first.id, second.id)
 
+    def test_every_field_is_a_keyword(self):
+        #: Two ids in swapped places would make a job of the wrong chat.
+        with self.assertRaises(TypeError):
+            ShellJob(1, 10, "sleep 100", output=_output())
+
 
 class RegistryTests(unittest.TestCase):
     def setUp(self):

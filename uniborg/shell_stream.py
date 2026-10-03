@@ -313,7 +313,7 @@ class LiveOutput:
 _job_ids = itertools.count(1)
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, kw_only=True)
 class ShellJob:
     """One shell command, from the moment it waits for a shell to its final.
 
