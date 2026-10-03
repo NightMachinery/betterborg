@@ -1,9 +1,11 @@
 """Golden characterization tests for chat response delivery.
 
-The planned delivery refactor moves every step of delivering an answer (the
-`...` placeholder, streaming partial edits, the final edit, and the cancel and
-error notes) behind a shared ResponseSink/StreamDriver core, and it must not
-change what Telegram sees. These tests pin what Telegram sees today.
+The delivery refactor moves every step of delivering an answer (the `...`
+placeholder, streaming partial edits, the final edit, and the cancel and
+error notes) behind a shared core, `uniborg/stream_driver.py`, and it must
+not change what Telegram sees. The partial edits of every streaming loop
+already go through its shared throttle, `stream_driver.PacedEditor`. These
+tests pin what Telegram sees today.
 
 Terms used below:
 

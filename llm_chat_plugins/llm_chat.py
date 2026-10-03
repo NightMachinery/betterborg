@@ -203,6 +203,7 @@ from uniborg import common_util
 from uniborg import topics
 from uniborg import codex_aliases
 from uniborg import draft_stream
+from uniborg import stream_driver
 from uniborg import guest_util
 from uniborg import media_store
 from uniborg import tg_format
@@ -4095,8 +4096,9 @@ async def _call_llm_with_retry(
         # Check if streaming mode based on edit_interval parameter
         if edit_interval is not None:
             # Streaming mode
-            last_edit_time = asyncio.get_event_loop().time()
-            streaming_start_time = last_edit_time
+            editor = stream_driver.PacedEditor(
+                response_message, edit_interval=edit_interval
+            )
             #: Tracked per chunk, so a stream that yields nothing still returns.
             finish_reason = None
 
@@ -4110,28 +4112,7 @@ async def _call_llm_with_retry(
                 delta = choice.delta.content
                 if delta:
                     response_text += delta
-                    current_time = asyncio.get_event_loop().time()
-                    pace = draft_stream.streaming_pace(
-                        response_message,
-                        elapsed=current_time - streaming_start_time,
-                        edit_interval=edit_interval,
-                    )
-
-                    if (current_time - last_edit_time) > pace.interval:
-                        try:
-                            # Add a cursor to indicate the bot is still "typing"
-                            await util.edit_message(
-                                response_message,
-                                f"{response_text}{pace.cursor}",
-                                parse_mode="md",
-                            )
-                            last_edit_time = current_time
-                        except errors.rpcerrorlist.MessageNotModifiedError:
-                            # This error is expected if the content hasn't changed
-                            pass
-                        except Exception as e:
-                            # Log other edit errors but don't stop the stream
-                            print(f"Error during message edit: {e}")
+                    await editor.show(response_text)
 
             return LLMResponse(
                 text=response_text, finish_reason=finish_reason, has_image=False

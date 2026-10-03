@@ -1,11 +1,10 @@
-import asyncio
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
 
 import openai
 
-from uniborg import draft_stream, util
+from uniborg import stream_driver
 from uniborg.constants import PIONEER_BASE_URL
 
 
@@ -209,8 +208,7 @@ async def stream_pioneer_response(
 
     response_text = ""
     finish_reason = None
-    last_edit_time = asyncio.get_event_loop().time()
-    streaming_start_time = last_edit_time
+    editor = stream_driver.PacedEditor(response_message, edit_interval=edit_interval)
 
     async for stream_event in await client.responses.create(**kwargs):
         event_type = getattr(stream_event, "type", None)
@@ -220,23 +218,7 @@ async def stream_pioneer_response(
             if not delta:
                 continue
             response_text += delta
-            current_time = asyncio.get_event_loop().time()
-            pace = draft_stream.streaming_pace(
-                response_message,
-                elapsed=current_time - streaming_start_time,
-                edit_interval=edit_interval,
-            )
-
-            if (current_time - last_edit_time) > pace.interval:
-                try:
-                    await util.edit_message(
-                        response_message,
-                        f"{response_text}{pace.cursor}",
-                        parse_mode="md",
-                    )
-                    last_edit_time = current_time
-                except Exception as e:
-                    print(f"Error during Pioneer message edit: {e}")
+            await editor.show(response_text)
 
         elif event_type == "response.completed":
             response = getattr(stream_event, "response", None)

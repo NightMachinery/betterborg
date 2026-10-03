@@ -15,7 +15,7 @@ import httpx
 import openai
 from PIL import Image
 
-from uniborg import codex_aliases, draft_stream, util
+from uniborg import codex_aliases, stream_driver, util
 from uniborg.constants import OPENAI_CODEX_LUNA_RESERVE
 
 
@@ -588,8 +588,7 @@ async def stream_codex_response(
     images_seen = set()
     # Track individual text parts so terminal events only fill missing parts.
     text_parts = {}
-    last_edit_time = asyncio.get_running_loop().time()
-    streaming_start_time = last_edit_time
+    editor = stream_driver.PacedEditor(response_message, edit_interval=edit_interval)
     client = None
     stream = None
     completed = False
@@ -661,25 +660,8 @@ async def stream_codex_response(
                     _field(stream_event, "content_index", 0),
                 )
                 add_text(key, _field(stream_event, "delta"), delta=True)
-                current_time = asyncio.get_running_loop().time()
-                pace = draft_stream.streaming_pace(
-                    response_message,
-                    elapsed=current_time - streaming_start_time,
-                    edit_interval=edit_interval,
-                )
-                if (
-                    response_message is not None
-                    and current_time - last_edit_time > pace.interval
-                ):
-                    try:
-                        await util.edit_message(
-                            response_message,
-                            result.text + pace.cursor,
-                            parse_mode="md",
-                        )
-                        last_edit_time = current_time
-                    except Exception as exc:
-                        print(f"Error during Codex message edit: {exc}")
+                #: Even for an empty delta, so the pace is checked per event.
+                await editor.show(result.text)
             elif event_type in ("response.output_text.done", "response.refusal.done"):
                 key = text_key(
                     _field(stream_event, "item_id"),
