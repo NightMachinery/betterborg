@@ -203,8 +203,11 @@ class ShowResult(Enum):
     NOT_DUE = "not_due"
     #: There is no message to edit.
     NO_TARGET = "no_target"
-    #: The edit failed, or changed nothing; the last-edit time is unchanged.
-    #: Only an editor built with `report_failures` sees a failed edit.
+    #: Telegram says the message already shows the text; the last-edit time
+    #: is unchanged.
+    UNCHANGED = "unchanged"
+    #: The edit failed; the last-edit time is unchanged. Only an editor built
+    #: with `report_failures` sees a failed edit.
     FAILED = "failed"
 
 
@@ -298,7 +301,7 @@ class PacedEditor:
                 self.message, self._render(text, pace), **edit_kwargs
             )
         except errors.rpcerrorlist.MessageNotModifiedError:
-            return ShowResult.FAILED
+            return ShowResult.UNCHANGED
         except Exception as e:
             #: A failed edit never stops the stream; the next one tries again.
             self._log.warning("Could not edit a streaming message: %r", e)
@@ -325,7 +328,8 @@ async def follow(
     the last text shows even when nothing follows it; a burst of changes
     makes one edit. After a failed edit, the next waits RETRY_AFTER seconds,
     so a broken message cannot make this spin; EDITOR must be built with
-    `report_failures`, since otherwise it never sees a failed edit. The final
+    `report_failures`, since otherwise it never sees a failed edit. A message
+    that Telegram says already shows the text counts as shown. The final
     text is the caller's to deliver: this returns as soon as DONE completes,
     without showing what changed since the last edit.
     """
@@ -351,7 +355,7 @@ async def follow(
         if not behind or editor.due_in() > 0:
             continue
         result = await editor.show(render())
-        if result == ShowResult.SHOWN:
+        if result in (ShowResult.SHOWN, ShowResult.UNCHANGED):
             behind = False
         elif result == ShowResult.NOT_DUE:
             pass

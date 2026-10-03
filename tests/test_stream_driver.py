@@ -78,12 +78,12 @@ class PacedEditorTests(unittest.TestCase):
         self.assertEqual(self.show(editor, "ab", at=2.5), ShowResult.SHOWN)
         self.assertEqual(editor.last_edit_at, 2.5)
 
-    def test_not_modified_fails_silently(self):
+    def test_not_modified_is_unchanged_and_silent(self):
         editor = self.editor(logger=logging.getLogger("test.stream_driver"))
         self.edit.side_effect = errors.MessageNotModifiedError(request=None)
 
         with self.assertNoLogs("test.stream_driver"):
-            self.assertEqual(self.show(editor, "a", at=2), ShowResult.FAILED)
+            self.assertEqual(self.show(editor, "a", at=2), ShowResult.UNCHANGED)
         self.assertEqual(editor.last_edit_at, 0)
 
     def test_no_message_is_a_no_op(self):
@@ -340,6 +340,24 @@ class FollowTests(unittest.TestCase):
         #: About 0.2 s of changes every 0.02 s, but retries 0.1 s apart.
         self.assertGreaterEqual(len(attempts), 1)
         self.assertLessEqual(len(attempts), 3)
+
+    def test_an_unchanged_message_is_not_edited_again(self):
+        async def producer(changed):
+            self.text = "same"
+            changed.set()
+            await asyncio.sleep(0.4)
+
+        attempts = []
+
+        async def not_modified(message, text, **kwargs):
+            attempts.append(text)
+            raise errors.MessageNotModifiedError(request=None)
+
+        with patch.object(util, "edit_message", not_modified):
+            self.run_follow(producer, retry_after=0.05)
+
+        #: It already shows the text, so nothing is left to show.
+        self.assertEqual(attempts, ["same▌"])
 
     def test_a_deleted_message_backs_off_through_the_real_edit_message(self):
         async def producer(changed):
