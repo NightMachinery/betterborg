@@ -241,11 +241,12 @@ gets SIGTERM at step 2, about 2.1 s later, and returns 143 (non-fork: its
 brish reaches step 4 (SIGKILL of the worker, 9001) after about 5 to 13 s;
 with brish 0.4.0 the pool then restarts, waiting for its other commands.
 
-**Old brish fallback.** A brish without `popen` (eva ran 0.3.5) runs the
+**Old brish fallback.** A brish without `popen` (before 0.4.0) runs the
 command through `send_cmd`, still asking `try_start` first, and writes its
 whole result into the job at the end, which makes the job ENDED. It cannot
-be stopped once it runs: no kill hook is attached. The consumer should not
-offer a stop (or a preview) for `.a` there; `.aa` streams on any brish.
+be stopped once it runs: no kill hook is attached. So the plugin runs `.a`
+and `.af` there with no job at all (no preview, nothing for `.k` to find),
+in chats and in guest answers; `.aa` streams on any brish.
 
 ## The `.aa` producer
 
@@ -309,7 +310,8 @@ The settings, with their defaults:
 - `final_mode` (`shell_settings.FinalMode`): what a command that showed a
   preview sends when it ends, EDIT_PREVIEW (the preview becomes the final) or
   NEW_REPLY (a new reply, as before live output).
-- `render`: show output as a terminal would (`term_render`), on.
+- `render`: show output as a terminal would (`term_render`), on. It is the
+  only setting that also applies to the admin's guest answers.
 
 ### The `/settings` panel
 
@@ -505,7 +507,8 @@ it was stopped, not who stopped it, so the note does not name anyone.
 With the caller's `render` setting on (the default), what a chat shows of
 the output is rendered as a terminal would show it (`term_render`, above):
 the preview (`LiveOutput.tail_text(render=True)`), the final, and the `.txt`
-file of a long final, for `.a`, `.af` and `.aa` alike. So a progress bar shows
+file of a long final, for `.a`, `.af` and `.aa` alike, and for guest answers
+(see "Live guest answers"). So a progress bar shows
 its last frame, colours are dropped, and for `.aa` rendering replaces the old
 translation of `\r` into a newline (`\r\n` stays a newline). Output with
 none of `\r`, `\b` or ESC is unchanged. Off, the final is the output as
@@ -697,6 +700,33 @@ for the brish threads, which end once their commands do (a command that
 ignores SIGINT ends at a later step of brish's kill, within about 13 s), so
 a `tail -f` no longer keeps the process from exiting.
 
-A stop does not reach a daemon that left the command's process group (a
-`setsid`, `nohup … &` with its own session, or a double fork): it outlives
-the command, and the shutdown, as before live output.
+## Limits
+
+- **Block-buffered programs.** Commands run with pipes, not a terminal, and
+  nothing fakes one, so a program that buffers its output when it is not
+  writing to a terminal (C stdio, Python) shows it in blocks of a few KiB,
+  or only when it exits. Ask it to flush each line: `python3 -u`, `stdbuf
+  -oL CMD` (for C programs that use stdio), `grep --line-buffered`. The bot
+  does not set `PYTHONUNBUFFERED` for you.
+- **Daemons survive a stop.** A stop reaches only the command's own
+  processes: for brish, the worker's descendants at each kill step
+  (popen-api.md: `kill()` signals nothing that has left the worker's
+  process tree); for `.aa`, the command's process group. A program that
+  detached itself (a daemon that forked twice and was reparented, or one
+  started with `setsid`) is not signalled, and outlives the stop and a
+  shutdown, as before live output.
+- **Binary output.** A preview shows invalid UTF-8 as U+FFFD; the final shows
+  it as `\xNN` escapes, for `.aa` too. With brish, an output line that holds
+  only a NUL still ends the stream early (popen-api.md, legacy mode), as it
+  did before live output. Write binary data to a file.
+- **Two drafts in one chat.** Clients keep one draft per sender and thread,
+  so two commands previewed as drafts at once in a private chat overwrite
+  each other's draft until one ends (docs/draft_streaming.md, "Known
+  limits"). Their finals are unaffected; Edits avoids it.
+- **No time limit, and endless output.** A command runs until it ends or is
+  stopped. One that writes without pause (`yes`) keeps the bot reading at
+  full speed until it is stopped; memory stays within the caps above.
+- **Stopping a queued job.** A job that waits for a worker (every worker
+  busy, or worker 0 for `.af`) is dropped at once by `.k`, and its final
+  goes out, but its executor thread still waits until it gets a worker, then
+  runs nothing.

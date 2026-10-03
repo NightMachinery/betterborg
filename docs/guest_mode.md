@@ -83,10 +83,9 @@ Each rule is enforced in code; this is why.
   accounts, and drops a mention entity there. It matches the mention followed
   by any of spaces, commas and colons (or none) and then `.a` or `.k`, since
   Telegram ends a mention at any of them; that is wider than what the shell
-  acts on, so the two cannot drift apart. Text typed in a Telegram app never passes
-  through it. `borg_guest_trigger_guard=0` turns it off; an
-  unknown value stops startup. Other tools logged in as the owner are not
-  covered.
+  acts on, so the two cannot drift apart. Text typed in a Telegram app never
+  passes through it. `borg_guest_trigger_guard=0` turns it off; an unknown
+  value stops startup. Other tools logged in as the owner are not covered.
 - **Guest queries survive gaps.** Telethon drops qts updates that
   `getDifference` recovers; the qts re-dispatch net hands them on (see
   [telethon_upgrade.md](telethon_upgrade.md)). Recovered queries can be old,

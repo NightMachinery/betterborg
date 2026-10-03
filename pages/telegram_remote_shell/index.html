@@ -239,7 +239,7 @@ done</code></pre>
 </dd>
 
 <dt><code>.k</code></dt>
-<dd>Stop a running command. See <a href="#long-running">Long commands and restarts</a>.</dd>
+<dd>Stop a running command. See <a href="#long-running">Long commands and restarts</a>. From a guest chat, <code>@BOT .k</code> (see <a href="#guest">Guest mode</a>).</dd>
 
 <dt><code>.x</code> or <code>.sbb</code></dt>
 <dd>Restart the shell pool. See <a href="#long-running">Long commands and restarts</a>.</dd>
@@ -305,8 +305,10 @@ done</code></pre>
 <li>When the command ends, the preview becomes its output by default: the same text as above, or, at 4000 characters or more, the last part that fits in one message under the line "✂️ The full output is in the file below.", followed by the <code>.txt</code> file. An edited preview changes silently, without a notification. A draft becomes a new message, which notifies.</li>
 <li>A stopped command's output ends with a note: <code>⏹ Stopped (exit 130).</code>, or <code>⏹ Stopped: julia is restarting (exit N).</code> when the bot is shutting down. A command stopped while it waited for a free shell never runs and says <code>⏹ Stopped before it ran.</code></li>
 <li>While a bot's draft is live, Telegram for Android disables the send button, so a long command under drafts keeps you from typing until it ends or you press Stop.</li>
+<li>Telegram apps keep one draft per chat for each bot, so two commands previewed as drafts at once in the same private chat overwrite each other's preview until one ends. Their outputs are not affected. Edits avoids this.</li>
 <li>With the <b>New reply</b> setting, the output arrives instead as a new reply, exactly as for a fast command, and the preview is removed. If the bot cannot delete it (a bot cannot delete its own messages in a group after 48 hours), the preview is edited to "Finished; output below."</li>
 <li>Programs that buffer their output when it is not a terminal show it in blocks, or only at the end. Ask them to flush each line: <code>python3 -u</code>, <code>stdbuf -oL CMD</code>, <code>grep --line-buffered</code>.</li>
+<li>Commands run in <a href="#guest">guest mode</a> show their output live in their answer too.</li>
 <li>The bot's operator can turn live output off with <code>borg_shell_streaming=0</code> (see <a href="#developers">For developers</a>). On an old Brish library without streaming, <code>.a</code> and <code>.af</code> show no preview; <code>.aa</code> still does.</li>
 </ul>
 
@@ -320,7 +322,7 @@ done</code></pre>
 <dt>When a command with a preview ends: Edit the preview (the default) or New reply</dt>
 <dd>Edit the preview turns the preview into the output. An edited message changes silently, with no notification; a draft becomes a new message, which notifies. New reply sends the output as a new reply, which notifies, and removes the preview.</dd>
 <dt>Renderer: On (the default) or Off</dt>
-<dd>On shows output as a terminal would (progress bars show their last state, colours are removed). Off shows the output as the command wrote it, except that <code>.aa</code> turns each carriage return into a line break.</dd>
+<dd>On shows output as a terminal would (progress bars show their last state, colours are removed). Off shows the output as the command wrote it, except that <code>.aa</code> turns each carriage return into a line break. This setting also applies to your <a href="#guest">guest mode</a> answers; the others do not.</dd>
 </dl>
 <p>Each setting can also be typed: <code>/settings private drafts</code> (or <code>edits</code>), <code>/settings groups edits</code>, <code>/settings final edit</code> (or <code>reply</code>), <code>/settings render off</code> (or <code>on</code>).</p>
 

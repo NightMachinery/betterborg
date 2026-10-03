@@ -185,10 +185,12 @@ while it lasts. The answer itself never waits for a draft.
 
 - **An image-only answer can leave its draft up for 30 s.** No text message
   arrives to adopt the draft, so Telegram Desktop keeps it until it expires,
-  and Android disables the send button while it lives.
+  and Android disables the send button while it lives. A shell command whose
+  final is only a `.txt` file, under New reply, does the same.
 - **Two answers streaming in one chat share one draft.** Clients keep one
   draft per sender and thread, so they overwrite each other until both finish.
-  The finished answers are unaffected.
+  The finished answers are unaffected. The same holds for two shell commands
+  previewed as drafts at once in the bot's private chat.
 - **Images sent during a draft stream** use an upload action ("sending a
   photo…"), which also goes through `messages.setTyping`. Whether a client
   then drops the draft is untested.
