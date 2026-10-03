@@ -249,6 +249,12 @@ those of a non-interactive zsh ignore SIGINT, so they end at SIGTERM, and a
 `.aa` whose background job holds the output open ends then too. A command
 that ignores SIGINT (`trap '' INT`) ends at SIGTERM, 2 s after the stop.
 
+When the command's own process has been reaped, the producer checks the
+group at once. If it is empty, the pending step is cancelled: the group's id
+(the command's process id) is then free, and could name a new group, such as
+another streamed `.aa`. A background job left in the group keeps the id
+reserved and gets the later steps.
+
 A cancelled await (the client disconnecting) cancels the job with
 StopReason.SHUTDOWN, sends the group SIGKILL at once and re-raises.
 

@@ -834,6 +834,11 @@ class _ProcessGroupKiller:
     whole group (background jobs included) gets each signal of
     `ZSH_KILL_SIGNALS`, `grace` seconds apart, until the group is empty.
     Callable from any thread; the steps run on `loop`.
+
+    The group's id is its leader's process id. Once the group is empty, the
+    system may give that id to a new process, and a later step would signal
+    whatever group it leads: so the steps end when `command_ended` finds the
+    group empty, not a grace later.
     """
 
     def __init__(self, pgid: int, *, loop, grace: float = ZSH_KILL_GRACE):
@@ -841,6 +846,9 @@ class _ProcessGroupKiller:
         self.loop = loop
         self.grace = grace
         self._started = False
+        #: The group is gone: no step may signal its id again.
+        self._finished = False
+        self._next_step = None
 
     def __call__(self) -> None:
         try:
@@ -849,15 +857,32 @@ class _ProcessGroupKiller:
             #: The loop is closed; the producer's own cleanup has run.
             pass
 
+    def command_ended(self) -> None:
+        """On the loop, once the command's own process has been reaped.
+
+        Ends the steps if nothing is left in the group. A background job left
+        there keeps the id reserved, and gets the later steps.
+        """
+        if _signal_group(self.pgid, 0):
+            return
+        self._finished = True
+        if self._next_step is not None:
+            self._next_step.cancel()
+            self._next_step = None
+
     def _start(self) -> None:
-        if not self._started:
+        if not (self._started or self._finished):
             self._started = True
             self._step(0)
 
     def _step(self, index: int) -> None:
-        if _signal_group(self.pgid, ZSH_KILL_SIGNALS[index]):
-            if index + 1 < len(ZSH_KILL_SIGNALS):
-                self.loop.call_later(self.grace, self._step, index + 1)
+        self._next_step = None
+        if self._finished:
+            return
+        if not _signal_group(self.pgid, ZSH_KILL_SIGNALS[index]):
+            self._finished = True
+        elif index + 1 < len(ZSH_KILL_SIGNALS):
+            self._next_step = self.loop.call_later(self.grace, self._step, index + 1)
 
 
 async def _stream_zsh(*, cwd, command, job) -> typing.Optional[CommandResult]:
@@ -887,7 +912,8 @@ async def _stream_zsh(*, cwd, command, job) -> typing.Optional[CommandResult]:
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
-    job.attach(_ProcessGroupKiller(proc.pid, loop=asyncio.get_running_loop()))
+    killer = _ProcessGroupKiller(proc.pid, loop=asyncio.get_running_loop())
+    job.attach(killer)
     try:
         while chunk := await proc.stdout.read(65536):
             job.output.write(chunk)
@@ -898,6 +924,7 @@ async def _stream_zsh(*, cwd, command, job) -> typing.Optional[CommandResult]:
         raise
     finally:
         job.detach()
+        killer.command_ended()
     return CommandResult(output=job.output.final_text(render=False), retcode=retcode)
 
 

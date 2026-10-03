@@ -10,9 +10,11 @@ command to start are long; what is timed starts at the stop.
 import asyncio
 import os
 from pathlib import Path
+import signal
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from uniborg import shell_stream, util
 from uniborg.shell_stream import CancelOutcome, JobState, StopReason
@@ -156,6 +158,62 @@ class ZshStreamTests(unittest.TestCase):
         self.assertTrue(_wait_gone(pid))
         self.assertGreater(took, 1.5)
         self.assertLess(took, 5)
+
+    def test_the_steps_stop_once_the_group_is_gone(self):
+        #: Its process group id is free again, and could name another group.
+        sent = []
+        signal_group = util._signal_group
+
+        def spy(pgid, sig):
+            delivered = signal_group(pgid, sig)
+            sent.append((time.monotonic(), sig, delivered))
+            return delivered
+
+        async def main():
+            with patch.object(util, "_signal_group", spy):
+                job = _job()
+                task = asyncio.create_task(
+                    self.capture("print started; sleep 30", job=job)
+                )
+                await _wait_for_output(job, lambda text: "started" in text)
+                job.cancel(reason=StopReason.USER)
+                await asyncio.wait_for(task, 30)
+                ended_at = time.monotonic()
+                await asyncio.sleep(util.ZSH_KILL_GRACE + 0.5)
+            return ended_at
+
+        ended_at = asyncio.run(main())
+
+        signals_after_the_end = [
+            sig for at, sig, _delivered in sent if at > ended_at and sig != 0
+        ]
+        self.assertEqual(signals_after_the_end, [])
+        self.assertIn(signal.SIGINT, [sig for _at, sig, _delivered in sent])
+
+    def test_the_steps_go_on_for_a_background_job_left_in_the_group(self):
+        #: Its output goes elsewhere, so the command ends at the interrupt,
+        #: and the background job, which ignores it, ends at the SIGTERM.
+        async def main():
+            job = _job()
+            task = asyncio.create_task(
+                self.capture("sleep 30 >/dev/null 2>&1 & print $!; sleep 30", job=job)
+            )
+            text = await _wait_for_output(job, lambda text: text.strip().isdigit())
+            stopped_at = time.monotonic()
+            job.cancel(reason=StopReason.USER)
+            await asyncio.wait_for(task, 30)
+            took = time.monotonic() - stopped_at
+            pid = int(text)
+            #: The later steps run on this loop, so it must keep running.
+            deadline = time.monotonic() + util.ZSH_KILL_GRACE + 2
+            while _alive(pid) and time.monotonic() < deadline:
+                await asyncio.sleep(0.05)
+            return took, _alive(pid)
+
+        took, alive = asyncio.run(main())
+
+        self.assertLess(took, 1.5)
+        self.assertFalse(alive)
 
     def test_a_command_that_ignores_the_interrupt_ends_at_sigterm(self):
         _text, _outcome, result, took = self.stop(
