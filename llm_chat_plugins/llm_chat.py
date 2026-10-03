@@ -204,6 +204,13 @@ from uniborg import topics
 from uniborg import codex_aliases
 from uniborg import draft_stream
 from uniborg import stream_driver
+from uniborg.stream_driver import (
+    STREAM_MODE_NAMES,
+    STREAM_SCOPE_GROUPS,
+    STREAM_SCOPE_NAMES,
+    STREAM_SCOPE_PRIVATE,
+    StreamMode,
+)
 from uniborg import guest_util
 from uniborg import media_store
 from uniborg import tg_format
@@ -1213,22 +1220,6 @@ METADATA_MODES = {
 }
 
 
-class StreamMode(str, Enum):
-    """How an answer shows while it is written (/stream)."""
-
-    #: Telegram's live draft, with a Stop button; private chats only.
-    DRAFTS = "drafts"
-    #: A message edited as the answer grows.
-    EDITS = "edits"
-
-
-STREAM_SCOPE_PRIVATE = "private"
-STREAM_SCOPE_GROUPS = "groups"
-STREAM_SCOPE_NAMES = {
-    STREAM_SCOPE_PRIVATE: "Private chats",
-    STREAM_SCOPE_GROUPS: "Groups",
-}
-STREAM_MODE_NAMES = {StreamMode.DRAFTS: "Drafts", StreamMode.EDITS: "Edits"}
 STREAM_CALLBACK_PREFIX = "stream:"
 #: The placeholder an answer streams into, when nothing else is shown first.
 RESPONSE_PLACEHOLDER = "..."
@@ -1997,12 +1988,7 @@ class UserManager:
 
     def set_stream_mode(self, user_id: int, *, scope: str, mode: StreamMode):
         prefs = self.get_prefs(user_id)
-        if scope == STREAM_SCOPE_PRIVATE:
-            prefs.stream_private = mode
-        elif scope == STREAM_SCOPE_GROUPS:
-            prefs.stream_groups = mode
-        else:
-            raise ValueError(f"Unknown stream scope: {scope!r}")
+        stream_driver.set_stream_mode(prefs, scope=scope, mode=mode)
         self._save_prefs(user_id, prefs)
 
     def set_group_activation_mode(self, user_id: int, mode: str):
@@ -7499,8 +7485,8 @@ async def status_handler(event):
         f"• **Reasoning Effort ({_model_display_name(effective_model)}):** {thinking_status}\n"
         f"• **Enabled Tools:** `{enabled_tools_str}`\n"
         f"• **JSON Mode:** `{'Enabled' if prefs.json_mode else 'Disabled'}`\n"
-        f"• **Streaming:** private chats `{_stream_mode(prefs, scope=STREAM_SCOPE_PRIVATE).value}`, "
-        f"groups `{_stream_mode(prefs, scope=STREAM_SCOPE_GROUPS).value}`\n"
+        f"• **Streaming:** private chats `{stream_driver.stream_mode(prefs, scope=STREAM_SCOPE_PRIVATE).value}`, "
+        f"groups `{stream_driver.stream_mode(prefs, scope=STREAM_SCOPE_GROUPS).value}`\n"
         f"• **Personal System Prompt:** `{user_system_prompt_status}`\n"
         f"• **Personal 'Last N' Limit:** {user_last_n_limit}\n\n"
         f"**This Chat's Settings**\n"
@@ -9933,7 +9919,7 @@ def _stream_menu_text(prefs) -> str:
         "",
     ]
     for scope, name in STREAM_SCOPE_NAMES.items():
-        mode = _stream_mode(prefs, scope=scope)
+        mode = stream_driver.stream_mode(prefs, scope=scope)
         lines.append(f"{name}: **{STREAM_MODE_NAMES[mode]}**")
     if not draft_stream.DRAFTS_SUPPORTED:
         lines.append(
@@ -9946,7 +9932,7 @@ def _stream_menu_text(prefs) -> str:
 def _stream_menu_buttons(prefs) -> list:
     rows = []
     for scope, name in STREAM_SCOPE_NAMES.items():
-        current = _stream_mode(prefs, scope=scope)
+        current = stream_driver.stream_mode(prefs, scope=scope)
         rows.append(
             [
                 tg_compat.callback_button(
@@ -12244,23 +12230,14 @@ _ALREADY_DELIVERED = GenerationResult(
 )
 
 
-def _stream_mode(prefs, *, scope: str) -> StreamMode:
-    if scope == STREAM_SCOPE_PRIVATE:
-        return StreamMode(prefs.stream_private)
-    elif scope == STREAM_SCOPE_GROUPS:
-        return StreamMode(prefs.stream_groups)
-    else:
-        raise ValueError(f"Unknown stream scope: {scope!r}")
-
-
 async def _response_placeholder(event, placeholder_text: str, *, prefs):
     """The message an answer to EVENT streams into (docs/draft_streaming.md).
 
     A draft stand-in where the user streams drafts here and Telegram shows
     one; otherwise PLACEHOLDER_TEXT, sent.
     """
-    scope = STREAM_SCOPE_PRIVATE if event.is_private else STREAM_SCOPE_GROUPS
-    if IS_BOT and _stream_mode(prefs, scope=scope) == StreamMode.DRAFTS:
+    scope = stream_driver.stream_scope(event)
+    if IS_BOT and stream_driver.stream_mode(prefs, scope=scope) == StreamMode.DRAFTS:
         draft = draft_stream.DraftAnswerMessage(
             borg, event=event, top_msg_id=_thread_topic_id(event), logger=logger
         )

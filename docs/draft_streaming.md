@@ -60,7 +60,10 @@ change them. There are two scopes, each set to **Drafts** or **Edits**:
 
 `/stream private edits` or `/stream groups drafts` sets a scope directly. The
 settings are per user, kept with the other preferences (`stream_private`,
-`stream_groups` in `UserPrefs`), and `/status` lists them.
+`stream_groups` in `UserPrefs`), and `/status` lists them. The modes
+(`StreamMode`), the scope names and the choice of scope for a chat live in
+`uniborg/stream_driver.py` (`stream_scope`, `stream_mode`, `set_stream_mode`),
+so another plugin can offer the same setting with its own preferences.
 
 The groups setting exists for when Telegram allows drafts there. Today it
 refuses them (`TEXTDRAFT_PEER_INVALID`), so a group set to Drafts costs one

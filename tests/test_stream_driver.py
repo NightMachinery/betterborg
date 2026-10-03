@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, patch
 from telethon import errors
 
 from uniborg import draft_stream, stream_driver, util
-from uniborg.stream_driver import PacedEditor, ShowResult
+from uniborg.stream_driver import PacedEditor, ShowResult, StreamMode
 
 
 class _Clock:
@@ -289,6 +289,55 @@ class FollowTests(unittest.TestCase):
         asyncio.run(main())
 
         self.assertEqual(self.edits, [])
+
+
+class StreamSettingTests(unittest.TestCase):
+    def test_the_mode_values_are_what_saved_preferences_hold(self):
+        self.assertEqual([mode.value for mode in StreamMode], ["drafts", "edits"])
+
+    def test_the_scope_follows_the_chat(self):
+        self.assertEqual(
+            stream_driver.stream_scope(SimpleNamespace(is_private=True)),
+            stream_driver.STREAM_SCOPE_PRIVATE,
+        )
+        self.assertEqual(
+            stream_driver.stream_scope(SimpleNamespace(is_private=False)),
+            stream_driver.STREAM_SCOPE_GROUPS,
+        )
+
+    def test_each_scope_reads_and_writes_its_own_field(self):
+        prefs = SimpleNamespace(stream_private="drafts", stream_groups="edits")
+
+        stream_driver.set_stream_mode(
+            prefs, scope=stream_driver.STREAM_SCOPE_GROUPS, mode=StreamMode.DRAFTS
+        )
+
+        self.assertEqual(prefs.stream_groups, StreamMode.DRAFTS)
+        for scope in stream_driver.STREAM_SCOPE_NAMES:
+            self.assertEqual(
+                stream_driver.stream_mode(prefs, scope=scope), StreamMode.DRAFTS
+            )
+
+    def test_an_unknown_scope_raises(self):
+        prefs = SimpleNamespace(stream_private="drafts", stream_groups="edits")
+
+        with self.assertRaises(ValueError):
+            stream_driver.stream_mode(prefs, scope="channels")
+        with self.assertRaises(ValueError):
+            stream_driver.set_stream_mode(
+                prefs, scope="channels", mode=StreamMode.EDITS
+            )
+
+    def test_the_chat_bot_uses_these_names_and_loads_saved_settings(self):
+        from test_llm_chat_stream import plugin
+
+        self.assertIs(plugin.StreamMode, StreamMode)
+        self.assertIs(plugin.STREAM_SCOPE_NAMES, stream_driver.STREAM_SCOPE_NAMES)
+        prefs = plugin.UserPrefs.model_validate(
+            {"stream_private": "edits", "stream_groups": "drafts"}
+        )
+        self.assertEqual(prefs.stream_private, StreamMode.EDITS)
+        self.assertEqual(prefs.stream_groups, StreamMode.DRAFTS)
 
 
 if __name__ == "__main__":

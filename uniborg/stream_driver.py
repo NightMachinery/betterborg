@@ -13,6 +13,11 @@ A producer that can go quiet, such as a shell command, needs the trailing
 edge too: its last text must show even when nothing follows it. `follow` is
 that pump: it waits for changes and shows the latest text once it is due.
 
+A user picks per *scope* (private chats, or groups) whether answers stream
+as drafts or by edits (`StreamMode`). The settings live in the plugin's own
+preferences, any object with a `stream_private` and a `stream_groups` field;
+`stream_mode` and `set_stream_mode` read and write them.
+
 This is a core module, so a plugin reload never re-executes it. How the chat
 bot uses it is in docs/draft_streaming.md.
 """
@@ -33,6 +38,48 @@ PaceFunction = Callable[..., draft_stream.StreamingPace]
 #: `follow` waits this much past an edit's due time, since an edit is due
 #: only strictly after the interval.
 FOLLOW_SLACK = 0.05
+
+
+class StreamMode(str, Enum):
+    """How an answer shows while it is written (/stream)."""
+
+    #: Telegram's live draft, with a Stop button; private chats only.
+    DRAFTS = "drafts"
+    #: A message edited as the answer grows.
+    EDITS = "edits"
+
+
+STREAM_SCOPE_PRIVATE = "private"
+STREAM_SCOPE_GROUPS = "groups"
+STREAM_SCOPE_NAMES = {
+    STREAM_SCOPE_PRIVATE: "Private chats",
+    STREAM_SCOPE_GROUPS: "Groups",
+}
+STREAM_MODE_NAMES = {StreamMode.DRAFTS: "Drafts", StreamMode.EDITS: "Edits"}
+
+
+def stream_scope(event: Any) -> str:
+    """The scope of the chat EVENT happened in."""
+    return STREAM_SCOPE_PRIVATE if event.is_private else STREAM_SCOPE_GROUPS
+
+
+def _stream_field(scope: str) -> str:
+    if scope == STREAM_SCOPE_PRIVATE:
+        return "stream_private"
+    elif scope == STREAM_SCOPE_GROUPS:
+        return "stream_groups"
+    else:
+        raise ValueError(f"Unknown stream scope: {scope!r}")
+
+
+def stream_mode(prefs: Any, *, scope: str) -> StreamMode:
+    """The mode PREFS set for SCOPE."""
+    return StreamMode(getattr(prefs, _stream_field(scope)))
+
+
+def set_stream_mode(prefs: Any, *, scope: str, mode: StreamMode) -> None:
+    """Sets PREFS's mode for SCOPE to MODE."""
+    setattr(prefs, _stream_field(scope), mode)
 
 
 class ShowResult(Enum):
