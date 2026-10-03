@@ -59,7 +59,6 @@ from telethon.tl.types import (
     UpdateNewMessage,
     User,
     UpdateMessageReactions,
-    UpdateUserTyping,
 )
 from pydantic import BaseModel, Field, model_validator
 from typing import Any, Callable, Optional, List, Dict, Tuple
@@ -6864,8 +6863,8 @@ def register_handlers():
             func=lambda e: e.is_private,
         )
     )(stream_handler)
-    if IS_BOT and draft_stream.STOP_SUPPORTED:
-        borg.on(events.Raw(types=UpdateUserTyping))(draft_stop_handler)
+    if IS_BOT:
+        stream_driver.register_draft_stop(borg, module=__name__)
     borg.on(events.NewMessage(pattern=rf"(?i)^/tts{bot_username_suffix_re}\s*$"))(
         tts_handler
     )
@@ -9985,11 +9984,6 @@ async def _stream_menu_press_handler(event, *, scope: str, mode: StreamMode):
     except errors.rpcerrorlist.MessageNotModifiedError:
         pass
     await event.answer(f"{STREAM_SCOPE_NAMES[scope]}: {STREAM_MODE_NAMES[mode]}.")
-
-
-async def draft_stop_handler(update):
-    """A press of a draft's Stop button (`draft_stream.on_typing_update`)."""
-    await draft_stream.on_typing_update(update)
 
 
 async def sep_handler(event):

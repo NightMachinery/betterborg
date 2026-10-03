@@ -12,9 +12,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from telethon import errors
+from telethon import errors, events
 
 from uniborg import draft_stream, stream_driver, util
+from uniborg.uniborg import Uniborg
 from uniborg.stream_driver import PacedEditor, ShowResult, StreamMode
 
 
@@ -463,6 +464,58 @@ class FlushDraftTests(unittest.TestCase):
         asyncio.run(stream_driver.flush_draft(target))
 
         target.flush.assert_not_awaited()
+
+
+class _Client:
+    """Records handlers as `Uniborg` does, so a plugin's removal can be run."""
+
+    def __init__(self):
+        self._event_builders = []
+
+    def on(self, event):
+        def decorator(callback):
+            self._event_builders.append((event, callback))
+            return callback
+
+        return decorator
+
+
+class RegisterDraftStopTests(unittest.TestCase):
+    MODULE = "_UniborgPlugins.test.plugin"
+
+    def register(self, *, supported=True):
+        client = _Client()
+        with patch.object(draft_stream, "STOP_SUPPORTED", supported):
+            registered = stream_driver.register_draft_stop(client, module=self.MODULE)
+        return client, registered
+
+    def test_the_handler_belongs_to_the_plugin_and_goes_with_it(self):
+        client, registered = self.register()
+
+        self.assertTrue(registered)
+        ((event, callback),) = client._event_builders
+        self.assertIsInstance(event, events.Raw)
+        self.assertEqual(callback.__module__, self.MODULE)
+        Uniborg.remove_events_of_mod(client, "_UniborgPlugins.test.other")
+        self.assertEqual(len(client._event_builders), 1)
+        Uniborg.remove_events_of_mod(client, self.MODULE)
+        self.assertEqual(client._event_builders, [])
+
+    def test_a_press_goes_to_the_draft_streams(self):
+        client, _ = self.register()
+        ((_, callback),) = client._event_builders
+        update = object()
+
+        with patch.object(draft_stream, "on_typing_update", AsyncMock()) as typing:
+            asyncio.run(callback(update))
+
+        typing.assert_awaited_once_with(update)
+
+    def test_nothing_is_registered_without_a_stop_button(self):
+        client, registered = self.register(supported=False)
+
+        self.assertFalse(registered)
+        self.assertEqual(client._event_builders, [])
 
 
 if __name__ == "__main__":

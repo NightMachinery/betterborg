@@ -23,7 +23,8 @@ A *stream target* is the message a reply streams into: a draft stand-in
 Telegram shows one, otherwise a sent placeholder message.
 `open_stream_target` picks it, `stop_wired` and `run_stoppable` connect a
 draft's Stop button to the work that fills it, and `flush_draft` sends what
-a draft last showed once the work is over.
+a draft last showed once the work is over. `register_draft_stop` lets a
+plugin receive the Stop button's presses.
 
 This is a core module, so a plugin reload never re-executes it. How the chat
 bot uses it is in docs/draft_streaming.md.
@@ -35,7 +36,8 @@ from enum import Enum
 import logging
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TypeVar
 
-from telethon import errors
+from telethon import errors, events
+from telethon.tl.types import UpdateUserTyping
 
 from uniborg import draft_stream, util
 
@@ -169,6 +171,27 @@ async def flush_draft(target: Any, *, logger: Optional[logging.Logger] = None) -
         (logger or target.logger).warning(
             "Could not send a draft's last text", exc_info=True
         )
+
+
+def register_draft_stop(client: Any, *, module: str) -> bool:
+    """Handles presses of drafts' Stop buttons on CLIENT, for the plugin MODULE.
+
+    MODULE is the plugin's `__name__`: the handler counts as the plugin's
+    own, so reloading or removing the plugin removes it
+    (`Uniborg.remove_events_of_mod`). False, registering nothing, where this
+    Telethon cannot build a Stop button (`draft_stream.STOP_SUPPORTED`).
+    Plugins that each register one are safe, since a press stops its stream
+    only once.
+    """
+    if not draft_stream.STOP_SUPPORTED:
+        return False
+
+    async def draft_stop_handler(update):
+        await draft_stream.on_typing_update(update)
+
+    draft_stop_handler.__module__ = module
+    client.on(events.Raw(types=UpdateUserTyping))(draft_stop_handler)
+    return True
 
 
 class ShowResult(Enum):

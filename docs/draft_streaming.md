@@ -118,11 +118,13 @@ images deletes the stand-in, which sends no text at all.
 
 Where Telethon can build it (`draft_stream.STOP_SUPPORTED`, true on 1.45), each
 draft is sent with `can_stop=True`. The press arrives as `UpdateUserTyping`
-with `SendMessageStopDraftAction(random_id)`. `draft_stop_handler` passes it to
-`draft_stream.on_typing_update`, which finds the stream by its `random_id`
-(`_ACTIVE`) and acts only when the update comes from the user the stream is
-answering. The handler is the plugin's own function, so a plugin reload removes
-it.
+with `SendMessageStopDraftAction(random_id)`. The plugin registers a handler
+for it with `stream_driver.register_draft_stop(borg, module=__name__)`, which
+passes it to `draft_stream.on_typing_update`. That finds the stream by its
+`random_id` (`_ACTIVE`) and acts only when the update comes from the user the
+stream is answering. The handler is registered under the plugin's module name,
+so a plugin reload removes it (`Uniborg.remove_events_of_mod`). Two plugins may
+each register one: a stream stops only once.
 
 After Stop, the stand-in sends no more drafts (clients would ignore them
 anyway) and no sync draft. The press is not guaranteed to arrive, since that
@@ -180,8 +182,9 @@ while it lasts. The answer itself never waits for a draft.
   strict interval check, failed and unchanged edits, the pace tiers and the
   fixed pace), and on a real loop `stream_driver.follow`, the trailing-edge
   pump for producers that go quiet, such as a shell command (the chat bot's
-  loops do not use it). Also the stream settings, and the stream target's
-  opening, Stop wiring and flush on their own.
+  loops do not use it). Also the stream settings, the stream target's
+  opening, Stop wiring and flush on their own, and the Stop handler's
+  registration and its removal with the plugin.
 - `tests/test_gemini_image_stream.py`: native Gemini images' partial edits
   keep one pace and cursor past 30 s.
 - `tests/test_llm_chat_stream.py`: the plugin's choice of drafts or edits per
