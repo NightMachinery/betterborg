@@ -9,18 +9,41 @@ import os
 import sys
 from uniborg.util import admin_cmd
 
+#: The tasks that outlive their handler, kept so they are not collected.
+_TASKS = set()
+
+
+def _restart():
+    os.execl(sys.executable, sys.executable, *sys.argv)
+
+
+def _quit():
+    sys.exit()
+
+
+async def _disconnect_then(then):
+    await borg.disconnect()
+    then()
+
+
+def _after_the_handler(then):
+    """Disconnects, then calls THEN, in a task of its own.
+
+    `disconnect` cancels every running event handler, the one that calls it
+    included, so nothing after it would run in the handler.
+    """
+    task = asyncio.ensure_future(_disconnect_then(then))
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
+
 
 @borg.on(admin_cmd(pattern=".restart"))
-async def _(event):
+async def restart_handler(event):
     await event.reply("Restarted.")
-    await borg.disconnect()
-    os.execl(sys.executable, sys.executable, *sys.argv)
-    # You probably don't need it but whatever
-    quit()
+    _after_the_handler(_restart)
 
 
 @borg.on(admin_cmd(pattern=".shutdown"))
-async def _(event):
+async def shutdown_handler(event):
     await event.edit("Turning off ...")
-    await borg.disconnect()
-    quit()
+    _after_the_handler(_quit)
