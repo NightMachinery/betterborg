@@ -1,0 +1,163 @@
+"""Shows a program's output as a terminal would, as plain text.
+
+Programs that draw progress bars write control characters that only mean
+something on a terminal: a carriage return (`\\r`) to redraw the current line,
+a backspace (`\\b`), and ANSI escape sequences for colours, erasing and moving
+the cursor. Shown raw in a message, a progress bar becomes every one of its
+frames in a row, wrapped in escape codes.
+
+`render` applies them, as far as plain text can:
+- `\\r` moves to column 0, and later characters overwrite from there
+  (`abcdef\\rXY` renders `XYcdef`);
+- `\\n` ends the line, moving down a line and to column 0 (onto a line that
+  already exists after a cursor-up, otherwise a new one);
+- `\\b` moves back one column, never past column 0;
+- of the CSI sequences (`ESC [ ... final`): SGR (`m`, colours and styles) is
+  removed; `K` erases to the end of the line (`ESC[K`, `ESC[0K`), from its
+  start through the cursor (`ESC[1K`, as blanks) or all of it (`ESC[2K`); `A`
+  moves the cursor up N lines (default 1, never above the first), as
+  multi-bar tqdm does. Every other CSI sequence is dropped.
+- Other escape sequences (OSC strings such as a window title, and the short
+  ones such as `ESC (B` that `tput sgr0` writes) are dropped.
+
+Every other character is written as it is, one column each: tabs and wide
+characters are not expanded. There is no screen and no cursor addressing
+beyond this; text without `\\r`, `\\b` or ESC is returned unchanged.
+
+A *tail* of a longer output can start in the middle of a line, where a `\\r`
+or a cursor-up would act on text that is not there. `line_aligned` cuts such
+a tail to its first whole line, so rendering it stays inside the tail.
+
+This module imports only the standard library.
+"""
+
+import re
+
+_CSI = r"\x1b\[(?P<params>[0-?]*)[ -/]*(?P<final>[@-~])?"
+_OSC = r"\x1b\][^\x07\x1b]*(?P<osc_end>\x07|\x1b\\)?"
+_ESCAPE = r"\x1b[ -/]*(?P<esc_final>[0-~])?"
+#: Within one line: `feed` splits its text at newlines first.
+_TOKEN = re.compile(f"{_CSI}|{_OSC}|{_ESCAPE}|[\r\b]")
+_NEEDS_RENDERING = re.compile(r"[\r\b\x1b]")
+
+
+class TerminalRenderer:
+    """Renders output fed to it piece by piece.
+
+    `feed` takes text in any pieces, even one that ends inside an escape
+    sequence (that part waits for the next piece), and `text` gives what is
+    rendered so far.
+    """
+
+    def __init__(self):
+        self._lines = [""]
+        self._row = 0
+        self._col = 0
+        self._pending = ""
+
+    def feed(self, text: str) -> "TerminalRenderer":
+        text = self._pending + text
+        self._pending = ""
+        segments = text.split("\n")
+        last = len(segments) - 1
+        for i, segment in enumerate(segments):
+            if i:
+                self._newline()
+            if _NEEDS_RENDERING.search(segment):
+                self._feed_controls(segment, at_end=(i == last))
+            elif segment:
+                self._write(segment)
+        return self
+
+    def text(self) -> str:
+        return "\n".join(self._lines)
+
+    def _write(self, run: str) -> None:
+        line = self._lines[self._row]
+        col = self._col
+        if col >= len(line):
+            line = line + " " * (col - len(line)) + run
+        else:
+            line = line[:col] + run + line[col + len(run) :]
+        self._lines[self._row] = line
+        self._col = col + len(run)
+
+    def _feed_controls(self, segment: str, *, at_end: bool) -> None:
+        """Feeds SEGMENT, a piece of one line with control characters in it."""
+        pos = 0
+        for match in _TOKEN.finditer(segment):
+            if match.start() > pos:
+                self._write(segment[pos : match.start()])
+            pos = match.end()
+            if at_end and pos == len(segment) and _unfinished(match):
+                self._pending = match.group()
+                return
+            self._apply(match)
+        if pos < len(segment):
+            self._write(segment[pos:])
+
+    def _newline(self) -> None:
+        self._row += 1
+        self._col = 0
+        if self._row == len(self._lines):
+            self._lines.append("")
+
+    def _apply(self, match) -> None:
+        token = match.group()
+        if token == "\r":
+            self._col = 0
+        elif token == "\b":
+            self._col = max(0, self._col - 1)
+        elif token.startswith("\x1b[") and match.group("final"):
+            self._csi(match.group("params"), match.group("final"))
+
+    def _csi(self, params: str, final: str) -> None:
+        if final not in "KA":
+            return
+        if params and not params.isdigit():
+            #: A private (`?`) or multi-part parameter: not one of ours.
+            return
+        n = int(params or 0)
+        if final == "A":
+            self._row = max(0, self._row - max(n, 1))
+            return
+        line = self._lines[self._row]
+        col = self._col
+        if n == 0:
+            self._lines[self._row] = line[:col]
+        elif n == 1:
+            self._lines[self._row] = " " * min(col + 1, len(line)) + line[col + 1 :]
+        elif n == 2:
+            self._lines[self._row] = ""
+
+
+def _unfinished(match) -> bool:
+    """Whether MATCH is an escape sequence cut off before its end."""
+    token = match.group()
+    if not token.startswith("\x1b"):
+        return False
+    if token.startswith("\x1b["):
+        return match.group("final") is None
+    if token.startswith("\x1b]"):
+        return match.group("osc_end") is None
+    return match.group("esc_final") is None
+
+
+def render(text: str) -> str:
+    """TEXT as a terminal would show it; see the module docstring."""
+    if not _NEEDS_RENDERING.search(text):
+        return text
+    renderer = TerminalRenderer().feed(text)
+    #: A sequence still unfinished at the very end is never completed now.
+    return renderer.text()
+
+
+def line_aligned(text: str) -> str:
+    """TEXT from the start of its first whole line.
+
+    For a tail cut from a longer output: its first line is usually the end of
+    a longer one. TEXT without a newline is returned whole, as the best there
+    is.
+    """
+    newline = text.find("\n")
+    return text if newline < 0 else text[newline + 1 :]

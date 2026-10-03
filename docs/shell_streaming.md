@@ -37,3 +37,30 @@ the commands still running on it end.
 Nothing here depends on whole-pool restarts. Brish 0.4.1 is announced to
 restart only the dead worker; the separate plugin pool is still worth keeping
 until the bot runs it.
+
+## The terminal renderer
+
+`uniborg/term_render.py` shows output as a terminal would, as plain text, so a
+progress bar shows its last frame instead of every frame in a row. It is a
+pure module (standard library only) and works on any `str`, streamed or not.
+
+- `render(text)` applies `\r` (back to column 0; later characters overwrite),
+  `\n`, `\b` (back one column, not past 0) and these CSI sequences: SGR
+  (`ESC[...m`) is removed, `ESC[K` with 0, 1 or 2 erases in the line, and
+  `ESC[nA` moves up n lines, as multi-bar tqdm does. Every other escape
+  sequence (other CSI, OSC titles and links, `ESC (B`) is dropped. Text with
+  no `\r`, `\b` or ESC is returned unchanged, as the same object.
+- `TerminalRenderer` does the same piece by piece (`feed`, then `text`); an
+  escape sequence cut at the end of one piece waits for the next.
+- `line_aligned(text)` drops everything up to the first newline. A tail cut
+  from a longer output usually starts mid-line, where a `\r` or a cursor-up
+  would act on text that is not there; aligned, rendering stays inside it.
+
+It is not a terminal emulator: there is no screen, no cursor addressing
+beyond the above, and every character is one column wide (tabs and wide
+characters are not expanded). Commands still run without a terminal; nothing
+fakes one (no `script`, `unbuffer` or pseudo-terminal).
+
+Cost: about 0.05 s per MiB of ordinary lines and 0.4 s per MiB of dense `\r`
+frames on the development machine, so a final render of a large output
+belongs in a thread, not on the event loop.
