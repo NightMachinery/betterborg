@@ -6,6 +6,21 @@ while they run, and stopped. This file describes the producers: the code that
 runs a command and collects its bytes. The chat side (the live preview, `.k`,
 the Stop button and `/settings`) builds on them and is not written yet.
 
+## Terms
+
+- **Job**: one `.a`, `.af` or `.aa` command, from the moment it waits for a
+  shell until its final is delivered (`shell_stream.ShellJob`).
+- **Producer**: the code that runs the command and writes its bytes into the
+  job's live output: `util.brishz_capture` for `.a` and `.af`,
+  `util.simple_run_capture` for `.aa`, each given `job=`.
+- **Consumer**: the chat side, which shows the output while the command runs
+  and sends the final text when it ends.
+- **Live output** (`shell_stream.LiveOutput`): what the command wrote so far,
+  written from any thread and read on the event loop.
+- **Kill hook**: the callable that stops the running command
+  (`BrishPopen.kill` for brish, the process-group escalation for `.aa`). The
+  producer attaches it to the job, and `ShellJob.cancel` calls it.
+
 ## Shell pools
 
 Brish keeps long-lived zsh workers ready; a set of them in one `Brish` object
@@ -64,3 +79,74 @@ fakes one (no `script`, `unbuffer` or pseudo-terminal).
 Cost: about 0.05 s per MiB of ordinary lines and 0.4 s per MiB of dense `\r`
 frames on the development machine, so a final render of a large output
 belongs in a thread, not on the event loop.
+
+## Live output and memory caps
+
+`uniborg/shell_stream.py` is a core module: a plugin reload never re-executes
+it. It imports only `term_render` and `tg_format`.
+
+`LiveOutput.write(chunk, stream="out" | "err")` works from any thread and
+never blocks, so a producer reads as fast as the command writes and brish's
+backpressure never engages; a slow consumer only ever sees a later tail.
+After a write, `changed` (an `asyncio.Event`) is set on the loop through
+`call_soon_threadsafe`, with at most one wake pending, so a flood of writes
+costs the loop one callback per burst. A closed loop is ignored.
+
+What is kept, per stream:
+- the first `HEAD_BYTES` (16 MiB) and the last `TAIL_BYTES` (16 MiB), with a
+  line `[… N bytes not kept …]` between them when anything was dropped. The
+  cuts never split a UTF-8 character;
+- after a stop (`mark_stopped`, called by `ShellJob.cancel`), at most
+  `AFTER_STOP_BYTES` (256 KiB, brish's read-ahead after its first signal)
+  more over both streams; the rest is counted and reported in a last line,
+  `[… N bytes written after the stop not kept …]`;
+- separately, the last `PREVIEW_BYTES` (16 KiB) of both streams together, in
+  arrival order, for previews.
+
+Reading:
+- `tail_text(*, max_units, render)` is for a preview. It decodes the recent
+  window with `errors="replace"` (so invalid bytes show as U+FFFD), leaves out
+  a character cut at either end, and returns at most `max_units` UTF-16 units
+  (`tg_format.tail_utf16`). With `render`, a window cut from a longer output
+  starts at its first whole line (`term_render.line_aligned`) and is rendered.
+- `final_text(*, render)` is for the final. It decodes stdout and stderr each
+  whole, with the producer's `decoding` (`shell_stream.Decoding`), and joins
+  them stdout first. Without `render` this is exactly what capturing the same
+  bytes gave before: brish's `CmdResult.outerr`, or for `.aa`
+  `subprocess.run(text=True)` with `\r\n` and `\r` turned into `\n`. With
+  `render`, `term_render.render` replaces that newline translation.
+
+## Jobs and the registry
+
+A `ShellJob` holds its owner, chat, command message, guest `thread_key`,
+live output, state and stop reason. Its `id` is a process-wide counter.
+
+The states (`JobState`): QUEUED (waiting for a shell), RUNNING, STOPPING
+(asked to stop; the command may still be ending) and DONE (its final is
+delivered). Every match on `JobState`, `StopReason` (USER or SHUTDOWN) and
+`CancelOutcome` names each member and raises on anything else.
+
+- `try_start()` is called by the producer once it holds a shell. It returns
+  False when the job was stopped while it waited; the producer then frees the
+  shell and runs nothing. A running job answers True again, for a producer
+  that retries.
+- `attach(kill)` stores the kill hook and calls it at once when the job is
+  already stopped. `cancel(*, reason)` marks the job stopped and then calls
+  the hook it finds. Both take the job's lock, so whichever runs second sees
+  the other, and a cancel that lands between `popen` and `attach` still kills
+  the command (popen-api.md, the Job pattern). `detach()` drops the hook once
+  the command has ended.
+- `cancel` returns STOPPING (the hook was called), NOT_STARTED (it was still
+  queued and will never run; the consumer can deliver its final at once),
+  ALREADY_STOPPING or FINISHED. Only the first cancel counts. It returns at
+  once; the command may take seconds to end.
+- Every state change sets `output.changed`, so a preview header can follow.
+
+The registry is a dict, `shell_stream.JOBS`, used from the event loop only:
+`register(job)`, `finish(job)` (state DONE, sets `job.done`, forgets it),
+`find(*, chat_id, message_id)` (the job whose command or preview that message
+is), `visible(*, chat_id, caller_id, thread_key=None)` (a chat's jobs; in the
+caller's private chat with the bot also the caller's guest jobs; with a
+`thread_key`, the caller's jobs of that guest thread) and
+`stop_all(*, reason, timeout)`, which cancels every job, waits up to `timeout`
+seconds for them to finish and returns how many had not.
