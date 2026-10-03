@@ -1072,7 +1072,7 @@ class StopButtonTests(_ShellTestCase):
 
 
 class OldPoolTests(_ShellTestCase):
-    """`.x`, `.sbb` and `.xf` say how many jobs still run on the old pool."""
+    """`.x`, `.sbb` and `.xf` say how many jobs still run on old pools."""
 
     def restart(self, text, *, pools):
         """Runs TEXT's handler; `init_brishes` swaps in the next of POOLS."""
@@ -1114,22 +1114,35 @@ class OldPoolTests(_ShellTestCase):
         self.assertEqual(self.restart(".x", pools=["old", "new"]), "Restarted brishes.")
 
     def test_jobs_on_the_old_pool_are_counted(self):
-        old, older = object(), object()
-        first, _second, _aa, _elsewhere = self.jobs(old, old, None, older)
+        old, new = object(), object()
+        first, _second, _aa, _current = self.jobs(old, old, None, new)
 
         self.assertEqual(
-            self.restart(".x", pools=[old, "new"]),
-            "Restarted brishes.\n2 commands still run on the old pool; .k stops them.",
+            self.restart(".x", pools=[old, new]),
+            "Restarted brishes.\n2 commands still run on old pools; .k stops them.",
         )
         first.detach()
         self.assertEqual(
-            self.restart(".sbb", pools=[old, "new"]),
-            "Restarted brishes.\n1 command still runs on the old pool; .k stops it.",
+            self.restart(".sbb", pools=[old, new]),
+            "Restarted brishes.\n1 command still runs on an old pool; .k stops it.",
         )
         self.assertTrue(
-            self.restart(".xf", pools=[old, "new"]).endswith(
-                "can still rejoin.\n1 command still runs on the old pool; .k stops it."
+            self.restart(".xf", pools=[old, new]).endswith(
+                "can still rejoin.\n1 command still runs on an old pool; .k stops it."
             )
+        )
+
+    def test_a_pool_retired_by_an_earlier_restart_still_counts(self):
+        p1, p2, p3 = object(), object(), object()
+        self.jobs(p1)
+
+        self.assertEqual(
+            self.restart(".x", pools=[p1, p2]),
+            "Restarted brishes.\n1 command still runs on an old pool; .k stops it.",
+        )
+        self.assertEqual(
+            self.restart(".x", pools=[p2, p3]),
+            "Restarted brishes.\n1 command still runs on an old pool; .k stops it.",
         )
 
     def test_a_streamed_dot_a_records_its_pool(self):
