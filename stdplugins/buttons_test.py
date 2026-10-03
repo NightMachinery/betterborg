@@ -18,7 +18,24 @@ def create_key(pl):
     return f"borg_callback_{pl}"
 
 
-@borg.on(events.CallbackQuery)
+def is_own_data(data) -> bool:
+    """Whether a press's DATA is this plugin's: a `zsh_` button, or `.z CMD`.
+
+    Every other press belongs to the plugin that sent its button (the shell's
+    Stop button and /settings panel, say). Answering or echoing it here
+    would take it from that plugin whenever this one's handler ran first,
+    which depends on the order the plugins load in.
+    """
+    if data is None:
+        return False
+    try:
+        pl = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return pl.startswith("zsh_") or bool(p_zsh.match(pl))
+
+
+@borg.on(events.CallbackQuery(data=is_own_data))
 async def callback(event: events.callbackquery.CallbackQuery.Event):
     # We can edit the event to edit the clicked message.
     chat = await event.get_chat()
@@ -48,8 +65,6 @@ async def callback(event: events.callbackquery.CallbackQuery.Event):
     elif m_zsh:
         res: CmdResult = z(m_zsh.group(1))
         await discreet_send(event, res.outerr, msg)
-    else:
-        await event.reply(pl)
     await event.answer()  # does nothing if we answered before
 
 
