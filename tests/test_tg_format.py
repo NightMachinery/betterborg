@@ -61,6 +61,19 @@ class Utf16HelperTests(unittest.TestCase):
     def test_a_suffix_longer_than_the_limit_is_returned_alone(self):
         self.assertEqual(tg_format.truncate_utf16("hello", 2, suffix="..."), "...")
 
+    def test_tail_utf16_keeps_the_end_that_fits(self):
+        self.assertEqual(tg_format.tail_utf16("hello", 5), "hello")
+        self.assertEqual(tg_format.tail_utf16("hello world", 5), "world")
+        self.assertEqual(tg_format.tail_utf16("hello", 0), "")
+        self.assertEqual(tg_format.tail_utf16("", 3), "")
+
+    def test_tail_utf16_never_splits_an_astral_character_at_the_cut(self):
+        #: "😀" is two units: one unit left for it drops it whole.
+        self.assertEqual(tg_format.tail_utf16("ab😀cd", 3), "cd")
+        self.assertEqual(tg_format.tail_utf16("ab😀cd", 4), "😀cd")
+        self.assertEqual(tg_format.tail_utf16("😀😀😀", 5), "😀😀")
+        self.assertEqual(tg_format.tail_utf16("😀", 1), "")
+
     def test_truncate_utf8_counts_bytes_and_never_splits_a_character(self):
         self.assertEqual(tg_format.truncate_utf8("hello", 5), "hello")
         self.assertEqual(

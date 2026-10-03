@@ -27,6 +27,8 @@ from typing import Any, Callable, Optional
 
 from telethon import errors, functions, types
 
+from uniborg import tg_format
+
 _log = logging.getLogger(__name__)
 
 _DRAFT_ACTION = getattr(types, "SendMessageTextDraftAction", None)
@@ -86,19 +88,6 @@ def streaming_pace(
     if elapsed > 30:
         return StreamingPace(interval=15, cursor="▌💤")
     return StreamingPace(interval=edit_interval, cursor="▌")
-
-
-def _tail(text: str, max_units: int) -> str:
-    """The end of TEXT that fits MAX_UNITS UTF-16 code units."""
-    kept = []
-    used = 0
-    for character in reversed(text):
-        units = 2 if ord(character) > 0xFFFF else 1
-        if used + units > max_units:
-            break
-        kept.append(character)
-        used += units
-    return "".join(reversed(kept))
 
 
 class _DraftPart:
@@ -218,7 +207,7 @@ class DraftAnswerMessage(_DraftPart):
         A call slower than `call_timeout` is cancelled and raises a flood wait.
         """
         text, entities = await self.client._parse_message_text(
-            _tail(text, DRAFT_LIMIT_UNITS - len(suffix)), parse_mode
+            tg_format.tail_utf16(text, DRAFT_LIMIT_UNITS - len(suffix)), parse_mode
         )
         kwargs = {"can_stop": True} if STOP_SUPPORTED else {}
         action = _DRAFT_ACTION(

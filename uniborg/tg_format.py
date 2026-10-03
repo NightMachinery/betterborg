@@ -2,7 +2,8 @@
 
 Telegram counts message lengths and entity offsets in UTF-16 code units, so a
 character outside the Basic Multilingual Plane (most emoji) costs two.
-`utf16_len` and `truncate_utf16` measure and cut text by that count.
+`utf16_len`, `truncate_utf16` and `tail_utf16` measure and cut text by that
+count.
 
 A *rich message* (MTProto layer 227 and later) carries no text: the server
 parses the Markdown or HTML it was sent into a tree of Instant View
@@ -48,6 +49,23 @@ def truncate_utf16(text: str, max_units: int, *, suffix: str = "…") -> str:
         kept.append(character)
         used += units
     return "".join(kept) + suffix
+
+
+def tail_utf16(text: str, max_units: int) -> str:
+    """The end of TEXT that fits MAX_UNITS UTF-16 code units.
+
+    Whole characters are kept from the end while they fit, so a surrogate pair
+    is never split.
+    """
+    kept = []
+    used = 0
+    for character in reversed(text):
+        units = utf16_len(character)
+        if used + units > max_units:
+            break
+        kept.append(character)
+        used += units
+    return "".join(reversed(kept))
 
 
 def truncate_utf8(text: str, max_bytes: int, *, suffix: str = "…") -> str:
