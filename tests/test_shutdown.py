@@ -1,4 +1,7 @@
-"""Shutting the bot down: `.restart` and `.shutdown` (`stdplugins/power_tools.py`).
+"""Shutting the bot down: `.restart` and `.shutdown` (`stdplugins/power_tools.py`),
+and the server's shutdown (`stdborg.shutdown_event`). Each stops the shell's
+jobs before it disconnects (`shell_stream.stop_all_and_disconnect`); that
+a stopped command's final goes out in time is in test_advanced_get_shell.py.
 
 Nothing here restarts or exits: the plugin's `_restart` and `_quit` are
 replaced, and `os.execl` and `sys.exit` fail the test if they are reached.
@@ -14,11 +17,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from uniborg import util
+from uniborg import shell_stream, util
 
 from test_advanced_get_guest import _FakeBorg
 
 PLUGIN_PATH = Path(__file__).resolve().parents[1] / "stdplugins" / "power_tools.py"
+STOP_ALL = ("stop_all", shell_stream.StopReason.SHUTDOWN, shell_stream.SHUTDOWN_TIMEOUT)
 
 
 def _forbidden(*args, **kwargs):
@@ -39,6 +43,14 @@ class _Borg(_FakeBorg):
         for task in self.handler_tasks:
             task.cancel()
         await asyncio.wait(self.handler_tasks)
+
+
+def _recording_stop_all(calls):
+    async def stop_all(*, reason, timeout):
+        calls.append(("stop_all", reason, timeout))
+        return 0
+
+    return stop_all
 
 
 def _load_power_tools(borg):
@@ -65,6 +77,7 @@ class PowerToolsTests(unittest.TestCase):
             (sys, "exit", _forbidden),
             (self.plugin, "_restart", lambda: self.calls.append("restart")),
             (self.plugin, "_quit", lambda: self.calls.append("quit")),
+            (shell_stream, "stop_all", _recording_stop_all(self.calls)),
         ):
             patcher = patch.object(target, name, value)
             patcher.start()
@@ -91,13 +104,42 @@ class PowerToolsTests(unittest.TestCase):
         event = self.run_handler("restart_handler")
 
         event.reply.assert_awaited_once_with("Restarted.")
-        self.assertEqual(self.calls, ["disconnect", "restart"])
+        self.assertEqual(self.calls, [STOP_ALL, "disconnect", "restart"])
 
     def test_shutdown_quits_after_the_disconnect(self):
         event = self.run_handler("shutdown_handler")
 
         event.edit.assert_awaited_once_with("Turning off ...")
-        self.assertEqual(self.calls, ["disconnect", "quit"])
+        self.assertEqual(self.calls, [STOP_ALL, "disconnect", "quit"])
+
+
+class ServerShutdownTests(unittest.TestCase):
+    def setUp(self):
+        import stdborg
+
+        self.stdborg = stdborg
+        self.calls = []
+        patcher = patch.object(
+            shell_stream, "stop_all", _recording_stop_all(self.calls)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_jobs_stop_before_the_disconnect(self):
+        borg = SimpleNamespace(
+            disconnect=AsyncMock(side_effect=lambda: self.calls.append("disconnect"))
+        )
+
+        with patch.object(self.stdborg, "borg", borg):
+            asyncio.run(self.stdborg.shutdown_event())
+
+        self.assertEqual(self.calls, [STOP_ALL, "disconnect"])
+
+    def test_no_bot_nothing_to_stop(self):
+        with patch.object(self.stdborg, "borg", None):
+            asyncio.run(self.stdborg.shutdown_event())
+
+        self.assertEqual(self.calls, [])
 
 
 if __name__ == "__main__":

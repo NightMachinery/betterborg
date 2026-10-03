@@ -19,8 +19,8 @@ stream keeps is bounded: its first `HEAD_BYTES` and last `TAIL_BYTES`, with a
 marker line for what was dropped between them, and after a stop at most
 `AFTER_STOP_BYTES` more.
 
-The registry (`JOBS`, `register`, `finish`, `find`, `visible`, `stop_all`) is
-used from the event loop thread only. This is a core module, so a plugin
+The registry (`JOBS`, `register`, `finish`, `find`, `visible`, `stop_all`,
+`stop_all_and_disconnect`) is used from the event loop thread only. This is a core module, so a plugin
 reload never re-executes it, and a reloaded plugin still sees the jobs that
 started on its old code. More is in docs/shell_streaming.md.
 """
@@ -31,11 +31,14 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 import itertools
+import logging
 import threading
 import time
 from typing import Any, Callable, Optional
 
 from uniborg import term_render, tg_format
+
+_log = logging.getLogger(__name__)
 
 #: What each stream keeps of its start, and of its end.
 HEAD_BYTES = 16 * 2**20
@@ -45,6 +48,8 @@ TAIL_BYTES = 16 * 2**20
 AFTER_STOP_BYTES = 256 * 2**10
 #: The latest output, in arrival order, that a preview is built from.
 PREVIEW_BYTES = 16 * 2**10
+#: How long a shutdown waits for the stopped jobs to deliver their finals.
+SHUTDOWN_TIMEOUT = 15.0
 
 STREAM_OUT = "out"
 STREAM_ERR = "err"
@@ -529,3 +534,19 @@ async def stop_all(*, reason: StopReason, timeout: float) -> int:
     for waiter in pending:
         waiter.cancel()
     return len(pending)
+
+
+async def stop_all_and_disconnect(
+    client: Any, *, timeout: float = SHUTDOWN_TIMEOUT
+) -> None:
+    """Stops every job for a shutdown, then disconnects CLIENT.
+
+    The jobs get up to TIMEOUT seconds to end and deliver their finals while
+    CLIENT is still connected. Telethon's disconnect then cancels the event
+    handlers still running, so a job that did not finish in time has its
+    command killed by its consumer's cancel path.
+    """
+    left = await stop_all(reason=StopReason.SHUTDOWN, timeout=timeout)
+    if left:
+        _log.warning("%s shell jobs had not finished when the bot disconnected", left)
+    await client.disconnect()

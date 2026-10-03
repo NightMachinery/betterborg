@@ -489,6 +489,35 @@ class RegistryTests(unittest.TestCase):
             0,
         )
 
+    def test_a_shutdown_disconnects_once_the_finals_are_out(self):
+        """And after its timeout when a job does not finish."""
+        calls = []
+
+        class _Client:
+            async def disconnect(self):
+                calls.append(("disconnect", sorted(shell_stream.JOBS)))
+
+        async def main():
+            loop = asyncio.get_running_loop()
+            quick = shell_stream.register(_job(output=LiveOutput()))
+            quick.try_start()
+            #: Its final goes out a moment after the stop.
+            quick.attach(lambda: loop.call_later(0.1, shell_stream.finish, quick))
+            await shell_stream.stop_all_and_disconnect(_Client(), timeout=5)
+
+            stuck = shell_stream.register(_job(output=LiveOutput()))
+            stuck.try_start()
+            stuck.attach(lambda: None)
+            with self.assertLogs("uniborg.shell_stream", "WARNING"):
+                await shell_stream.stop_all_and_disconnect(_Client(), timeout=0.1)
+            return quick, stuck
+
+        quick, stuck = asyncio.run(main())
+
+        self.assertEqual(calls, [("disconnect", []), ("disconnect", [stuck.id])])
+        self.assertIs(quick.stop_reason, StopReason.SHUTDOWN)
+        self.assertIs(stuck.stop_reason, StopReason.SHUTDOWN)
+
 
 if __name__ == "__main__":
     unittest.main()

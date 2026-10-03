@@ -7,6 +7,7 @@ from telethon import events
 import asyncio
 import os
 import sys
+from uniborg import shell_stream
 from uniborg.util import admin_cmd
 
 #: The tasks that outlive their handler, kept so they are not collected.
@@ -22,15 +23,17 @@ def _quit():
 
 
 async def _disconnect_then(then):
-    await borg.disconnect()
+    await shell_stream.stop_all_and_disconnect(borg)
     then()
 
 
 def _after_the_handler(then):
-    """Disconnects, then calls THEN, in a task of its own.
+    """Stops the running shell commands and disconnects, then calls THEN, in
+    a task of its own.
 
-    `disconnect` cancels every running event handler, the one that calls it
-    included, so nothing after it would run in the handler.
+    The commands' finals go out before the disconnect. `disconnect` cancels
+    every running event handler, the one that calls it included, so nothing
+    after it would run in the handler.
     """
     task = asyncio.ensure_future(_disconnect_then(then))
     _TASKS.add(task)

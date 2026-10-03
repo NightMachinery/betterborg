@@ -526,9 +526,10 @@ On a brish without `popen`, `.a` renders its captured output the same way.
 - **The preview cannot be sent**: logged; the command runs on, and its final
   is sent as if there had been no preview.
 - **A preview edit fails**: `follow` waits a second before the next one.
-- **The handler's task is cancelled** (the client disconnecting): the job is
-  stopped with StopReason.SHUTDOWN, the producer is cancelled, and the
-  cancel propagates.
+- **The handler's task is cancelled** (the client disconnecting, or a
+  standalone bot's loop shutting down; see "Shutdown and restarts"): the
+  job is stopped with StopReason.SHUTDOWN, the producer is cancelled, and
+  the cancel propagates.
 - `util.forget_edit_chain(preview)` drops `util.edit_message`'s record of the
   preview once the pump is done, so it does not outlive the command.
 - **`borg_shell_streaming=0`**: `.a`, `.af` and `.aa` run exactly as before:
@@ -665,6 +666,37 @@ and its answer shows the output live. The code is `_run_guest_shell` and
 - **Failures**: a producer's error leaves the preview in place (a guest
   answer cannot be deleted), and the traceback replaces it, as before.
 
-## Still to come
+## Shutdown and restarts
 
-Stopping jobs before a shutdown.
+A shutdown stops every job first, while the bot is still connected, so each
+stopped command's final goes out: "⏹ Stopped: julia is restarting (exit
+N)." in a chat, "⏹ Stopped: julia is restarting" under the exit code of a
+guest answer. `shell_stream.stop_all_and_disconnect(client)` cancels every
+job with StopReason.SHUTDOWN, waits up to `SHUTDOWN_TIMEOUT` (15 s) for them
+to finish (their finals and files delivered), logs how many had not, and
+then disconnects. Three paths call it:
+
+- **Under uvicorn** (`start_server.py`), the server's shutdown event
+  (`stdborg.shutdown_event`) runs on SIGINT or SIGTERM, while the event loop
+  still runs.
+- **`.restart` and `.shutdown`** (`stdplugins/power_tools.py`) run it, then
+  re-execute the bot or exit. They do so in a task of their own: Telethon's
+  `disconnect` cancels every running event handler, the one that calls it
+  included, so code after it in the handler would never run.
+- **Leftovers**: a job that has not finished when the time runs out has its
+  handler cancelled by the disconnect (`_disconnect_coro` in Telethon's
+  `telegrambaseclient.py` cancels and awaits its event handler tasks). The
+  pump's cancel path then kills the command, with no final.
+
+**Standalone** (`python3 stdborg.py`), Ctrl-C ends `asyncio.run`, which
+cancels every task before it closes the loop; there is no time to send
+anything. Each job's pump takes its cancel path: the job is stopped with
+SHUTDOWN, a streamed `.aa` gets SIGKILL for its process group at once, and a
+brish command gets its popen's kill. The loop's default executor then waits
+for the brish threads, which end once their commands do (a command that
+ignores SIGINT ends at a later step of brish's kill, within about 13 s), so
+a `tail -f` no longer keeps the process from exiting.
+
+A stop does not reach a daemon that left the command's process group (a
+`setsid`, `nohup … &` with its own session, or a double fork): it outlives
+the command, and the shutdown, as before live output.

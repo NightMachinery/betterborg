@@ -11,6 +11,7 @@ in tenths of a second.
 import asyncio
 from functools import partial
 import itertools
+import os
 from pathlib import Path
 import re
 import tempfile
@@ -1243,6 +1244,65 @@ class OldPoolTests(_ShellTestCase):
         ((pool, brish),) = pools
         self.assertIs(pool, util.persistent_brish)
         self.assertIs(brish, pool)
+
+
+class ShutdownTests(_ShellTestCase):
+    """A shutdown stops the running commands, with an inert `.aa sleep` in a
+    real zsh."""
+
+    def test_stopping_all_before_the_disconnect_delivers_the_restart_note(self):
+        took = {}
+
+        async def shut_down(event):
+            await _until(lambda: event.log)
+            client = SimpleNamespace(disconnect=AsyncMock())
+            started = asyncio.get_running_loop().time()
+            await shell_stream.stop_all_and_disconnect(client, timeout=15)
+            took["seconds"] = asyncio.get_running_loop().time() - started
+            took["disconnected"] = client.disconnect.await_count
+
+        event = self.run_command(".aa sleep 100", during=shut_down)
+
+        self.assertLess(took["seconds"], 2)
+        self.assertEqual(took["disconnected"], 1)
+        self.assertRegex(
+            event.log[-1][2],
+            r"^The process exited -?\d+\.\n\n⏹ Stopped: julia is restarting"
+            r" \(exit -?\d+\)\.$",
+        )
+        self.assertEqual(shell_stream.JOBS, {})
+
+    def test_the_loops_teardown_kills_a_command_still_running(self):
+        """What `asyncio.run` does to a standalone bot on Ctrl-C: it cancels the
+        handler's task, and the command dies with it."""
+        seen = {}
+
+        async def main():
+            event = _Event(
+                self.plugin, ".aa printf '%s\\n' $$; sleep 100", private=False
+            )
+            asyncio.ensure_future(self.handler(event))
+            await _until(lambda: shell_stream.JOBS)
+            (job,) = shell_stream.JOBS.values()
+            await _until(lambda: job.output.final_text(render=False).strip())
+            seen["job"] = job
+            seen["pid"] = int(job.output.final_text(render=False).split()[0])
+
+        asyncio.run(main())
+
+        self.assertIs(seen["job"].stop_reason, shell_stream.StopReason.SHUTDOWN)
+
+        async def gone():
+            def dead():
+                try:
+                    os.kill(seen["pid"], 0)
+                except ProcessLookupError:
+                    return True
+                return False
+
+            await _until(dead)
+
+        asyncio.run(gone())
 
 
 class _QuickAnswer(guest_util.GuestAnswerMessage):

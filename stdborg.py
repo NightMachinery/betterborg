@@ -8,7 +8,7 @@ import os
 import os.path
 import sys
 import socks
-from uniborg import Uniborg
+from uniborg import Uniborg, shell_stream
 from uniborg.util import executor
 from watchgod import awatch, Change
 from brish import z, zp, zq
@@ -98,7 +98,8 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     if borg:
-        await borg.disconnect()
+        #: While still connected, so the stopped commands' finals go out.
+        await shell_stream.stop_all_and_disconnect(borg)
 
 
 @app.get("/")
