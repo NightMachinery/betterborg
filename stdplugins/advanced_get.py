@@ -680,7 +680,8 @@ async def stop_press_handler(event):
     """A press of an edited preview's Stop button: stops its job, with a toast.
 
     Only admins (`.a`'s gate) may stop; anyone else gets a toast that says
-    so. The preview's header then shows the stop, at the preview's pace.
+    so. The job must be the one whose preview was pressed. The preview's
+    header then shows the stop, at the preview's pace.
     """
     if not await util.isAdmin(event):
         await event.answer(ADMINS_ONLY)
@@ -691,7 +692,13 @@ async def stop_press_handler(event):
         await event.answer(OUTDATED_BUTTON)
         return
     job = shell_stream.JOBS.get(int(job_id))
-    if job is None or job.chat_id != event.chat_id:
+    #: Job ids start again at 1 after a restart, so a button left from before
+    #: one names a newer job; only the job's own preview may stop it.
+    if (
+        job is None
+        or job.chat_id != event.chat_id
+        or job.preview_id != event.message_id
+    ):
         await event.answer(f"#{job_id} has already ended.")
         return
     await event.answer(_stop(job))

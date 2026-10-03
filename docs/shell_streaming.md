@@ -587,12 +587,15 @@ load in.
 - A press by anyone but an admin (`util.isAdmin`, as for `.a`) gets the
   toast "Only the bot's admins can do that." and stops nothing.
 - Otherwise the job is `shell_stream.JOBS[id]`, if it is in the chat of the
-  press, and it is stopped as by `.k`: the toast is the same text ("⏹
-  Stopping #3…", "#3 is already stopping.", "#3 has already ended."), and the
-  header turns to "⏹ #3 stopping…" at the preview's next edit.
+  press and the pressed message is its preview (`job.preview_id`), and it is
+  stopped as by `.k`: the toast is the same text ("⏹ Stopping #3…", "#3 is
+  already stopping.", "#3 has already ended."), and the header turns to "⏹
+  #3 stopping…" at the preview's next edit.
 - A job that is no longer registered (it finished, or the bot restarted)
   gets "#3 has already ended.", and data with no id "That button is out of
-  date."
+  date." The preview check matters after a restart: job ids start again at
+  1 in each process, and a preview that a shutdown or a crash left with its
+  button would otherwise stop the newer job that got the same id.
 
 ## Still to come
 

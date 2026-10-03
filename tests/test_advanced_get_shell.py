@@ -911,11 +911,13 @@ class KillTests(_ShellTestCase):
 
 
 class _Press:
-    """A press of a Stop button in CHAT_ID; records its answers."""
+    """A press of the Stop button of message MESSAGE_ID in CHAT_ID; records
+    its answers. 100 is the fake chat's first message: a job's preview."""
 
-    def __init__(self, data, *, chat_id=CHAT):
+    def __init__(self, data, *, chat_id=CHAT, message_id=100):
         self.data = data.encode()
         self.chat_id = chat_id
+        self.message_id = message_id
         self.sender_id = ADMIN
         self.answers = []
 
@@ -998,6 +1000,27 @@ class StopButtonTests(_ShellTestCase):
             ],
         )
         self.assertFalse(other.stopped)
+
+    def test_a_stale_button_does_not_stop_a_newer_job_with_its_number(self):
+        """After a restart, job ids start again at 1: an old preview's
+        button carries the id of a newer job in the same chat."""
+
+        async def main():
+            job = shell_stream.register(
+                shell_stream.ShellJob(
+                    owner_id=ADMIN, chat_id=CHAT, command="x", preview_id=500
+                )
+            )
+            job.try_start()
+            stale = await self.press(f"shk:{job.id}", message_id=7)
+            own = await self.press(f"shk:{job.id}", message_id=500)
+            return job, stale, own
+
+        job, stale, own = asyncio.run(main())
+
+        self.assertEqual(stale, [f"#{job.id} has already ended."])
+        self.assertEqual(own, [f"⏹ Stopping #{job.id}…"])
+        self.assertTrue(job.stopped)
 
     def test_only_its_own_presses_reach_it(self):
         ((builder, _fn),) = [
