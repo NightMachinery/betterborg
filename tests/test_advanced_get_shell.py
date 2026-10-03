@@ -12,6 +12,7 @@ import asyncio
 from functools import partial
 import itertools
 from pathlib import Path
+import re
 import tempfile
 import threading
 from types import SimpleNamespace
@@ -20,7 +21,7 @@ from unittest.mock import AsyncMock, patch
 
 from telethon.tl import types
 
-from uniborg import draft_stream, shell_settings, shell_stream, util
+from uniborg import draft_stream, shell_settings, shell_stream, tg_compat, util
 from uniborg.shell_settings import FinalMode, ShellPrefs, ShellSettings
 from uniborg.storage import UserStorage
 from uniborg.stream_driver import StreamMode
@@ -253,6 +254,20 @@ async def _until(condition, *, timeout=10):
         await asyncio.sleep(0.02)
 
 
+def _buttons(rows):
+    """ROWS of buttons as (text, data) pairs."""
+    return [
+        [(tg_compat.button_text(b), tg_compat.button_data(b)) for b in row]
+        for row in rows
+    ]
+
+
+def _stop_button(preview_text):
+    """The Stop button of the job whose preview shows PREVIEW_TEXT."""
+    job_id = re.match(r"⏳ #(\d+)", preview_text).group(1)
+    return ("⏹ Stop", f"shk:{job_id}".encode())
+
+
 #: Output, a pause past the preview delay, more output.
 SLOW = ["a\n", 0.8, "b"]
 PLAIN_TEXT = {"parse_mode": None, "link_preview": False}
@@ -309,9 +324,11 @@ class EditedPreviewTests(_ShellTestCase):
 
         first, *rest = event.log
         self.assertEqual(first[0], "respond")
-        self.assertRegex(first[1], r"^⏳ #\d+ · \.k to stop\n\na\n▌$")
+        self.assertRegex(first[1], r"^⏳ #\d+\n\na\n▌$")
+        kwargs = dict(first[2])
+        self.assertEqual(_buttons(kwargs.pop("buttons")), [[_stop_button(first[1])]])
         self.assertEqual(
-            first[2], {**PLAIN_TEXT, "reply_to": event.message, "silent": True}
+            kwargs, {**PLAIN_TEXT, "reply_to": event.message, "silent": True}
         )
         preview_id = 100
         *_partials, final = rest
@@ -554,7 +571,10 @@ class DraftPreviewTests(_ShellTestCase):
 
         event = self.run_script(SLOW)
 
-        self.assertRegex(event.log[0][1], r"^⏳ #\d+ · \.k to stop")
+        self.assertRegex(event.log[0][1], r"^⏳ #\d+\n")
+        self.assertEqual(
+            _buttons(event.log[0][2]["buttons"]), [[_stop_button(event.log[0][1])]]
+        )
         self.assertEqual(event.log[-1][:3], ("edit", 100, "a\nb"))
 
     @unittest.skipUnless(draft_stream.STOP_SUPPORTED, "no Stop button here")
@@ -887,6 +907,142 @@ class KillTests(_ShellTestCase):
 
     def test_help_names_it(self):
         self.assertIn("`.k`", self.plugin.HELP_TEXT)
+
+
+class _Press:
+    """A press of a Stop button in CHAT_ID; records its answers."""
+
+    def __init__(self, data, *, chat_id=CHAT):
+        self.data = data.encode()
+        self.chat_id = chat_id
+        self.sender_id = ADMIN
+        self.answers = []
+
+    async def answer(self, *args, **kwargs):
+        self.answers.append(args)
+
+
+class StopButtonTests(_ShellTestCase):
+    def setUp(self):
+        super().setUp()
+        (self.press_handler,) = [
+            fn
+            for _b, fn in self.borg.handlers
+            if getattr(fn, "__name__", None) == "stop_press_handler"
+        ]
+
+    async def press(self, data, **kwargs):
+        press = _Press(data, **kwargs)
+        await self.press_handler(press)
+        return [args[0] for args in press.answers]
+
+    def test_a_press_stops_the_job_and_the_header_says_so(self):
+        toasts = []
+
+        async def press(event):
+            await _until(lambda: event.log)
+            (job,) = shell_stream.JOBS.values()
+            toasts.extend(await self.press(f"shk:{job.id}"))
+            await _until(lambda: len(event.log) > 1)
+            toasts.extend(await self.press(f"shk:{job.id}"))
+
+        event = self.run_script(["started", STOP, 0.5], during=press)
+
+        job_id = re.match(r"⏳ #(\d+)", event.log[0][1]).group(1)
+        self.assertEqual(
+            toasts, [f"⏹ Stopping #{job_id}…", f"#{job_id} is already stopping."]
+        )
+        self.assertEqual(event.log[1][2], f"⏹ #{job_id} stopping…\n\nstarted▌")
+        #: The final's edit removes the button.
+        self.assertEqual(
+            event.log[-1],
+            ("edit", 100, "started\n\n⏹ Stopped (exit 130).", FINAL_EDIT),
+        )
+
+    def test_a_non_admins_press_gets_a_toast_and_stops_nothing(self):
+        async def main():
+            job = shell_stream.register(
+                shell_stream.ShellJob(owner_id=ADMIN, chat_id=CHAT, command="x")
+            )
+            job.try_start()
+            with patch.object(util, "isAdmin", AsyncMock(return_value=False)):
+                toasts = await self.press(f"shk:{job.id}")
+            return job, toasts
+
+        job, toasts = asyncio.run(main())
+
+        self.assertEqual(toasts, [self.plugin.ADMINS_ONLY])
+        self.assertFalse(job.stopped)
+
+    def test_a_press_for_a_job_that_ended_says_so(self):
+        async def main():
+            other = shell_stream.register(
+                shell_stream.ShellJob(owner_id=ADMIN, chat_id=-1002, command="x")
+            )
+            other.try_start()
+            return other, [
+                *await self.press("shk:999999"),
+                *await self.press(f"shk:{other.id}"),
+                *await self.press("shk:"),
+            ]
+
+        other, toasts = asyncio.run(main())
+
+        self.assertEqual(
+            toasts,
+            [
+                "#999999 has already ended.",
+                f"#{other.id} has already ended.",
+                self.plugin.OUTDATED_BUTTON,
+            ],
+        )
+        self.assertFalse(other.stopped)
+
+    def test_only_its_own_presses_reach_it(self):
+        ((builder, _fn),) = [
+            (b, fn)
+            for b, fn in self.borg.handlers
+            if getattr(fn, "__name__", None) == "stop_press_handler"
+        ]
+
+        def takes(data):
+            event = SimpleNamespace(query=SimpleNamespace(data=data, chat_instance=0))
+            return bool(builder.filter(event))
+
+        self.assertTrue(takes(b"shk:3"))
+        self.assertFalse(takes(b"shs:render:off"))
+        self.assertFalse(takes(b"zsh_1"))
+
+    def test_partial_edits_keep_the_button(self):
+        from telethon import TelegramClient
+        from test_stream_driver import _EditClient, _message_with_a_button
+
+        async def main():
+            job = shell_stream.ShellJob(owner_id=ADMIN, chat_id=CHAT, command="x")
+            client = _EditClient()
+            client.parse_mode = None
+            message = _message_with_a_button(client)
+            message.reply_markup = TelegramClient.build_reply_markup(
+                self.plugin._stop_buttons(job)
+            )
+            await util.edit_message(
+                message, "⏳ #3\n\nmore▌", parse_mode=None, raise_on_head_failure=True
+            )
+            return message, client
+
+        with patch.dict(util.EDIT_CHAINS, {}, clear=True):
+            message, client = asyncio.run(main())
+
+        ((_args, kwargs),) = client.edits
+        self.assertIs(kwargs["buttons"], message.reply_markup)
+
+    def test_a_userbots_preview_has_no_button(self):
+        self.borg.me.bot = False
+
+        event = self.run_script(SLOW)
+
+        self.assertIsNone(event.log[0][2]["buttons"])
+        self.assertRegex(event.log[0][1], r"^⏳ #\d+ · \.k to stop")
 
 
 class PreviewHeaderTests(_ShellTestCase):

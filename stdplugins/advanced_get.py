@@ -110,6 +110,9 @@ PREVIEW_CURSOR = "▌"
 #: in a thread: rendering costs up to about 0.35 s per MiB
 #: (docs/shell_streaming.md), so this holds the loop for at most about 20 ms.
 RENDER_ON_LOOP_BYTES = 64 * 2**10
+#: An edited preview's Stop button sends this, then the job's id.
+STOP_CALLBACK_PREFIX = "shk:"
+STOP_BUTTON_TEXT = "⏹ Stop"
 LONG_OUTPUT_LINE = "✂️ The full output is in the file below."
 FINISHED_TEXT = "Finished; output below."
 STOPPED_BEFORE_IT_RAN = "⏹ Stopped before it ran."
@@ -254,20 +257,38 @@ def _preview_text(job, *, render, stop_hint) -> str:
 
 
 def _shows_stop_button(preview) -> bool:
-    """Whether PREVIEW has a Stop button: a draft, on a Telethon that can
-    build one (1.45; `draft_stream.STOP_SUPPORTED`)."""
-    return draft_stream.STOP_SUPPORTED and isinstance(
-        preview, draft_stream.DraftAnswerMessage
-    )
+    """Whether PREVIEW has a Stop button.
+
+    A draft has its own on a Telethon that can build one (1.45;
+    `draft_stream.STOP_SUPPORTED`). An edited message has ours on a bot
+    (`_stop_buttons`); a userbot cannot send inline buttons.
+    """
+    if isinstance(preview, draft_stream.DraftAnswerMessage):
+        return draft_stream.STOP_SUPPORTED
+    return bool(borg.me.bot)
 
 
-async def _send_preview(event, text):
+def _stop_buttons(job) -> list:
+    """An edited preview's Stop button. Edits keep it: `Message.edit` reuses
+    the message's reply markup unless told otherwise, and only the final's
+    edit (`stream_driver.show_final`) removes it."""
+    return [
+        [
+            tg_compat.callback_button(
+                STOP_BUTTON_TEXT, data=f"{STOP_CALLBACK_PREFIX}{job.id}"
+            )
+        ]
+    ]
+
+
+async def _send_preview(event, text, *, buttons=None):
     return await event.respond(
         text,
         reply_to=event.message,
         parse_mode=None,
         link_preview=False,
         silent=True,
+        buttons=buttons,
     )
 
 
@@ -287,13 +308,14 @@ def _wants_drafts(event, prefs) -> bool:
 
 async def _open_chat_preview(event, *, job, drafts, render):
     text = partial(_preview_text, job, render=render)
+    buttons = _stop_buttons(job) if borg.me.bot else None
     return await stream_driver.open_stream_target(
         event,
         client=borg,
         drafts=drafts,
-        placeholder_text=text(stop_hint=True) + PREVIEW_CURSOR,
+        placeholder_text=text(stop_hint=buttons is None) + PREVIEW_CURSOR,
         draft_text=text(stop_hint=not draft_stream.STOP_SUPPORTED) + PREVIEW_CURSOR,
-        send_placeholder=_send_preview,
+        send_placeholder=partial(_send_preview, buttons=buttons),
         top_msg_id=topics.private_topic_id(event.message) if drafts else None,
         parse_mode=None,
         logger=logger if drafts else None,
@@ -529,6 +551,9 @@ KILL_USAGE = (
 )
 #: How much of a command a list shows.
 COMMAND_PREVIEW_CHARS = 60
+#: A toast for a press by anyone but an admin.
+ADMINS_ONLY = "Only the bot's admins can do that."
+OUTDATED_BUTTON = "That button is out of date."
 
 
 def _is_running(job) -> bool:
@@ -648,8 +673,33 @@ async def kill_handler(event):
     await event.reply(await kill_reply(event), parse_mode=None, link_preview=False)
 
 
+@callback_util.hold_bare_answers
+async def stop_press_handler(event):
+    """A press of an edited preview's Stop button: stops its job, with a toast.
+
+    Only admins (`.a`'s gate) may stop; anyone else gets a toast that says
+    so. The preview's header then shows the stop, at the preview's pace.
+    """
+    if not await util.isAdmin(event):
+        await event.answer(ADMINS_ONLY)
+        return
+    data = event.data.decode("utf-8", "replace")
+    job_id = data.removeprefix(STOP_CALLBACK_PREFIX)
+    if not job_id.isdigit():
+        await event.answer(OUTDATED_BUTTON)
+        return
+    job = shell_stream.JOBS.get(int(job_id))
+    if job is None or job.chat_id != event.chat_id:
+        await event.answer(f"#{job_id} has already ended.")
+        return
+    await event.answer(_stop(job))
+
+
 if borg.me.bot:
     stream_driver.register_draft_stop(borg, module=__name__)
+    borg.on(events.CallbackQuery(pattern=re.escape(STOP_CALLBACK_PREFIX).encode()))(
+        stop_press_handler
+    )
 
 
 @borg.on(util.admin_cmd(pattern="^\.xf$"))
@@ -697,7 +747,6 @@ SETTINGS_IN_PRIVATE = (
     "The shell settings are in my private chat: send /settings to me there."
 )
 SETTINGS_NOT_SAVED = "Could not save that setting; try again."
-ADMINS_ONLY = "Only the bot's admins can do that."
 HELP_TEXT = """**Shell**
 `.a CMD` runs CMD in a zsh of the shell pool and replies with its output, then the files it leaves. Flags, in this order:
 • `.aa`: a new `zsh -c`, outside the pool;
@@ -873,7 +922,7 @@ async def settings_press_handler(event):
     data = event.data.decode("utf-8", "replace")
     change = setting_change(data.removeprefix(SETTINGS_CALLBACK_PREFIX).split(":"))
     if change is None:
-        await event.answer("That button is out of date; send /settings again.")
+        await event.answer(f"{OUTDATED_BUTTON} Send /settings again.")
         return
     saved = _save_change(event.sender_id, change)
     await event.answer(change.summary if saved else SETTINGS_NOT_SAVED)

@@ -4,9 +4,9 @@ How the shell (`.a`, `.af`, `.aa` and the guest shell in
 `stdplugins/advanced_get.py`) runs commands so that their output can be shown
 while they run, and stopped. It describes the producers (the code that runs a
 command and collects its bytes), the settings and their `/settings` panel,
-the live output of `.a`, `.af` and `.aa` in chats, and `.k`, which stops a
-running command. The Stop button of edited previews and the guest shell's
-live answers are not written yet.
+the live output of `.a`, `.af` and `.aa` in chats, and how a running command
+is stopped: `.k` and the previews' Stop buttons. The guest shell's live
+answers are not written yet.
 
 ## Terms
 
@@ -409,9 +409,9 @@ frees its shell whenever it gets one and runs nothing.
 - **Header**: "⏳ #3" while the command runs, "⏳ #3 waiting for a free shell"
   while the job is QUEUED (every shell of the pool is busy), and "⏹ #3
   stopping…" once it is stopped. A preview with no Stop button adds
-  " · .k to stop": an edited message, and a draft on a Telethon that cannot
-  build the button (before 1.45). That draft is the worse case: on Android it
-  disables the send button for as long as it lives.
+  " · .k to stop": an edited message on a userbot, and a draft on a Telethon
+  that cannot build the button (before 1.45). That draft is the worse case:
+  on Android it disables the send button for as long as it lives.
 - **Kind**: a draft (`draft_stream.DraftAnswerMessage`, opened through
   `stream_driver.open_stream_target` with `parse_mode=None`) when the account
   is a bot, the installed Telethon can send drafts, and the caller's setting
@@ -424,7 +424,15 @@ frees its shell whenever it gets one and runs nothing.
   on Telegram 10.3 clients. `stream_driver.stop_wired` points it at
   `job.cancel(reason=USER)`, and the plugin registers the press handler with
   `stream_driver.register_draft_stop(borg, module=__name__)`, so a plugin
-  reload removes it.
+  reload removes it. An edited preview on a bot has an inline "⏹ Stop"
+  button (`_stop_buttons`, built with `tg_compat.callback_button`, so it
+  works on both Telethon versions), whose callback data is `shk:` and the
+  job id. Edits keep it, since `Message.edit` reuses a message's reply
+  markup when `buttons` is left out (and a message sent in a private chat,
+  which Telethon builds itself from `UpdateShortSentMessage`, keeps the
+  markup of its request, `client/messages.py` in `send_message`); the
+  final's edit removes it (`buttons=None`), and so does deleting the
+  preview. See "The Stop button" below.
 - **Pace**: an edited preview changes at most every 2 s, then every 5 s once
   the command has run 30 s; in groups every 4 s, then every 10 s
   (`stream_driver.tiered_pace`). That is about 10 edits in a group's first
@@ -562,7 +570,25 @@ stopped."), and on a brish without `popen` `.a` and `.af` are not jobs
 The registry lives in the core module `shell_stream`, so a `.k` from a
 reloaded plugin still sees the jobs that started on the old code.
 
+### The Stop button
+
+`stop_press_handler` takes the presses whose data starts with `shk:` (a
+CallbackQuery pattern), on bots only, and is wrapped in
+`callback_util.hold_bare_answers`, so its toast always shows. `buttons_test`
+no longer answers presses that are not its own, whatever order the plugins
+load in.
+
+- A press by anyone but an admin (`util.isAdmin`, as for `.a`) gets the
+  toast "Only the bot's admins can do that." and stops nothing.
+- Otherwise the job is `shell_stream.JOBS[id]`, if it is in the chat of the
+  press, and it is stopped as by `.k`: the toast is the same text ("⏹
+  Stopping #3…", "#3 is already stopping.", "#3 has already ended."), and the
+  header turns to "⏹ #3 stopping…" at the preview's next edit.
+- A job that is no longer registered (it finished, or the bot restarted)
+  gets "#3 has already ended.", and data with no id "That button is out of
+  date."
+
 ## Still to come
 
-The Stop button of edited previews on bots, live guest answers (and the
-renderer in them, and `@bot .k`), and stopping jobs before a shutdown.
+Live guest answers (and the renderer in them, and `@bot .k`), and stopping
+jobs before a shutdown.
