@@ -86,7 +86,8 @@ class ShellSettings:
     by default a `UserStorage` for PURPOSE, made on first use. Only values
     that differ from the defaults are stored, so a changed default reaches
     everyone who never set that value. A stored value this version does not
-    know is logged and read as its default.
+    know is logged and read as its default, and so is stored data that is
+    not an object.
     """
 
     def __init__(self, *, storage: Any = None):
@@ -99,7 +100,13 @@ class ShellSettings:
         return self._storage
 
     def get(self, user_id: int) -> ShellPrefs:
-        data = self.storage.get(user_id) or {}
+        data = self.storage.get(user_id)
+        if data is None:
+            data = {}
+        elif not isinstance(data, dict):
+            #: Valid JSON, but not an object: a hand edit gone wrong.
+            _log.warning("Ignoring the shell settings of %s: %r", user_id, data)
+            data = {}
         prefs = ShellPrefs()
         for name, value in data.items():
             if name not in _FIELD_TYPES:

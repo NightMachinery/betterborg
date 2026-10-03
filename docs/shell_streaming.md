@@ -280,9 +280,10 @@ in `UserStorage(purpose="shell")`, one JSON file per user under
 `~/.borg/shell/`. `ShellSettings.get(user_id)` gives a `ShellPrefs`, and
 `ShellSettings.set(user_id, prefs)` stores only the values that differ from
 the defaults, so a changed default reaches everyone who never chose. A stored
-value this version does not know is logged and read as its default. The
-storage is injected (`ShellSettings(storage=...)`), so the tests use a temp
-dir.
+value this version does not know is logged and read as its default, and a
+file that holds valid JSON other than an object (`["drafts"]`, after a hand
+edit) is logged and read as all defaults, so `.a` still answers. The storage
+is injected (`ShellSettings(storage=...)`), so the tests use a temp dir.
 
 The settings, with their defaults:
 - `stream_private`: how a preview shows in private chats, Drafts. The field

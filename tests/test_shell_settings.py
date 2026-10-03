@@ -89,6 +89,17 @@ class ShellSettingsTests(unittest.TestCase):
         self.assertEqual(prefs, ShellPrefs(stream_groups=StreamMode.DRAFTS))
         self.assertEqual(len(logs.output), 3)
 
+    def test_a_stored_file_that_is_not_an_object_reads_as_the_defaults(self):
+        path = self.storage.base_dir / f"{USER}.json"
+        for stored in ('["drafts"]', '"drafts"', "3"):
+            with self.subTest(stored=stored):
+                path.write_text(stored)
+
+                with self.assertLogs(shell_settings.__name__, level="WARNING"):
+                    prefs = self.settings.get(USER)
+
+                self.assertEqual(prefs, ShellPrefs())
+
     def test_the_default_storage_is_made_on_first_use(self):
         settings = ShellSettings()
 
