@@ -933,9 +933,14 @@ async def simple_run(event, cwd, command, shell=True):
     await send_output(event, result.output, retcode=result.retcode, shell=shell)
 
 
-async def send_output(event, output: str, retcode=-1, shell=True):
+def shell_output_text(output: str, *, retcode) -> str:
+    """What `.a` shows for OUTPUT: trimmed, or "The process exited N." if empty."""
     output = output.strip()
-    output = f"The process exited {retcode}." if output == "" else output
+    return f"The process exited {retcode}." if output == "" else output
+
+
+async def send_output(event, output: str, retcode=-1, shell=True):
+    output = shell_output_text(output, retcode=retcode)
     if not shell:
         print(output)
         if retcode != 0:
@@ -1209,6 +1214,16 @@ async def discreet_send(
         )
 
     return last_msg
+
+
+def discreet_sends_file(text: str) -> bool:
+    """Whether `discreet_send`, with its default thresholds, sends TEXT as a file."""
+    return _should_send_as_file(
+        text.strip(),
+        DEFAULT_FILE_LENGTH_THRESHOLD,
+        SendFileMode.ONLY,
+        DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
+    ).send_file
 
 
 def _utf16_units(text: str) -> int:
@@ -1533,6 +1548,15 @@ def _edit_chain_key(message_obj):
     own messages, so a bare id could pick up, and edit, another chat's chain.
     """
     return (getattr(message_obj, "chat_id", None), message_obj.id)
+
+
+def forget_edit_chain(message_obj) -> None:
+    """Drops what `edit_message` recorded of the chain `message_obj` started.
+
+    For a message that `edit_message` will not edit again, such as a preview
+    whose final was shown by other means, so the record does not outlive it.
+    """
+    EDIT_CHAINS.pop(_edit_chain_key(message_obj), None)
 
 
 async def edit_message(

@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, patch
 from telethon import types
 from telethon._updates import EntityCache
 
-from uniborg import guest_util, telethon_safety, tg_raw, util
+from uniborg import guest_util, shell_settings, telethon_safety, tg_raw, util
 
 BOT_USERNAME = "julia_bot"
 BOT_ID = 999
@@ -370,6 +370,11 @@ class ShellHandlerEchoTests(unittest.TestCase):
 
 
 class ShellHandlerPoolTests(unittest.TestCase):
+    """The `.a` handler with live output switched off, as before it existed.
+
+    The live path is in test_advanced_get_shell.py.
+    """
+
     def setUp(self):
         borg = _FakeBorg()
         self.plugin = _load_plugin(borg)
@@ -379,11 +384,12 @@ class ShellHandlerPoolTests(unittest.TestCase):
         async def run_and_upload(*, event, to_await, album_mode):
             self.runs.append(to_await)
 
-        for name, value in (
-            ("isAdmin", AsyncMock(return_value=True)),
-            ("run_and_upload", run_and_upload),
+        for target, name, value in (
+            (util, "isAdmin", AsyncMock(return_value=True)),
+            (util, "run_and_upload", run_and_upload),
+            (shell_settings, "SHELL_STREAMING", False),
         ):
-            patcher = patch.object(util, name, value)
+            patcher = patch.object(target, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
 

@@ -190,7 +190,9 @@ dropped, never run late.
   the item replied to arrives, and the answer's footer says so
   (`album_note`).
 - **The answer** is the output as plain text, as `.a` sends it, cut to fit
-  one message and followed by the exit code when it is not 0. Empty output
+  one message and followed by the exit code when it is not 0. It changes only
+  once, when the command ends: the live preview of `.a` in a chat
+  (docs/shell_streaming.md) does not apply to guest answers. Empty output
   reads "The process exited N.". An exception becomes the traceback.
 - **Files go to the caller's DM**, after a header message naming the command:
   the files the command left in its working directory, plus `output.txt` with

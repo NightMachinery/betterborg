@@ -2,9 +2,10 @@
 
 How the shell (`.a`, `.af`, `.aa` and the guest shell in
 `stdplugins/advanced_get.py`) runs commands so that their output can be shown
-while they run, and stopped. This file describes the producers: the code that
-runs a command and collects its bytes. The chat side (the live preview, `.k`,
-the Stop button and `/settings`) builds on them and is not written yet.
+while they run, and stopped. It describes the producers (the code that runs a
+command and collects its bytes), the settings, and the live output of `.a`,
+`.af` and `.aa` in chats. `.k`, the Stop button of edited previews,
+`/settings` and the guest shell's live answers are not written yet.
 
 ## Terms
 
@@ -294,10 +295,145 @@ once when the module is first imported: "1" or unset is on, "0" is off, and
 any other value raises at startup rather than guess. Off, `.a`, `.af` and
 `.aa` run exactly as before live output: no job, no preview and no renderer.
 
-## What phase C builds on this
+## Live output in chats
 
-Nothing calls the producers with a job yet. The chat side (the preview and
-its pace, the final in its two modes, `.k`, the Stop button, `/settings`,
-guest answers, stopping jobs before a shutdown, and the
-`borg_shell_streaming` kill switch) is the next phase, and will extend this
-file.
+`.a`, `.af` and `.aa` in a chat (private or group, on a bot or a userbot) show
+a running command's output while it runs. The code is in
+`stdplugins/advanced_get.py`. Terms:
+
+- **Preview**: the message, or draft, that shows the end of a running
+  command's output and changes as the output grows.
+- **Final**: the output text once the command has ended, built as before live
+  output (`util.shell_output_text`, which `send_output` uses too): trimmed, or
+  "The process exited N." when empty. A stopped job's final gets a stop note
+  after a blank line.
+- **Pump**: `_run_live`, which runs the producer and moves its latest output
+  into the preview.
+
+### The flow
+
+1. The `.a` handler keeps its gate (an admin's own, unforwarded message, not
+   an echoed guest answer), reads the caller's settings, registers a
+   `ShellJob` and runs `util.run_and_upload` with `_run_in_chat` as its work.
+   So the read receipt, the downloads, the files sent back and `handle_exc`
+   stay as they were. The job is finished (`shell_stream.finish`) only after
+   the files are sent, so it can be found until then.
+2. `_run_in_chat` starts the producer (`util.brishz_capture` on the shell
+   pool, or `util.simple_run_capture` for `.aa`, each with `job=`) and runs
+   the pump.
+3. A command that ends within the preview delay (2 s) shows no preview: its
+   final goes out exactly as before (one plain-text reply, or the `.txt` file
+   at 4000 characters or more), then its files.
+4. Otherwise the preview opens, and `stream_driver.follow` shows the latest
+   output in it through a `PacedEditor`, whenever the output or the job's
+   state changes, at the preview's pace, until the command ends.
+5. The final takes the preview's place, as the caller's final mode says
+   (below), and the files follow.
+
+The pump is the only reader of `job.output.changed`; it passes each change on
+to `follow`. That way it also sees a job **dropped** while it waited for a
+shell, and delivers "⏹ Stopped before it ran." at once, while the producer
+frees its shell whenever it gets one and runs nothing.
+
+### The preview
+
+- **Text**: a header, a blank line, the output's end and the cursor "▌",
+  within 4000 UTF-16 units. That keeps it one message, so `util.edit_message`
+  never splits it into a chain, and leaves room for a draft's heartbeat
+  suffix ("⏳ 42s"). It is plain text (`parse_mode=None`) with no link
+  preview. The first message is sent silently, and edits never notify.
+- **Header**: "⏳ #3" while the command runs, "⏳ #3 waiting for a free shell"
+  while the job is QUEUED (every shell of the pool is busy), and "⏹ #3
+  stopping…" once it is stopped. An edited preview adds " · .k to stop",
+  since it shows no Stop button.
+- **Kind**: a draft (`draft_stream.DraftAnswerMessage`, opened through
+  `stream_driver.open_stream_target` with `parse_mode=None`) when the account
+  is a bot, the installed Telethon can send drafts, and the caller's setting
+  for this kind of chat is Drafts (private chats, by default). Otherwise, and
+  when Telegram refuses the draft (it does in groups), it is a message sent as
+  a reply to the command and edited. In a private topic the draft shows in
+  that topic.
+- **Stop**: a draft has a Stop button on Telethon 1.45
+  (`draft_stream.STOP_SUPPORTED`). `stream_driver.stop_wired` points it at
+  `job.cancel(reason=USER)`, and the plugin registers the press handler with
+  `stream_driver.register_draft_stop(borg, module=__name__)`, so a plugin
+  reload removes it.
+- **Pace**: an edited preview changes at most every 2 s, then every 5 s once
+  the command has run 30 s; in groups every 4 s, then every 10 s
+  (`stream_driver.tiered_pace`). That is about 10 edits in a group's first
+  minute, within its edit budget. A draft keeps the draft worker's own pace,
+  about one draft a second, plus a heartbeat every 20 s of quiet so it does
+  not expire.
+
+The costs of drafts, which the settings panel names: while a bot's draft is
+live, Telegram for Android disables the send button, so under Drafts a long
+command keeps you from typing until you press Stop (or choose Edits). An
+edited preview that becomes the final changes silently, with no
+notification; a new reply notifies.
+
+### The final
+
+A command that showed no preview gets the final exactly as before, in both
+modes. After a preview, `ShellPrefs.final_mode` decides:
+
+- **Edit the preview** (EDIT_PREVIEW, the default).
+  - A final under 4000 characters (`util.discreet_sends_file`, the rule of
+    `discreet_send`) replaces the preview (`stream_driver.show_final`). An
+    edited preview is edited in place as plain text, with `buttons=None`:
+    Telethon's `Message.edit` reuses the old reply markup when `buttons` is
+    left out (`telethon/tl/custom/message.py`, in `Message.edit`, on both
+    1.43.2 and 1.45). That edit does not notify. A draft ends its stream, and
+    the final is sent as a real reply to the command after a sync draft, the
+    way the chat bot's draft becomes its answer; that reply notifies.
+  - A final of 4000 characters or more turns the preview into its end, as
+    much as fits one message (4096 UTF-16 units), under the first line
+    "✂️ The full output is in the file below.". The same `.txt` file as
+    before follows, as a reply to that message.
+  - If the preview cannot be edited (it was deleted, say), the final is sent
+    anew, as before, and the preview is removed.
+- **New reply** (NEW_REPLY): the final exactly as before, as a new reply to
+  the command, then the edited preview is deleted. A preview that cannot be
+  deleted (a bot cannot delete its messages in a group after 48 hours) is
+  edited to "Finished; output below." A draft's stream ends without its text
+  being sent; before a final sent as text, a sync draft with that text lets
+  the client adopt the draft into the reply.
+
+How a draft goes away (docs/telegram_ai_apis.md, section 2.1): no call clears
+one. A client drops a draft 30 s after its last update, or replaces it with a
+message from the bot that adopts it. Telegram Desktop adopts only a message
+that starts like the last draft, hence the sync draft; Android adopts only
+while the chat is open. So under New reply, a final sent only as a `.txt`
+file has no text to adopt the draft, which can stay up to 30 s, as after the
+chat bot's image-only answers.
+
+Stop notes: "⏹ Stopped (exit 130)." after a stop by the user (the draft's
+Stop button), "⏹ Stopped: julia is restarting (exit N)." after a shutdown,
+and "⏹ Stopped before it ran." alone for a dropped job. The job records why
+it was stopped, not who stopped it, so the note does not name anyone.
+
+### Failures and fallbacks
+
+- **The producer raises**: the preview is removed, and `handle_exc` posts the
+  traceback, as before.
+- **The preview cannot be sent**: logged; the command runs on, and its final
+  is sent as if there had been no preview.
+- **A preview edit fails**: `follow` waits a second before the next one.
+- **The handler's task is cancelled** (the client disconnecting): the job is
+  stopped with StopReason.SHUTDOWN, the producer is cancelled, and the
+  cancel propagates.
+- `util.forget_edit_chain(preview)` drops `util.edit_message`'s record of the
+  preview once the pump is done, so it does not outlive the command.
+- **`borg_shell_streaming=0`**: `.a`, `.af` and `.aa` run exactly as before:
+  no job, no preview.
+- **A brish without `Brish.popen`**: `.a` and `.af` run as before, with no job
+  and no preview, since they could not be stopped; `.aa` still streams.
+
+Tests: `tests/test_advanced_get_shell.py` drives the handler with a fake chat
+and a fake producer that follows a script, with the timings injected
+(`LIVE_TIMING`); a few tests run inert commands in a real zsh.
+
+## Still to come
+
+`.k` and the Stop button of edited previews on bots, the `/settings` panel,
+the terminal renderer in chats, live guest answers, and stopping jobs before a
+shutdown.

@@ -6,7 +6,8 @@ picks between the two. The Telegram side (the API, its limits, the client
 quirks this works around) is in
 [telegram_ai_apis.md](telegram_ai_apis.md), section 2.1. The code is
 `uniborg/draft_stream.py`, and `uniborg/stream_driver.py` holds what the
-streaming loops share.
+streaming loops share. The shell's live preview of a running command uses the
+same drafts, with its own setting; see [shell_streaming.md](shell_streaming.md).
 
 ## Terms
 
@@ -195,16 +196,16 @@ while it lasts. The answer itself never waits for a draft.
   streaming and one real message at the end, long answers, errors left in the
   draft, buttons, refused chats, flood waits, a hanging call, heartbeats, Stop,
   and `streaming_pace`.
-- `tests/test_stream_driver.py`: `PacedEditor` on a scripted clock (the
-  strict interval check, failed and unchanged edits, the pace tiers, the
-  fixed pace and `tiered_pace`), and on a real loop `stream_driver.follow`, the trailing-edge
+- `tests/test_stream_driver.py`: `PacedEditor` on a scripted clock (the strict
+  interval check, failed and unchanged edits, the pace tiers, the fixed pace and
+  `tiered_pace`), and on a real loop `stream_driver.follow`, the trailing-edge
   pump for producers that go quiet, such as a shell command (the chat bot's
-  loops do not use it), which backs off from a deleted message through the
-  real `util.edit_message`. Also the stream settings, the stream target's
-  opening, Stop wiring, flush, `show_final` (with the installed Telethon's
+  loops do not use it), which backs off from a deleted message through the real
+  `util.edit_message`. Also the stream settings, the stream target's opening,
+  Stop wiring, flush, `show_final` (with the installed Telethon's
   `Message.edit`, which keeps a message's buttons unless told) and the sync
-  draft on their own, and the Stop handler's registration and its removal
-  with the plugin.
+  draft on their own, and the Stop handler's registration and its removal with
+  the plugin.
 - `tests/test_gemini_image_stream.py`: native Gemini images' partial edits
   keep one pace and cursor past 30 s.
 - `tests/test_llm_chat_stream.py`: the plugin's choice of drafts or edits per

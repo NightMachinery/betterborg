@@ -1,0 +1,627 @@
+"""Live output of `.a`, `.af` and `.aa` in chats (`stdplugins/advanced_get.py`).
+
+A fake chat records every message the plugin sends, edits and deletes, and
+the drafts it shows. Commands run through a fake producer that follows a
+script (text to write, seconds to wait, `STOP` to wait for a stop), so the
+timings hold however slowly zsh starts; a few tests run inert commands
+(`printf`, `sleep`) in a real zsh. The timings are injected (`LIVE_TIMING`),
+in tenths of a second.
+"""
+
+import asyncio
+import itertools
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import AsyncMock, patch
+
+from telethon.tl import types
+
+from uniborg import draft_stream, shell_settings, shell_stream, util
+from uniborg.shell_settings import FinalMode, ShellPrefs, ShellSettings
+from uniborg.storage import UserStorage
+from uniborg.stream_driver import StreamMode
+
+from test_advanced_get_guest import ADMIN, _FakeBorg, _load_plugin
+
+CHAT = -1001
+DM = ADMIN
+COMMAND_ID = 1
+
+
+class _Message:
+    def __init__(self, chat, text, *, chat_id, **kwargs):
+        self._chat = chat
+        self.id = next(chat.ids)
+        self.chat_id = chat_id
+        self.text = text
+        self.kwargs = kwargs
+
+    async def edit(self, text, **kwargs):
+        self._chat.log.append(("edit", self.id, text, kwargs))
+        self.text = text
+        return self
+
+    async def delete(self):
+        if self._chat.fail_delete:
+            raise RuntimeError("MESSAGE_DELETE_FORBIDDEN")
+        self._chat.log.append(("delete", self.id))
+
+
+class _Event:
+    """A `.a` message; also the chat that records what the plugin does."""
+
+    def __init__(self, plugin, text, *, private):
+        self.log = []
+        self.ids = itertools.count(100)
+        self.fail_delete = False
+        self.chat_id = DM if private else CHAT
+        self.sender_id = ADMIN
+        self.is_private = private
+        self.message = SimpleNamespace(
+            id=COMMAND_ID,
+            out=False,
+            forward=None,
+            reply_to=None,
+            reply_to_msg_id=None,
+            grouped_id=None,
+        )
+        self.pattern_match = plugin.pattern_a.match(text)
+
+    def _sent(self, kind, text, kwargs):
+        message = _Message(self, text, chat_id=self.chat_id, **kwargs)
+        self.log.append((kind, text, kwargs))
+        return message
+
+    async def respond(self, text, **kwargs):
+        return self._sent("respond", text, kwargs)
+
+    async def reply(self, text, **kwargs):
+        return self._sent("reply", text, kwargs)
+
+    async def get_chat(self):
+        return "chat"
+
+    async def get_input_chat(self):
+        return types.InputPeerUser(self.chat_id, 0)
+
+    def sent(self, kind):
+        return [entry for entry in self.log if entry[0] == kind]
+
+
+class _Borg(_FakeBorg):
+    """A bot account; as the drafts' client, it records each draft."""
+
+    def __init__(self, *, bot=True):
+        super().__init__()
+        self.me.bot = bot
+        self.drafts = []
+        self.parse_modes = []
+        #: Telegram refuses drafts in this chat.
+        self.refuse_drafts = False
+
+    def action(self, chat, kind):
+        borg = self
+
+        class _Action:
+            async def __aenter__(self):
+                return borg
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _Action()
+
+    async def _parse_message_text(self, text, parse_mode):
+        self.parse_modes.append(parse_mode)
+        return text, []
+
+    async def __call__(self, request):
+        if self.refuse_drafts:
+            raise RuntimeError("TEXTDRAFT_PEER_INVALID")
+        self.drafts.append(request.action.text.text)
+
+
+FAST = SimpleNamespace(
+    preview_delay=0.3,
+    private=SimpleNamespace(interval=0.1, slow_interval=0.1),
+    groups=SimpleNamespace(interval=0.1, slow_interval=0.1),
+    slow_after=30,
+)
+
+
+class _ShellTestCase(unittest.TestCase):
+    bot = True
+
+    def setUp(self):
+        self.borg = _Borg(bot=self.bot)
+        self.plugin = _load_plugin(self.borg)
+        self.handler = self.borg.handlers[0][1]
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.settings = ShellSettings(
+            storage=UserStorage(purpose=shell_settings.PURPOSE, root=tmp.name)
+        )
+        self.files = []
+
+        async def upload_output_files(chat, files, *, album_mode, reply_to, on_error):
+            self.files.append(sorted(Path(f).name for f in files))
+            return []
+
+        self.text_files = []
+
+        async def send_text_as_file(*, text, chat, reply_to, **kwargs):
+            self.text_files.append((text, reply_to))
+            return SimpleNamespace(id=999)
+
+        for target, name, value in (
+            (util, "isAdmin", AsyncMock(return_value=True)),
+            (util, "borg", self.borg),
+            (util, "dl_base", tmp.name + "/dls/"),
+            (util, "upload_output_files", upload_output_files),
+            (util, "send_text_as_file", send_text_as_file),
+            (shell_settings, "SETTINGS", self.settings),
+            (shell_settings, "SHELL_STREAMING", True),
+            (self.plugin, "LIVE_TIMING", FAST),
+        ):
+            patcher = patch.object(target, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch.dict(shell_stream.JOBS, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def set_prefs(self, **changes):
+        self.settings.set(ADMIN, ShellPrefs(**changes))
+
+    def run_command(self, text, *, private=False, during=None):
+        """Runs TEXT through the `.a` handler; DURING(event) runs alongside."""
+        event = _Event(self.plugin, text, private=private)
+
+        async def main():
+            task = asyncio.ensure_future(self.handler(event))
+            if during is not None:
+                await during(event)
+            await asyncio.wait_for(task, 30)
+
+        asyncio.run(main())
+        return event
+
+    def run_script(self, steps, *, command=".aa x", retcode=0, files=(), **kwargs):
+        """Runs COMMAND with both producers following STEPS (`_producer`)."""
+        capture = _producer(steps, retcode=retcode, files=files)
+        with patch.object(util, "simple_run_capture", capture), patch.object(
+            util, "brishz_capture", capture
+        ):
+            return self.run_command(command, **kwargs)
+
+
+#: A step that waits until the job is stopped; the command then ends with 130.
+STOP = object()
+
+
+def _producer(steps, *, retcode=0, files=()):
+    """A fake `simple_run_capture` and `brishz_capture` that follows STEPS.
+
+    A step is text the command writes, seconds it waits, or STOP. FILES are
+    made in its directory at the end.
+    """
+
+    async def capture(*, cwd, job=None, **kwargs):
+        if job is not None and not job.try_start():
+            return None
+        killed = asyncio.Event()
+        if job is not None:
+            job.attach(killed.set)
+        written, code = [], retcode
+        for step in steps:
+            if isinstance(step, str):
+                written.append(step)
+                if job is not None:
+                    job.output.write(step.encode())
+            elif step is STOP:
+                await killed.wait()
+                code = 130
+            else:
+                await asyncio.sleep(step)
+        for name in files:
+            Path(cwd, name).touch()
+        if job is None:
+            return util.CommandResult(output="".join(written), retcode=code)
+        job.detach()
+        return util.CommandResult(
+            output=job.output.final_text(render=False), retcode=code
+        )
+
+    return capture
+
+
+async def _until(condition, *, timeout=10):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("timed out")
+        await asyncio.sleep(0.02)
+
+
+#: Output, a pause past the preview delay, more output.
+SLOW = ["a\n", 0.8, "b"]
+PLAIN_TEXT = {"parse_mode": None, "link_preview": False}
+FINAL_EDIT = {"parse_mode": None, "link_preview": False, "buttons": None}
+
+
+class FastCommandTests(_ShellTestCase):
+    def test_a_fast_command_gives_exactly_todays_messages(self):
+        live = self.run_script(["hi\n"]).log
+        with patch.object(shell_settings, "SHELL_STREAMING", False):
+            before = self.run_script(["hi\n"]).log
+
+        self.assertEqual(live, before)
+        ((_kind, text, kwargs),) = live
+        self.assertEqual(text, "hi")
+        self.assertEqual(kwargs["reply_to"].id, COMMAND_ID)
+
+    def test_a_real_fast_command_too(self):
+        with patch.object(
+            self.plugin,
+            "LIVE_TIMING",
+            SimpleNamespace(**{**vars(FAST), "preview_delay": 60}),
+        ):
+            live = self.run_command(".aa printf 'hi\\r\\n'").log
+            with patch.object(shell_settings, "SHELL_STREAMING", False):
+                before = self.run_command(".aa printf 'hi\\r\\n'").log
+
+        self.assertEqual(live, before)
+        self.assertEqual([entry[:2] for entry in live], [("respond", "hi")])
+
+    def test_in_both_final_modes(self):
+        self.set_prefs(final_mode=FinalMode.NEW_REPLY)
+        reply = self.run_script(["hi"]).log
+        self.set_prefs(final_mode=FinalMode.EDIT_PREVIEW)
+        edit = self.run_script(["hi"]).log
+
+        self.assertEqual([entry[:2] for entry in reply], [("respond", "hi")])
+        self.assertEqual([entry[:2] for entry in edit], [("respond", "hi")])
+
+    def test_empty_output_says_how_it_exited_and_files_follow(self):
+        event = self.run_script([], retcode=3, files=["out.txt"])
+
+        self.assertEqual(
+            [entry[:2] for entry in event.log],
+            [("respond", "The process exited 3.")],
+        )
+        self.assertEqual(self.files, [["out.txt"]])
+        self.assertEqual(shell_stream.JOBS, {})
+
+
+class EditedPreviewTests(_ShellTestCase):
+    def test_a_slow_command_shows_a_silent_preview_that_becomes_the_final(self):
+        event = self.run_script(SLOW)
+
+        first, *rest = event.log
+        self.assertEqual(first[0], "respond")
+        self.assertRegex(first[1], r"^⏳ #\d+ · \.k to stop\n\na\n▌$")
+        self.assertEqual(
+            first[2], {**PLAIN_TEXT, "reply_to": event.message, "silent": True}
+        )
+        preview_id = 100
+        *_partials, final = rest
+        self.assertEqual(final, ("edit", preview_id, "a\nb", FINAL_EDIT))
+        self.assertEqual(event.sent("respond"), [first])
+        self.assertNotIn((event.chat_id, preview_id), util.EDIT_CHAINS)
+
+    def test_the_preview_follows_the_output_at_its_pace(self):
+        event = self.run_script(["a\n", 0.5, "b\n", 0.5, "c"])
+
+        partials = [entry[2] for entry in event.log[1:-1]]
+        self.assertIn(partials[-1].split("\n\n", 1)[1], ("a\nb\n▌",))
+        for entry in event.log[1:-1]:
+            self.assertEqual(entry[3], {"parse_mode": None, "link_preview": False})
+        self.assertEqual(event.log[-1][2], "a\nb\nc")
+
+    def test_new_reply_sends_the_final_then_deletes_the_preview(self):
+        self.set_prefs(final_mode=FinalMode.NEW_REPLY)
+
+        event = self.run_script(SLOW)
+
+        self.assertEqual(
+            [entry[:2] for entry in event.log[-2:]],
+            [("respond", "a\nb"), ("delete", 100)],
+        )
+
+    def test_a_preview_that_cannot_be_deleted_says_it_finished(self):
+        self.set_prefs(final_mode=FinalMode.NEW_REPLY)
+
+        async def fail_deletes(event):
+            event.fail_delete = True
+
+        event = self.run_script(SLOW, during=fail_deletes)
+
+        self.assertEqual(event.log[-2][:2], ("respond", "a\nb"))
+        self.assertEqual(
+            event.log[-1], ("edit", 100, self.plugin.FINISHED_TEXT, FINAL_EDIT)
+        )
+
+    def test_long_output_ends_the_preview_with_its_tail_and_sends_the_file(self):
+        lines = "".join(f"{i}\n" for i in range(1, 2001))
+        event = self.run_script(["a\n", 0.5, lines])
+
+        kind, preview_id, text, kwargs = event.log[-1]
+        self.assertEqual((kind, preview_id, kwargs), ("edit", 100, FINAL_EDIT))
+        first_line, tail = text.split("\n", 1)
+        self.assertEqual(first_line, self.plugin.LONG_OUTPUT_LINE)
+        self.assertTrue(tail.endswith("1999\n2000"))
+        self.assertLessEqual(len(text.encode("utf-16-le")) // 2, 4096)
+        ((whole, reply_to),) = self.text_files
+        self.assertTrue(whole.startswith("a\n1\n2\n"))
+        self.assertEqual(reply_to.id, 100)
+
+    def test_long_output_as_a_new_reply_is_todays_file(self):
+        self.set_prefs(final_mode=FinalMode.NEW_REPLY)
+        lines = "".join(f"{i}\n" for i in range(1, 2001))
+
+        event = self.run_script(["a\n", 0.5, lines])
+
+        ((whole, reply_to),) = self.text_files
+        self.assertTrue(whole.endswith("2000"))
+        self.assertIs(reply_to, event.message)
+        self.assertEqual(event.log[-1], ("delete", 100))
+
+    def test_files_follow_the_final(self):
+        event = self.run_script(["a", 0.5], files=["out.txt"])
+
+        self.assertEqual(event.log[-1][:3], ("edit", 100, "a"))
+        self.assertEqual(self.files, [["out.txt"]])
+
+    def test_a_stop_ends_the_command_and_says_so(self):
+        async def stop(event):
+            await _until(lambda: event.log)
+            (job,) = shell_stream.JOBS.values()
+            job.cancel(reason=shell_stream.StopReason.USER)
+
+        event = self.run_script(["started", STOP], during=stop)
+
+        self.assertEqual(event.log[-1][2], "started\n\n⏹ Stopped (exit 130).")
+
+    def test_a_shutdown_stop_says_the_bot_is_restarting(self):
+        async def stop(event):
+            await _until(lambda: event.log)
+            (job,) = shell_stream.JOBS.values()
+            job.cancel(reason=shell_stream.StopReason.SHUTDOWN)
+
+        event = self.run_script([STOP], during=stop)
+
+        self.assertEqual(
+            event.log[-1][2],
+            "The process exited 130.\n\n⏹ Stopped: julia is restarting (exit 130).",
+        )
+
+    def test_the_header_says_stopping_once_stopped(self):
+        async def stop(event):
+            await _until(lambda: event.log)
+            (job,) = shell_stream.JOBS.values()
+            job.cancel(reason=shell_stream.StopReason.USER)
+            await _until(lambda: len(event.log) > 1)
+
+        event = self.run_script(["x", STOP, 0.5], during=stop)
+
+        self.assertRegex(event.log[1][2], r"^⏹ #\d+ stopping…\n\nx▌$")
+
+    def test_a_producer_error_removes_the_preview_and_reports_it(self):
+        async def capture(*, job, **kwargs):
+            job.try_start()
+            await asyncio.sleep(0.6)
+            raise RuntimeError("boom")
+
+        with patch.object(util, "brishz_capture", capture):
+            event = self.run_command(".a true")
+
+        self.assertEqual(event.log[1], ("delete", 100))
+        self.assertIn("RuntimeError: boom", event.log[2][1])
+        self.assertEqual(shell_stream.JOBS, {})
+
+    def test_a_userbot_shows_the_stop_hint_and_edits(self):
+        self.borg.me.bot = False
+
+        event = self.run_script(SLOW, private=True)
+
+        self.assertRegex(event.log[0][1], r"^⏳ #\d+ · \.k to stop")
+        self.assertEqual(event.log[-1][:3], ("edit", 100, "a\nb"))
+        self.assertEqual(self.borg.drafts, [])
+
+    def test_a_real_slow_command(self):
+        event = self.run_command(".aa printf 'a\\n'; sleep 1; printf b")
+
+        self.assertEqual(event.log[-1][:3], ("edit", 100, "a\nb"))
+
+
+class QueuedTests(_ShellTestCase):
+    def test_a_job_stopped_while_queued_ends_at_once_and_never_runs(self):
+        ran = []
+        gate = {}
+
+        async def capture(*, job, **kwargs):
+            gate["free"] = free = asyncio.Event()
+            await free.wait()
+            if not job.try_start():
+                return None
+            ran.append(job)
+            return util.CommandResult(output="ran", retcode=0)
+
+        async def stop(event):
+            await _until(lambda: event.log)
+            self.assertIn("waiting for a free shell", event.log[0][1])
+            (job,) = shell_stream.JOBS.values()
+            job.cancel(reason=shell_stream.StopReason.USER)
+            await _until(lambda: len(event.log) > 1)
+            gate["free"].set()
+            await asyncio.sleep(0.05)
+
+        with patch.object(util, "brishz_capture", capture):
+            event = self.run_command(".a true", during=stop)
+
+        self.assertEqual(
+            event.log[-1],
+            ("edit", 100, self.plugin.STOPPED_BEFORE_IT_RAN, FINAL_EDIT),
+        )
+        self.assertEqual(ran, [])
+
+
+class DraftPreviewTests(_ShellTestCase):
+    def test_a_private_chat_streams_a_plain_draft_that_becomes_a_reply(self):
+        event = self.run_script(["*a* `b`\n", 0.8, "c"], private=True)
+
+        ((kind, text, kwargs),) = event.log
+        self.assertEqual((kind, text, kwargs), ("reply", "*a* `b`\nc", FINAL_EDIT))
+        self.assertRegex(self.borg.drafts[0], r"^⏳ #\d+\n\n\*a\* `b`\n▌$")
+        #: The last draft is the sync draft, which the reply adopts.
+        self.assertEqual(self.borg.drafts[-1], "*a* `b`\nc")
+        self.assertEqual(set(self.borg.parse_modes), {None})
+
+    def test_new_reply_ends_the_draft_with_a_sync_draft_then_replies(self):
+        self.set_prefs(final_mode=FinalMode.NEW_REPLY)
+
+        event = self.run_script(SLOW, private=True)
+
+        self.assertEqual([entry[:2] for entry in event.log], [("respond", "a\nb")])
+        self.assertEqual(self.borg.drafts[-1], "a\nb")
+
+    def test_long_output_ends_the_draft_with_its_tail_and_the_file(self):
+        lines = "".join(f"{i}\n" for i in range(1, 2001))
+
+        event = self.run_script(["a\n", 0.5, lines], private=True)
+
+        ((kind, text, _kwargs),) = event.log
+        self.assertEqual(kind, "reply")
+        self.assertTrue(text.startswith(self.plugin.LONG_OUTPUT_LINE))
+        ((_whole, reply_to),) = self.text_files
+        self.assertEqual(reply_to.text, text)
+
+    def test_edits_when_the_user_chose_edits(self):
+        self.set_prefs(stream_private=StreamMode.EDITS)
+
+        event = self.run_script(SLOW, private=True)
+
+        self.assertEqual(event.log[0][0], "respond")
+        self.assertEqual(self.borg.drafts, [])
+
+    def test_a_group_set_to_drafts_falls_back_to_edits_when_refused(self):
+        self.set_prefs(stream_groups=StreamMode.DRAFTS)
+        self.borg.refuse_drafts = True
+
+        event = self.run_script(SLOW)
+
+        self.assertRegex(event.log[0][1], r"^⏳ #\d+ · \.k to stop")
+        self.assertEqual(event.log[-1][:3], ("edit", 100, "a\nb"))
+
+    @unittest.skipUnless(draft_stream.STOP_SUPPORTED, "no Stop button here")
+    def test_the_drafts_stop_button_stops_the_command(self):
+        async def press_stop(event):
+            await _until(lambda: draft_stream._ACTIVE)
+            (draft,) = draft_stream._ACTIVE.values()
+            draft.stop_pressed()
+
+        event = self.run_script(["started", STOP], private=True, during=press_stop)
+
+        ((_kind, text, _kwargs),) = event.log
+        self.assertEqual(text, "started\n\n⏹ Stopped (exit 130).")
+        #: After Stop, no more drafts: not even the sync draft.
+        self.assertNotIn(text, self.borg.drafts)
+
+    @unittest.skipUnless(draft_stream.STOP_SUPPORTED, "no Stop button here")
+    def test_the_draft_stop_handler_belongs_to_the_plugin(self):
+        later = [fn for _builder, fn in self.borg.handlers[1:]]
+
+        self.assertIn(self.plugin.__name__, [fn.__module__ for fn in later])
+
+
+class OldPathTests(_ShellTestCase):
+    def capture(self, seen):
+        async def capture(**kwargs):
+            seen.append(kwargs)
+            return util.CommandResult(output="hi", retcode=0)
+
+        return capture
+
+    def test_old_brish_runs_dot_a_as_before(self):
+        seen = []
+        with patch.object(util, "BRISH_POPEN", False), patch.object(
+            util, "brishz_capture", self.capture(seen)
+        ):
+            event = self.run_command(".af printf hi")
+
+        (call,) = seen
+        self.assertNotIn("job", call)
+        self.assertFalse(call["fork"])
+        self.assertEqual([entry[:2] for entry in event.log], [("respond", "hi")])
+        self.assertEqual(shell_stream.JOBS, {})
+
+    def test_old_brish_still_streams_dot_aa(self):
+        with patch.object(util, "BRISH_POPEN", False):
+            event = self.run_script(SLOW)
+
+        self.assertEqual(event.log[-1][:3], ("edit", 100, "a\nb"))
+
+    def test_streaming_off_runs_as_before(self):
+        seen = []
+        with patch.object(shell_settings, "SHELL_STREAMING", False), patch.object(
+            util, "brishz_capture", self.capture(seen)
+        ), patch.object(util, "simple_run_capture", self.capture(seen)):
+            self.run_command(".a printf hi")
+            self.run_command(".aa printf hi")
+
+        self.assertEqual([("job" in call) for call in seen], [False, False])
+        self.assertEqual(shell_stream.JOBS, {})
+
+    def test_a_streamed_dot_a_runs_on_the_shell_pool_with_a_job(self):
+        seen = []
+        with patch.object(util, "brishz_capture", self.capture(seen)):
+            self.run_command(".af printf hi")
+
+        (call,) = seen
+        self.assertIs(call["brish"], util.persistent_brish)
+        self.assertFalse(call["fork"])
+        self.assertIsInstance(call["job"], shell_stream.ShellJob)
+
+
+class PreviewHeaderTests(_ShellTestCase):
+    def test_the_header_follows_the_job(self):
+        async def main():
+            job = shell_stream.ShellJob(owner_id=ADMIN, chat_id=CHAT, command="x")
+            header = self.plugin._preview_header
+            seen = [header(job, stop_hint=True)]
+            job.try_start()
+            seen.append(header(job, stop_hint=True))
+            seen.append(header(job, stop_hint=False))
+            job.cancel(reason=shell_stream.StopReason.USER)
+            seen.append(header(job, stop_hint=True))
+            return job.id, seen
+
+        job_id, seen = asyncio.run(main())
+
+        self.assertEqual(
+            seen,
+            [
+                f"⏳ #{job_id} waiting for a free shell · .k to stop",
+                f"⏳ #{job_id} · .k to stop",
+                f"⏳ #{job_id}",
+                f"⏹ #{job_id} stopping…",
+            ],
+        )
+
+    def test_the_preview_fits_one_message(self):
+        async def main():
+            job = shell_stream.ShellJob(owner_id=ADMIN, chat_id=CHAT, command="x")
+            job.output.write(("😀" * 20000).encode())
+            return self.plugin._preview_text(job, render=False, stop_hint=True)
+
+        text = asyncio.run(main())
+
+        units = len((text + "▌").encode("utf-16-le")) // 2
+        self.assertLessEqual(units, self.plugin.PREVIEW_UNITS)
+        self.assertGreater(units, self.plugin.PREVIEW_UNITS - 4)
+
+
+if __name__ == "__main__":
+    unittest.main()

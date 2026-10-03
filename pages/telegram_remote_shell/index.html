@@ -283,8 +283,20 @@ done</code></pre>
 <li>The bot replies to the command with what it printed, as plain text (Markdown is not rendered). Errors (standard error) are mixed into the same text.</li>
 <li>Leading and trailing whitespace is trimmed. If 4000 characters or more remain, the output comes as a <code>.txt</code> file instead, with the caption "This message is too long, so it has been sent as a text file."</li>
 <li>If the command printed nothing, the reply is <code>The process exited N.</code>, where <code>N</code> is the exit code. When there is output, the exit code is not shown. End the command with <code>; echo "exit $?"</code> to see it.</li>
-<li>Nothing arrives until the command exits: output is not streamed while the command runs.</li>
+<li>A command that runs longer than 2 seconds shows its output live: see <a href="#live">Live output</a>.</li>
 <li>If something fails inside the bot rather than in your command, the reply starts with "Julia encountered an exception. :(" followed by a Python traceback.</li>
+</ul>
+
+<h3 id="live">Live output</h3>
+<p>A command that is still running after 2 seconds gets a <b>preview</b>: a reply that shows a header such as <code>⏳ #3</code>, a blank line, and the last part of the output, ending in a <code>▌</code> cursor. It changes as the command prints. A faster command shows no preview, and its reply is exactly as described above.</p>
+<ul>
+<li>In a private chat with a bot, the preview is a Telegram <b>draft</b> by default: a live preview that grows about once a second and has a Stop button (Telegram 10.3 clients). Pressing Stop stops the command. In groups, on a userbot, or where Telegram refuses a draft, the preview is a normal message that the bot edits every 2 seconds (every 4 in groups), then every 5 (10 in groups) once the command has run for 30 seconds.</li>
+<li>The header says <code>waiting for a free shell</code> while every pool shell is busy, and <code>⏹ #3 stopping…</code> once the command is being stopped.</li>
+<li>When the command ends, the preview becomes its output: the same text as above, or, at 4000 characters or more, the last part that fits in one message under the line "✂️ The full output is in the file below.", followed by the <code>.txt</code> file. An edited preview changes silently, without a notification. A draft becomes a new message, which notifies.</li>
+<li>A stopped command's output ends with a note: <code>⏹ Stopped (exit 130).</code>, or <code>⏹ Stopped: julia is restarting (exit N).</code> when the bot is shutting down. A command stopped while it waited for a free shell never runs and says <code>⏹ Stopped before it ran.</code></li>
+<li>While a bot's draft is live, Telegram for Android disables the send button, so a long command under drafts keeps you from typing until it ends or you press Stop.</li>
+<li>Programs that buffer their output when it is not a terminal show it in blocks, or only at the end. Ask them to flush each line: <code>python3 -u</code>, <code>stdbuf -oL CMD</code>, <code>grep --line-buffered</code>.</li>
+<li>The bot's operator can turn live output off with <code>borg_shell_streaming=0</code> (see <a href="#developers">For developers</a>). On an old Brish library without streaming, <code>.a</code> and <code>.af</code> show no preview; <code>.aa</code> still does.</li>
 </ul>
 
 <h3>Files</h3>
@@ -318,9 +330,9 @@ done</code></pre>
 <li><b>Smart punctuation is replaced inside quotes too.</b> <code>.a echo "a—b"</code> prints <code>a--b</code>.</li>
 <li><b>The scratch directory is temporary.</b> Write anything you want to keep to an absolute path outside it.</li>
 <li><b>Exit codes are hidden</b> whenever there is output.</li>
-<li><b>No input, no live output, no time limit.</b> See <a href="#running">How commands run</a> and <a href="#long-running">Long commands and restarts</a>.</li>
+<li><b>No input, no time limit.</b> See <a href="#running">How commands run</a> and <a href="#long-running">Long commands and restarts</a>.</li>
 <li><b>Forwarded and edited messages never run.</b></li>
-<li><b>Binary output with <code>.aa</code>.</b> Printing raw binary data under <code>.aa</code> makes the bot report an exception instead of the output. Write binary data to a file.</li>
+<li><b>Binary output.</b> Bytes that are not valid UTF-8 show as <code>\xNN</code> escapes in the reply, and as "�" in a live preview. With live output turned off, raw binary data under <code>.aa</code> makes the bot report an exception instead. Write binary data to a file.</li>
 </ul>
 </div>
 </details>
@@ -342,7 +354,7 @@ done</code></pre>
 <div class="body">
 <ul>
 <li>The plugin sets no time limit. A command that never exits keeps its shell busy, and you get no reply for it.</li>
-<li>There is no command that cancels a running command. Find its process id and stop it from a second command. <code>.aa</code> works even when every pool shell is busy:
+<li>In a private chat with a bot, the live draft's Stop button stops the command (see <a href="#live">Live output</a>). Otherwise, find its process id and stop it from a second command. <code>.aa</code> works even when every pool shell is busy:
 <pre><code>.aa pgrep -l ffmpeg
 .aa kill 12345</code></pre>
 </li>
@@ -383,6 +395,7 @@ done</code></pre>
 <dd>
 <p><a href="https://github.com/NightMachinery/betterborg/blob/master/stdplugins/advanced_get.py"><code>stdplugins/advanced_get.py</code></a> holds the <code>.a</code> handler, the restart commands and the guest shell.</p>
 <p><code>uniborg/util.py</code> holds the shared pieces: running commands (<code>brishz_capture</code>, <code>simple_run_capture</code>), downloading inputs (<code>run_and_get</code>), sending output (<code>send_output</code>, <code>discreet_send</code>) and files (<code>upload_output_files</code>, <code>send_files</code>), the shell pool (<code>init_brishes</code>) and the admin checks (<code>isAdmin</code>, <code>admin_cmd</code>, <code>is_admin_by_id</code>). The built-in admin list is <code>admins</code> in that file.</p>
+<p>Live output is built from <code>uniborg/shell_stream.py</code> (jobs and their output), <code>uniborg/stream_driver.py</code> (the paced preview, drafts and their Stop button) and <code>uniborg/shell_settings.py</code> (each admin's settings and the <code>borg_shell_streaming</code> switch). How they fit together is in <a href="https://github.com/NightMachinery/betterborg/blob/master/docs/shell_streaming.md"><code>docs/shell_streaming.md</code></a>.</p>
 <p><code>uniborg/guest_util.py</code> and <code>uniborg/tg_raw.py</code> implement guest mode. Its design and safety rules are in <a href="https://github.com/NightMachinery/betterborg/blob/master/docs/guest_mode.md"><code>docs/guest_mode.md</code></a>.</p>
 </dd>
 
@@ -420,6 +433,8 @@ python3 start_server.py    # or with the FastAPI server</code></pre>
 <dd>The port of a SOCKS5 proxy on 127.0.0.1 to connect through.</dd>
 <dt><code>borg_api_id</code>, <code>borg_api_hash</code></dt>
 <dd>Telegram API credentials (<code>TELEGRAM_API_ID</code> and <code>TELEGRAM_API_HASH</code> also work). Built-in defaults are used when unset.</dd>
+<dt><code>borg_shell_streaming</code></dt>
+<dd><code>0</code> turns <a href="#live">live output</a> off: every command replies only when it ends, as before. <code>1</code> or unset leaves it on; any other value stops the bot at startup.</dd>
 <dt><code>borg_guest_trigger_guard</code></dt>
 <dd><code>0</code> turns off the "＠" rewriting described under <a href="#guest">Guest mode</a>.</dd>
 </dl>

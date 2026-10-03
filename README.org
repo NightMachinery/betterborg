@@ -145,8 +145,10 @@ The shell's commands can stream their output while they run and be stopped:
 =util.brishz_capture= (=.a=, =.af=, through =Brish.popen=) and
 =util.simple_run_capture= (=.aa=) take a job from =uniborg/shell_stream.py=,
 and =uniborg/term_render.py= shows progress bars as a terminal would. Other
-plugins run on a brish pool of their own. The chat side (live previews and
-=.k=) is not wired up yet. See
+plugins run on a brish pool of their own. In chats, a command that runs longer
+than 2 s shows its output live, in a draft (private chats with a bot, with a
+Stop button) or an edited message, which becomes its output when it ends;
+=borg_shell_streaming=0= turns this off. See
 [[file:docs/shell_streaming.md][docs/shell_streaming.md]].
 
 ** Guest mode
