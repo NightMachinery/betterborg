@@ -146,9 +146,9 @@ Reading:
 ## Jobs and the registry
 
 A `ShellJob` holds its owner, chat, command message, guest `thread_key`,
-live output, state and stop reason, and the brish pool it runs on (`pool`). Its `id` is a process-wide counter. Every
-field is a keyword argument, so two ids (owner and chat, say) cannot be
-swapped by position.
+live output, state and stop reason, and the brish pool it runs on (`pool`).
+Its `id` is a process-wide counter. Every field is a keyword argument, so
+two ids (owner and chat, say) cannot be swapped by position.
 
 The states (`JobState`): QUEUED (waiting for a shell), RUNNING, STOPPING
 (asked to stop; the command may still be ending), ENDED (the command has
