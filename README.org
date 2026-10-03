@@ -140,6 +140,15 @@ separately for private chats and for groups; groups default to edits, since
 Telegram refuses drafts there. See
 [[file:docs/draft_streaming.md][docs/draft_streaming.md]].
 
+** Shell streaming
+The shell's commands can stream their output while they run and be stopped:
+=util.brishz_capture= (=.a=, =.af=, through =Brish.popen=) and
+=util.simple_run_capture= (=.aa=) take a job from =uniborg/shell_stream.py=,
+and =uniborg/term_render.py= shows progress bars as a terminal would. Other
+plugins run on a brish pool of their own. The chat side (live previews and
+=.k=) is not wired up yet. See
+[[file:docs/shell_streaming.md][docs/shell_streaming.md]].
+
 ** Guest mode
 The bots answer where they are mentioned, even in chats they are not in.
 =@bot .a CMD= runs a shell command for an admin, with any files sent to the

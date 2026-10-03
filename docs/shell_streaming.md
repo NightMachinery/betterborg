@@ -198,3 +198,46 @@ command through `send_cmd`, still asking `try_start` first, and writes its
 whole result into the job at the end. It cannot be stopped once it runs: no
 kill hook is attached. The consumer should not offer a stop (or a preview)
 for `.a` there; `.aa` streams on any brish.
+
+## The `.aa` producer
+
+`util.simple_run_capture(*, cwd, command, shell=True, job=None)`. Without a
+job it runs as before, through `subprocess.run(shell=True, executable="zsh",
+text=True)` on an executor thread. A job needs `shell=True` (anything else
+raises ValueError). With one, `util._stream_zsh`:
+
+1. asks `job.try_start()`; False gives None and runs nothing;
+2. starts `asyncio.create_subprocess_exec("zsh", "-c", command, cwd=cwd,
+   stdin=DEVNULL, stdout=PIPE, stderr=STDOUT, start_new_session=True)`. The
+   argv is the one `executable="zsh"` gave, and the input stays empty;
+3. reads `stdout.read(65536)` on the event loop into `job.output`, so a
+   running `.aa` holds no executor thread and stays the escape hatch when
+   every thread is busy;
+4. returns `CommandResult(output=job.output.final_text(render=False),
+   retcode=...)`. That is UTF-8 with `\r\n` and `\r` turned into `\n`, as
+   `text=True` gave for valid output; invalid bytes now become `\xNN`
+   escapes, as in `.a`, where `text=True` raised UnicodeDecodeError. The exit
+   status of a command killed by a signal is negative (`-15`), as before.
+
+The command runs in a session, and so a process group, of its own. Its kill
+hook (`util._ProcessGroupKiller`) sends the whole group SIGINT, then SIGTERM,
+then SIGKILL, `ZSH_KILL_GRACE` (2 s) apart through `loop.call_later`, and
+stops as soon as the group is empty. The group includes background jobs:
+those of a non-interactive zsh ignore SIGINT, so they end at SIGTERM, and a
+`.aa` whose background job holds the output open ends then too. A command
+that ignores SIGINT (`trap '' INT`) ends at SIGTERM, 2 s after the stop.
+
+A cancelled await (the client disconnecting) cancels the job with
+StopReason.SHUTDOWN, sends the group SIGKILL at once and re-raises.
+
+A side effect of the own session: a streamed `.aa` command has no controlling
+terminal, like a brish command, and a terminal Ctrl-C on the bot no longer
+reaches it.
+
+## What phase C builds on this
+
+Nothing calls the producers with a job yet. The chat side (the preview and
+its pace, the final in its two modes, `.k`, the Stop button, `/settings`,
+guest answers, stopping jobs before a shutdown, and the
+`borg_shell_streaming` kill switch) is the next phase, and will extend this
+file.

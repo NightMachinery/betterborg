@@ -37,6 +37,7 @@ import pexpect
 import re
 import itertools
 import shutil
+import signal
 import threading
 from uniborg import util
 from uniborg import guest_util
@@ -779,12 +780,24 @@ class CommandResult:
     retcode: int
 
 
-async def simple_run_capture(*, cwd, command, shell=True) -> CommandResult:
+async def simple_run_capture(
+    *, cwd, command, shell=True, job=None
+) -> typing.Optional[CommandResult]:
     """Runs `command` (through zsh when `shell`) in `cwd` and captures it.
 
     Its input is empty: the bot's own stdin is no one's to type into, and a
     command reading it would wait forever.
+
+    With a `shell_stream.ShellJob` (which needs `shell`), the output goes into
+    `job.output` while the command runs, and the job can stop it; see
+    `_stream_zsh`. The result is then None when the job was stopped before
+    the command started.
     """
+    if job is not None:
+        if not shell:
+            raise ValueError("streaming a command needs shell=True")
+        return await _stream_zsh(cwd=cwd, command=command, job=job)
+
     sp = await subprocess_aio.run(
         command,
         shell=shell,
@@ -796,6 +809,96 @@ async def simple_run_capture(*, cwd, command, shell=True) -> CommandResult:
         stdout=subprocess.PIPE,
     )
     return CommandResult(output=sp.stdout, retcode=sp.returncode)
+
+
+#: Seconds between the steps that stop a streamed `.aa` command.
+ZSH_KILL_GRACE = 2.0
+#: The steps: an interrupt, as Ctrl-C would send, then termination, then a
+#: kill that cannot be caught.
+ZSH_KILL_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGKILL)
+
+
+def _signal_group(pgid: int, sig) -> bool:
+    """Sends SIG to process group PGID; False when no process is left in it."""
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+class _ProcessGroupKiller:
+    """The kill hook of a streamed `.aa` command.
+
+    The command runs in a session, and so a process group, of its own; the
+    whole group (background jobs included) gets each signal of
+    `ZSH_KILL_SIGNALS`, `grace` seconds apart, until the group is empty.
+    Callable from any thread; the steps run on `loop`.
+    """
+
+    def __init__(self, pgid: int, *, loop, grace: float = ZSH_KILL_GRACE):
+        self.pgid = pgid
+        self.loop = loop
+        self.grace = grace
+        self._started = False
+
+    def __call__(self) -> None:
+        try:
+            self.loop.call_soon_threadsafe(self._start)
+        except RuntimeError:
+            #: The loop is closed; the producer's own cleanup has run.
+            pass
+
+    def _start(self) -> None:
+        if not self._started:
+            self._started = True
+            self._step(0)
+
+    def _step(self, index: int) -> None:
+        if _signal_group(self.pgid, ZSH_KILL_SIGNALS[index]):
+            if index + 1 < len(ZSH_KILL_SIGNALS):
+                self.loop.call_later(self.grace, self._step, index + 1)
+
+
+async def _stream_zsh(*, cwd, command, job) -> typing.Optional[CommandResult]:
+    """Runs `command` with `zsh -c`, writing its output into `job` as it comes.
+
+    The argv is the one `subprocess.run(shell=True, executable="zsh")` uses.
+    The output is read on the event loop, so a running `.aa` holds no
+    executor thread: it still works when every thread is busy. The command
+    gets a session of its own, so a stop reaches its whole process group,
+    background jobs included (`_ProcessGroupKiller`). A cancelled await
+    kills the group at once and re-raises.
+
+    The result's output is `job.output.final_text(render=False)`: UTF-8 with
+    `\\r\\n` and `\\r` turned into `\\n`, as `text=True` gives for valid output;
+    invalid bytes become `\\xNN` escapes instead of a UnicodeDecodeError.
+    """
+    if not job.try_start():
+        return None
+    job.output.decoding = shell_stream.Decoding(translate_newlines=True)
+    proc = await asyncio.create_subprocess_exec(
+        "zsh",
+        "-c",
+        command,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    job.attach(_ProcessGroupKiller(proc.pid, loop=asyncio.get_running_loop()))
+    try:
+        while chunk := await proc.stdout.read(65536):
+            job.output.write(chunk)
+        retcode = await proc.wait()
+    except asyncio.CancelledError:
+        job.cancel(reason=shell_stream.StopReason.SHUTDOWN)
+        _signal_group(proc.pid, signal.SIGKILL)
+        raise
+    finally:
+        job.detach()
+    return CommandResult(output=job.output.final_text(render=False), retcode=retcode)
 
 
 async def simple_run(event, cwd, command, shell=True):
