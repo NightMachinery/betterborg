@@ -44,6 +44,12 @@ class _Message:
         self.text = text
         return self
 
+    async def reply(self, text, **kwargs):
+        """A chain message: `util.edit_message` splitting a long text."""
+        message = _Message(self._chat, text, chat_id=self.chat_id, **kwargs)
+        self._chat.log.append(("chain", self.id, text, kwargs))
+        return message
+
     async def delete(self):
         if self._chat.fail_delete:
             raise RuntimeError("MESSAGE_DELETE_FORBIDDEN")
@@ -369,6 +375,18 @@ class EditedPreviewTests(_ShellTestCase):
         self.assertIs(reply_to, event.message)
         self.assertEqual(event.log[-1], ("delete", 100))
 
+    def test_a_long_running_preview_stays_one_message(self):
+        lines = "".join(f"line {i}\n" for i in range(1, 2001))
+
+        event = self.run_script(["a\n", 0.5, lines, 0.6, "end"])
+
+        self.assertEqual(
+            [entry[0] for entry in event.log if entry[0] != "edit"], ["respond"]
+        )
+        self.assertEqual({entry[1] for entry in event.sent("edit")}, {100})
+        partial = event.log[-2][2]
+        self.assertTrue(partial.endswith("line 2000\n▌"))
+
     def test_files_follow_the_final(self):
         event = self.run_script(["a", 0.5], files=["out.txt"])
 
@@ -498,6 +516,17 @@ class DraftPreviewTests(_ShellTestCase):
         self.assertTrue(text.startswith(self.plugin.LONG_OUTPUT_LINE))
         ((_whole, reply_to),) = self.text_files
         self.assertEqual(reply_to.text, text)
+
+    def test_a_long_running_draft_shows_the_header(self):
+        lines = "".join(f"line {i}\n" for i in range(1, 2001))
+
+        event = self.run_script(["a\n", 0.5, lines, 2.5, "end"], private=True)
+
+        self.assertEqual([entry[0] for entry in event.log], ["reply"])
+        *partials, _sync = self.borg.drafts
+        self.assertTrue(partials)
+        for draft in partials:
+            self.assertRegex(draft, r"^⏳ #\d+")
 
     def test_edits_when_the_user_chose_edits(self):
         self.set_prefs(stream_private=StreamMode.EDITS)
@@ -688,6 +717,20 @@ class PreviewHeaderTests(_ShellTestCase):
         units = len((text + "▌").encode("utf-16-le")) // 2
         self.assertLessEqual(units, self.plugin.PREVIEW_UNITS)
         self.assertGreater(units, self.plugin.PREVIEW_UNITS - 4)
+
+    def test_edit_message_keeps_a_full_preview_of_lines_in_one_message(self):
+        async def main():
+            job = shell_stream.ShellJob(owner_id=ADMIN, chat_id=CHAT, command="x")
+            job.output.write(("x" * 79 + "\n").encode() * 200)
+            return self.plugin._preview_text(job, render=False, stop_hint=True)
+
+        text = asyncio.run(main()) + "▌"
+
+        self.assertGreater(len(text), self.plugin.PREVIEW_UNITS - 80)
+        chunks = util._split_message_smart(
+            text, max_chunk_size=self.plugin.MESSAGE_UNITS, search_direction=0
+        )
+        self.assertEqual(len(chunks), 1)
 
 
 if __name__ == "__main__":

@@ -997,13 +997,20 @@ def _check_split_candidate(text: str, i: int) -> tuple[bool, int]:
     return False, 0
 
 
+#: How far back from a chunk's limit the splitter looks for a good place to
+#: break (a newline, a sentence's end, a space). With the forward search that
+#: `edit_message` uses, a text longer than `max_len` less this can become two
+#: messages although it would fit in one; a shorter one never does.
+SPLIT_SEARCH_CHARS = 600
+
+
 def _find_best_split_point(
     text: str,
     start_pos: int,
     max_length: int,
     *,
     search_direction: int = -1,
-    buffer_size=600,
+    buffer_size=SPLIT_SEARCH_CHARS,
 ) -> int:
     """Find the best position to split text, prioritizing word boundaries and markdown preservation.
 

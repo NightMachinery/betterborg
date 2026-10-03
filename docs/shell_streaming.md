@@ -338,10 +338,15 @@ frees its shell whenever it gets one and runs nothing.
 ### The preview
 
 - **Text**: a header, a blank line, the output's end and the cursor "▌",
-  within 4000 UTF-16 units. That keeps it one message, so `util.edit_message`
-  never splits it into a chain, and leaves room for a draft's heartbeat
-  suffix ("⏳ 42s"). It is plain text (`parse_mode=None`) with no link
-  preview. The first message is sent silently, and edits never notify.
+  within 3496 UTF-16 units (`PREVIEW_UNITS`). A message holds 4096, but
+  `util.edit_message` splits a text into a chain of messages where it can
+  break it well: it looks for a newline in the last
+  `util.SPLIT_SEARCH_CHARS` (600) characters below that limit, so a text of
+  lines longer than 3496 characters would become two messages, and the
+  second would outlive the preview. A shorter text is never split. The room
+  left also fits a draft's heartbeat suffix ("⏳ 42s"). It is plain text
+  (`parse_mode=None`) with no link preview. The first message is sent
+  silently, and edits never notify.
 - **Header**: "⏳ #3" while the command runs, "⏳ #3 waiting for a free shell"
   while the job is QUEUED (every shell of the pool is busy), and "⏹ #3
   stopping…" once it is stopped. An edited preview adds " · .k to stop",

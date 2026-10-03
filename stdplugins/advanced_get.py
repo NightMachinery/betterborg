@@ -93,12 +93,14 @@ class LiveTiming:
 
 
 LIVE_TIMING = LiveTiming()
-#: A preview's length in UTF-16 units: within one message (4096), with room
-#: for a draft's elapsed-time suffix, so `util.edit_message` never splits it.
-PREVIEW_UNITS = 4000
-PREVIEW_CURSOR = "▌"
 #: Telegram's limit for one message, in UTF-16 units.
 MESSAGE_UNITS = 4096
+#: A preview's length in UTF-16 units. `util.edit_message` splits a longer
+#: text that has a newline near its end into two messages, even within
+#: MESSAGE_UNITS; this one it never splits. It also leaves room for a draft's
+#: elapsed-time suffix.
+PREVIEW_UNITS = MESSAGE_UNITS - util.SPLIT_SEARCH_CHARS
+PREVIEW_CURSOR = "▌"
 #: Output of up to this many bytes is rendered on the event loop, and more
 #: in a thread: rendering costs up to about 0.35 s per MiB
 #: (docs/shell_streaming.md), so this holds the loop for at most about 20 ms.
