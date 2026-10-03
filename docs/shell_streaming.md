@@ -3,9 +3,9 @@
 How the shell (`.a`, `.af`, `.aa` and the guest shell in
 `stdplugins/advanced_get.py`) runs commands so that their output can be shown
 while they run, and stopped. It describes the producers (the code that runs a
-command and collects its bytes), the settings, and the live output of `.a`,
-`.af` and `.aa` in chats. `.k`, the Stop button of edited previews,
-`/settings` and the guest shell's live answers are not written yet.
+command and collects its bytes), the settings and their `/settings` panel,
+and the live output of `.a`, `.af` and `.aa` in chats. `.k`, the Stop button
+of edited previews and the guest shell's live answers are not written yet.
 
 ## Terms
 
@@ -296,6 +296,54 @@ The settings, with their defaults:
   NEW_REPLY (a new reply, as before live output).
 - `render`: show output as a terminal would (`term_render`), on.
 
+### The `/settings` panel
+
+On a bot, `/settings` (in `stdplugins/advanced_get.py`) shows an admin's
+settings and changes them. It has the gate of `.a` (an admin's message, not
+forwarded, not an echoed guest answer), and a non-admin gets no reply.
+
+- In a private chat with the bot it replies with the **panel**: a Markdown
+  message that says what each setting does and what it costs, its current
+  value, and a row of inline buttons per setting. The rows of the two
+  live-output scopes are the chat bot's `/stream` rows
+  (`stream_driver.stream_mode_rows`); the others are "When it ends" (Edit
+  the preview, New reply) and "Renderer" (On, Off).
+- In a group it replies that the panel is in the private chat with the bot,
+  and changes nothing.
+- Text forms change one setting, then show the panel: `/settings private
+  drafts|edits`, `/settings groups drafts|edits`, `/settings final
+  edit|reply` and `/settings render on|off`, in any letter case. Anything
+  else gets the usage line. `/settings@thisbot` works too.
+- A button's callback data is `shs:` and the same words joined by ":"
+  (`shs:private:edits`, `shs:final:reply`, `shs:render:off`), so a press and
+  a text form go through one parser, `setting_change`. Its handler takes
+  only data that starts with `shs:`, and is wrapped in
+  `callback_util.hold_bare_answers`, so its toast always shows. A press is
+  answered first, with a toast that names the new value ("Groups:
+  Drafts."), and then the panel is redrawn in place. A press by a non-admin
+  gets the toast "Only the bot's admins can do that." and changes nothing;
+  data the parser does not know (a button from an older panel) gets a toast
+  that asks for a new `/settings`.
+- A setting that cannot be saved (the user file's lock timed out) gets "Could
+  not save that setting; try again.", by reply or toast.
+
+The panel's text names the costs of each choice: while a bot's draft is
+live, Telegram for Android disables the send button, so under Drafts a long
+command keeps you from typing (press Stop, or choose Edits; where the
+bot's Telethon cannot give a draft a Stop button, the panel says so, since
+`.k` cannot be sent either); Edit the preview finishes an edited preview
+silently, with no notification, while a draft becomes a new message, and
+New reply notifies.
+
+`/help` lists the shell's commands. Both are in the plugin's `BOT_COMMANDS`,
+which `bot_util.register_bot_commands` sets as the bot's command menu at
+startup; no other plugin of `stdplugins/` sets one, so it replaces nothing.
+On a userbot neither command exists: the account's own `/settings`, typed
+to another bot, would be answered there too. A userbot still reads the
+settings files under `~/.borg/shell/`, so it follows what an admin set
+through a bot that runs as the same OS user, and otherwise the defaults (it
+cannot show drafts, so its previews are edited messages).
+
 The **kill switch** is the environment variable `borg_shell_streaming`, read
 once when the module is first imported: "1" or unset is on, "0" is off, and
 any other value raises rather than guess. `uniborg/uniborg.py` imports the
@@ -472,6 +520,5 @@ and a fake producer that follows a script, with the timings injected
 
 ## Still to come
 
-`.k` and the Stop button of edited previews on bots, the `/settings` panel,
-live guest answers (and the renderer in them), and stopping jobs before a
-shutdown.
+`.k` and the Stop button of edited previews on bots, live guest answers (and
+the renderer in them), and stopping jobs before a shutdown.

@@ -243,6 +243,12 @@ done</code></pre>
 
 <dt><code>.xf</code></dt>
 <dd>The same restart, with a different reply.</dd>
+
+<dt><code>/settings</code></dt>
+<dd>On a bot account, in your private chat with the bot: show your <a href="#settings">settings</a> for live output and the renderer, with buttons to change them. In a group it only says where the panel is. A userbot has no <code>/settings</code>: it uses the defaults, or the values you set through a bot that runs on the same machine as the same operating-system user, since both read the same settings files.</dd>
+
+<dt><code>/help</code></dt>
+<dd>On a bot account: a short list of these commands.</dd>
 </dl>
 
 <h3>Combining flags</h3>
@@ -281,7 +287,7 @@ done</code></pre>
 <h3>Text output</h3>
 <ul>
 <li>The bot replies to the command with what it printed, as plain text (Markdown is not rendered). Errors (standard error) are mixed into the same text.</li>
-<li>The output is shown as a terminal would show it: a progress bar that redraws its line with a carriage return shows only its last state, and colours and other terminal escape codes are removed.</li>
+<li>The output is shown as a terminal would show it: a progress bar that redraws its line with a carriage return shows only its last state, and colours and other terminal escape codes are removed. The <a href="#settings">settings</a> can turn this off.</li>
 <li>Leading and trailing whitespace is trimmed. If 4000 characters or more remain, the output comes as a <code>.txt</code> file instead, with the caption "This message is too long, so it has been sent as a text file."</li>
 <li>If the command printed nothing, the reply is <code>The process exited N.</code>, where <code>N</code> is the exit code. When there is output, the exit code is not shown. End the command with <code>; echo "exit $?"</code> to see it.</li>
 <li>A command that runs longer than 2 seconds shows its output live: see <a href="#live">Live output</a>.</li>
@@ -291,14 +297,29 @@ done</code></pre>
 <h3 id="live">Live output</h3>
 <p>A command that is still running after 2 seconds gets a <b>preview</b>: a reply that shows a header such as <code>⏳ #3</code>, a blank line, and the last part of the output, ending in a <code>▌</code> cursor. It changes as the command prints. A faster command shows no preview, and its reply is exactly as described above.</p>
 <ul>
-<li>In a private chat with a bot, the preview is a Telegram <b>draft</b> by default: a live preview that grows about once a second. It has a Stop button when the bot runs Telethon 1.45 or later and your app is Telegram 10.3 or later; pressing Stop stops the command. A preview without a Stop button says <code>· .k to stop</code> in its header. In groups, on a userbot, or where Telegram refuses a draft, the preview is a normal message that the bot edits every 2 seconds (every 4 in groups), then every 5 (10 in groups) once the command has run for 30 seconds.</li>
+<li>In a private chat with a bot, the preview is a Telegram <b>draft</b> by default (<a href="#settings">settings</a> can change this): a live preview that grows about once a second. It has a Stop button when the bot runs Telethon 1.45 or later and your app is Telegram 10.3 or later; pressing Stop stops the command. A preview without a Stop button says <code>· .k to stop</code> in its header. In groups, on a userbot, or where Telegram refuses a draft, the preview is a normal message that the bot edits every 2 seconds (every 4 in groups), then every 5 (10 in groups) once the command has run for 30 seconds.</li>
 <li>The header says <code>waiting for a free shell</code> while every pool shell is busy, and <code>⏹ #3 stopping…</code> once the command is being stopped.</li>
-<li>When the command ends, the preview becomes its output: the same text as above, or, at 4000 characters or more, the last part that fits in one message under the line "✂️ The full output is in the file below.", followed by the <code>.txt</code> file. An edited preview changes silently, without a notification. A draft becomes a new message, which notifies.</li>
+<li>When the command ends, the preview becomes its output by default: the same text as above, or, at 4000 characters or more, the last part that fits in one message under the line "✂️ The full output is in the file below.", followed by the <code>.txt</code> file. An edited preview changes silently, without a notification. A draft becomes a new message, which notifies.</li>
 <li>A stopped command's output ends with a note: <code>⏹ Stopped (exit 130).</code>, or <code>⏹ Stopped: julia is restarting (exit N).</code> when the bot is shutting down. A command stopped while it waited for a free shell never runs and says <code>⏹ Stopped before it ran.</code></li>
 <li>While a bot's draft is live, Telegram for Android disables the send button, so a long command under drafts keeps you from typing until it ends or you press Stop.</li>
+<li>With the <b>New reply</b> setting, the output arrives instead as a new reply, exactly as for a fast command, and the preview is removed. If the bot cannot delete it (a bot cannot delete its own messages in a group after 48 hours), the preview is edited to "Finished; output below."</li>
 <li>Programs that buffer their output when it is not a terminal show it in blocks, or only at the end. Ask them to flush each line: <code>python3 -u</code>, <code>stdbuf -oL CMD</code>, <code>grep --line-buffered</code>.</li>
 <li>The bot's operator can turn live output off with <code>borg_shell_streaming=0</code> (see <a href="#developers">For developers</a>). On an old Brish library without streaming, <code>.a</code> and <code>.af</code> show no preview; <code>.aa</code> still does.</li>
 </ul>
+
+<h3 id="settings">Settings</h3>
+<p>On a bot account, send <code>/settings</code> in your private chat with the bot. It shows each setting with what it does and costs, and buttons to change it; a press says the new value in a short pop-up and updates the panel. The settings are per admin and kept across restarts:</p>
+<dl>
+<dt>Live output in private chats: Drafts (the default) or Edits</dt>
+<dd>Drafts are Telegram's live preview. While a bot's draft is live, Telegram for Android disables the send button, so a long command under Drafts keeps you from typing until it ends: press its Stop button, or choose Edits. Where the bot cannot give a draft a Stop button (it runs a Telethon older than 1.45), you cannot even send <code>.k</code>, so choose Edits if that matters.</dd>
+<dt>Live output in groups: Edits (the default) or Drafts</dt>
+<dd>Telegram allows drafts only in private chats today, so Drafts here falls back to edits.</dd>
+<dt>When a command with a preview ends: Edit the preview (the default) or New reply</dt>
+<dd>Edit the preview turns the preview into the output. An edited message changes silently, with no notification; a draft becomes a new message, which notifies. New reply sends the output as a new reply, which notifies, and removes the preview.</dd>
+<dt>Renderer: On (the default) or Off</dt>
+<dd>On shows output as a terminal would (progress bars show their last state, colours are removed). Off shows the output as the command wrote it, except that <code>.aa</code> turns each carriage return into a line break.</dd>
+</dl>
+<p>Each setting can also be typed: <code>/settings private drafts</code> (or <code>edits</code>), <code>/settings groups edits</code>, <code>/settings final edit</code> (or <code>reply</code>), <code>/settings render off</code> (or <code>on</code>).</p>
 
 <h3>Files</h3>
 <p>After the text, the bot sends every file left at the top level of the scratch directory, including files whose names start with a dot. Directories are skipped with everything inside them, so pack a directory with <code>zip</code> or <code>tar</code> to get it back.</p>

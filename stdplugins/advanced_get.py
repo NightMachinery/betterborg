@@ -7,8 +7,11 @@ import uuid
 import subprocess
 import traceback
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+from telethon import errors
 from uniborg import (
+    bot_util,
+    callback_util,
     draft_stream,
     guest_util,
     redis_util,
@@ -16,14 +19,15 @@ from uniborg import (
     shell_stream,
     stream_driver,
     term_render,
+    tg_compat,
     tg_format,
     tg_raw,
     topics,
     util,
 )
-from uniborg.shell_settings import FinalMode
+from uniborg.shell_settings import FinalMode, ShellPrefs
 from uniborg.shell_stream import JobState, ShellJob, StopReason
-from uniborg.stream_driver import StreamMode
+from uniborg.stream_driver import STREAM_MODE_NAMES, STREAM_SCOPE_NAMES, StreamMode
 from uniborg.util import clean_cmd, embed2, brishz
 from IPython import embed
 import re
@@ -459,11 +463,17 @@ def _job_of(event, request):
     )
 
 
+async def _is_admin_command(event) -> bool:
+    """The gate of `.a`: an admin's message, not forwarded, and not one of
+    our own guest answers echoed back (its text may be the caller's doing)."""
+    if guest_util.is_guest_answer(event.message):
+        return False
+    return bool(await util.isAdmin(event) and event.message.forward is None)
+
+
 @borg.on(events.NewMessage(pattern=pattern_a))
 async def _(event):
-    if guest_util.is_guest_answer(event.message):
-        return
-    if not (await util.isAdmin(event) and event.message.forward == None):
+    if not await _is_admin_command(event):
         return
 
     request = await parse_shell_request(event.pattern_match)
@@ -516,6 +526,259 @@ async def _(event):
 async def _(event):
     util.restart_brishes()
     await event.reply("Restarted brishes.")
+
+
+##
+#: `/settings`: each admin's shell settings (`shell_settings.ShellPrefs`), as a
+#: panel of buttons in the private chat with the bot, or as text arguments.
+#: Only on a bot: a userbot's own `/settings` would also answer one typed to
+#: another bot.
+
+BOT_COMMANDS = [
+    {
+        "command": "settings",
+        "description": "Shell settings: live output, finished commands, renderer",
+    },
+    {"command": "help", "description": "The shell's commands"},
+]
+SETTINGS_CALLBACK_PREFIX = "shs:"
+FINAL_MODE_NAMES = {
+    FinalMode.EDIT_PREVIEW: "Edit the preview",
+    FinalMode.NEW_REPLY: "New reply",
+}
+#: The words of `/settings final WORD`, and of its buttons' data.
+FINAL_MODE_WORDS = {"edit": FinalMode.EDIT_PREVIEW, "reply": FinalMode.NEW_REPLY}
+RENDER_NAMES = {True: "On", False: "Off"}
+RENDER_WORDS = {"on": True, "off": False}
+SETTINGS_USAGE = (
+    "Usage: `/settings`, or `/settings private drafts|edits`, "
+    "`/settings groups drafts|edits`, `/settings final edit|reply`, "
+    "`/settings render on|off`."
+)
+SETTINGS_IN_PRIVATE = (
+    "The shell settings are in my private chat: send /settings to me there."
+)
+SETTINGS_NOT_SAVED = "Could not save that setting; try again."
+ADMINS_ONLY = "Only the bot's admins can do that."
+HELP_TEXT = """**Shell**
+`.a CMD` runs CMD in a zsh of the shell pool and replies with its output, then the files it leaves. Flags, in this order:
+• `.aa`: a new `zsh -c`, outside the pool;
+• `.af`: no fork, so what it sets stays for the next `.af`;
+• `.ad`: each file on its own, not in albums;
+• `.an`: `noglob` before CMD.
+A command still running after 2 s shows its output live.
+`.x` (or `.sbb`, `.xf`) restarts the shell pool.
+/settings: how live output shows, what it becomes when the command ends, and the renderer.
+`@{username} .a CMD` runs CMD from any chat, where guest mode is on."""
+
+
+@dataclass(frozen=True)
+class SettingChange:
+    """One setting's new value, from `/settings ARGS` or a button of its panel."""
+
+    apply: Callable[[ShellPrefs], None]
+    #: What it sets, as the press's toast says it: "Groups: Drafts."
+    summary: str
+
+
+def _set_field(prefs, *, name, value):
+    setattr(prefs, name, value)
+
+
+def setting_change(words: list[str]) -> Optional[SettingChange]:
+    """The change WORDS name (`["final", "reply"]`, any case), or None.
+
+    A button's data is its prefix, then the same words joined by ":".
+    """
+    words = [word.lower() for word in words]
+    choice = stream_driver.stream_choice_of_args(words)
+    if choice is not None:
+        return SettingChange(
+            apply=partial(
+                stream_driver.set_stream_mode, scope=choice.scope, mode=choice.mode
+            ),
+            summary=f"{STREAM_SCOPE_NAMES[choice.scope]}: "
+            f"{STREAM_MODE_NAMES[choice.mode]}.",
+        )
+    match words:
+        case ["final", word] if word in FINAL_MODE_WORDS:
+            mode = FINAL_MODE_WORDS[word]
+            return SettingChange(
+                apply=partial(_set_field, name="final_mode", value=mode),
+                summary=f"When it ends: {FINAL_MODE_NAMES[mode]}.",
+            )
+        case ["render", word] if word in RENDER_WORDS:
+            render = RENDER_WORDS[word]
+            return SettingChange(
+                apply=partial(_set_field, name="render", value=render),
+                summary=f"Renderer: {RENDER_NAMES[render].lower()}.",
+            )
+        case _:
+            return None
+
+
+def _settings_text(prefs) -> str:
+    """The panel: what each setting does and costs, and its value, in Markdown."""
+    if draft_stream.STOP_SUPPORTED:
+        drafts = (
+            "Telegram's live draft, with a Stop button. While a bot's draft is "
+            "live, Telegram for Android disables the send button, so a long "
+            "command keeps you from typing: press Stop, or choose Edits."
+        )
+    else:
+        drafts = (
+            "Telegram's live draft. This bot's drafts have no Stop button, and "
+            "while a bot's draft is live, Telegram for Android disables the send "
+            "button, so a long command keeps you from typing, even `.k`: choose "
+            "Edits if that matters."
+        )
+    lines = [
+        "**Shell settings**",
+        "",
+        "**Live output**: a command still running after 2 s shows its output "
+        "in a preview.",
+        f"• **Drafts**: {drafts} Telegram allows drafts only in private chats; "
+        "elsewhere they fall back to edits.",
+        "• **Edits**: a message edited as the output grows, with a Stop button.",
+        *stream_driver.stream_mode_lines(prefs),
+        "",
+        "**When a command with a preview ends**:",
+        "• **Edit the preview**: the preview becomes the output. An edited "
+        "message changes silently, with no notification; a draft becomes a new "
+        "message, which notifies.",
+        "• **New reply**: the output arrives as a new reply, which notifies, and "
+        "the preview goes.",
+        f"Now: **{FINAL_MODE_NAMES[prefs.final_mode]}**",
+        "",
+        "**Renderer**: show output as a terminal would, so a progress bar shows "
+        "its last state and colours are removed. Off shows the output raw.",
+        f"Now: **{RENDER_NAMES[prefs.render]}**",
+    ]
+    if not draft_stream.DRAFTS_SUPPORTED:
+        lines.append(
+            "\nThis bot's Telethon cannot send drafts, so every preview is an "
+            "edited message."
+        )
+    lines += ["", SETTINGS_USAGE]
+    return "\n".join(lines)
+
+
+def _choice_row(key, words, *, current, names, label) -> list:
+    return [
+        tg_compat.callback_button(
+            f"{'✅ ' if value == current else ''}{label}: {names[value]}",
+            data=f"{SETTINGS_CALLBACK_PREFIX}{key}:{word}",
+        )
+        for word, value in words.items()
+    ]
+
+
+def _settings_rows(prefs) -> list:
+    return [
+        *stream_driver.stream_mode_rows(
+            prefs, callback_prefix=SETTINGS_CALLBACK_PREFIX
+        ),
+        _choice_row(
+            "final",
+            FINAL_MODE_WORDS,
+            current=prefs.final_mode,
+            names=FINAL_MODE_NAMES,
+            label="When it ends",
+        ),
+        _choice_row(
+            "render",
+            RENDER_WORDS,
+            current=prefs.render,
+            names=RENDER_NAMES,
+            label="Renderer",
+        ),
+    ]
+
+
+def _save_change(user_id, change) -> bool:
+    prefs = shell_settings.SETTINGS.get(user_id)
+    change.apply(prefs)
+    return shell_settings.SETTINGS.set(user_id, prefs)
+
+
+async def settings_handler(event):
+    """/settings: the panel, or with arguments a change, then the panel."""
+    if not await _is_admin_command(event):
+        return
+    if not event.is_private:
+        await event.reply(SETTINGS_IN_PRIVATE, parse_mode=None)
+        return
+    args = (event.pattern_match.group("args") or "").split()
+    if args:
+        change = setting_change(args)
+        if change is None:
+            await event.reply(SETTINGS_USAGE, parse_mode="md")
+            return
+        if not _save_change(event.sender_id, change):
+            await event.reply(SETTINGS_NOT_SAVED, parse_mode=None)
+    prefs = shell_settings.SETTINGS.get(event.sender_id)
+    await event.reply(
+        _settings_text(prefs),
+        parse_mode="md",
+        link_preview=False,
+        buttons=_settings_rows(prefs),
+    )
+
+
+@callback_util.hold_bare_answers
+async def settings_press_handler(event):
+    """A press on the panel: saves the change, says so, redraws the panel."""
+    if not await util.isAdmin(event):
+        await event.answer(ADMINS_ONLY)
+        return
+    data = event.data.decode("utf-8", "replace")
+    change = setting_change(data.removeprefix(SETTINGS_CALLBACK_PREFIX).split(":"))
+    if change is None:
+        await event.answer("That button is out of date; send /settings again.")
+        return
+    saved = _save_change(event.sender_id, change)
+    await event.answer(change.summary if saved else SETTINGS_NOT_SAVED)
+    prefs = shell_settings.SETTINGS.get(event.sender_id)
+    try:
+        await event.edit(
+            _settings_text(prefs),
+            parse_mode="md",
+            link_preview=False,
+            buttons=_settings_rows(prefs),
+        )
+    except errors.MessageNotModifiedError:
+        pass
+
+
+async def help_handler(event):
+    if not await _is_admin_command(event):
+        return
+    await event.reply(
+        HELP_TEXT.format(username=borg.me.username),
+        parse_mode="md",
+        link_preview=False,
+    )
+
+
+def _bot_command_pattern(command) -> str:
+    """`/COMMAND`, also as `/COMMAND@thisbot`, with optional arguments."""
+    mention = f"(?:@{re.escape(borg.me.username)})?" if borg.me.username else ""
+    return rf"(?i)^/{command}{mention}(?:\s+(?P<args>.*))?\s*$"
+
+
+def register_bot_handlers():
+    borg.on(events.NewMessage(pattern=_bot_command_pattern("settings")))(
+        settings_handler
+    )
+    borg.on(events.NewMessage(pattern=_bot_command_pattern("help")))(help_handler)
+    borg.on(events.CallbackQuery(pattern=re.escape(SETTINGS_CALLBACK_PREFIX).encode()))(
+        settings_press_handler
+    )
+
+
+if borg.me.bot:
+    register_bot_handlers()
+    borg.loop.create_task(bot_util.register_bot_commands(borg, BOT_COMMANDS))
 
 
 ##

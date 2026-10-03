@@ -34,6 +34,13 @@ class _FakeBorg:
         self.handlers = []
         self.guest_handlers = []
         self.sent = []
+        #: The names of the coroutines the plugin scheduled; none of them runs.
+        self.scheduled = []
+        self.loop = SimpleNamespace(create_task=self._create_task)
+
+    def _create_task(self, coro):
+        self.scheduled.append(coro.__qualname__)
+        coro.close()
 
     def on(self, builder):
         def decorator(fn):
