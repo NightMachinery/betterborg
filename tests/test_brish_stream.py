@@ -7,8 +7,10 @@ inert (printf, print, sleep, trap) and run in a temporary directory.
 import asyncio
 from pathlib import Path
 import tempfile
+import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from brish import Brish
 
@@ -202,6 +204,28 @@ class BrishStreamTests(_BrishTestCase):
         self.assertLess(took, 3)
 
 
+class PluginPoolTests(_BrishTestCase):
+    def test_the_plugin_pool_is_looked_up_off_the_event_loop(self):
+        #: Its first use boots a pool of zsh workers, which takes seconds.
+        threads = []
+
+        def plugin_brish():
+            threads.append(threading.current_thread())
+            return self.brish
+
+        async def main():
+            job = _job()
+            result = await util.brishz_capture(cwd=self.cwd, cmd="print hi", job=job)
+            return result, threading.current_thread()
+
+        with patch.object(util, "plugin_brish", plugin_brish):
+            result, loop_thread = asyncio.run(main())
+
+        self.assertEqual(result, util.CommandResult(output="hi\n", retcode=0))
+        (thread,) = threads
+        self.assertIsNot(thread, loop_thread)
+
+
 class _BrishWithoutPopen(Brish):
     """A brish as before 0.4.0, as far as streaming is concerned."""
 
@@ -237,6 +261,10 @@ class BrishFallbackTests(_BrishTestCase):
 
         self.assertIsNone(asyncio.run(main()))
         self.assertFalse(Path(self.cwd, "ran").exists())
+
+
+class PluginPoolFallbackTests(PluginPoolTests):
+    brish_class = _BrishWithoutPopen
 
 
 if __name__ == "__main__":
