@@ -31,9 +31,9 @@ is a **pool**. The bot has two:
   and the plugin passes it explicitly (`brish=util.persistent_brish`).
 - The **plugin pool**, `util.plugin_brish()`: `borg_plugin_brish_count`
   workers (4 by default), started on its first use. `brishz`,
-  `brishz_capture` and `brishz_helper` default to it, so `jlib_plugins/jlib2.py`,
-  `stdplugins/tex2png.py`, `stdplugins/ptv.py` (through `aget_brishz`) and
-  `stdplugins/ebook_processor.py` run here.
+  `brishz_capture` and `brishz_helper` default to it, so
+  `jlib_plugins/jlib2.py`, `stdplugins/tex2png.py`, `stdplugins/ptv.py`
+  (through `aget_brishz`) and `stdplugins/ebook_processor.py` run here.
 
 Both pools boot with `util.BRISH_BOOT_CMD` (`JBRISH=y`).
 
