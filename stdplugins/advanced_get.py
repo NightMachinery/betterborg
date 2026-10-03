@@ -688,7 +688,8 @@ async def stop_press_handler(event):
         return
     data = event.data.decode("utf-8", "replace")
     job_id = data.removeprefix(STOP_CALLBACK_PREFIX)
-    if not job_id.isdigit():
+    #: Not `isdigit`, which also takes digits like "²" that `int` refuses.
+    if not re.fullmatch(r"[0-9]+", job_id):
         await event.answer(OUTDATED_BUTTON)
         return
     job = shell_stream.JOBS.get(int(job_id))

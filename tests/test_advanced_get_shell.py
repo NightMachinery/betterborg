@@ -987,6 +987,7 @@ class StopButtonTests(_ShellTestCase):
                 *await self.press("shk:999999"),
                 *await self.press(f"shk:{other.id}"),
                 *await self.press("shk:"),
+                *await self.press("shk:²"),
             ]
 
         other, toasts = asyncio.run(main())
@@ -996,6 +997,7 @@ class StopButtonTests(_ShellTestCase):
             [
                 "#999999 has already ended.",
                 f"#{other.id} has already ended.",
+                self.plugin.OUTDATED_BUTTON,
                 self.plugin.OUTDATED_BUTTON,
             ],
         )

@@ -592,10 +592,11 @@ load in.
   already stopping.", "#3 has already ended."), and the header turns to "⏹
   #3 stopping…" at the preview's next edit.
 - A job that is no longer registered (it finished, or the bot restarted)
-  gets "#3 has already ended.", and data with no id "That button is out of
-  date." The preview check matters after a restart: job ids start again at
-  1 in each process, and a preview that a shutdown or a crash left with its
-  button would otherwise stop the newer job that got the same id.
+  gets "#3 has already ended.", and data whose id is not ASCII digits "That
+  button is out of date." The preview check matters after a restart: job ids
+  start again at 1 in each process, and a preview that a shutdown or a crash
+  left with its button would otherwise stop the newer job that got the same
+  id.
 
 ## Still to come
 
