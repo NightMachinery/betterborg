@@ -411,6 +411,25 @@ Stop button), "⏹ Stopped: julia is restarting (exit N)." after a shutdown,
 and "⏹ Stopped before it ran." alone for a dropped job. The job records why
 it was stopped, not who stopped it, so the note does not name anyone.
 
+### The renderer in chats
+
+With the caller's `render` setting on (the default), what a chat shows of
+the output is rendered as a terminal would show it (`term_render`, above):
+the preview (`LiveOutput.tail_text(render=True)`), the final, and the `.txt`
+file of a long final, for `.a`, `.af` and `.aa` alike. So a progress bar shows
+its last frame, colours are dropped, and for `.aa` rendering replaces the old
+translation of `\r` into a newline (`\r\n` stays a newline). Output with
+none of `\r`, `\b` or ESC is unchanged. Off, the final is the output as
+before: raw for brish, newline-translated for `.aa`.
+
+A final over `RENDER_ON_LOOP_BYTES` (64 KiB) is rendered in a thread of the
+default executor: at the worst rate measured above (0.35 s per MiB), 64 KiB
+holds the event loop for about 20 ms, while the 32 MiB a job may keep could
+hold it for seconds. A preview renders at most `PREVIEW_BYTES` (16 KiB) and
+stays on the loop.
+
+On a brish without `popen`, `.a` renders its captured output the same way.
+
 ### Failures and fallbacks
 
 - **The producer raises**: the preview is removed, and `handle_exc` posts the
@@ -424,9 +443,10 @@ it was stopped, not who stopped it, so the note does not name anyone.
 - `util.forget_edit_chain(preview)` drops `util.edit_message`'s record of the
   preview once the pump is done, so it does not outlive the command.
 - **`borg_shell_streaming=0`**: `.a`, `.af` and `.aa` run exactly as before:
-  no job, no preview.
+  no job, no preview, no renderer.
 - **A brish without `Brish.popen`**: `.a` and `.af` run as before, with no job
-  and no preview, since they could not be stopped; `.aa` still streams.
+  and no preview, since they could not be stopped (only the renderer
+  applies); `.aa` still streams.
 
 Tests: `tests/test_advanced_get_shell.py` drives the handler with a fake chat
 and a fake producer that follows a script, with the timings injected
@@ -435,5 +455,5 @@ and a fake producer that follows a script, with the timings injected
 ## Still to come
 
 `.k` and the Stop button of edited previews on bots, the `/settings` panel,
-the terminal renderer in chats, live guest answers, and stopping jobs before a
+live guest answers (and the renderer in them), and stopping jobs before a
 shutdown.

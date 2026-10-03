@@ -12,6 +12,7 @@ import asyncio
 import itertools
 from pathlib import Path
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -583,6 +584,72 @@ class OldPathTests(_ShellTestCase):
         self.assertIs(call["brish"], util.persistent_brish)
         self.assertFalse(call["fork"])
         self.assertIsInstance(call["job"], shell_stream.ShellJob)
+
+
+class RendererTests(_ShellTestCase):
+    def test_the_final_shows_what_a_terminal_would(self):
+        event = self.run_script(["abcdef\rXY\n\x1b[31mred\x1b[0m\n"])
+
+        self.assertEqual(event.log[-1][1], "XYcdef\nred")
+
+    def test_off_the_final_is_the_raw_output(self):
+        self.set_prefs(render=False)
+
+        event = self.run_script(["abcdef\rXY\n"])
+
+        self.assertEqual(event.log[-1][1], "abcdef\rXY")
+
+    def test_the_preview_and_the_file_are_rendered_too(self):
+        bar = "".join(f"\r{i}%" for i in range(0, 101, 10))
+        lines = "".join(f"{i}\n" for i in range(1, 2001))
+
+        event = self.run_script([bar + "\n", 0.6, lines])
+
+        preview = event.log[0][1]
+        self.assertIn("\n\n100%\n▌", preview)
+        self.assertNotIn("\r", preview)
+        ((whole, _reply_to),) = self.text_files
+        self.assertTrue(whole.startswith("100%\n1\n"))
+
+    def test_off_the_preview_is_raw(self):
+        self.set_prefs(render=False)
+
+        event = self.run_script(["10%\r20%\n", 0.6, "done"])
+
+        self.assertIn("10%\r20%", event.log[0][1])
+        self.assertEqual(event.log[-1][2], "10%\r20%\ndone")
+
+    def test_a_large_final_renders_off_the_event_loop(self):
+        threads = []
+        render = shell_stream.term_render.render
+
+        def recording(text):
+            threads.append(threading.current_thread() is threading.main_thread())
+            return render(text)
+
+        with patch.object(shell_stream.term_render, "render", recording):
+            self.run_script(["a\rb"])
+            self.assertEqual(threads, [True])
+            with patch.object(self.plugin, "RENDER_ON_LOOP_BYTES", 2):
+                event = self.run_script(["a\rb"])
+
+        self.assertEqual(threads, [True, False])
+        self.assertEqual(event.log[-1][1], "b")
+
+    def test_old_brish_renders_dot_a_too(self):
+        async def capture(**kwargs):
+            return util.CommandResult(output="abcdef\rXY", retcode=0)
+
+        with patch.object(util, "BRISH_POPEN", False), patch.object(
+            util, "brishz_capture", capture
+        ):
+            rendered = self.run_command(".a x").log
+            self.set_prefs(render=False)
+            raw = self.run_command(".a x").log
+
+        self.assertEqual(
+            [entry[1] for entry in rendered + raw], ["XYcdef", "abcdef\rXY"]
+        )
 
 
 class PreviewHeaderTests(_ShellTestCase):

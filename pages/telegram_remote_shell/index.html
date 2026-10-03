@@ -281,6 +281,7 @@ done</code></pre>
 <h3>Text output</h3>
 <ul>
 <li>The bot replies to the command with what it printed, as plain text (Markdown is not rendered). Errors (standard error) are mixed into the same text.</li>
+<li>The output is shown as a terminal would show it: a progress bar that redraws its line with a carriage return shows only its last state, and colours and other terminal escape codes are removed.</li>
 <li>Leading and trailing whitespace is trimmed. If 4000 characters or more remain, the output comes as a <code>.txt</code> file instead, with the caption "This message is too long, so it has been sent as a text file."</li>
 <li>If the command printed nothing, the reply is <code>The process exited N.</code>, where <code>N</code> is the exit code. When there is output, the exit code is not shown. End the command with <code>; echo "exit $?"</code> to see it.</li>
 <li>A command that runs longer than 2 seconds shows its output live: see <a href="#live">Live output</a>.</li>
@@ -434,7 +435,7 @@ python3 start_server.py    # or with the FastAPI server</code></pre>
 <dt><code>borg_api_id</code>, <code>borg_api_hash</code></dt>
 <dd>Telegram API credentials (<code>TELEGRAM_API_ID</code> and <code>TELEGRAM_API_HASH</code> also work). Built-in defaults are used when unset.</dd>
 <dt><code>borg_shell_streaming</code></dt>
-<dd><code>0</code> turns <a href="#live">live output</a> off: every command replies only when it ends, as before. <code>1</code> or unset leaves it on; any other value stops the bot at startup.</dd>
+<dd><code>0</code> turns <a href="#live">live output</a> off: every command replies only when it ends, with its raw output, as before. <code>1</code> or unset leaves it on; any other value stops the bot at startup.</dd>
 <dt><code>borg_guest_trigger_guard</code></dt>
 <dd><code>0</code> turns off the "＠" rewriting described under <a href="#guest">Guest mode</a>.</dd>
 </dl>

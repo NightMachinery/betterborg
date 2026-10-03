@@ -15,6 +15,7 @@ from uniborg import (
     shell_settings,
     shell_stream,
     stream_driver,
+    term_render,
     tg_format,
     tg_raw,
     topics,
@@ -98,6 +99,10 @@ PREVIEW_UNITS = 4000
 PREVIEW_CURSOR = "▌"
 #: Telegram's limit for one message, in UTF-16 units.
 MESSAGE_UNITS = 4096
+#: Output of up to this many bytes is rendered on the event loop, and more
+#: in a thread: rendering costs up to about 0.35 s per MiB
+#: (docs/shell_streaming.md), so this holds the loop for at most about 20 ms.
+RENDER_ON_LOOP_BYTES = 64 * 2**10
 LONG_OUTPUT_LINE = "✂️ The full output is in the file below."
 FINISHED_TEXT = "Finished; output below."
 STOPPED_BEFORE_IT_RAN = "⏹ Stopped before it ran."
@@ -284,6 +289,13 @@ async def _open_chat_preview(event, *, job, drafts, render):
     )
 
 
+async def _off_the_loop_if_large(read, *, size):
+    """`read()`, in a thread when SIZE is over RENDER_ON_LOOP_BYTES."""
+    if size <= RENDER_ON_LOOP_BYTES:
+        return read()
+    return await asyncio.get_running_loop().run_in_executor(None, read)
+
+
 def _stop_note(job, *, retcode) -> str:
     match job.stop_reason:
         case None:
@@ -296,11 +308,20 @@ def _stop_note(job, *, retcode) -> str:
             raise ValueError(f"Unknown stop reason: {job.stop_reason!r}")
 
 
-def _final_text(job, result) -> str:
-    """What `send_output` would send for RESULT, plus a note when JOB was stopped."""
+async def _final_text(job, result, *, render) -> str:
+    """What `send_output` would send for RESULT, plus a note when JOB was stopped.
+
+    With RENDER, the output is shown as a terminal would (`term_render`);
+    without, it is RESULT's own, as before.
+    """
     if result is None:
         return STOPPED_BEFORE_IT_RAN
-    text = util.shell_output_text(result.output, retcode=result.retcode)
+    output = result.output
+    if render:
+        output = await _off_the_loop_if_large(
+            partial(job.output.final_text, render=True), size=job.output.written
+        )
+    text = util.shell_output_text(output, retcode=result.retcode)
     note = _stop_note(job, retcode=result.retcode)
     return f"{text}\n\n{note}" if note else text
 
@@ -390,10 +411,10 @@ async def _run_in_chat(*, cwd, event, request, job, prefs):
             event,
             job=job,
             drafts=_wants_drafts(event, prefs),
-            render=False,
+            render=prefs.render,
         ),
         preview_text=lambda preview: _preview_text(
-            job, render=False, stop_hint=not _shows_stop_button(preview)
+            job, render=prefs.render, stop_hint=not _shows_stop_button(preview)
         ),
         pace=stream_driver.tiered_pace(
             slow_after=timing.slow_after,
@@ -403,8 +424,24 @@ async def _run_in_chat(*, cwd, event, request, job, prefs):
         edit_interval=edit_pace.interval,
         preview_delay=timing.preview_delay,
     )
-    text = _final_text(job, live.result)
+    text = await _final_text(job, live.result, render=prefs.render)
     await _deliver_final(event, text, preview=live.preview, mode=prefs.final_mode)
+
+
+async def _run_unstoppable(*, cwd, event, request, prefs):
+    """`.a` on a brish without `popen`: as before live output, rendered."""
+    result = await util.brishz_capture(
+        cwd=cwd,
+        cmd=request.command,
+        fork=request.fork,
+        brish=util.persistent_brish,
+    )
+    output = result.output
+    if prefs.render:
+        output = await _off_the_loop_if_large(
+            partial(term_render.render, output), size=len(output)
+        )
+    await util.send_output(event, output, retcode=result.retcode)
 
 
 def _job_of(event, request):
@@ -441,9 +478,7 @@ async def _(event):
         #: This brish can neither stream a command nor stop one.
         await util.run_and_upload(
             event=event,
-            to_await=partial(
-                _brishz_on_shell_pool, cmd=request.command, fork=request.fork
-            ),
+            to_await=partial(_run_unstoppable, request=request, prefs=prefs),
             album_mode=request.album_mode,
         )
         return
