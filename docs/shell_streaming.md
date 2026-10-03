@@ -70,6 +70,9 @@ pure module (standard library only) and works on any `str`, streamed or not.
 - `line_aligned(text)` drops everything up to the first newline. A tail cut
   from a longer output usually starts mid-line, where a `\r` or a cursor-up
   would act on text that is not there; aligned, rendering stays inside it.
+  When only blanks follow that newline (the tail is the end of one long line,
+  such as a minified JSON body), the tail is kept whole, so a preview never
+  goes empty.
 
 It is not a terminal emulator: there is no screen, no cursor addressing
 beyond the above, and every character is one column wide (tabs and wide

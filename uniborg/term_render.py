@@ -26,7 +26,8 @@ beyond this; text without `\\r`, `\\b` or ESC is returned unchanged.
 
 A *tail* of a longer output can start in the middle of a line, where a `\\r`
 or a cursor-up would act on text that is not there. `line_aligned` cuts such
-a tail to its first whole line, so rendering it stays inside the tail.
+a tail to its first whole line, so rendering it stays inside the tail; a tail
+that holds only the end of one line is kept whole.
 
 This module imports only the standard library.
 """
@@ -156,8 +157,12 @@ def line_aligned(text: str) -> str:
     """TEXT from the start of its first whole line.
 
     For a tail cut from a longer output: its first line is usually the end of
-    a longer one. TEXT without a newline is returned whole, as the best there
-    is.
+    a longer one. When nothing but blanks follows that line (TEXT is the end
+    of one long line, with or without its newline), TEXT is returned whole,
+    as the best there is.
     """
     newline = text.find("\n")
-    return text if newline < 0 else text[newline + 1 :]
+    if newline < 0:
+        return text
+    rest = text[newline + 1 :]
+    return rest if rest.strip() else text

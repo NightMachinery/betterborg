@@ -103,6 +103,11 @@ class LineAlignedTests(unittest.TestCase):
     def test_a_tail_without_a_newline_is_kept(self):
         self.assertEqual(line_aligned("no newline\rX"), "no newline\rX")
 
+    def test_a_tail_with_nothing_after_its_first_newline_is_kept(self):
+        #: The end of one long line: dropping it would leave nothing.
+        self.assertEqual(line_aligned('vvv"}\n'), 'vvv"}\n')
+        self.assertEqual(line_aligned("vvv\n\n  \n"), "vvv\n\n  \n")
+
     def test_a_cursor_up_in_an_aligned_tail_stays_inside_it(self):
         tail = line_aligned(f"cut\nkept\nlast{ESC}[9A\rK")
         self.assertEqual(render(tail), "Kept\nlast")

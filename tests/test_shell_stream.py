@@ -152,6 +152,13 @@ class TailTextTests(unittest.TestCase):
         #: Rendered, it starts at the first whole line.
         self.assertEqual(output.tail_text(max_units=100, render=True), "abc")
 
+    def test_one_long_last_line_still_shows_rendered(self):
+        output = _output(preview_bytes=100)
+        output.write(b'{"k":"' + b"v" * 200 + b'"}\n')
+
+        tail = output.tail_text(max_units=30, render=True)
+        self.assertEqual(tail, "v" * 27 + '"}\n')
+
     def test_a_character_cut_at_either_end_is_left_out(self):
         output = _output(preview_bytes=5)
         output.write("éé".encode())
