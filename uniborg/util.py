@@ -1829,12 +1829,14 @@ async def aget_brishz(event, cmd, fork=True, album_mode=True):
 BRISH_EVAL_STDIN = '{ eval "$(< /dev/stdin)"; } 2>&1'
 
 
-@force_async
-def brishz_helper(cwd, cmd, *, brish=None, fork=True, server_index=None, **kwargs):
-    """Runs `cmd` on one worker of `brish`, in `cwd` when given.
+def _on_brish_worker(my_brish, *, cwd, server_index, run, may_start=None, **kwargs):
+    """Runs `run(index)` on one worker of `my_brish`, holding its lock.
 
-    `brish` defaults to the plugin pool (`plugin_brish`); the shell passes
-    `persistent_brish`.
+    In `cwd`, when given, the worker sets `$jd` to it, changes into it and
+    calls `jinit` if defined; it changes back to /tmp afterwards. `may_start`,
+    when given, is asked once the worker is ours: when it returns False, the
+    lock is released and nothing runs. Returns what `run` returned, or None
+    when nothing ran.
 
     A worker that is gone (after `exit N` in a non-fork command) fails every
     later call under the same lock with BrishWorkerDiedException, and the
@@ -1842,14 +1844,15 @@ def brishz_helper(cwd, cmd, *, brish=None, fork=True, server_index=None, **kwarg
     stands if the command ran, and a command that never ran is tried once
     more.
     """
-    myBrish = plugin_brish() if brish is None else brish
     for attempt in range(2):
-        lock, index = myBrish.acquire_lock(server_index=server_index, lock_sleep=1)
+        lock, index = my_brish.acquire_lock(server_index=server_index, lock_sleep=1)
         res = None
         try:
+            if may_start is not None and not may_start():
+                return None
             if cwd:
-                myBrish.z("typeset -g jd={cwd}", server_index=index, **kwargs)
-                myBrish.send_cmd(
+                my_brish.z("typeset -g jd={cwd}", server_index=index, **kwargs)
+                my_brish.send_cmd(
                     """
                 cd "$jd"
                 ! ((${+functions[jinit]})) || jinit
@@ -1858,15 +1861,9 @@ def brishz_helper(cwd, cmd, *, brish=None, fork=True, server_index=None, **kwarg
                     **kwargs,
                 )
 
-            res = myBrish.send_cmd(
-                BRISH_EVAL_STDIN,
-                fork=fork,
-                cmd_stdin=cmd,
-                server_index=index,
-                **kwargs,
-            )
+            res = run(index)
             if cwd:
-                myBrish.z("cd /tmp", server_index=index, **kwargs)
+                my_brish.z("cd /tmp", server_index=index, **kwargs)
 
             return res
         except BrishWorkerDiedException:
@@ -1876,6 +1873,30 @@ def brishz_helper(cwd, cmd, *, brish=None, fork=True, server_index=None, **kwarg
                 raise
         finally:
             lock.release()
+
+
+@force_async
+def brishz_helper(cwd, cmd, *, brish=None, fork=True, server_index=None, **kwargs):
+    """Runs `cmd` on one worker of `brish`, in `cwd` when given.
+
+    `brish` defaults to the plugin pool (`plugin_brish`); the shell passes
+    `persistent_brish`. Returns brish's CmdResult; see `_on_brish_worker`
+    for a worker that dies.
+    """
+    my_brish = plugin_brish() if brish is None else brish
+
+    def run(index):
+        return my_brish.send_cmd(
+            BRISH_EVAL_STDIN,
+            fork=fork,
+            cmd_stdin=cmd,
+            server_index=index,
+            **kwargs,
+        )
+
+    return _on_brish_worker(
+        my_brish, cwd=cwd, server_index=server_index, run=run, **kwargs
+    )
 
 
 async def brishz_capture(*, cwd, cmd, fork=True, brish=None) -> CommandResult:

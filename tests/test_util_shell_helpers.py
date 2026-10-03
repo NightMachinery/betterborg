@@ -270,3 +270,85 @@ class RunAndUploadTests(_BorgTestCase):
         asyncio.run(util.run_and_upload(event=event, to_await=to_await))
 
         self.assertEqual(self.reports, [event])
+
+
+class _ScriptedWorkerBrish:
+    """A one-worker pool whose `z` calls fail as told, recording the lock."""
+
+    def __init__(self, *, die_on=()):
+        self.die_on = list(die_on)
+        self.calls = []
+        self.locks = 0
+
+    def acquire_lock(self, server_index=None, lock_sleep=1):
+        self.locks += 1
+        brish = self
+
+        class Lock:
+            def release(self):
+                brish.locks -= 1
+
+        return Lock(), 0
+
+    def z(self, template, **kwargs):
+        self.calls.append(template)
+        if self.die_on and self.die_on[0] == len(self.calls):
+            self.die_on.pop(0)
+            raise util.BrishWorkerDiedException("gone")
+
+    def send_cmd(self, cmd, **kwargs):
+        self.calls.append("cd")
+
+
+@unittest.skipUnless(
+    isinstance(util.BrishWorkerDiedException, type), "brish before 0.4"
+)
+class OnBrishWorkerTests(unittest.TestCase):
+    def run_on(self, brish, **kwargs):
+        runs = []
+
+        def run(index):
+            runs.append(index)
+            return "result"
+
+        res = util._on_brish_worker(
+            brish, cwd="/w/", server_index=None, run=run, **kwargs
+        )
+        return res, runs
+
+    def test_runs_in_the_directory_and_returns_to_tmp(self):
+        brish = _ScriptedWorkerBrish()
+
+        res, runs = self.run_on(brish)
+
+        self.assertEqual((res, runs), ("result", [0]))
+        self.assertEqual(brish.calls, ["typeset -g jd={cwd}", "cd", "cd /tmp"])
+        self.assertEqual(brish.locks, 0)
+
+    def test_a_refused_start_runs_nothing_and_frees_the_worker(self):
+        brish = _ScriptedWorkerBrish()
+
+        res, runs = self.run_on(brish, may_start=lambda: False)
+
+        self.assertEqual((res, runs, brish.calls), (None, [], []))
+        self.assertEqual(brish.locks, 0)
+
+    def test_a_death_after_the_command_keeps_its_result(self):
+        brish = _ScriptedWorkerBrish(die_on=[3])
+
+        res, runs = self.run_on(brish)
+
+        self.assertEqual((res, runs), ("result", [0]))
+        self.assertEqual(brish.locks, 0)
+
+    def test_a_death_before_the_command_retries_once(self):
+        brish = _ScriptedWorkerBrish(die_on=[1])
+
+        res, runs = self.run_on(brish)
+
+        self.assertEqual((res, runs), ("result", [0]))
+
+        brish = _ScriptedWorkerBrish(die_on=[1, 2])
+        with self.assertRaises(util.BrishWorkerDiedException):
+            self.run_on(brish)
+        self.assertEqual(brish.locks, 0)
