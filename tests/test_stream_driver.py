@@ -2,6 +2,7 @@
 
 `PacedEditor` runs on a *scripted clock*: a callable whose time only moves
 when the test says so, so each edit decision sees an exact timestamp.
+`follow` runs on a real loop with intervals of a few hundredths of a second.
 `util.edit_message` is replaced by a mock that records its calls.
 """
 
@@ -148,6 +149,146 @@ class PacedEditorTests(unittest.TestCase):
                 del loop.time
 
         self.assertEqual(asyncio.run(run()), (ShowResult.NOT_DUE, ShowResult.SHOWN))
+
+
+#: The edit interval of `follow`'s tests, in seconds.
+_INTERVAL = 0.05
+
+
+class FollowTests(unittest.TestCase):
+    """`follow` with a producer that sets `text` and `changed` by hand."""
+
+    def setUp(self):
+        self.edits = []
+
+        async def edit_message(message, text, **kwargs):
+            self.edits.append(text)
+
+        patcher = patch.object(util, "edit_message", edit_message)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.text = ""
+
+    def run_follow(self, producer, *, retry_after=1.0):
+        async def main():
+            editor = PacedEditor(
+                "message",
+                edit_interval=_INTERVAL,
+                logger=logging.getLogger("test.stream_driver"),
+            )
+            changed = asyncio.Event()
+            done = asyncio.get_running_loop().create_future()
+            pump = asyncio.ensure_future(
+                stream_driver.follow(
+                    editor,
+                    render=lambda: self.text,
+                    changed=changed,
+                    done=done,
+                    retry_after=retry_after,
+                )
+            )
+            await producer(changed)
+            done.set_result(None)
+            await asyncio.wait_for(pump, 1)
+
+        asyncio.run(main())
+
+    async def until(self, predicate, *, timeout=1.0):
+        deadline = asyncio.get_running_loop().time() + timeout
+        while not predicate():
+            self.assertLess(asyncio.get_running_loop().time(), deadline)
+            await asyncio.sleep(0.005)
+
+    def test_the_last_text_shows_after_a_quiet_spell(self):
+        async def producer(changed):
+            #: Before the first edit is due, so it must wait for the pace.
+            self.text = "a"
+            changed.set()
+            await self.until(lambda: self.edits)
+            self.text = "ab"
+            changed.set()
+            await self.until(lambda: len(self.edits) == 2)
+
+        self.run_follow(producer)
+
+        self.assertEqual(self.edits, ["a▌", "ab▌"])
+
+    def test_a_burst_makes_one_edit_of_the_last_text(self):
+        async def producer(changed):
+            for text in ("a", "ab", "abc"):
+                self.text = text
+                changed.set()
+            await self.until(lambda: self.edits)
+            await asyncio.sleep(3 * _INTERVAL)
+
+        self.run_follow(producer)
+
+        self.assertEqual(self.edits, ["abc▌"])
+
+    def test_a_spread_burst_edits_at_most_once_per_interval(self):
+        async def producer(changed):
+            await asyncio.sleep(2 * _INTERVAL)
+            for index in range(10):
+                self.text = str(index)
+                changed.set()
+                await asyncio.sleep(_INTERVAL / 10)
+            await self.until(lambda: self.edits[-1:] == ["9▌"])
+
+        self.run_follow(producer)
+
+        #: One leading edit, then the trailing one, and maybe one between.
+        self.assertLessEqual(len(self.edits), 3)
+        self.assertEqual(self.edits[-1], "9▌")
+
+    def test_a_failed_edit_backs_off(self):
+        async def producer(changed):
+            for index in range(10):
+                self.text = str(index)
+                changed.set()
+                await asyncio.sleep(0.02)
+
+        attempts = []
+
+        async def failing(message, text, **kwargs):
+            attempts.append(text)
+            raise RuntimeError("the message is gone")
+
+        with patch.object(util, "edit_message", failing), self.assertLogs(
+            "test.stream_driver", level="WARNING"
+        ):
+            self.run_follow(producer, retry_after=0.1)
+
+        #: About 0.2 s of changes every 0.02 s, but retries 0.1 s apart.
+        self.assertGreaterEqual(len(attempts), 1)
+        self.assertLessEqual(len(attempts), 3)
+
+    def test_it_returns_when_done_without_showing_the_rest(self):
+        async def producer(changed):
+            self.text = "late"
+            changed.set()
+            await asyncio.sleep(0)
+
+        self.run_follow(producer)
+
+        self.assertEqual(self.edits, [])
+
+    def test_it_returns_at_once_when_already_done(self):
+        async def main():
+            done = asyncio.get_running_loop().create_future()
+            done.set_result(None)
+            await asyncio.wait_for(
+                stream_driver.follow(
+                    PacedEditor("message", edit_interval=_INTERVAL),
+                    render=lambda: "x",
+                    changed=asyncio.Event(),
+                    done=done,
+                ),
+                1,
+            )
+
+        asyncio.run(main())
+
+        self.assertEqual(self.edits, [])
 
 
 if __name__ == "__main__":

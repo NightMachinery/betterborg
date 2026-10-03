@@ -171,7 +171,9 @@ while it lasts. The answer itself never waits for a draft.
   and `streaming_pace`.
 - `tests/test_stream_driver.py`: `PacedEditor` on a scripted clock (the
   strict interval check, failed and unchanged edits, the pace tiers and the
-  fixed pace).
+  fixed pace), and on a real loop `stream_driver.follow`, the trailing-edge
+  pump for producers that go quiet, such as a shell command (the chat bot's
+  loops do not use it).
 - `tests/test_gemini_image_stream.py`: native Gemini images' partial edits
   keep one pace and cursor past 30 s.
 - `tests/test_llm_chat_stream.py`: the plugin's choice of drafts or edits per

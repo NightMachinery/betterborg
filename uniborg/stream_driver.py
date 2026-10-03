@@ -9,6 +9,9 @@ down as the answer ages and keeps a draft's own pace.
 
 The editor only edits when it is asked to show new text (the leading edge),
 and it creates no task or timer, so a streaming loop stays a plain loop.
+A producer that can go quiet, such as a shell command, needs the trailing
+edge too: its last text must show even when nothing follows it. `follow` is
+that pump: it waits for changes and shows the latest text once it is due.
 
 This is a core module, so a plugin reload never re-executes it. How the chat
 bot uses it is in docs/draft_streaming.md.
@@ -27,6 +30,9 @@ _log = logging.getLogger(__name__)
 
 #: A pace function: `(message, *, elapsed, edit_interval) -> StreamingPace`.
 PaceFunction = Callable[..., draft_stream.StreamingPace]
+#: `follow` waits this much past an edit's due time, since an edit is due
+#: only strictly after the interval.
+FOLLOW_SLACK = 0.05
 
 
 class ShowResult(Enum):
@@ -128,3 +134,56 @@ class PacedEditor:
             return ShowResult.FAILED
         self.last_edit_at = now
         return ShowResult.SHOWN
+
+
+async def _wait_first(*futures, timeout: Optional[float] = None) -> None:
+    await asyncio.wait(futures, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+
+
+async def follow(
+    editor: PacedEditor,
+    *,
+    render: Callable[[], str],
+    changed: asyncio.Event,
+    done: asyncio.Future,
+    retry_after: float = 1.0,
+) -> None:
+    """Shows `render()` through EDITOR whenever CHANGED is set, until DONE.
+
+    A change that arrives before an edit is due is shown once it is due, so
+    the last text shows even when nothing follows it; a burst of changes
+    makes one edit. After a failed edit, the next waits RETRY_AFTER seconds,
+    so a broken message cannot make this spin. The final text is the
+    caller's to deliver: this returns as soon as DONE completes, without
+    showing what changed since the last edit.
+    """
+    #: A change not yet shown.
+    behind = False
+    while not done.done():
+        waiter = asyncio.ensure_future(changed.wait())
+        try:
+            await _wait_first(
+                waiter,
+                done,
+                timeout=editor.due_in() + FOLLOW_SLACK if behind else None,
+            )
+        finally:
+            waiter.cancel()
+        if done.done():
+            return
+        if changed.is_set():
+            changed.clear()
+            behind = True
+        if not behind or editor.due_in() > 0:
+            continue
+        result = await editor.show(render())
+        if result == ShowResult.SHOWN:
+            behind = False
+        elif result == ShowResult.NOT_DUE:
+            pass
+        elif result == ShowResult.FAILED:
+            await _wait_first(done, timeout=retry_after)
+        elif result == ShowResult.NO_TARGET:
+            await _wait_first(done)
+        else:
+            raise ValueError(f"Unknown show result: {result!r}")
