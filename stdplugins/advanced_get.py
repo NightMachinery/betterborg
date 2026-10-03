@@ -712,25 +712,43 @@ if borg.me.bot:
     )
 
 
-def old_pool_note() -> str:
-    """A line on the jobs still running on a retired shell pool.
+def old_pool_note(*, chat_id, caller_id) -> str:
+    """Lines on the jobs still running on a retired shell pool.
 
     A restart does not stop them: they keep their pool until they end. Call
     it after the restart: every pool but `util.persistent_brish` is retired,
-    whichever restart retired it.
+    whichever restart retired it. The jobs that `.k` from CALLER_ID in
+    CHAT_ID can see are counted apart from the others.
     """
-    count = sum(
-        1
+    old = {
+        job.id
         for job in shell_stream.JOBS.values()
         if job.pool is not None
         and job.pool is not util.persistent_brish
         and _is_running(job)
+    }
+    here = sum(
+        1
+        for job in shell_stream.visible(chat_id=chat_id, caller_id=caller_id)
+        if job.id in old
     )
-    if count == 0:
-        return ""
-    if count == 1:
-        return "\n1 command still runs on an old pool; .k stops it."
-    return f"\n{count} commands still run on old pools; .k stops them."
+    elsewhere = len(old) - here
+    lines = []
+    if here == 1:
+        lines.append("1 command still runs on an old pool; .k stops it.")
+    elif here > 1:
+        lines.append(f"{here} commands still run on old pools; .k stops them.")
+    if elsewhere == 1:
+        lines.append(
+            "1 command in another chat still runs on an old pool;"
+            " .k in that chat stops it."
+        )
+    elif elsewhere > 1:
+        lines.append(
+            f"{elsewhere} commands in other chats still run on old pools;"
+            " .k in their chats stops them."
+        )
+    return "".join(f"\n{line}" for line in lines)
 
 
 @borg.on(util.admin_cmd(pattern="^\.xf$"))
@@ -738,14 +756,17 @@ async def reinit_brishes_handler(event):
     util.init_brishes()
     await event.reply(
         "Reinitialized brishes. Note that old running instances can still rejoin."
-        + old_pool_note()
+        + old_pool_note(chat_id=event.chat_id, caller_id=event.sender_id)
     )
 
 
 @borg.on(util.admin_cmd(pattern="^\.(x|sbb)$"))
 async def restart_brishes_handler(event):
     util.restart_brishes()
-    await event.reply("Restarted brishes." + old_pool_note())
+    await event.reply(
+        "Restarted brishes."
+        + old_pool_note(chat_id=event.chat_id, caller_id=event.sender_id)
+    )
 
 
 ##

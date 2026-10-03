@@ -1084,7 +1084,7 @@ class OldPoolTests(_ShellTestCase):
             and builder.pattern(text)
             and fn.__name__.endswith("brishes_handler")
         ]
-        event = SimpleNamespace(reply=AsyncMock())
+        event = SimpleNamespace(reply=AsyncMock(), chat_id=CHAT, sender_id=ADMIN)
         pools = iter(pools)
 
         def init_brishes():
@@ -1096,12 +1096,12 @@ class OldPoolTests(_ShellTestCase):
             asyncio.run(handler(event))
         return event.reply.await_args.args[0]
 
-    def jobs(self, *pools):
+    def jobs(self, *pools, chat_id=CHAT):
         async def make():
             made = []
             for pool in pools:
                 job = shell_stream.register(
-                    shell_stream.ShellJob(owner_id=ADMIN, chat_id=CHAT, command="x")
+                    shell_stream.ShellJob(owner_id=ADMIN, chat_id=chat_id, command="x")
                 )
                 job.pool = pool
                 job.try_start()
@@ -1143,6 +1143,25 @@ class OldPoolTests(_ShellTestCase):
         self.assertEqual(
             self.restart(".x", pools=[p2, p3]),
             "Restarted brishes.\n1 command still runs on an old pool; .k stops it.",
+        )
+
+    def test_jobs_in_other_chats_are_counted_apart(self):
+        """`.k` here cannot see them, so the note says where they run."""
+        old, new = object(), object()
+        self.jobs(old, chat_id=-1002)
+
+        self.assertEqual(
+            self.restart(".x", pools=[old, new]),
+            "Restarted brishes.\n1 command in another chat still runs on an old"
+            " pool; .k in that chat stops it.",
+        )
+        self.jobs(old, old)
+        self.jobs(old, chat_id=-1003)
+        self.assertEqual(
+            self.restart(".x", pools=[old, new]),
+            "Restarted brishes.\n2 commands still run on old pools; .k stops them."
+            "\n2 commands in other chats still run on old pools; .k in their chats"
+            " stops them.",
         )
 
     def test_a_streamed_dot_a_records_its_pool(self):

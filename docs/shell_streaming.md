@@ -60,7 +60,11 @@ RUNNING or STOPPING) have a retired pool as their `ShellJob.pool`: any pool
 but the current `util.persistent_brish`, so one that an earlier restart
 retired counts too. The consumer sets that field when it picks the pool,
 after the downloads; `.aa` jobs and jobs still downloading have none, and an
-old-brish `.a` is no job, so none of these is counted.
+old-brish `.a` is no job, so none of these is counted. Only the jobs that a
+`.k` in the chat of the restart can see (`shell_stream.visible`) get that
+line. The others get a second line, "1 command in another chat still runs
+on an old pool; .k in that chat stops it.", since a `.k` here would not find
+them.
 
 Nothing here depends on whole-pool restarts. Brish 0.4.1 is announced to
 restart only the dead worker; the separate plugin pool is still worth keeping
