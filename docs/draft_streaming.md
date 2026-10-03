@@ -85,11 +85,11 @@ streams by edits.
    sends the first draft. Without drafts, or if `start` fails, it sends the
    usual placeholder message instead, so the answer streams by edits.
 2. `_generate_streamed` runs the generation through
-   `stream_driver.run_stoppable`, as its own task, and `stream_driver.stop_wired`
-   points the stand-in's `on_stop` at that task's `cancel`, so the Stop button
-   can cancel it. When the generation returns or fails, `stop_wired` calls
-   `end_stream`. `stop_wired` takes any callable, so other work, such as a
-   shell command, can be stopped the same way.
+   `stream_driver.run_stoppable`, as its own task, and
+   `stream_driver.stop_wired` points the stand-in's `on_stop` at that task's
+   `cancel`, so the Stop button can cancel it. When the generation returns or
+   fails, `stop_wired` calls `end_stream`. `stop_wired` takes any callable, so
+   other work, such as a shell command, can be stopped the same way.
 3. While streaming, an edit only records the new text and wakes the **draft
    worker**, a background task that sends the last live part as a draft, at
    most once per second (`DRAFT_MIN_INTERVAL`), and sends a heartbeat after
@@ -107,8 +107,9 @@ streams by edits.
    real message, and the first edit of each part sends it: a sync draft, then
    the real message (a reply to the question, or to the previous part).
 6. `chat_handler`'s `finally` calls `stream_driver.flush_draft`, whose
-   `flush` sends every part that was never edited after the stream ended. This is how an error message, a
-   cancelled partial answer or the text left by Stop still reaches the chat.
+   `flush` sends every part that was never edited after the stream ended.
+   This is how an error message, a cancelled partial answer or the text left
+   by Stop still reaches the chat.
 
 An edit that carries buttons ends the stream at once and sends the part for
 real, since a draft cannot carry buttons. An answer that turns out to be only
