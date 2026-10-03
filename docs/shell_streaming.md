@@ -79,9 +79,16 @@ beyond the above, and every character is one column wide (tabs and wide
 characters are not expanded). Commands still run without a terminal; nothing
 fakes one (no `script`, `unbuffer` or pseudo-terminal).
 
-Cost: about 0.05 s per MiB of ordinary lines and 0.4 s per MiB of dense `\r`
-frames on the development machine, so a final render of a large output
-belongs in a thread, not on the event loop.
+Cost: linear in the text. The line under the cursor is kept as an array of
+code points, so a write, an overwrite after `\r` or `\b`, and an erase cost
+what they change, not the length of the line; only moving to another line
+(a newline or a cursor-up) costs the length of the lines involved. On the
+development machine, per MiB: about 0.02 s for ordinary lines, 0.06 s for
+dense `\r` frames (tqdm), 0.09 s for coloured lines, 0.2 s for one long
+coloured line (`jq -C -c`) and 0.35 s for one long line of
+`grep --color=always` matches. The cap allows 32 MiB per stream, so a final
+render of a large output can take seconds, and belongs in a thread, not on
+the event loop.
 
 ## Live output and memory caps
 

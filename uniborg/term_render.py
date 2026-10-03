@@ -29,10 +29,18 @@ or a cursor-up would act on text that is not there. `line_aligned` cuts such
 a tail to its first whole line, so rendering it stays inside the tail; a tail
 that holds only the end of one line is kept whole.
 
+Rendering takes time linear in the text: the line under the cursor is kept
+as an array of code points, so writing, overwriting and erasing in it cost
+what they change, not the length of the line. Moving to another line (a
+newline or a cursor-up) costs the length of the line left and of the line
+written next.
+
 This module imports only the standard library.
 """
 
+from array import array
 import re
+import sys
 
 _CSI = r"\x1b\[(?P<params>[0-?]*)[ -/]*(?P<final>[@-~])?"
 _OSC = r"\x1b\][^\x07\x1b]*(?P<osc_end>\x07|\x1b\\)?"
@@ -40,6 +48,21 @@ _ESCAPE = r"\x1b[ -/]*(?P<esc_final>[0-~])?"
 #: Within one line: `feed` splits its text at newlines first.
 _TOKEN = re.compile(f"{_CSI}|{_OSC}|{_ESCAPE}|[\r\b]")
 _NEEDS_RENDERING = re.compile(r"[\r\b\x1b]")
+
+#: An array type of 4-byte items: one code point each.
+_CODE_POINT_TYPE = next(code for code in "IL" if array(code).itemsize == 4)
+_UTF32 = "utf-32-le" if sys.byteorder == "little" else "utf-32-be"
+
+
+def _code_points(text: str) -> array:
+    """TEXT as an array of its code points; lone surrogates pass."""
+    points = array(_CODE_POINT_TYPE)
+    points.frombytes(text.encode(_UTF32, "surrogatepass"))
+    return points
+
+
+def _text_of(points: array) -> str:
+    return points.tobytes().decode(_UTF32, "surrogatepass")
 
 
 class TerminalRenderer:
@@ -55,6 +78,9 @@ class TerminalRenderer:
         self._row = 0
         self._col = 0
         self._pending = ""
+        #: The cursor's line as code points, once written to; while it is
+        #: set, `_lines[_row]` is out of date.
+        self._active = None
 
     def feed(self, text: str) -> "TerminalRenderer":
         text = self._pending + text
@@ -71,17 +97,31 @@ class TerminalRenderer:
         return self
 
     def text(self) -> str:
+        self._store_active()
         return "\n".join(self._lines)
 
+    def _line(self) -> array:
+        """The cursor's line, as code points to change in place."""
+        if self._active is None:
+            self._active = _code_points(self._lines[self._row])
+        return self._active
+
+    def _store_active(self) -> None:
+        if self._active is not None:
+            self._lines[self._row] = _text_of(self._active)
+            self._active = None
+
     def _write(self, run: str) -> None:
-        line = self._lines[self._row]
         col = self._col
-        if col >= len(line):
-            line = line + " " * (col - len(line)) + run
-        else:
-            line = line[:col] + run + line[col + len(run) :]
-        self._lines[self._row] = line
         self._col = col + len(run)
+        if self._active is None and col == 0 and not self._lines[self._row]:
+            #: A fresh line, the common case, needs no array.
+            self._lines[self._row] = run
+            return
+        line = self._line()
+        if col > len(line):
+            line.extend(_code_points(" " * (col - len(line))))
+        line[col : col + len(run)] = _code_points(run)
 
     def _feed_controls(self, segment: str, *, at_end: bool) -> None:
         """Feeds SEGMENT, a piece of one line with control characters in it."""
@@ -98,6 +138,7 @@ class TerminalRenderer:
             self._write(segment[pos:])
 
     def _newline(self) -> None:
+        self._store_active()
         self._row += 1
         self._col = 0
         if self._row == len(self._lines):
@@ -120,16 +161,18 @@ class TerminalRenderer:
             return
         n = int(params or 0)
         if final == "A":
+            self._store_active()
             self._row = max(0, self._row - max(n, 1))
             return
-        line = self._lines[self._row]
+        line = self._line()
         col = self._col
         if n == 0:
-            self._lines[self._row] = line[:col]
+            del line[col:]
         elif n == 1:
-            self._lines[self._row] = " " * min(col + 1, len(line)) + line[col + 1 :]
+            end = min(col + 1, len(line))
+            line[:end] = _code_points(" " * end)
         elif n == 2:
-            self._lines[self._row] = ""
+            del line[:]
 
 
 def _unfinished(match) -> bool:

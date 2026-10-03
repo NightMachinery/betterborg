@@ -1,5 +1,6 @@
 """`uniborg/term_render.py`: output rendered as a terminal would show it."""
 
+import time
 import unittest
 
 from uniborg import term_render
@@ -77,6 +78,42 @@ class RenderTests(unittest.TestCase):
     def test_multi_part_and_private_parameters_are_not_misread(self):
         self.assertEqual(render(f"abc\r{ESC}[?1Kx"), "xbc")
         self.assertEqual(render(f"a\nb{ESC}[1;2A\rX"), "a\nX")
+
+    def test_lone_surrogates_pass_through(self):
+        #: As `surrogateescape` decoding leaves invalid bytes.
+        self.assertEqual(render("a\udcffb\rX"), "X\udcffb")
+
+
+def _best_time(text, *, runs=3):
+    best = float("inf")
+    for _ in range(runs):
+        started = time.perf_counter()
+        render(text)
+        best = min(best, time.perf_counter() - started)
+    return best
+
+
+class CostTests(unittest.TestCase):
+    def test_the_cost_grows_linearly_along_one_long_coloured_line(self):
+        #: `jq -C -c` output: one line, a colour code every few characters.
+        unit = f'{ESC}[1;34m"key"{ESC}[0m:{ESC}[0;32m"value"{ESC}[0m,'
+        small = _best_time(unit * 4000)
+        large = _best_time(unit * 32000)
+
+        #: 8 times the text: about 8 times the time when linear, about 27
+        #: when every write copies the line.
+        self.assertLess(large / small, 16)
+
+    def test_redrawing_after_a_long_prefix_costs_what_is_redrawn(self):
+        frames = "".join(f"\r{i:5}%" for i in range(100000)) + f"{ESC}[K\n"
+        self.assertEqual(render("x" * 10 + frames), "99999%\n")
+
+        short = _best_time("x" * 2**16 + frames, runs=2)
+        long = _best_time("x" * 2**19 + frames, runs=2)
+
+        #: The same frames after a prefix 8 times as long: about the same
+        #: time, not about 6 times as much.
+        self.assertLess(long / short, 2)
 
 
 class IncrementalTests(unittest.TestCase):
