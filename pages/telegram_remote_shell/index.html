@@ -385,7 +385,7 @@ done</code></pre>
 <li>alone, it stops the only command running in this chat, or lists them when there are several;</li>
 <li><code>.k 3</code> stops #3, <code>.k all</code> stops every command running in this chat, and <code>.k ls</code> lists them with their age and the start of the command.</li>
 </ul>
-<p>It sees the commands of this chat, whichever admin started them. The bot replies <code>⏹ Stopping #3…</code>; the preview's header then says <code>⏹ #3 stopping…</code>, and the output ends with <code>⏹ Stopped (exit N).</code> A command that ignores the interrupt is sent stronger signals, so stopping it can take a few seconds. A command stopped while it waited for a free shell never runs. Only admins can use <code>.k</code>, as with <code>.a</code>.</p>
+<p>It sees the commands of this chat, whichever admin started them; in your private chat with the bot, also the commands you started in <a href="#guest">guest mode</a>. The bot replies <code>⏹ Stopping #3…</code>; the preview's header then says <code>⏹ #3 stopping…</code>, and the output ends with <code>⏹ Stopped (exit N).</code> A command that ignores the interrupt is sent stronger signals, so stopping it can take a few seconds. A command stopped while it waited for a free shell never runs. Only admins can use <code>.k</code>, as with <code>.a</code>.</p>
 </li>
 <li>On a bot account, a preview's Stop button does the same (see <a href="#live">Live output</a>); a pop-up confirms the press.</li>
 <li><code>.k</code> sees only commands that show live output: with live output turned off it stops nothing, and on an old Brish library it cannot stop <code>.a</code> or <code>.af</code> (it says so). Then find the process id and stop it from a second command. <code>.aa</code> works even when every pool shell is busy:
@@ -406,7 +406,7 @@ done</code></pre>
 <pre><code>@BOT .a uptime</code></pre>
 <ul>
 <li>It works only when the bot is a bot account (not a userbot) and its operator has turned guest mode on for it.</li>
-<li>The message must start with the mention, then at least one space, then <code>.a</code> with any <a href="#commands">flags</a>. <code>@BOT: .a …</code> and <code>@BOT.a …</code> get a usage hint instead of running. A mention inside a code block or inline code does not count.</li>
+<li>The message must start with the mention, then at least one space, then <code>.a</code> with any <a href="#commands">flags</a> (or <code>.k</code>, below). <code>@BOT: .a …</code> and <code>@BOT.a …</code> get a usage hint instead of running. A mention inside a code block or inline code does not count.</li>
 <li>Only admins listed by numeric user id may use it. Anyone else who mentions the bot gets "Not available here."</li>
 <li>A forwarded message, or one sent through another bot or a connected Business bot, never runs.</li>
 <li>A command is dropped, never run, if the bot receives it more than 60 seconds after it was sent (for example because the bot was offline).</li>
@@ -415,6 +415,7 @@ done</code></pre>
 <li>The answer is the output as plain text, cut to fit one Telegram message (4096 UTF-16 code units, which are roughly characters, with most emoji counting as two). A cut ends in "…". Lines under the output report a non-zero exit code (<code>exit N</code>), how many files were sent to your private chat, and whether the output was cut.</li>
 <li>When the output is longer than about 3800 code units (the answer keeps room for the lines under it), the bot saves the whole output as <code>output.txt</code> in the scratch directory (under another name if the command made its own <code>output.txt</code>) and sends it with the other files.</li>
 <li>Files go to your private chat with the bot, never to the chat where you called it, after a message that names the command. You need to have started the bot in a private chat first; if you have not, the answer says so. When there is exactly one file and the output is short enough for a caption (1024 UTF-16 code units), the file is also attached to the answer itself.</li>
+<li><code>@BOT .k</code> in the same chat stops a command you started there, with the forms of <a href="#long-running"><code>.k</code></a>: alone it stops your only running command there (or lists them), and <code>@BOT .k 3</code>, <code>@BOT .k all</code> and <code>@BOT .k ls</code> work too. It sees only your own guest commands of that chat, and the bot answers with a short note there. <code>.k</code> in your private chat with the bot sees them as well.</li>
 <li>A reply to the bot's answer does nothing unless it mentions the bot again.</li>
 <li>On a userbot, betterborg replaces the "@" in outgoing text that looks like a guest shell call with a full-width "＠", so text the userbot sends (command output, for instance) cannot run a command by accident. Text you type in a Telegram app is not affected.</li>
 </ul>

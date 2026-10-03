@@ -18,7 +18,8 @@ this module enforces:
   back as a new outgoing message; `is_guest_answer` recognises it.
 - **Automation does not summon the shell.** Telegram finds mentions in plain
   text, so a userbot relaying text that starts with ``@somebot .a …`` would run
-  it as its owner; `OutgoingTriggerGuardMixin` defangs such text on its way out.
+  it as its owner (and ``@somebot .k`` would stop the owner's guest commands);
+  `OutgoingTriggerGuardMixin` defangs such text on its way out.
 
 This module imports only the standard library, Telethon and `tg_format`,
 never ``uniborg.util``, so ``util`` can import it.
@@ -437,15 +438,16 @@ def text_after_leading_mention(text: Optional[str], *, username: str) -> Optiona
 
 
 def shell_command_after_mention(text: Optional[str], *, username: str) -> Optional[str]:
-    """The `.a…` command after a leading `@username`, or None.
+    """The `.a…` (run) or `.k…` (stop) command after a leading `@username`, or None.
 
     This is the guest shell's strict trigger: only whitespace, at least one
-    character of it, may separate the mention from `.a`. The userbot's trigger
-    guard (`defang_guest_trigger`) defangs a superset, any `MENTION_SEPARATORS`
-    or none, so text the shell would run never leaves a user account intact.
+    character of it, may separate the mention from `.a` or `.k`. The userbot's
+    trigger guard (`defang_guest_trigger`) defangs a superset, any
+    `MENTION_SEPARATORS` or none, so text the shell would act on never leaves
+    a user account intact.
     """
     name = re.escape(username.lstrip("@"))
-    match = re.match(rf"^\s*@{name}(?!\w)\s+(?=\.a)", text or "", re.IGNORECASE)
+    match = re.match(rf"^\s*@{name}(?!\w)\s+(?=\.[ak])", text or "", re.IGNORECASE)
     if match is None:
         return None
     return text[match.end() :]
@@ -1194,12 +1196,12 @@ TRIGGER_GUARD_ENV = "borg_guest_trigger_guard"
 _ENABLED_VALUES = frozenset({"", "1", "true", "yes", "on"})
 _DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
 
-#: A leading bot mention, then any `MENTION_SEPARATORS` (or none), then `.a`:
-#: wider than the shell's strict trigger (`shell_command_after_mention`), so
-#: the guard covers every shape the shell could be loosened to run.
-#: Every bot username ends in "bot".
+#: A leading bot mention, then any `MENTION_SEPARATORS` (or none), then `.a`
+#: or `.k`: wider than the shell's strict trigger
+#: (`shell_command_after_mention`), so the guard covers every shape the shell
+#: could be loosened to act on. Every bot username ends in "bot".
 _SHELL_TRIGGER = re.compile(
-    rf"^(\s*)@(\w*bot)(?!\w)(?={MENTION_SEPARATORS}\.a)", re.IGNORECASE
+    rf"^(\s*)@(\w*bot)(?!\w)(?={MENTION_SEPARATORS}\.[ak])", re.IGNORECASE
 )
 
 #: U+FF20 FULLWIDTH COMMERCIAL AT: looks like "@", is not a mention, and is one
@@ -1225,7 +1227,7 @@ def trigger_guard_enabled(*, environ=None) -> bool:
 
 
 def defang_guest_trigger(text: Optional[str], entities: Optional[list] = None):
-    """Returns (text, entities) with a leading ``@…bot .a`` made inert.
+    """Returns (text, entities) with a leading ``@…bot .a`` or ``.k`` made inert.
 
     The "@" becomes `FULLWIDTH_AT`, and a mention entity starting there is
     dropped. Other text is returned unchanged.
@@ -1277,8 +1279,9 @@ class OutgoingTriggerGuardMixin:
     Put it first in the client's bases. Everything a userbot process sends is
     automation (its owner types in a Telegram app, which bypasses it), yet
     Telegram would run text such as an LLM answer or command output starting
-    with ``@shellbot .a …`` as a guest query from the owner, who is admin. The
-    guard only acts on user accounts, and only on that trigger shape.
+    with ``@shellbot .a …`` as a guest query from the owner, who is admin
+    (``@shellbot .k`` would stop the owner's guest commands). The guard only
+    acts on user accounts, and only on those trigger shapes.
     """
 
     #: `Uniborg.create` sets it from `trigger_guard_enabled()`.

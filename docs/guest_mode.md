@@ -81,9 +81,9 @@ Each rule is enforced in code; this is why.
   `guest_util.OutgoingTriggerGuardMixin` (first in `Uniborg`'s bases) replaces
   that "@" with "＠" (U+FF20) in outgoing messages, captions and edits of user
   accounts, and drops a mention entity there. It matches the mention followed
-  by any of spaces, commas and colons (or none) and then `.a`, since Telegram
-  ends a mention at any of them; that is wider than what the shell runs, so
-  the two cannot drift apart. Text typed in a Telegram app never passes
+  by any of spaces, commas and colons (or none) and then `.a` or `.k`, since
+  Telegram ends a mention at any of them; that is wider than what the shell
+  acts on, so the two cannot drift apart. Text typed in a Telegram app never passes
   through it. `borg_guest_trigger_guard=0` turns it off; an
   unknown value stops startup. Other tools logged in as the owner are not
   covered.
@@ -174,10 +174,15 @@ without Brish, `.af` without forking, `.ad` without albums, `.an` with
 dropped, never run late.
 
 - **Only a strict trigger runs.** The text must start with the bot's mention,
-  then whitespace, then `.a` (`guest_util.shell_command_after_mention`), and
-  no code block may cover the mention. `@bot: .a` or `@bot.a` gets the usage
-  line instead. The
-  caller must be an admin by user id (`util.is_admin_by_id`).
+  then whitespace, then `.a` or `.k` (`guest_util.shell_command_after_mention`),
+  and no code block may cover the mention. `@bot: .a` or `@bot.a` gets the
+  usage line instead. The caller must be an admin by user id
+  (`util.is_admin_by_id`).
+- **`@<bot> .k` stops** the caller's own running guest commands of this guest
+  chat (`shell_stream.visible` with the query's `thread_key`), with the forms
+  of `.k` (alone, `N`, `all`, `ls`; docs/shell_streaming.md). Its answer is a
+  note (`guest_util.answer_note`), so it costs one message in the chat. `.k`
+  in the caller's private chat with the bot sees these commands too.
 - **Every explicit call is answered.** A non-admin who mentions the bot gets
   "Not available here."; an admin whose text is not a strict trigger gets the
   usage line. A reply to the answer without a mention (an implicit call) gets

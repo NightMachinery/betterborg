@@ -11,12 +11,20 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from functools import partial
 from unittest.mock import AsyncMock, patch
 
 from telethon import types
 from telethon._updates import EntityCache
 
-from uniborg import guest_util, shell_settings, telethon_safety, tg_raw, util
+from uniborg import (
+    guest_util,
+    shell_settings,
+    shell_stream,
+    telethon_safety,
+    tg_raw,
+    util,
+)
 
 BOT_USERNAME = "julia_bot"
 BOT_ID = 999
@@ -136,7 +144,7 @@ class _FakeEditor:
         return True
 
 
-class GuestShellTests(unittest.TestCase):
+class _GuestTestCase(unittest.TestCase):
     def setUp(self):
         self.borg = _FakeBorg()
         self.plugin = _load_plugin(self.borg)
@@ -179,6 +187,8 @@ class GuestShellTests(unittest.TestCase):
     def _run(self, query):
         asyncio.run(self.plugin.guest_shell(query))
 
+
+class GuestShellTests(_GuestTestCase):
     def test_registers_a_guest_handler_on_a_bot(self):
         if not hasattr(types, "UpdateBotGuestChatQuery"):
             self.skipTest("no guest types in this Telethon")
@@ -361,6 +371,117 @@ class GuestShellTests(unittest.TestCase):
         (call,) = seen
         self.assertIs(call["brish"], util.persistent_brish)
         self.assertEqual(self.edits[-1]["text"], "hi")
+
+
+class GuestKillTests(_GuestTestCase):
+    """`@bot .k`: stops the caller's guest commands of the guest chat."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = patch.dict(shell_stream.JOBS, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.thread = _query("").thread_key
+
+    def kill(self, text, *, jobs=(), caller=ADMIN):
+        """Sends TEXT as a guest query once JOBS are running; a job is a dict
+        of `ShellJob` fields over a guest job of the caller in this chat.
+        Returns the jobs and the ids of those whose kill hook ran."""
+        killed = []
+        shell_stream.JOBS.clear()
+
+        async def main():
+            made = []
+            for fields in jobs:
+                job = shell_stream.register(
+                    shell_stream.ShellJob(
+                        **{
+                            "owner_id": ADMIN,
+                            "chat_id": None,
+                            "command": "sleep 100",
+                            "thread_key": self.thread,
+                            **fields,
+                        }
+                    )
+                )
+                job.try_start()
+                job.attach(partial(killed.append, job.id))
+                made.append(job)
+            await self.plugin.guest_shell(_query(text, caller=caller))
+            return made
+
+        return asyncio.run(main()), killed
+
+    def test_nothing_running(self):
+        self.kill(f"@{BOT_USERNAME} .k")
+
+        self.assertEqual(self.answers, [self.plugin.NO_RUNNING_JOB])
+        self.assertEqual(self.edits, [])
+
+    def test_bare_stops_the_callers_only_command_here(self):
+        (job,), killed = self.kill(f"@{BOT_USERNAME} .k", jobs=[{}])
+
+        self.assertEqual(self.answers, [f"⏹ Stopping #{job.id}…"])
+        self.assertEqual(killed, [job.id])
+
+    def test_only_the_callers_jobs_of_this_chat_are_visible(self):
+        _jobs, killed = self.kill(
+            f"@{BOT_USERNAME} .k all",
+            jobs=[
+                {"thread_key": "chat:-100"},
+                {"owner_id": 42},
+                {"thread_key": None, "chat_id": ADMIN},
+            ],
+        )
+
+        self.assertEqual(self.answers, [self.plugin.NO_RUNNING_JOB])
+        self.assertEqual(killed, [])
+
+    def test_its_forms_name_the_guest_command(self):
+        jobs, killed = self.kill(f"@{BOT_USERNAME} .k ls", jobs=[{}, {}])
+        (listing,) = self.answers
+        self.assertIn(f"@{BOT_USERNAME} .k N stops one", listing)
+        self.assertEqual(killed, [])
+
+        self.answers.clear()
+        jobs, killed = self.kill(f"@{BOT_USERNAME} .k", jobs=[{}, {}])
+        self.assertTrue(self.answers[0].startswith("Running here:"))
+        self.assertEqual(killed, [])
+
+        self.answers.clear()
+        jobs, killed = self.kill(f"@{BOT_USERNAME} .K #{0}", jobs=[{}])
+        self.assertEqual(self.answers, ["No running command #0 here."])
+
+        self.answers.clear()
+        jobs, killed = self.kill(f"@{BOT_USERNAME} .k all", jobs=[{}, {}])
+        self.assertEqual(
+            self.answers, ["\n".join(f"⏹ Stopping #{job.id}…" for job in jobs)]
+        )
+        self.assertEqual(killed, [job.id for job in jobs])
+
+    def test_an_unknown_form_gets_the_usage(self):
+        _jobs, killed = self.kill(f"@{BOT_USERNAME} .k 3 5", jobs=[{}])
+
+        (answer,) = self.answers
+        self.assertTrue(answer.startswith(f"Usage: @{BOT_USERNAME} .k "))
+        self.assertEqual(killed, [])
+
+    def test_a_non_admin_is_told_and_nothing_stops(self):
+        _jobs, killed = self.kill(f"@{BOT_USERNAME} .k all", jobs=[{}], caller=STRANGER)
+
+        self.assertEqual(self.answers, ["Not available here."])
+        self.assertEqual(killed, [])
+
+    def test_only_a_strict_trigger_stops(self):
+        for text in (f"@{BOT_USERNAME}: .k", f"see @{BOT_USERNAME} .k"):
+            with self.subTest(text=text):
+                self.answers.clear()
+                _jobs, killed = self.kill(text, jobs=[{}])
+
+                (answer,) = self.answers
+                self.assertTrue(answer.startswith("Usage:"))
+                self.assertIn(f"@{BOT_USERNAME} .k stops it", answer)
+                self.assertEqual(killed, [])
 
 
 class ShellHandlerEchoTests(unittest.TestCase):

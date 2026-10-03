@@ -846,6 +846,29 @@ class KillTests(_ShellTestCase):
         )
         self.assertEqual(killed, [])
 
+    def test_the_private_chat_also_sees_the_callers_guest_jobs(self):
+        killed = []
+
+        async def make():
+            jobs = [
+                shell_stream.register(
+                    shell_stream.ShellJob(
+                        owner_id=owner, chat_id=None, command="sleep 100", thread_key=t
+                    )
+                )
+                for owner, t in ((ADMIN, "chat:-100"), (42, "chat:-100"))
+            ]
+            for job in jobs:
+                job.try_start()
+                job.attach(partial(killed.append, job.id))
+            return jobs
+
+        mine, _theirs = asyncio.run(make())
+
+        self.assertEqual(self.kill(".k"), [self.plugin.NO_RUNNING_JOB])
+        self.assertEqual(self.kill(".k", private=True), [f"⏹ Stopping #{mine.id}…"])
+        self.assertEqual(killed, [mine.id])
+
     def test_a_queued_job_is_stopped_before_it_runs(self):
         (job,), _killed = self.jobs("sleep 100", start=False)
 

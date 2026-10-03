@@ -621,6 +621,13 @@ class AlbumNoteTests(unittest.TestCase):
 
 
 class TriggerGuardTests(unittest.TestCase):
+    def test_the_shell_trigger_takes_dot_a_and_dot_k(self):
+        after = guest_util.shell_command_after_mention
+        self.assertEqual(after("@julia_bot .af ls", username="julia_bot"), ".af ls")
+        self.assertEqual(after("@julia_bot  .k 3", username="julia_bot"), ".k 3")
+        self.assertIsNone(after("@julia_bot .x", username="julia_bot"))
+        self.assertIsNone(after("@julia_bot.k", username="julia_bot"))
+
     def test_a_leading_bot_mention_before_dot_a_is_defanged(self):
         mention = types.MessageEntityMention(0, 10)
         bold = types.MessageEntityBold(11, 5)
@@ -645,6 +652,8 @@ class TriggerGuardTests(unittest.TestCase):
             "@julia_bot.a ls",
             "@Julia_Bot,  .a ls",
             "@julia_bot:\n.a ls",
+            "@julia_bot .k",
+            "@julia_bot:.k all",
         ):
             with self.subTest(text=text):
                 defanged, _ = guest_util.defang_guest_trigger(text)
@@ -657,6 +666,8 @@ class TriggerGuardTests(unittest.TestCase):
             "@JULIA_BOT\n.ad ls",
             "@julia_bot: .a ls",
             "@julia_bot.a ls",
+            "@julia_bot .k",
+            " @julia_bot\t.K 3",
         ):
             with self.subTest(text=text):
                 runs = (

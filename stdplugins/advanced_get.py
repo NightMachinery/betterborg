@@ -614,11 +614,14 @@ def _job_line(job, *, now) -> str:
     return f"#{job.id} · {_age_text(now - job.started_at)}{note} · {command}"
 
 
-def job_list_text(jobs, *, now) -> str:
-    """The running JOBS, a line each; NOW is `time.monotonic()`."""
+def job_list_text(jobs, *, now, kill=".k") -> str:
+    """The running JOBS, a line each; NOW is `time.monotonic()`.
+
+    KILL is the command that stops one, as the caller types it.
+    """
     lines = [_job_line(job, now=now) for job in jobs]
     return "\n".join(
-        ["Running here:", *lines, "", ".k N stops one; .k all stops them all."]
+        ["Running here:", *lines, "", f"{kill} N stops one; {kill} all stops them all."]
     )
 
 
@@ -631,16 +634,41 @@ def _nothing_text(text) -> str:
     return text
 
 
+def _running(jobs) -> list:
+    return [job for job in jobs if _is_running(job)]
+
+
+def kill_text(arg, *, jobs, now, kill=".k", usage=KILL_USAGE) -> str:
+    """Stops what `KILL ARG` names among the running JOBS, and says what it did.
+
+    ARG is the lowered text after KILL; an empty one stops the only job, or
+    lists several. A reply to a job is the caller's to resolve first.
+    """
+    if not arg:
+        if not jobs:
+            return _nothing_text(NO_RUNNING_JOB)
+        if len(jobs) == 1:
+            return _stop(jobs[0])
+        return job_list_text(jobs, now=now, kill=kill)
+    if arg == "ls":
+        if not jobs:
+            return _nothing_text(NO_RUNNING_JOB)
+        return job_list_text(jobs, now=now, kill=kill)
+    if arg == "all":
+        return "\n".join(map(_stop, jobs)) if jobs else _nothing_text(NO_RUNNING_JOB)
+    number = re.fullmatch(r"#?(\d+)", arg)
+    if number is None:
+        return usage
+    job_id = int(number.group(1))
+    for job in jobs:
+        if job.id == job_id:
+            return _stop(job)
+    return _nothing_text(f"No running command #{job_id} here.")
+
+
 async def kill_reply(event, *, clock=time.monotonic) -> str:
     """Stops what `.k` in EVENT names, and says what it did."""
     arg = (event.pattern_match.group("arg") or "").lower()
-    jobs = [
-        job
-        for job in shell_stream.visible(
-            chat_id=event.chat_id, caller_id=event.sender_id
-        )
-        if _is_running(job)
-    ]
     if not arg:
         #: In a topic every message has a reply header; only a real reply
         #: names a job.
@@ -648,25 +676,10 @@ async def kill_reply(event, *, clock=time.monotonic) -> str:
         if target is not None:
             job = shell_stream.find(chat_id=event.chat_id, message_id=target.msg_id)
             return _stop(job) if job is not None else _nothing_text(NOT_A_JOB)
-        if not jobs:
-            return _nothing_text(NO_RUNNING_JOB)
-        if len(jobs) == 1:
-            return _stop(jobs[0])
-        return job_list_text(jobs, now=clock())
-    if arg == "ls":
-        return (
-            job_list_text(jobs, now=clock()) if jobs else _nothing_text(NO_RUNNING_JOB)
-        )
-    if arg == "all":
-        return "\n".join(map(_stop, jobs)) if jobs else _nothing_text(NO_RUNNING_JOB)
-    number = re.fullmatch(r"#?(\d+)", arg)
-    if number is None:
-        return KILL_USAGE
-    job_id = int(number.group(1))
-    for job in jobs:
-        if job.id == job_id:
-            return _stop(job)
-    return _nothing_text(f"No running command #{job_id} here.")
+    jobs = _running(
+        shell_stream.visible(chat_id=event.chat_id, caller_id=event.sender_id)
+    )
+    return kill_text(arg, jobs=jobs, now=clock())
 
 
 @borg.on(events.NewMessage(pattern=pattern_k))
@@ -811,7 +824,7 @@ A command still running after 2 s shows its output live.
 `.k` stops a running command: as a reply to it or its preview, or alone. `.k N` stops #N, `.k all` stops every one here, `.k ls` lists them.
 `.x` (or `.sbb`, `.xf`) restarts the shell pool.
 /settings: how live output shows, what it becomes when the command ends, and the renderer.
-`@{username} .a CMD` runs CMD from any chat, where guest mode is on."""
+`@{username} .a CMD` runs CMD from any chat, where guest mode is on; `@{username} .k` there stops it, with the forms of `.k`."""
 
 
 @dataclass(frozen=True)
@@ -1045,12 +1058,12 @@ def _guest_username() -> str:
     return borg.me.username
 
 
-def _guest_shell_match(query):
-    """The `pattern_a` match of a strict guest trigger, or None.
+def _guest_shell_command(query) -> Optional[str]:
+    """The `.a…` or `.k…` text after a strict guest trigger, or None.
 
-    The text must start with the bot's mention, then whitespace, then `.a`,
-    and must not start inside a code block: relayed text (command output, an
-    LLM answer) is what a looser rule would let through.
+    The text must start with the bot's mention, then whitespace, then `.a` or
+    `.k`, and must not start inside a code block: relayed text (command
+    output, an LLM answer) is what a looser rule would let through.
     """
     text = query.text
     after = guest_util.shell_command_after_mention(text, username=_guest_username())
@@ -1062,7 +1075,36 @@ def _guest_shell_match(query):
             entity.offset <= mention_at < entity.offset + entity.length
         ):
             return None
-    return pattern_a.match(after)
+    return after
+
+
+def _guest_kill_command() -> str:
+    """What stops a guest command from its guest chat: `@thisbot .k`."""
+    return f"@{_guest_username()} .k"
+
+
+def guest_kill_reply(query, arg, *, clock=time.monotonic) -> str:
+    """Stops what `@thisbot .k ARG` names: the caller's guest jobs of this chat.
+
+    Only the jobs the caller started from this guest chat (its `thread_key`)
+    are visible; `.k` in the caller's private chat with the bot sees them too.
+    """
+    kill = _guest_kill_command()
+    jobs = _running(
+        shell_stream.visible(
+            chat_id=None, caller_id=query.caller_id, thread_key=query.thread_key
+        )
+    )
+    return kill_text(
+        (arg or "").lower(),
+        jobs=jobs,
+        now=clock(),
+        kill=kill,
+        usage=(
+            f"Usage: {kill} stops your one running command here; {kill} N stops"
+            f" #N, {kill} all stops every one of yours here, {kill} ls lists them."
+        ),
+    )
 
 
 async def _answer_note(query, text):
@@ -1209,10 +1251,17 @@ async def guest_shell(query):
     if not util.is_admin_by_id(query.caller_id):
         await _answer_note(query, "Not available here.")
         return
-    match = _guest_shell_match(query)
+    command = _guest_shell_command(query)
+    kill = pattern_k.match(command) if command is not None else None
+    if kill is not None:
+        await _answer_note(query, guest_kill_reply(query, kill.group("arg")))
+        return
+    match = pattern_a.match(command) if command is not None else None
     if match is None:
         await _answer_note(
-            query, f"Usage: @{_guest_username()} .a COMMAND (the mention first)"
+            query,
+            f"Usage: @{_guest_username()} .a COMMAND runs it, "
+            f"{_guest_kill_command()} stops it (the mention first)",
         )
         return
 

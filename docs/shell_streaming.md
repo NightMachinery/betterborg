@@ -583,6 +583,25 @@ stopped."), and on a brish without `popen` `.a` and `.af` are not jobs
 The registry lives in the core module `shell_stream`, so a `.k` from a
 reloaded plugin still sees the jobs that started on the old code.
 
+### `@bot .k` in a guest chat
+
+`@<bot> .k`, sent in a guest chat (docs/guest_mode.md), stops the caller's
+own running guest jobs of that chat: `shell_stream.visible` with the query's
+`thread_key`, which matches only jobs that this caller started from this
+guest chat. It takes the trigger of the guest shell (the mention first, then
+whitespace, then `.k`; `guest_util.shell_command_after_mention`), so a
+non-admin gets "Not available here." and a loose form gets the usage line.
+The forms are those of `.k` (`kill_text` serves both) except a reply, which
+names no job here: alone it stops the only running job or lists several,
+and `N`, `all` and `ls` work as above. The lists and the usage line name
+`@<bot> .k` rather than `.k`. Each call is answered with a guest note
+(`guest_util.answer_note`), so it costs one message in the chat. In the
+caller's private chat with the bot, a plain `.k` sees the same jobs.
+
+A userbot's trigger guard (`guest_util.OutgoingTriggerGuardMixin`) defangs
+`@somebot .k` as it does `@somebot .a`, so text the userbot relays cannot
+stop its owner's guest commands.
+
 ### The Stop button
 
 `stop_press_handler` takes the presses whose data starts with `shk:` (a
@@ -607,5 +626,5 @@ load in.
 
 ## Still to come
 
-Live guest answers (and the renderer in them, and `@bot .k`), and stopping
-jobs before a shutdown.
+Live guest answers (and the renderer in them), and stopping jobs before a
+shutdown.
