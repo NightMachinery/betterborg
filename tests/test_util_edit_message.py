@@ -353,6 +353,28 @@ class EditMessageTests(_EditChainCase):
         self.assertEqual(self.chat.ops(), [("edit", self.head.id, "B" * 10)])
         self.assertEqual(self.state().last_text, "A" * 10)
 
+    async def test_raise_on_head_failure_raises_the_head_error_unprinted(self):
+        await self.edit("A" * 10)
+        self.head.edit_errors.append(errors.MessageIdInvalidError(request=None))
+
+        with mock.patch("builtins.print") as printed, self.assertRaises(
+            errors.MessageIdInvalidError
+        ):
+            await self.edit("B" * 10, raise_on_head_failure=True)
+
+        printed.assert_not_called()
+        self.assertEqual(self.state().last_text, "A" * 10)
+
+    async def test_raise_on_head_failure_leaves_a_resent_chain_alone(self):
+        self.head.edit_errors.append(errors.MessageIdInvalidError(request=None))
+
+        await self.edit(
+            "answer", raise_on_head_failure=True, send_new_on_head_failure=True
+        )
+
+        self.assertEqual(self.chat.ops()[1], ("respond", self.head.id, "answer"))
+        self.assertEqual(self.state().last_text, "answer")
+
     async def test_a_same_id_in_another_chat_starts_its_own_chain(self):
         await self.edit(_blocks("A", "B"))
         other_chat = _Chat(chat_id=-1002)

@@ -152,6 +152,82 @@ class PacedEditorTests(unittest.TestCase):
         self.assertEqual(asyncio.run(run()), (ShowResult.NOT_DUE, ShowResult.SHOWN))
 
 
+class _GoneMessage:
+    """A message the user deleted: every edit fails, as Telegram's would."""
+
+    def __init__(self):
+        self.chat_id = -1001
+        self.id = 77
+        self.text = "..."
+        self.edits = []
+
+    async def edit(self, text, **kwargs):
+        self.edits.append(text)
+        raise errors.MessageIdInvalidError(request=None)
+
+
+class PacedEditorFailureTests(unittest.TestCase):
+    """`PacedEditor` through the real `util.edit_message`, which prints a
+    failed head edit and returns unless asked to raise it."""
+
+    def setUp(self):
+        chains = patch.dict(util.EDIT_CHAINS, {}, clear=True)
+        chains.start()
+        self.addCleanup(chains.stop)
+        printed = patch("builtins.print")
+        self.printed = printed.start()
+        self.addCleanup(printed.stop)
+        self.clock = _Clock()
+        self.message = _GoneMessage()
+
+    def show(self, editor, text, *, at):
+        self.clock.now = at
+        return asyncio.run(editor.show(text))
+
+    def test_a_reported_failure_keeps_the_last_edit_time(self):
+        editor = PacedEditor(
+            self.message,
+            edit_interval=1.0,
+            clock=self.clock,
+            report_failures=True,
+            logger=logging.getLogger("test.stream_driver"),
+        )
+
+        with self.assertLogs("test.stream_driver", level="WARNING"):
+            self.assertEqual(self.show(editor, "a", at=2), ShowResult.FAILED)
+        self.assertEqual(editor.last_edit_at, 0)
+        self.assertEqual(editor.due_in(), 0)
+        self.printed.assert_not_called()
+
+    def test_by_default_a_failure_counts_as_an_edit(self):
+        #: The chat bot's loops: a deleted placeholder costs one failed edit
+        #: per interval, not one per delta.
+        editor = PacedEditor(self.message, edit_interval=1.0, clock=self.clock)
+
+        self.assertEqual(self.show(editor, "a", at=2), ShowResult.SHOWN)
+        self.assertEqual(editor.last_edit_at, 2)
+        self.assertEqual(self.show(editor, "ab", at=2.5), ShowResult.NOT_DUE)
+        self.assertEqual(self.message.edits, ["a▌"])
+
+    def test_only_a_reporting_editor_passes_raise_on_head_failure(self):
+        edit = AsyncMock()
+        with patch.object(util, "edit_message", edit):
+            for report_failures in (False, True):
+                editor = PacedEditor(
+                    "message",
+                    edit_interval=1.0,
+                    clock=self.clock,
+                    report_failures=report_failures,
+                )
+                self.show(editor, "a", at=2)
+                self.clock.now = 0
+
+        self.assertEqual(
+            [call.kwargs for call in edit.await_args_list],
+            [{"parse_mode": "md"}, {"parse_mode": "md", "raise_on_head_failure": True}],
+        )
+
+
 #: The edit interval of `follow`'s tests, in seconds.
 _INTERVAL = 0.05
 
@@ -161,6 +237,7 @@ class FollowTests(unittest.TestCase):
 
     def setUp(self):
         self.edits = []
+        self.real_edit_message = util.edit_message
 
         async def edit_message(message, text, **kwargs):
             self.edits.append(text)
@@ -170,11 +247,12 @@ class FollowTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.text = ""
 
-    def run_follow(self, producer, *, retry_after=1.0):
+    def run_follow(self, producer, *, retry_after=1.0, message="message"):
         async def main():
             editor = PacedEditor(
-                "message",
+                message,
                 edit_interval=_INTERVAL,
+                report_failures=True,
                 logger=logging.getLogger("test.stream_driver"),
             )
             changed = asyncio.Event()
@@ -263,6 +341,40 @@ class FollowTests(unittest.TestCase):
         self.assertGreaterEqual(len(attempts), 1)
         self.assertLessEqual(len(attempts), 3)
 
+    def test_a_deleted_message_backs_off_through_the_real_edit_message(self):
+        async def producer(changed):
+            for index in range(10):
+                self.text = str(index)
+                changed.set()
+                await asyncio.sleep(0.02)
+
+        message = _GoneMessage()
+        with patch.object(util, "edit_message", self.real_edit_message), patch.dict(
+            util.EDIT_CHAINS, {}, clear=True
+        ), patch("builtins.print"), self.assertLogs(
+            "test.stream_driver", level="WARNING"
+        ):
+            self.run_follow(producer, retry_after=0.1, message=message)
+
+        #: About 0.2 s of changes every 0.02 s, but retries 0.1 s apart.
+        self.assertGreaterEqual(len(message.edits), 1)
+        self.assertLessEqual(len(message.edits), 3)
+
+    def test_an_editor_that_hides_failures_is_refused(self):
+        async def main():
+            await asyncio.wait_for(
+                stream_driver.follow(
+                    PacedEditor("message", edit_interval=_INTERVAL),
+                    render=lambda: "x",
+                    changed=asyncio.Event(),
+                    done=asyncio.get_running_loop().create_future(),
+                ),
+                1,
+            )
+
+        with self.assertRaises(ValueError):
+            asyncio.run(main())
+
     def test_it_returns_when_done_without_showing_the_rest(self):
         async def producer(changed):
             self.text = "late"
@@ -279,7 +391,9 @@ class FollowTests(unittest.TestCase):
             done.set_result(None)
             await asyncio.wait_for(
                 stream_driver.follow(
-                    PacedEditor("message", edit_interval=_INTERVAL),
+                    PacedEditor(
+                        "message", edit_interval=_INTERVAL, report_failures=True
+                    ),
                     render=lambda: "x",
                     changed=asyncio.Event(),
                     done=done,

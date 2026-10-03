@@ -1384,6 +1384,7 @@ async def edit_message(
     api_keys: dict | None = None,
     title_generator: "TitleGenerator | None" = None,
     send_new_on_head_failure: bool = False,
+    raise_on_head_failure: bool = False,
     twin_file_marker: str = TWIN_FILE_MARKER,
 ):
     """
@@ -1444,6 +1445,12 @@ async def edit_message(
             shows its chunk: that child and the ones after it are replaced by
             new replies to the last child kept.
             Other errors abort as with False.
+        raise_on_head_failure (bool): If True, a failed head edit that
+            `send_new_on_head_failure` does not send anew is raised instead of
+            printed, so a caller can see that the message does not show the
+            text (say, to back off from a deleted message). The chain is left
+            as it was, as without it. If False (the default), this function
+            prints the error and returns normally.
         twin_file_marker (str): Caption prefix for the file sent together with
             the text (`constants.TWIN_FILE_MARKER`), so history can skip that
             twin. It is added only when every chunk of the text was delivered:
@@ -1543,8 +1550,11 @@ async def edit_message(
                 link_preview=link_preview,
             )
         except Exception as e:
+            send_new = send_new_on_head_failure and isinstance(e, HEAD_LOST_ERRORS)
+            if raise_on_head_failure and not send_new:
+                raise
             print(f"Error editing original message {message_id}: {e}")
-            if send_new_on_head_failure and isinstance(e, HEAD_LOST_ERRORS):
+            if send_new:
                 if await _resend_chain(
                     edit_state,
                     chunks=chunks,

@@ -100,7 +100,12 @@ streams by edits.
    is at most once a second with a plain cursor, and for a real message it is
    the slowing edit pace. Native Gemini images keep one pace at any age
    (`stream_driver.fixed_pace`): the model's streaming delay and a plain
-   cursor.
+   cursor. `util.edit_message` prints a failed edit and returns, so for these
+   loops a failed edit counts as made, and a deleted placeholder costs one
+   failed edit per interval. `stream_driver.follow`, the pump for producers
+   that go quiet, needs to see failures instead: it takes only an editor
+   built with `report_failures`, whose failed edits `util.edit_message`
+   raises (`raise_on_head_failure`), and waits `retry_after` after one.
 4. `end_stream` cancels the worker and waits for it, so no draft can arrive
    after the answer and show as a ghost draft.
 5. After `end_stream`, the final delivery edits the stand-in as it would a
@@ -183,7 +188,8 @@ while it lasts. The answer itself never waits for a draft.
   strict interval check, failed and unchanged edits, the pace tiers and the
   fixed pace), and on a real loop `stream_driver.follow`, the trailing-edge
   pump for producers that go quiet, such as a shell command (the chat bot's
-  loops do not use it). Also the stream settings, the stream target's
+  loops do not use it), which backs off from a deleted message through the
+  real `util.edit_message`. Also the stream settings, the stream target's
   opening, Stop wiring and flush on their own, and the Stop handler's
   registration and its removal with the plugin.
 - `tests/test_gemini_image_stream.py`: native Gemini images' partial edits

@@ -204,6 +204,7 @@ class ShowResult(Enum):
     #: There is no message to edit.
     NO_TARGET = "no_target"
     #: The edit failed, or changed nothing; the last-edit time is unchanged.
+    #: Only an editor built with `report_failures` sees a failed edit.
     FAILED = "failed"
 
 
@@ -238,6 +239,12 @@ class PacedEditor:
 
     MESSAGE may be None, for a caller that only collects the text; `show` then
     does nothing.
+
+    `util.edit_message` prints a failed edit of MESSAGE and returns, so by
+    default a failed edit counts as made: a deleted message costs one failed
+    edit per interval, however often `show` is called. With REPORT_FAILURES
+    it raises the failure instead, and `show` logs it and returns FAILED
+    without moving the last-edit time, so the caller decides when to retry.
     """
 
     def __init__(
@@ -250,10 +257,12 @@ class PacedEditor:
         render: Optional[Callable[[str, draft_stream.StreamingPace], str]] = None,
         clock: Optional[Callable[[], float]] = None,
         logger: Optional[logging.Logger] = None,
+        report_failures: bool = False,
     ):
         self.message = message
         self.edit_interval = edit_interval
         self.parse_mode = parse_mode
+        self.report_failures = report_failures
         self._pace = pace
         self._render = render or _default_render
         self._clock = clock or _loop_time
@@ -281,9 +290,12 @@ class PacedEditor:
         pace = self._pace_at(now)
         if not now - self.last_edit_at > pace.interval:
             return ShowResult.NOT_DUE
+        edit_kwargs = {"parse_mode": self.parse_mode}
+        if self.report_failures:
+            edit_kwargs["raise_on_head_failure"] = True
         try:
             await util.edit_message(
-                self.message, self._render(text, pace), parse_mode=self.parse_mode
+                self.message, self._render(text, pace), **edit_kwargs
             )
         except errors.rpcerrorlist.MessageNotModifiedError:
             return ShowResult.FAILED
@@ -312,10 +324,13 @@ async def follow(
     A change that arrives before an edit is due is shown once it is due, so
     the last text shows even when nothing follows it; a burst of changes
     makes one edit. After a failed edit, the next waits RETRY_AFTER seconds,
-    so a broken message cannot make this spin. The final text is the
-    caller's to deliver: this returns as soon as DONE completes, without
-    showing what changed since the last edit.
+    so a broken message cannot make this spin; EDITOR must be built with
+    `report_failures`, since otherwise it never sees a failed edit. The final
+    text is the caller's to deliver: this returns as soon as DONE completes,
+    without showing what changed since the last edit.
     """
+    if not editor.report_failures:
+        raise ValueError("follow needs an editor built with report_failures=True")
     #: A change not yet shown.
     behind = False
     while not done.done():
