@@ -205,8 +205,8 @@ with brish 0.4.0 the pool then restarts, waiting for its other commands.
 **Old brish fallback.** A brish without `popen` (eva ran 0.3.5) runs the
 command through `send_cmd`, still asking `try_start` first, and writes its
 whole result into the job at the end, which makes the job ENDED. It cannot
-be stopped once it runs: no kill hook is attached. The consumer should not offer a stop (or a preview)
-for `.a` there; `.aa` streams on any brish.
+be stopped once it runs: no kill hook is attached. The consumer should not
+offer a stop (or a preview) for `.a` there; `.aa` streams on any brish.
 
 ## The `.aa` producer
 
