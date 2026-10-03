@@ -146,7 +146,9 @@ SHUTDOWN) and `CancelOutcome` names each member and raises on anything else.
 - `try_start()` is called by the producer once it holds a shell. It returns
   False when the job was stopped while it waited; the producer then frees the
   shell and runs nothing. A running job answers True again, for a producer
-  that retries.
+  that retries. `ran` records that the command was let run, and a job
+  stopped before that is **dropped** (`dropped`): its command never runs, so
+  the consumer delivers its final at once instead of waiting for a shell.
 - `attach(kill)` stores the kill hook and calls it at once when the job is
   already stopped. `cancel(*, reason)` marks the job stopped and then calls
   the hook it finds. Both take the job's lock, so whichever runs second sees

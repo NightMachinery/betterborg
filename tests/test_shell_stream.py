@@ -249,18 +249,25 @@ class ShellJobTests(unittest.TestCase):
         job = _job()
         self.assertEqual(job.state, JobState.QUEUED)
 
+        self.assertFalse(job.ran)
         self.assertTrue(job.try_start())
         self.assertEqual(job.state, JobState.RUNNING)
+        self.assertTrue(job.ran)
         #: A producer that retries asks again.
         self.assertTrue(job.try_start())
+        job.cancel(reason=StopReason.USER)
+        self.assertFalse(job.dropped)
 
     def test_a_job_stopped_while_queued_never_starts(self):
         job = _job()
 
+        self.assertFalse(job.dropped)
         self.assertEqual(job.cancel(reason=StopReason.USER), CancelOutcome.NOT_STARTED)
+        self.assertTrue(job.dropped)
         self.assertFalse(job.try_start())
         self.assertEqual(job.state, JobState.STOPPING)
         self.assertEqual(job.stop_reason, StopReason.USER)
+        self.assertFalse(job.ran)
 
     def test_attach_then_cancel_kills(self):
         job = _job()

@@ -338,6 +338,8 @@ class ShellJob:
     started_at: float = field(default_factory=time.monotonic)
     state: JobState = JobState.QUEUED
     stop_reason: Optional[StopReason] = None
+    #: `try_start` let the command run.
+    ran: bool = field(default=False, init=False)
     #: The message that shows the output while it runs.
     preview_id: Optional[int] = None
     #: Set by `finish`.
@@ -351,6 +353,15 @@ class ShellJob:
     def stopped(self) -> bool:
         return self.stop_reason is not None
 
+    @property
+    def dropped(self) -> bool:
+        """Stopped while it waited for a shell: its command will never run.
+
+        The consumer can deliver its final at once, without waiting for the
+        producer, which runs nothing once it gets a shell.
+        """
+        return self.stopped and not self.ran
+
     def try_start(self) -> bool:
         """Called by the producer once it has a shell: False if stopped meanwhile.
 
@@ -363,6 +374,7 @@ class ShellJob:
                     started = not self.stopped
                     if started:
                         self.state = JobState.RUNNING
+                        self.ran = True
                 case JobState.RUNNING:
                     started = True
                 case JobState.STOPPING | JobState.ENDED | JobState.DONE:
