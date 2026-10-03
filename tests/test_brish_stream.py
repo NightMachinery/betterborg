@@ -73,7 +73,7 @@ class BrishStreamTests(_BrishTestCase):
                 with self.subTest(cmd=cmd, fork=fork):
                     plain, streamed, job = asyncio.run(both(cmd, fork))
                     self.assertEqual(streamed, plain)
-                    self.assertEqual(job.state, JobState.RUNNING)
+                    self.assertEqual(job.state, JobState.ENDED)
         self.assertEqual(plain, util.CommandResult(output="", retcode=0))
 
     def test_output_arrives_while_the_command_runs(self):
@@ -227,7 +227,7 @@ class BrishFallbackTests(_BrishTestCase):
         self.assertFalse(hasattr(self.brish, "popen"))
         self.assertEqual(streamed, plain)
         self.assertEqual(job.output.final_text(render=False), plain.output)
-        self.assertEqual(job.state, JobState.RUNNING)
+        self.assertEqual(job.state, JobState.ENDED)
 
     def test_a_job_stopped_before_it_ran_runs_nothing(self):
         async def main():

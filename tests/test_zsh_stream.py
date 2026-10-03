@@ -183,7 +183,7 @@ class ZshStreamTests(unittest.TestCase):
 
         self.assertTrue(_wait_gone(pid, timeout=2))
         self.assertEqual(job.stop_reason, StopReason.SHUTDOWN)
-        self.assertEqual(job.state, JobState.STOPPING)
+        self.assertEqual(job.state, JobState.ENDED)
 
 
 if __name__ == "__main__":

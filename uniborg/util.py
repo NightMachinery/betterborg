@@ -2108,7 +2108,10 @@ async def brishz_capture(
 
 
 def _write_brish_result(job, res) -> BrishStreamRun:
-    """Writes a whole brish result into JOB's output, as if it had streamed."""
+    """Writes a whole brish result into JOB's output, as if it had streamed.
+
+    The command has ended, so the job is marked ended (`detach`).
+    """
     #: Round-trips any text that decoding with `surrogateescape` can give.
     job.output.decoding = shell_stream.Decoding(errors="surrogateescape")
     for stream, text in (
@@ -2116,6 +2119,7 @@ def _write_brish_result(job, res) -> BrishStreamRun:
         (shell_stream.STREAM_ERR, res.err),
     ):
         job.output.write(text.encode("utf-8", "surrogateescape"), stream=stream)
+    job.detach()
     return BrishStreamRun(retcode=res.retcode)
 
 

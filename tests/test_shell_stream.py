@@ -305,19 +305,46 @@ class ShellJobTests(unittest.TestCase):
         self.assertEqual((kill.calls, job.stop_reason), (1, StopReason.USER))
 
     def test_a_detached_or_finished_job_kills_nothing(self):
-        job = _job()
+        job = _job(output=_output(after_stop_bytes=0))
         kill = _KillCounter()
         job.try_start()
         job.attach(kill)
         job.detach()
-        job.cancel(reason=StopReason.USER)
-        self.assertEqual(kill.calls, 0)
+
+        self.assertEqual(job.state, JobState.ENDED)
+        #: The final or the files may still be on their way: nothing to stop.
+        self.assertEqual(job.cancel(reason=StopReason.USER), CancelOutcome.FINISHED)
+        self.assertEqual((kill.calls, job.stopped), (0, False))
+        self.assertFalse(job.try_start())
+        job.output.write(b"late")
+        self.assertEqual(job.output.final_text(render=False), "late")
 
         done = _job()
         done.try_start()
         shell_stream.finish(done)
         self.assertEqual(done.cancel(reason=StopReason.USER), CancelOutcome.FINISHED)
         self.assertFalse(done.stopped)
+
+    def test_a_stopped_job_that_ended_keeps_its_reason(self):
+        job = _job()
+        job.try_start()
+        job.attach(_KillCounter())
+        job.cancel(reason=StopReason.USER)
+        job.detach()
+
+        self.assertEqual(job.state, JobState.ENDED)
+        self.assertEqual(job.cancel(reason=StopReason.SHUTDOWN), CancelOutcome.FINISHED)
+        self.assertEqual(job.stop_reason, StopReason.USER)
+
+    def test_detach_wakes_the_consumer_and_needs_a_started_job(self):
+        loop = _FakeLoop()
+        job = _job(output=LiveOutput(loop))
+        with self.assertRaises(ValueError):
+            job.detach()
+        job.try_start()
+        loop.run_pending()
+        job.detach()
+        self.assertEqual(len(loop.callbacks), 1)
 
     def test_a_cancel_caps_the_output(self):
         job = _job(output=_output(after_stop_bytes=1))

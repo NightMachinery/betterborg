@@ -56,6 +56,8 @@ class JobState(Enum):
     RUNNING = "running"
     #: Asked to stop; the command may still be ending.
     STOPPING = "stopping"
+    #: The command has ended (`detach`); its final is not delivered yet.
+    ENDED = "ended"
     #: Ended, and its final delivered (`finish`).
     DONE = "done"
 
@@ -363,7 +365,7 @@ class ShellJob:
                         self.state = JobState.RUNNING
                 case JobState.RUNNING:
                     started = True
-                case JobState.STOPPING | JobState.DONE:
+                case JobState.STOPPING | JobState.ENDED | JobState.DONE:
                     started = False
                 case _:
                     raise ValueError(f"unknown job state: {self.state!r}")
@@ -383,9 +385,24 @@ class ShellJob:
             kill()
 
     def detach(self) -> None:
-        """The command has ended; a later cancel has nothing to kill."""
+        """The command has ended: drops the kill hook, and the job is ENDED.
+
+        Any thread. A later cancel finds nothing to stop (FINISHED), even
+        while the consumer still sends the final or the files; a job that was
+        stopped keeps its `stop_reason`.
+        """
         with self._lock:
             self._kill = None
+            match self.state:
+                case JobState.RUNNING | JobState.STOPPING:
+                    self.state = JobState.ENDED
+                case JobState.ENDED | JobState.DONE:
+                    return
+                case JobState.QUEUED:
+                    raise ValueError("a job that never started cannot end")
+                case _:
+                    raise ValueError(f"unknown job state: {self.state!r}")
+        self.output.notify()
 
     def cancel(self, *, reason: StopReason) -> CancelOutcome:
         """Stops the job: kills its command, or keeps it from ever starting.
@@ -403,7 +420,7 @@ class ShellJob:
                     kill = self._kill
                 case JobState.STOPPING:
                     outcome = CancelOutcome.ALREADY_STOPPING
-                case JobState.DONE:
+                case JobState.ENDED | JobState.DONE:
                     outcome = CancelOutcome.FINISHED
                 case _:
                     raise ValueError(f"unknown job state: {self.state!r}")

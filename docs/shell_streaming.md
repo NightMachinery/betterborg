@@ -124,9 +124,10 @@ field is a keyword argument, so two ids (owner and chat, say) cannot be
 swapped by position.
 
 The states (`JobState`): QUEUED (waiting for a shell), RUNNING, STOPPING
-(asked to stop; the command may still be ending) and DONE (its final is
-delivered). Every match on `JobState`, `StopReason` (USER or SHUTDOWN) and
-`CancelOutcome` names each member and raises on anything else.
+(asked to stop; the command may still be ending), ENDED (the command has
+ended, and the consumer may still be sending its final or its files) and DONE
+(all of it is delivered). Every match on `JobState`, `StopReason` (USER or
+SHUTDOWN) and `CancelOutcome` names each member and raises on anything else.
 
 - `try_start()` is called by the producer once it holds a shell. It returns
   False when the job was stopped while it waited; the producer then frees the
@@ -136,12 +137,15 @@ delivered). Every match on `JobState`, `StopReason` (USER or SHUTDOWN) and
   already stopped. `cancel(*, reason)` marks the job stopped and then calls
   the hook it finds. Both take the job's lock, so whichever runs second sees
   the other, and a cancel that lands between `popen` and `attach` still kills
-  the command (popen-api.md, the Job pattern). `detach()` drops the hook once
-  the command has ended.
+  the command (popen-api.md, the Job pattern). The producer calls `detach()`
+  once the command has ended: it drops the hook and makes the job ENDED. A
+  stopped job keeps its `stop_reason` there.
 - `cancel` returns STOPPING (the hook was called), NOT_STARTED (it was still
   queued and will never run; the consumer can deliver its final at once),
-  ALREADY_STOPPING or FINISHED. Only the first cancel counts. It returns at
-  once; the command may take seconds to end.
+  ALREADY_STOPPING or FINISHED (ENDED or DONE: the command has ended by
+  itself or after an earlier stop, and nothing is done, so a `.k` during the
+  upload of the files does not claim a stop). Only the first cancel counts.
+  It returns at once; the command may take seconds to end.
 - Every state change sets `output.changed`, so a preview header can follow.
 
 The registry is a dict, `shell_stream.JOBS`, used from the event loop only:
@@ -197,8 +201,8 @@ with brish 0.4.0 the pool then restarts, waiting for its other commands.
 
 **Old brish fallback.** A brish without `popen` (eva ran 0.3.5) runs the
 command through `send_cmd`, still asking `try_start` first, and writes its
-whole result into the job at the end. It cannot be stopped once it runs: no
-kill hook is attached. The consumer should not offer a stop (or a preview)
+whole result into the job at the end, which makes the job ENDED. It cannot
+be stopped once it runs: no kill hook is attached. The consumer should not offer a stop (or a preview)
 for `.a` there; `.aa` streams on any brish.
 
 ## The `.aa` producer
