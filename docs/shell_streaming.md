@@ -265,6 +265,33 @@ A side effect of the own session: a streamed `.aa` command has no controlling
 terminal, like a brish command, and a terminal Ctrl-C on the bot no longer
 reaches it.
 
+## Settings and the kill switch
+
+`uniborg/shell_settings.py` (a core module) keeps each admin's shell settings
+in `UserStorage(purpose="shell")`, one JSON file per user under
+`~/.borg/shell/`. `ShellSettings.get(user_id)` gives a `ShellPrefs`, and
+`ShellSettings.set(user_id, prefs)` stores only the values that differ from
+the defaults, so a changed default reaches everyone who never chose. A stored
+value this version does not know is logged and read as its default. The
+storage is injected (`ShellSettings(storage=...)`), so the tests use a temp
+dir.
+
+The settings, with their defaults:
+- `stream_private`: how a preview shows in private chats, Drafts. The field
+  names and values are the chat bot's (`stream_driver.StreamMode`), and so
+  are the helpers that read and write them per scope
+  (`stream_driver.stream_mode`, `set_stream_mode`).
+- `stream_groups`: the same in groups, Edits.
+- `final_mode` (`shell_settings.FinalMode`): what a command that showed a
+  preview sends when it ends, EDIT_PREVIEW (the preview becomes the final) or
+  NEW_REPLY (a new reply, as before live output).
+- `render`: show output as a terminal would (`term_render`), on.
+
+The **kill switch** is the environment variable `borg_shell_streaming`, read
+once when the module is first imported: "1" or unset is on, "0" is off, and
+any other value raises at startup rather than guess. Off, `.a`, `.af` and
+`.aa` run exactly as before live output: no job, no preview and no renderer.
+
 ## What phase C builds on this
 
 Nothing calls the producers with a job yet. The chat side (the preview and

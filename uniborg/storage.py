@@ -88,16 +88,18 @@ class UserStorage:
     with potential for concurrent access.
     """
 
-    def __init__(self, purpose: str):
+    def __init__(self, purpose: str, *, root=None):
         """
         Initializes the storage for a specific purpose (e.g., 'llm_chat').
-        This purpose will be used as the subdirectory name under ~/.borg/
+        This purpose will be used as the subdirectory name under ROOT, by
+        default ~/.borg/
         """
         if not purpose or not isinstance(purpose, str):
             raise ValueError(
                 "Purpose must be a valid string for the subdirectory name."
             )
-        self.base_dir = Path(os.path.expanduser("~/.borg/")) / purpose
+        root = Path(os.path.expanduser("~/.borg/")) if root is None else Path(root)
+        self.base_dir = root / purpose
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_user_paths(self, user_id: int) -> tuple[Path, Path]:
