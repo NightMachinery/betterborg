@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch
 from telethon import types
 from telethon._updates import EntityCache
 
+from uniborg.storage import UserStorage
 from uniborg import (
     guest_util,
     shell_settings,
@@ -172,7 +173,14 @@ class _GuestTestCase(unittest.TestCase):
             ]
 
         self.answer_guest = AsyncMock(side_effect=answer_guest)
+        #: Each admin's shell settings, here all defaults (the renderer on).
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
+        self.settings = shell_settings.ShellSettings(
+            storage=UserStorage(purpose=shell_settings.PURPOSE, root=settings_dir.name)
+        )
         for target, name, value in (
+            (shell_settings, "SETTINGS", self.settings),
             (tg_raw, "answer_guest", self.answer_guest),
             (tg_raw, "InlineEditor", _FakeEditor),
             (util, "is_admin_by_id", lambda user_id: user_id == ADMIN),

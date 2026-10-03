@@ -98,6 +98,33 @@ class LiveTiming:
 
 
 LIVE_TIMING = LiveTiming()
+
+
+@dataclass(frozen=True)
+class LivePacing:
+    """When a preview opens, and how often it may change after that."""
+
+    preview_delay: float
+    edit_interval: float
+    #: `stream_driver.tiered_pace`: slower once the command has run a while.
+    pace: Callable
+
+
+def _live_pacing(*, private) -> LivePacing:
+    """LIVE_TIMING's pacing for a preview in a private chat, or in a group."""
+    timing = LIVE_TIMING
+    edit_pace = timing.private if private else timing.groups
+    return LivePacing(
+        preview_delay=timing.preview_delay,
+        edit_interval=edit_pace.interval,
+        pace=stream_driver.tiered_pace(
+            slow_after=timing.slow_after,
+            slow_interval=edit_pace.slow_interval,
+            cursor=PREVIEW_CURSOR,
+        ),
+    )
+
+
 #: Telegram's limit for one message, in UTF-16 units.
 MESSAGE_UNITS = 4096
 #: A preview's length in UTF-16 units. `util.edit_message` splits a longer
@@ -165,33 +192,34 @@ async def _run_live(
     produce,
     open_preview,
     preview_text,
-    pace,
-    edit_interval,
-    preview_delay,
+    pacing,
+    remove_preview=None,
 ) -> LiveRun:
-    """Runs `produce()` for JOB, showing its output live once PREVIEW_DELAY passes.
+    """Runs `produce()` for JOB, showing its output live once PACING's
+    preview delay passes.
 
     `open_preview()` sends the preview, then `preview_text(preview)` is what
-    it shows, at PACE (`stream_driver.follow`), until the command ends. A
-    draft preview's Stop button stops the job. A job dropped while it waited
-    for a shell returns at once, with no result. A producer's error removes
-    the preview and propagates. A cancel stops the command (SHUTDOWN).
+    it shows, at PACING's pace (`stream_driver.follow`), until the command
+    ends. A draft preview's Stop button stops the job. A job dropped while it
+    waited for a shell returns at once, with no result. A producer's error
+    removes the preview (`remove_preview(preview)`, by default
+    `_remove_preview`) and propagates. A cancel stops the command (SHUTDOWN).
     """
     task = asyncio.ensure_future(produce())
     changed = asyncio.Event()
     ended = asyncio.ensure_future(_relay_changes(job, task, changed=changed))
     preview = None
     try:
-        await asyncio.wait({ended}, timeout=preview_delay)
+        await asyncio.wait({ended}, timeout=pacing.preview_delay)
         if not ended.done():
             preview = await _open_preview_or_none(open_preview)
         if preview is not None:
             job.preview_id = preview.id
             editor = stream_driver.PacedEditor(
                 preview,
-                edit_interval=edit_interval,
+                edit_interval=pacing.edit_interval,
                 parse_mode=None,
-                pace=pace,
+                pace=pacing.pace,
                 report_failures=True,
                 logger=logger,
             )
@@ -221,11 +249,11 @@ async def _run_live(
         return LiveRun(result=task.result(), preview=preview)
     except Exception:
         if preview is not None:
-            await _remove_preview(preview)
+            await (remove_preview or _remove_preview)(preview)
         raise
 
 
-def _preview_header(job, *, stop_hint) -> str:
+def _preview_header(job, *, stop_hint, stop_command=".k") -> str:
     if job.stopped:
         return f"⏹ #{job.id} stopping…"
     match job.state:
@@ -237,15 +265,15 @@ def _preview_header(job, *, stop_hint) -> str:
             raise ValueError("a stopping job has a stop reason")
         case _:
             raise ValueError(f"Unknown job state: {job.state!r}")
-    return f"{header} · .k to stop" if stop_hint else header
+    return f"{header} · {stop_command} to stop" if stop_hint else header
 
 
-def _preview_text(job, *, render, stop_hint) -> str:
+def _preview_text(job, *, render, stop_hint, stop_command=".k") -> str:
     """The header, a blank line and the output's tail, within PREVIEW_UNITS.
 
-    STOP_HINT names `.k`, for a preview that shows no Stop button.
+    STOP_HINT names STOP_COMMAND, for a preview that shows no Stop button.
     """
-    header = _preview_header(job, stop_hint=stop_hint)
+    header = _preview_header(job, stop_hint=stop_hint, stop_command=stop_command)
     room = (
         PREVIEW_UNITS
         - tg_format.utf16_len(header)
@@ -329,16 +357,41 @@ async def _off_the_loop_if_large(read, *, size):
     return await asyncio.get_running_loop().run_in_executor(None, read)
 
 
-def _stop_note(job, *, retcode) -> str:
+def _stop_words(job) -> Optional[str]:
+    """Why JOB was stopped, as its final says it; None when it was not."""
     match job.stop_reason:
         case None:
-            return ""
+            return None
         case StopReason.USER:
-            return f"⏹ Stopped (exit {retcode})."
+            return "⏹ Stopped"
         case StopReason.SHUTDOWN:
-            return f"⏹ Stopped: julia is restarting (exit {retcode})."
+            return "⏹ Stopped: julia is restarting"
         case _:
             raise ValueError(f"Unknown stop reason: {job.stop_reason!r}")
+
+
+def _stop_note(job, *, retcode) -> str:
+    words = _stop_words(job)
+    return f"{words} (exit {retcode})." if words else ""
+
+
+async def _shown_output(result, *, job, render) -> str:
+    """RESULT's output as a chat shows it: with RENDER, as a terminal would
+    (`term_render`); without, as RESULT has it, as before.
+
+    Rendering reads JOB's live output, each stream on its own and before any
+    newline translation, when its producer wrote into it; RESULT's output is
+    the same bytes, decoded and joined.
+    """
+    if not render:
+        return result.output
+    if job is not None and job.output.written:
+        return await _off_the_loop_if_large(
+            partial(job.output.final_text, render=True), size=job.output.written
+        )
+    return await _off_the_loop_if_large(
+        partial(term_render.render, result.output), size=len(result.output)
+    )
 
 
 async def _final_text(job, result, *, render) -> str:
@@ -349,11 +402,7 @@ async def _final_text(job, result, *, render) -> str:
     """
     if result is None:
         return STOPPED_BEFORE_IT_RAN
-    output = result.output
-    if render:
-        output = await _off_the_loop_if_large(
-            partial(job.output.final_text, render=True), size=job.output.written
-        )
+    output = await _shown_output(result, job=job, render=render)
     text = util.shell_output_text(output, retcode=result.retcode)
     note = _stop_note(job, retcode=result.retcode)
     return f"{text}\n\n{note}" if note else text
@@ -419,12 +468,12 @@ async def _deliver_final(event, text, *, preview, mode):
             raise ValueError(f"Unknown final mode: {mode!r}")
 
 
-async def _run_in_chat(*, cwd, event, request, job, prefs):
-    """`run_and_get`'s work for a live `.a`, `.af` or `.aa`: run, show, deliver."""
+def _live_producer(job, *, cwd, request):
+    """What runs JOB's command in CWD: brish on the shell pool, or `.aa`."""
     if request.brish_mode:
         #: The pool of now: `.x` during the download retired the earlier one.
         job.pool = util.persistent_brish
-        produce = partial(
+        return partial(
             util.brishz_capture,
             cwd=cwd,
             cmd=request.command,
@@ -432,15 +481,14 @@ async def _run_in_chat(*, cwd, event, request, job, prefs):
             job=job,
             brish=job.pool,
         )
-    else:
-        produce = partial(
-            util.simple_run_capture, cwd=cwd, command=request.command, job=job
-        )
-    timing = LIVE_TIMING
-    edit_pace = timing.private if event.is_private else timing.groups
+    return partial(util.simple_run_capture, cwd=cwd, command=request.command, job=job)
+
+
+async def _run_in_chat(*, cwd, event, request, job, prefs):
+    """`run_and_get`'s work for a live `.a`, `.af` or `.aa`: run, show, deliver."""
     live = await _run_live(
         job,
-        produce=produce,
+        produce=_live_producer(job, cwd=cwd, request=request),
         open_preview=partial(
             _open_chat_preview,
             event,
@@ -451,13 +499,7 @@ async def _run_in_chat(*, cwd, event, request, job, prefs):
         preview_text=lambda preview: _preview_text(
             job, render=prefs.render, stop_hint=not _shows_stop_button(preview)
         ),
-        pace=stream_driver.tiered_pace(
-            slow_after=timing.slow_after,
-            slow_interval=edit_pace.slow_interval,
-            cursor=PREVIEW_CURSOR,
-        ),
-        edit_interval=edit_pace.interval,
-        preview_delay=timing.preview_delay,
+        pacing=_live_pacing(private=event.is_private),
     )
     text = await _final_text(job, live.result, render=prefs.render)
     await _deliver_final(event, text, preview=live.preview, mode=prefs.final_mode)
@@ -471,12 +513,19 @@ async def _run_unstoppable(*, cwd, event, request, prefs):
         fork=request.fork,
         brish=util.persistent_brish,
     )
-    output = result.output
-    if prefs.render:
-        output = await _off_the_loop_if_large(
-            partial(term_render.render, output), size=len(output)
-        )
+    output = await _shown_output(result, job=None, render=prefs.render)
     await util.send_output(event, output, retcode=result.retcode)
+
+
+def _streams(request) -> bool:
+    """Whether REQUEST runs as a job, so its output can show live and be stopped.
+
+    Not with live output off, nor for `.a` on a brish without `popen`, which
+    can neither stream a command nor stop one.
+    """
+    return shell_settings.SHELL_STREAMING and (
+        not request.brish_mode or util.BRISH_POPEN
+    )
 
 
 def _job_of(event, request):
@@ -515,8 +564,7 @@ async def _(event):
         return
 
     prefs = shell_settings.SETTINGS.get(event.sender_id)
-    if request.brish_mode and not util.BRISH_POPEN:
-        #: This brish can neither stream a command nor stop one.
+    if not _streams(request):
         await util.run_and_upload(
             event=event,
             to_await=partial(_run_unstoppable, request=request, prefs=prefs),
@@ -611,7 +659,8 @@ def _job_line(job, *, now) -> str:
             note = ""
         case _:
             raise ValueError(f"Unknown job state: {job.state!r}")
-    return f"#{job.id} · {_age_text(now - job.started_at)}{note} · {command}"
+    guest = " · guest" if job.thread_key is not None else ""
+    return f"#{job.id} · {_age_text(now - job.started_at)}{note}{guest} · {command}"
 
 
 def job_list_text(jobs, *, now, kill=".k") -> str:
@@ -732,21 +781,23 @@ def old_pool_note(*, chat_id, caller_id) -> str:
     A restart does not stop them: they keep their pool until they end. Call
     it after the restart: every pool but `util.persistent_brish` is retired,
     whichever restart retired it. The jobs that `.k` from CALLER_ID in
-    CHAT_ID can see are counted apart from the others.
+    CHAT_ID can see are counted apart from the others, and of those, guest
+    jobs apart from chat jobs.
     """
-    old = {
-        job.id
+    old = [
+        job
         for job in shell_stream.JOBS.values()
         if job.pool is not None
         and job.pool is not util.persistent_brish
         and _is_running(job)
+    ]
+    seen = {
+        job.id for job in shell_stream.visible(chat_id=chat_id, caller_id=caller_id)
     }
-    here = sum(
-        1
-        for job in shell_stream.visible(chat_id=chat_id, caller_id=caller_id)
-        if job.id in old
-    )
-    elsewhere = len(old) - here
+    here = sum(1 for job in old if job.id in seen)
+    #: Of the others, a guest job is stopped from its guest chat.
+    guests = sum(1 for job in old if job.id not in seen and job.thread_key is not None)
+    elsewhere = len(old) - here - guests
     lines = []
     if here == 1:
         lines.append("1 command still runs on an old pool; .k stops it.")
@@ -761,6 +812,16 @@ def old_pool_note(*, chat_id, caller_id) -> str:
         lines.append(
             f"{elsewhere} commands in other chats still run on old pools;"
             " .k in their chats stops them."
+        )
+    if guests == 1:
+        lines.append(
+            "1 guest command still runs on an old pool;"
+            f" {_guest_kill_command()} in its chat stops it."
+        )
+    elif guests > 1:
+        lines.append(
+            f"{guests} guest commands still run on old pools;"
+            f" {_guest_kill_command()} in their chats stops them."
         )
     return "".join(f"\n{line}" for line in lines)
 
@@ -1178,11 +1239,80 @@ async def _finalize_with_attachment(answer, dm_message, *, output, footer_lines)
         return False
 
 
+def _guest_is_private(query) -> bool:
+    match query.chat_kind:
+        case guest_util.ChatKind.PRIVATE:
+            return True
+        case guest_util.ChatKind.GROUP:
+            return False
+        case _:
+            raise ValueError(f"Unknown chat kind: {query.chat_kind!r}")
+
+
+async def _keep_guest_answer(answer):
+    """A guest answer cannot be deleted; the final edit replaces it."""
+
+
+async def _run_guest_live(job, *, cwd, request, query, answer, render):
+    """A guest command whose output shows live in its answer (the *preview*).
+
+    As in a chat, after the preview delay and at the edit pace of a private
+    chat or a group; never a draft, and the settings' preview kinds and final
+    modes do not apply. The preview has no Stop button: its header names
+    `@thisbot .k`. Returns the result, None when the job was dropped.
+    """
+    guest_text = partial(
+        _preview_text,
+        job,
+        render=render,
+        stop_hint=True,
+        stop_command=_guest_kill_command(),
+    )
+
+    async def open_preview():
+        await answer.edit(guest_text() + PREVIEW_CURSOR, parse_mode=None)
+        return answer
+
+    live = await _run_live(
+        job,
+        produce=_live_producer(job, cwd=cwd, request=request),
+        open_preview=open_preview,
+        preview_text=lambda _preview: guest_text(),
+        pacing=_live_pacing(private=_guest_is_private(query)),
+        remove_preview=_keep_guest_answer,
+    )
+    return live.result
+
+
 async def _run_guest_shell(query, request, answer):
     results = []
+    #: The caller's renderer setting; live output off means none at all.
+    render = bool(
+        shell_settings.SHELL_STREAMING
+        and shell_settings.SETTINGS.get(query.caller_id).render
+    )
+    job = None
+    if _streams(request):
+        job = shell_stream.register(
+            ShellJob(
+                owner_id=query.caller_id,
+                chat_id=None,
+                command=request.command,
+                thread_key=query.thread_key,
+            )
+        )
 
     async def to_await(*, cwd, event):
-        if request.brish_mode:
+        if job is not None:
+            result = await _run_guest_live(
+                job,
+                cwd=cwd,
+                request=request,
+                query=query,
+                answer=answer,
+                render=render,
+            )
+        elif request.brish_mode:
             result = await util.brishz_capture(
                 cwd=cwd,
                 cmd=request.command,
@@ -1197,7 +1327,11 @@ async def _run_guest_shell(query, request, answer):
     try:
         await util.run_and_get(None, to_await, cwd, messages=query.messages)
         (result,) = results
-        output = result.output.strip() or f"The process exited {result.retcode}."
+        if result is None:
+            output = STOPPED_BEFORE_IT_RAN
+        else:
+            output = await _shown_output(result, job=job, render=render)
+            output = output.strip() or f"The process exited {result.retcode}."
         truncated = (
             tg_format.utf16_len(output) > GUEST_TEXT_LIMIT - GUEST_FOOTER_RESERVE
         )
@@ -1207,8 +1341,11 @@ async def _run_guest_shell(query, request, answer):
 
         footer_lines = []
         sent = []
-        if result.retcode != 0:
+        if result is not None and result.retcode != 0:
             footer_lines.append(f"exit {result.retcode}")
+        stop = _stop_words(job) if job is not None and result is not None else None
+        if stop:
+            footer_lines.append(stop)
         if files:
             sent, error = await _send_files_to_dm(
                 query.caller_id, request=request, files=files
@@ -1241,6 +1378,8 @@ async def _run_guest_shell(query, request, answer):
             return
         await answer.finalize(text=_plain_answer(output, footer_lines=footer_lines))
     finally:
+        if job is not None:
+            shell_stream.finish(job)
         await util.remove_potential_file(cwd)
 
 

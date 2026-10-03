@@ -22,12 +22,26 @@ from unittest.mock import AsyncMock, patch
 from telethon import events
 from telethon.tl import types
 
-from uniborg import draft_stream, shell_settings, shell_stream, tg_compat, util
+from uniborg import (
+    draft_stream,
+    guest_util,
+    shell_settings,
+    shell_stream,
+    tg_compat,
+    util,
+)
 from uniborg.shell_settings import FinalMode, ShellPrefs, ShellSettings
 from uniborg.storage import UserStorage
 from uniborg.stream_driver import StreamMode
 
-from test_advanced_get_guest import ADMIN, _FakeBorg, _load_plugin
+from test_advanced_get_guest import (
+    ADMIN,
+    BOT_USERNAME,
+    _FakeBorg,
+    _GuestTestCase,
+    _load_plugin,
+    _query,
+)
 
 CHAT = -1001
 DM = ADMIN
@@ -1194,6 +1208,27 @@ class OldPoolTests(_ShellTestCase):
             " stops them.",
         )
 
+    def test_guest_jobs_elsewhere_are_counted_apart(self):
+        """They are stopped from their guest chat, or the caller's private chat."""
+        old, new = object(), object()
+
+        async def make():
+            job = shell_stream.register(
+                shell_stream.ShellJob(
+                    owner_id=ADMIN, chat_id=None, command="x", thread_key="chat:-5"
+                )
+            )
+            job.pool = old
+            job.try_start()
+
+        asyncio.run(make())
+
+        self.assertEqual(
+            self.restart(".x", pools=[old, new]),
+            "Restarted brishes.\n1 guest command still runs on an old pool;"
+            f" @{BOT_USERNAME} .k in its chat stops it.",
+        )
+
     def test_a_streamed_dot_a_records_its_pool(self):
         pools = []
 
@@ -1208,6 +1243,204 @@ class OldPoolTests(_ShellTestCase):
         ((pool, brish),) = pools
         self.assertIs(pool, util.persistent_brish)
         self.assertIs(brish, pool)
+
+
+class _QuickAnswer(guest_util.GuestAnswerMessage):
+    """A guest answer whose edits may follow each other at once."""
+
+    def __init__(self, editor, **kwargs):
+        super().__init__(editor, min_interval=0, **kwargs)
+
+
+class GuestLiveTests(_GuestTestCase):
+    """`@bot .a CMD`: the guest answer shows the output live."""
+
+    def setUp(self):
+        super().setUp()
+        for target, name, value in (
+            (shell_settings, "SHELL_STREAMING", True),
+            (self.plugin, "LIVE_TIMING", FAST),
+            (guest_util, "GuestAnswerMessage", _QuickAnswer),
+        ):
+            patcher = patch.object(target, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch.dict(shell_stream.JOBS, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_guest(self, steps, *, command=".aa x", retcode=0, during=None):
+        """Runs COMMAND as a guest query, the producers following STEPS
+        (`_producer`); DURING() runs alongside. Returns the answer's texts."""
+        capture = _producer(steps, retcode=retcode)
+
+        async def main():
+            task = asyncio.ensure_future(
+                self.plugin.guest_shell(_query(f"@{BOT_USERNAME} {command}"))
+            )
+            if during is not None:
+                await during()
+            await asyncio.wait_for(task, 30)
+
+        with patch.object(util, "simple_run_capture", capture), patch.object(
+            util, "brishz_capture", capture
+        ):
+            asyncio.run(main())
+        return [edit["text"] for edit in self.edits]
+
+    async def guest_kill(self, text):
+        """`@bot TEXT` from the same guest chat; returns its answers."""
+        before = len(self.answers)
+        await self.plugin.guest_shell(_query(f"@{BOT_USERNAME} {text}"))
+        return self.answers[before:]
+
+    def test_a_slow_command_shows_its_output_live_then_the_final(self):
+        texts = self.run_guest(SLOW)
+
+        self.assertEqual(self.answers, ["⏳ Running…"])
+        first, *_partials, final = texts
+        self.assertRegex(first, rf"^⏳ #\d+ · @{BOT_USERNAME} \.k to stop\n\na\n▌$")
+        self.assertEqual(final, "a\nb")
+        self.assertTrue(all(edit.get("parse_mode") is None for edit in self.edits))
+        self.assertEqual(shell_stream.JOBS, {})
+
+    def test_a_fast_command_still_makes_one_edit(self):
+        texts = self.run_guest(["hi\n"])
+
+        self.assertEqual(texts, ["hi"])
+
+    def test_a_long_running_preview_fits_the_answer(self):
+        texts = self.run_guest(["line\n" * 2000, 0.5])
+
+        self.assertLessEqual(
+            max(len(text.encode("utf-16-le")) // 2 for text in texts[:-1]),
+            self.plugin.PREVIEW_UNITS + 1,
+        )
+        self.assertIn("Output truncated", texts[-1])
+
+    def test_at_kill_stops_it_and_the_answer_says_so_under_its_exit(self):
+        kills = []
+
+        async def kill():
+            await _until(lambda: self.edits)
+            kills.extend(await self.guest_kill(".k"))
+
+        texts = self.run_guest(["started", STOP], during=kill)
+
+        self.assertRegex(kills[0], r"^⏹ Stopping #\d+…$")
+        self.assertEqual(texts[-1], "started\n\nexit 130\n⏹ Stopped")
+
+    def test_a_shutdown_says_the_bot_is_restarting(self):
+        async def stop():
+            await _until(lambda: self.edits)
+            (job,) = shell_stream.JOBS.values()
+            job.cancel(reason=shell_stream.StopReason.SHUTDOWN)
+
+        texts = self.run_guest([STOP], during=stop)
+
+        self.assertEqual(
+            texts[-1],
+            "The process exited 130.\n\nexit 130\n⏹ Stopped: julia is restarting",
+        )
+
+    def test_a_command_stopped_while_queued_never_runs(self):
+        ran = []
+        gate = {}
+
+        async def capture(*, job, **kwargs):
+            gate["free"] = free = asyncio.Event()
+            await free.wait()
+            if not job.try_start():
+                return None
+            ran.append(job)
+            return util.CommandResult(output="ran", retcode=0)
+
+        async def main():
+            task = asyncio.ensure_future(
+                self.plugin.guest_shell(_query(f"@{BOT_USERNAME} .a true"))
+            )
+            await _until(lambda: self.edits)
+            self.assertIn("waiting for a free shell", self.edits[0]["text"])
+            (job,) = shell_stream.JOBS.values()
+            job.cancel(reason=shell_stream.StopReason.USER)
+            await asyncio.wait_for(task, 30)
+            gate["free"].set()
+            await asyncio.sleep(0.05)
+
+        with patch.object(util, "brishz_capture", capture):
+            asyncio.run(main())
+
+        self.assertEqual(self.edits[-1]["text"], self.plugin.STOPPED_BEFORE_IT_RAN)
+        self.assertEqual(ran, [])
+
+    def test_a_producer_error_with_a_preview_becomes_the_traceback(self):
+        async def capture(*, job, **kwargs):
+            job.try_start()
+            await asyncio.sleep(0.6)
+            raise RuntimeError("boom")
+
+        with patch.object(util, "simple_run_capture", capture):
+            asyncio.run(self.plugin.guest_shell(_query(f"@{BOT_USERNAME} .aa x")))
+
+        first, final = [edit["text"] for edit in self.edits]
+        self.assertTrue(first.startswith("⏳ #"))
+        self.assertIn("RuntimeError: boom", final)
+        self.assertEqual(shell_stream.JOBS, {})
+
+    def test_the_renderer_follows_the_callers_setting(self):
+        self.assertEqual(self.run_guest(["50%\r100%\n"])[-1], "100%")
+
+        self.edits.clear()
+        self.settings.set(ADMIN, ShellPrefs(render=False))
+        self.assertEqual(self.run_guest(["50%\r100%\n"])[-1], "50%\r100%")
+
+    def test_streaming_off_runs_as_before(self):
+        calls = []
+
+        async def capture(**kwargs):
+            calls.append(kwargs)
+            return util.CommandResult(output="50%\r100%", retcode=0)
+
+        with patch.object(shell_settings, "SHELL_STREAMING", False), patch.object(
+            util, "simple_run_capture", capture
+        ):
+            asyncio.run(self.plugin.guest_shell(_query(f"@{BOT_USERNAME} .aa x")))
+
+        ((call,),) = [calls]
+        self.assertNotIn("job", call)
+        self.assertEqual([edit["text"] for edit in self.edits], ["50%\r100%"])
+
+    def test_old_brish_runs_dot_a_as_before_rendered(self):
+        calls = []
+
+        async def capture(**kwargs):
+            calls.append(kwargs)
+            return util.CommandResult(output="50%\r100%", retcode=0)
+
+        with patch.object(util, "BRISH_POPEN", False), patch.object(
+            util, "brishz_capture", capture
+        ):
+            asyncio.run(self.plugin.guest_shell(_query(f"@{BOT_USERNAME} .a x")))
+
+        ((call,),) = [calls]
+        self.assertNotIn("job", call)
+        self.assertEqual([edit["text"] for edit in self.edits], ["100%"])
+        self.assertEqual(shell_stream.JOBS, {})
+
+    def test_a_brish_job_runs_on_the_shell_pool_and_records_it(self):
+        seen = []
+
+        async def capture(*, job, brish, **kwargs):
+            seen.append((job.pool, brish, job.thread_key, job.chat_id))
+            return util.CommandResult(output="hi", retcode=0)
+
+        with patch.object(util, "brishz_capture", capture):
+            asyncio.run(self.plugin.guest_shell(_query(f"@{BOT_USERNAME} .a x")))
+
+        ((pool, brish, thread_key, chat_id),) = seen
+        self.assertIs(pool, util.persistent_brish)
+        self.assertIs(brish, pool)
+        self.assertEqual((thread_key, chat_id), (_query("").thread_key, None))
 
 
 class PreviewHeaderTests(_ShellTestCase):

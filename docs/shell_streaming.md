@@ -4,14 +4,15 @@ How the shell (`.a`, `.af`, `.aa` and the guest shell in
 `stdplugins/advanced_get.py`) runs commands so that their output can be shown
 while they run, and stopped. It describes the producers (the code that runs a
 command and collects its bytes), the settings and their `/settings` panel,
-the live output of `.a`, `.af` and `.aa` in chats, and how a running command
-is stopped: `.k` and the previews' Stop buttons. The guest shell's live
-answers are not written yet.
+the live output of `.a`, `.af` and `.aa` in chats and in guest answers, and
+how a running command is stopped: `.k`, `@bot .k` and the previews' Stop
+buttons.
 
 ## Terms
 
-- **Job**: one `.a`, `.af` or `.aa` command, from the moment it waits for a
-  shell until its final is delivered (`shell_stream.ShellJob`).
+- **Job**: one `.a`, `.af` or `.aa` command, in a chat or from a guest
+  chat, from the moment it waits for a shell until its final is delivered
+  (`shell_stream.ShellJob`).
 - **Producer**: the code that runs the command and writes its bytes into the
   job's live output: `util.brishz_capture` for `.a` and `.af`,
   `util.simple_run_capture` for `.aa`, each given `job=`.
@@ -64,7 +65,9 @@ old-brish `.a` is no job, so none of these is counted. Only the jobs that a
 `.k` in the chat of the restart can see (`shell_stream.visible`) get that
 line. The others get a second line, "1 command in another chat still runs
 on an old pool; .k in that chat stops it.", since a `.k` here would not find
-them.
+them, and guest jobs among them a third, "1 guest command still runs on an
+old pool; @bot .k in its chat stops it." A guest job records its pool as a
+chat job does.
 
 Nothing here depends on whole-pool restarts. Brish 0.4.1 is announced to
 restart only the dead worker; the separate plugin pool is still worth keeping
@@ -564,7 +567,8 @@ being sent, has nothing left to stop.
 - **`.k N`** (or `.k #N`): stops job N, if it is visible and running.
 - **`.k all`**: stops every running visible job, one reply line each.
 - **`.k ls`**: lists them, a line each: id, age, "waiting" or "stopping"
-  when it is, and the first 60 characters of the command on one line.
+  when it is, "guest" for a guest job, and the first 60 characters of the
+  command on one line.
 - Anything else gets the usage line.
 
 A stop is `job.cancel(reason=StopReason.USER)`. Its reply follows the
@@ -624,7 +628,43 @@ load in.
   left with its button would otherwise stop the newer job that got the same
   id.
 
+## Live guest answers
+
+`@<bot> .a CMD` from a guest chat (docs/guest_mode.md) runs as a job too,
+and its answer shows the output live. The code is `_run_guest_shell` and
+`_run_guest_live` in `stdplugins/advanced_get.py`.
+
+- **The job** is registered before the replied-to files download, with the
+  caller as its owner, no chat (`chat_id=None`) and the query's
+  `thread_key`, so `@<bot> .k` in that guest chat and `.k` in the caller's
+  private chat with the bot see it. It is finished after the answer's last
+  edit. With `borg_shell_streaming=0`, or for `.a` on a brish without
+  `popen`, there is no job and the answer is as before live output.
+- **The preview** is the guest answer itself: it says "⏳ Running…" when
+  posted, as before, and a command still running after the preview delay
+  (2 s) turns it into the header, the output's end and the cursor, as in a
+  chat, through the same pump (`_run_live`) and the same text
+  (`_preview_text`, within `PREVIEW_UNITS`). It is never a draft, and the
+  settings' preview kinds and final modes do not apply. It changes at the
+  edit pace of a private chat or of a group, after the kind of the guest
+  chat, and `guest_util.GuestAnswerMessage` keeps its own edits at least
+  1.2 s apart and skips them during a flood wait. A guest answer has no
+  Stop button, so the header always names the command that stops it:
+  "⏳ #3 · @bot .k to stop".
+- **The final** is the answer's last edit (`finalize`), built as before:
+  the output as plain text, cut to fit, with the lines under it. A command
+  that ends within the preview delay still makes exactly one edit. After a
+  stop, a line "⏹ Stopped" (or "⏹ Stopped: julia is restarting" on a
+  shutdown) follows "exit N". A job stopped while it waited for a shell
+  says "⏹ Stopped before it ran." alone.
+- **The renderer** follows the caller's `render` setting (the default, on,
+  when they never chose), for the preview, the final and the `output.txt`
+  of long output. Off, and with live output off, the output is raw as
+  before; on a brish without `popen`, `.a` is rendered from its captured
+  output, as in a chat.
+- **Failures**: a producer's error leaves the preview in place (a guest
+  answer cannot be deleted), and the traceback replaces it, as before.
+
 ## Still to come
 
-Live guest answers (and the renderer in them), and stopping jobs before a
-shutdown.
+Stopping jobs before a shutdown.

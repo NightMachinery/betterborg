@@ -394,7 +394,7 @@ done</code></pre>
 </li>
 <li><code>.x</code> or <code>.sbb</code> starts a fresh shell pool for the commands that follow, and replies "Restarted brishes." <code>.xf</code> does the same and replies "Reinitialized brishes. Note that old running instances can still rejoin." Both also retire the other plugins' pool, which starts afresh at its next use.</li>
 <li>The new shells read their startup files afresh. Restart after changing those files, or after an <code>.af</code> command left the shared shell in a bad state.</li>
-<li>A restart does not cancel commands that are already running. With the current Brish library, the old pool shuts down in the background once those commands finish. The reply says how many commands still run on an old pool, if any, including pools that an earlier restart retired (<code>2 commands still run on old pools; .k stops them.</code>). Commands running in other chats are counted on a line of their own, since <code>.k</code> stops them only in their own chat.</li>
+<li>A restart does not cancel commands that are already running. With the current Brish library, the old pool shuts down in the background once those commands finish. The reply says how many commands still run on an old pool, if any, including pools that an earlier restart retired (<code>2 commands still run on old pools; .k stops them.</code>). Commands running in other chats are counted on a line of their own, since <code>.k</code> stops them only in their own chat, and <a href="#guest">guest</a> commands on another, since <code>@BOT .k</code> in their chat stops them.</li>
 </ul>
 </div>
 </details>
@@ -411,6 +411,7 @@ done</code></pre>
 <li>A forwarded message, or one sent through another bot or a connected Business bot, never runs.</li>
 <li>A command is dropped, never run, if the bot receives it more than 60 seconds after it was sent (for example because the bot was offline).</li>
 <li>The bot first answers "⏳ Running…" in the chat, then edits that answer into the result. If it cannot post that first answer, the command does not run at all.</li>
+<li>A command that runs longer than 2 seconds shows its output live in that answer, as in a private chat with edits (see <a href="#live">Live output</a>): its header says <code>⏳ #3 · @BOT .k to stop</code>. The answer has no Stop button, and is never a draft. A stopped command's answer ends with <code>⏹ Stopped</code> under the exit code. The <a href="#settings">renderer setting</a> applies; the other settings do not.</li>
 <li>Input files come from your message and from the message it replies to. Telegram sends only that one message of an album, so the other files of an album are not fetched, and the answer says so.</li>
 <li>The answer is the output as plain text, cut to fit one Telegram message (4096 UTF-16 code units, which are roughly characters, with most emoji counting as two). A cut ends in "…". Lines under the output report a non-zero exit code (<code>exit N</code>), how many files were sent to your private chat, and whether the output was cut.</li>
 <li>When the output is longer than about 3800 code units (the answer keeps room for the lines under it), the bot saves the whole output as <code>output.txt</code> in the scratch directory (under another name if the command made its own <code>output.txt</code>) and sends it with the other files.</li>

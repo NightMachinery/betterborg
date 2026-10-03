@@ -157,8 +157,8 @@ off. See
 
 ** Guest mode
 The bots answer where they are mentioned, even in chats they are not in.
-=@bot .a CMD= runs a shell command for an admin, with any files sent to the
-caller's DM (see the
+=@bot .a CMD= runs a shell command for an admin, shows its output live in the
+answer, and =@bot .k= stops it, with any files sent to the caller's DM (see the
 [[https://nightmachinery.github.io/betterborg/telegram_remote_shell/#guest][shell guide]]); =@vlm_chat_bot question= answers with the caller's own model and
 API key, can generate images into its answer, and a reply to the answer, to
 the question, or to what your own question replied to continues the exchange,
