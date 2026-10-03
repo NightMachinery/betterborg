@@ -5,6 +5,8 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
+from brish import Brish
+
 from uniborg import util
 
 
@@ -176,3 +178,34 @@ class CaptureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrishzHelperTests(unittest.TestCase):
+    """Non-fork commands on a real one-worker Brish, as `.af` runs them."""
+
+    def setUp(self):
+        self.brish = Brish(server_count=1)
+        self.addCleanup(self.brish.cleanup)
+
+    def run_helper(self, cmd):
+        async def run(cwd):
+            return await util.brishz_helper(
+                self.brish, cwd, cmd, fork=False, server_index=0
+            )
+
+        with tempfile.TemporaryDirectory() as cwd:
+            return asyncio.run(run(cwd + "/"))
+
+    def test_a_worker_left_under_emulate_sh_still_runs_commands(self):
+        self.run_helper("emulate sh")
+        res = self.run_helper("echo hello")
+
+        self.assertEqual((res.retcode, res.outerr), (0, "hello\n"))
+
+    @unittest.skipUnless(hasattr(Brish, "popen"), "brish before popen")
+    def test_exit_reports_its_status_and_the_pool_recovers(self):
+        res = self.run_helper("exit 3")
+        self.assertEqual(res.retcode, 3)
+
+        res = self.run_helper("echo again")
+        self.assertEqual((res.retcode, res.outerr), (0, "again\n"))

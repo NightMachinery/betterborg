@@ -13,6 +13,12 @@ from pynight.common_files import sanitize_filename
 import json
 from pydantic import BaseModel, Field
 from brish import z, zp, zs, bsh, Brish
+
+try:
+    from brish import BrishWorkerDiedException
+except ImportError:
+    #: brish 0.3.5 (PyPI) has no such exception; an empty tuple catches nothing.
+    BrishWorkerDiedException = ()
 from pynight.common_icecream import ic
 from collections.abc import Awaitable, Callable, Iterable
 from IPython.terminal.embed import InteractiveShellEmbed, InteractiveShell
@@ -1773,34 +1779,54 @@ async def aget_brishz(event, cmd, fork=True, album_mode=True):
     await util.run_and_upload(event=event, to_await=to_await, album_mode=album_mode)
 
 
+#: The `;` keeps it parsing on a worker that an earlier non-fork command left
+#: under `emulate sh` or `setopt ignore_braces`.
+BRISH_EVAL_STDIN = '{ eval "$(< /dev/stdin)"; } 2>&1'
+
+
 @force_async
 def brishz_helper(myBrish, cwd, cmd, fork=True, server_index=None, **kwargs):
-    lock, server_index = myBrish.acquire_lock(server_index=server_index, lock_sleep=1)
-    try:
-        if cwd:
-            myBrish.z("typeset -g jd={cwd}", server_index=server_index, **kwargs)
-            myBrish.send_cmd(
-                """
-            cd "$jd"
-            ! ((${+functions[jinit]})) || jinit
-            """,
-                server_index=server_index,
+    """Runs `cmd` on one worker of `myBrish`, in `cwd` when given.
+
+    A worker that is gone (after `exit N` in a non-fork command) fails every
+    later call under the same lock with BrishWorkerDiedException, and the
+    pool restarts at the next call once the lock is released. So the result
+    stands if the command ran, and a command that never ran is tried once
+    more.
+    """
+    for attempt in range(2):
+        lock, index = myBrish.acquire_lock(server_index=server_index, lock_sleep=1)
+        res = None
+        try:
+            if cwd:
+                myBrish.z("typeset -g jd={cwd}", server_index=index, **kwargs)
+                myBrish.send_cmd(
+                    """
+                cd "$jd"
+                ! ((${+functions[jinit]})) || jinit
+                """,
+                    server_index=index,
+                    **kwargs,
+                )
+
+            res = myBrish.send_cmd(
+                BRISH_EVAL_STDIN,
+                fork=fork,
+                cmd_stdin=cmd,
+                server_index=index,
                 **kwargs,
             )
+            if cwd:
+                myBrish.z("cd /tmp", server_index=index, **kwargs)
 
-        res = myBrish.send_cmd(
-            '{ eval "$(< /dev/stdin)" } 2>&1',
-            fork=fork,
-            cmd_stdin=cmd,
-            server_index=server_index,
-            **kwargs,
-        )
-        if cwd:
-            myBrish.z("cd /tmp", server_index=server_index, **kwargs)
-
-        return res
-    finally:
-        lock.release()
+            return res
+        except BrishWorkerDiedException:
+            if res is not None:
+                return res
+            if attempt:
+                raise
+        finally:
+            lock.release()
 
 
 async def brishz_capture(*, cwd, cmd, fork=True) -> CommandResult:
