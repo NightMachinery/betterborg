@@ -346,6 +346,9 @@ class ShellJob:
     ran: bool = field(default=False, init=False)
     #: The message that shows the output while it runs.
     preview_id: Optional[int] = None
+    #: The brish pool the command runs on, once the consumer picked it (after
+    #: the replied-to files downloaded); None for `.aa`, which needs none.
+    pool: Optional[Any] = None
     #: Set by `finish`.
     done: asyncio.Event = field(default_factory=asyncio.Event)
     _lock: threading.Lock = field(

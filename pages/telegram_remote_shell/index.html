@@ -394,7 +394,7 @@ done</code></pre>
 </li>
 <li><code>.x</code> or <code>.sbb</code> starts a fresh shell pool for the commands that follow, and replies "Restarted brishes." <code>.xf</code> does the same and replies "Reinitialized brishes. Note that old running instances can still rejoin." Both also retire the other plugins' pool, which starts afresh at its next use.</li>
 <li>The new shells read their startup files afresh. Restart after changing those files, or after an <code>.af</code> command left the shared shell in a bad state.</li>
-<li>A restart does not cancel commands that are already running. With the current Brish library, the old pool shuts down in the background once those commands finish.</li>
+<li>A restart does not cancel commands that are already running. With the current Brish library, the old pool shuts down in the background once those commands finish. The reply says how many there are, if any (<code>2 commands still run on the old pool; .k stops them.</code>).</li>
 </ul>
 </div>
 </details>

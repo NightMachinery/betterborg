@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from telethon import events
 from telethon.tl import types
 
 from uniborg import draft_stream, shell_settings, shell_stream, tg_compat, util
@@ -1043,6 +1044,83 @@ class StopButtonTests(_ShellTestCase):
 
         self.assertIsNone(event.log[0][2]["buttons"])
         self.assertRegex(event.log[0][1], r"^⏳ #\d+ · \.k to stop")
+
+
+class OldPoolTests(_ShellTestCase):
+    """`.x`, `.sbb` and `.xf` say how many jobs still run on the old pool."""
+
+    def restart(self, text, *, pools):
+        """Runs TEXT's handler; `init_brishes` swaps in the next of POOLS."""
+        (handler,) = [
+            fn
+            for builder, fn in self.borg.handlers
+            if isinstance(builder, events.NewMessage)
+            and builder.pattern
+            and builder.pattern(text)
+            and fn.__name__.endswith("brishes_handler")
+        ]
+        event = SimpleNamespace(reply=AsyncMock())
+        pools = iter(pools)
+
+        def init_brishes():
+            util.persistent_brish = next(pools)
+
+        with patch.object(util, "persistent_brish", next(pools)), patch.object(
+            util, "init_brishes", init_brishes
+        ):
+            asyncio.run(handler(event))
+        return event.reply.await_args.args[0]
+
+    def jobs(self, *pools):
+        async def make():
+            made = []
+            for pool in pools:
+                job = shell_stream.register(
+                    shell_stream.ShellJob(owner_id=ADMIN, chat_id=CHAT, command="x")
+                )
+                job.pool = pool
+                job.try_start()
+                made.append(job)
+            return made
+
+        return asyncio.run(make())
+
+    def test_no_jobs_no_note(self):
+        self.assertEqual(self.restart(".x", pools=["old", "new"]), "Restarted brishes.")
+
+    def test_jobs_on_the_old_pool_are_counted(self):
+        old, older = object(), object()
+        first, _second, _aa, _elsewhere = self.jobs(old, old, None, older)
+
+        self.assertEqual(
+            self.restart(".x", pools=[old, "new"]),
+            "Restarted brishes.\n2 commands still run on the old pool; .k stops them.",
+        )
+        first.detach()
+        self.assertEqual(
+            self.restart(".sbb", pools=[old, "new"]),
+            "Restarted brishes.\n1 command still runs on the old pool; .k stops it.",
+        )
+        self.assertTrue(
+            self.restart(".xf", pools=[old, "new"]).endswith(
+                "can still rejoin.\n1 command still runs on the old pool; .k stops it."
+            )
+        )
+
+    def test_a_streamed_dot_a_records_its_pool(self):
+        pools = []
+
+        async def capture(*, job, brish, **kwargs):
+            pools.append((job.pool, brish))
+            return util.CommandResult(output="hi", retcode=0)
+
+        with patch.object(util, "brishz_capture", capture):
+            self.run_command(".a printf hi")
+            self.run_script(["hi"], command=".aa printf hi")
+
+        ((pool, brish),) = pools
+        self.assertIs(pool, util.persistent_brish)
+        self.assertIs(brish, pool)
 
 
 class PreviewHeaderTests(_ShellTestCase):

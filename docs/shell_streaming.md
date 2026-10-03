@@ -53,7 +53,13 @@ restart of either never stalls the other.
 `.x`, `.sbb` and `.xf` call `util.init_brishes`, which starts a new shell pool
 and retires both old pools on `util.executor`. The plugin pool is not started
 again there; the next plugin command starts it. A retired pool shuts down once
-the commands still running on it end.
+the commands still running on it end. A restart stops none of them, so the
+reply (`old_pool_note` in the plugin) adds a line such as "2 commands still
+run on the old pool; .k stops them." when jobs that are still running
+(QUEUED, RUNNING or STOPPING) have the old pool as their `ShellJob.pool`.
+The consumer sets that field when it picks the pool, after the downloads;
+`.aa` jobs and jobs still downloading have none, and an old-brish `.a` is no
+job, so none of these is counted.
 
 Nothing here depends on whole-pool restarts. Brish 0.4.1 is announced to
 restart only the dead worker; the separate plugin pool is still worth keeping
@@ -140,7 +146,7 @@ Reading:
 ## Jobs and the registry
 
 A `ShellJob` holds its owner, chat, command message, guest `thread_key`,
-live output, state and stop reason. Its `id` is a process-wide counter. Every
+live output, state and stop reason, and the brish pool it runs on (`pool`). Its `id` is a process-wide counter. Every
 field is a keyword argument, so two ids (owner and chat, say) cannot be
 swapped by position.
 

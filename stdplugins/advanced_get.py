@@ -422,13 +422,15 @@ async def _deliver_final(event, text, *, preview, mode):
 async def _run_in_chat(*, cwd, event, request, job, prefs):
     """`run_and_get`'s work for a live `.a`, `.af` or `.aa`: run, show, deliver."""
     if request.brish_mode:
+        #: The pool of now: `.x` during the download retired the earlier one.
+        job.pool = util.persistent_brish
         produce = partial(
             util.brishz_capture,
             cwd=cwd,
             cmd=request.command,
             fork=request.fork,
             job=job,
-            brish=util.persistent_brish,
+            brish=job.pool,
         )
     else:
         produce = partial(
@@ -702,18 +704,38 @@ if borg.me.bot:
     )
 
 
+def old_pool_note(old_pool) -> str:
+    """A line on the jobs still running on OLD_POOL, the retired shell pool.
+
+    A restart does not stop them: they keep their pool until they end.
+    """
+    count = sum(
+        1
+        for job in shell_stream.JOBS.values()
+        if old_pool is not None and job.pool is old_pool and _is_running(job)
+    )
+    if count == 0:
+        return ""
+    if count == 1:
+        return "\n1 command still runs on the old pool; .k stops it."
+    return f"\n{count} commands still run on the old pool; .k stops them."
+
+
 @borg.on(util.admin_cmd(pattern="^\.xf$"))
-async def _(event):
+async def reinit_brishes_handler(event):
+    old_pool = util.persistent_brish
     util.init_brishes()
     await event.reply(
         "Reinitialized brishes. Note that old running instances can still rejoin."
+        + old_pool_note(old_pool)
     )
 
 
 @borg.on(util.admin_cmd(pattern="^\.(x|sbb)$"))
-async def _(event):
+async def restart_brishes_handler(event):
+    old_pool = util.persistent_brish
     util.restart_brishes()
-    await event.reply("Restarted brishes.")
+    await event.reply("Restarted brishes." + old_pool_note(old_pool))
 
 
 ##
