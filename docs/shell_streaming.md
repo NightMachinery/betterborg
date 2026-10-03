@@ -150,3 +150,51 @@ caller's private chat with the bot also the caller's guest jobs; with a
 `thread_key`, the caller's jobs of that guest thread) and
 `stop_all(*, reason, timeout)`, which cancels every job, waits up to `timeout`
 seconds for them to finish and returns how many had not.
+
+## The brish producer (`.a`, `.af`)
+
+`util.brishz_capture(*, cwd, cmd, fork=True, job=None, brish=None)`. Without a
+job it runs as it always did, through `brishz_helper` and `send_cmd`. With a
+job, on a brish that has `Brish.popen` (0.4.0 and later; `util.BRISH_POPEN`
+says whether the installed one does):
+
+1. An executor thread takes a worker through `util._on_brish_worker`, the
+   session `brishz_helper` also uses: the worker lock, `$jd`, `cd` and
+   `jinit`, the command, `cd /tmp`.
+2. Right after taking the lock it asks `job.try_start()`. False (the job was
+   stopped while it waited for a free worker) frees the lock, runs nothing,
+   and the result is None.
+3. The command runs as `popen('{ eval "$(< /dev/stdin)"; } 2>&1', fork=...,
+   cmd_stdin=cmd)`. The popen's `kill` is attached as the job's kill hook,
+   and every chunk goes to `job.output.write(chunk, stream=...)`.
+4. The loop never breaks on a stop. What a dying command still prints
+   arrives (a trap's goodbye, say), and brish takes kill steps 2 to 4 inside
+   these reads, which stay fast because `write` never blocks. No brish call
+   happens inside the loop, so BrishWorkerBusyException cannot occur.
+5. `cd /tmp` runs after the `with` block. After `exit N` in a non-fork
+   command, or a 9001 (a worker that brish had to SIGKILL), it raises
+   BrishWorkerDiedException and the result stands; a worker that was gone
+   before the command ran gets one retry (6b60222), which is safe because
+   nothing streamed.
+6. The result is `CommandResult(output=job.output.final_text(render=False),
+   retcode=...)`, the same text as without a job. The output decodes with the
+   brish's own `encoding` and `decoding_errors`.
+
+If the awaiting task is cancelled (the client disconnecting), the job is
+cancelled with StopReason.SHUTDOWN and the CancelledError propagates; the
+executor thread is not awaited, and ends once the command does.
+
+What a stop gives, in the tests (default `kill_grace` of 2 s): `sleep 100`
+ends with 130 within about 0.1 s, and a non-fork command keeps the worker's
+state; a command that traps INT runs its trap (its output arrives) and
+returns the trap's status; a fork command that ignores INT (`trap '' INT`)
+gets SIGTERM at step 2, about 2.1 s later, and returns 143 (non-fork: its
+`sleep` gets the SIGTERM, and the command goes on). Under a stubborn command
+brish reaches step 4 (SIGKILL of the worker, 9001) after about 5 to 13 s;
+with brish 0.4.0 the pool then restarts, waiting for its other commands.
+
+**Old brish fallback.** A brish without `popen` (eva ran 0.3.5) runs the
+command through `send_cmd`, still asking `try_start` first, and writes its
+whole result into the job at the end. It cannot be stopped once it runs: no
+kill hook is attached. The consumer should not offer a stop (or a preview)
+for `.a` there; `.aa` streams on any brish.

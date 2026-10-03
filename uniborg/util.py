@@ -19,6 +19,8 @@ try:
 except ImportError:
     #: brish 0.3.5 (PyPI) has no such exception; an empty tuple catches nothing.
     BrishWorkerDiedException = ()
+#: Whether the installed brish can stream a command's output (0.4.0 and later).
+BRISH_POPEN = hasattr(Brish, "popen")
 from pynight.common_icecream import ic
 from collections.abc import Awaitable, Callable, Iterable
 from IPython.terminal.embed import InteractiveShellEmbed, InteractiveShell
@@ -38,6 +40,7 @@ import shutil
 import threading
 from uniborg import util
 from uniborg import guest_util
+from uniborg import shell_stream
 import telethon
 from telethon import TelegramClient, events
 import telethon.utils
@@ -1876,12 +1879,14 @@ def _on_brish_worker(my_brish, *, cwd, server_index, run, may_start=None, **kwar
 
 
 @force_async
-def brishz_helper(cwd, cmd, *, brish=None, fork=True, server_index=None, **kwargs):
+def brishz_helper(
+    cwd, cmd, *, brish=None, fork=True, server_index=None, may_start=None, **kwargs
+):
     """Runs `cmd` on one worker of `brish`, in `cwd` when given.
 
     `brish` defaults to the plugin pool (`plugin_brish`); the shell passes
-    `persistent_brish`. Returns brish's CmdResult; see `_on_brish_worker`
-    for a worker that dies.
+    `persistent_brish`. Returns brish's CmdResult, or None when `may_start`
+    refused; see `_on_brish_worker` for a worker that dies.
     """
     my_brish = plugin_brish() if brish is None else brish
 
@@ -1895,24 +1900,120 @@ def brishz_helper(cwd, cmd, *, brish=None, fork=True, server_index=None, **kwarg
         )
 
     return _on_brish_worker(
-        my_brish, cwd=cwd, server_index=server_index, run=run, **kwargs
+        my_brish,
+        cwd=cwd,
+        server_index=server_index,
+        run=run,
+        may_start=may_start,
+        **kwargs,
     )
 
 
-async def brishz_capture(*, cwd, cmd, fork=True, brish=None) -> CommandResult:
+@dataclass
+class BrishStreamRun:
+    """How a streamed brish command ended; its output is in its job."""
+
+    retcode: int
+
+
+@force_async
+def _brishz_stream(cwd, cmd, *, brish, fork, server_index, job):
+    """Runs `cmd` with `brish.popen`, writing its output into `job` as it comes.
+
+    The job's kill hook is the popen's `kill`. The loop never breaks on a
+    stop: what a dying command still prints arrives, and brish takes its
+    later kill steps inside these reads. No brish call happens inside the
+    loop, so BrishWorkerBusyException cannot occur. Returns None when the
+    job was stopped before the command ran.
+    """
+
+    def run(index):
+        with brish.popen(
+            BRISH_EVAL_STDIN, fork=fork, cmd_stdin=cmd, server_index=index
+        ) as p:
+            job.attach(p.kill)
+            try:
+                for stream, chunk in p:
+                    job.output.write(chunk, stream=stream)
+            finally:
+                job.detach()
+        return BrishStreamRun(retcode=p.retcode)
+
+    return _on_brish_worker(
+        brish, cwd=cwd, server_index=server_index, run=run, may_start=job.try_start
+    )
+
+
+async def brishz_capture(
+    *, cwd, cmd, fork=True, job=None, brish=None
+) -> typing.Optional[CommandResult]:
     """Runs `cmd` on `brish` (by default the plugin pool) in `cwd` and captures it.
 
     `fork=False` runs it on server 0 itself, which keeps its state between
     commands (a persistent REPL).
+
+    With a `shell_stream.ShellJob`, the output goes into `job.output` while
+    the command runs, and the job can stop it; the result's output is
+    `job.output.final_text(render=False)`, the same text as without a job.
+    A brish without `popen` runs the command as without a job and writes its
+    output into the job at the end; it cannot be stopped once it runs. With
+    a job, the result is None when the job was stopped before the command
+    ran, and a cancelled await stops the command (StopReason.SHUTDOWN).
     """
     server_index = None
     if fork == False:
         server_index = 0
 
-    res = await brishz_helper(
-        cwd, cmd, brish=brish, fork=fork, server_index=server_index
+    if job is None:
+        res = await brishz_helper(
+            cwd, cmd, brish=brish, fork=fork, server_index=server_index
+        )
+        return CommandResult(output=res.outerr, retcode=res.retcode)
+
+    my_brish = plugin_brish() if brish is None else brish
+    try:
+        if hasattr(my_brish, "popen"):
+            job.output.decoding = shell_stream.Decoding(
+                encoding=my_brish.encoding, errors=my_brish.decoding_errors
+            )
+            run = await _brishz_stream(
+                cwd,
+                cmd,
+                brish=my_brish,
+                fork=fork,
+                server_index=server_index,
+                job=job,
+            )
+        else:
+            res = await brishz_helper(
+                cwd,
+                cmd,
+                brish=my_brish,
+                fork=fork,
+                server_index=server_index,
+                may_start=job.try_start,
+            )
+            run = None if res is None else _write_brish_result(job, res)
+    except asyncio.CancelledError:
+        job.cancel(reason=shell_stream.StopReason.SHUTDOWN)
+        raise
+    if run is None:
+        return None
+    return CommandResult(
+        output=job.output.final_text(render=False), retcode=run.retcode
     )
-    return CommandResult(output=res.outerr, retcode=res.retcode)
+
+
+def _write_brish_result(job, res) -> BrishStreamRun:
+    """Writes a whole brish result into JOB's output, as if it had streamed."""
+    #: Round-trips any text that decoding with `surrogateescape` can give.
+    job.output.decoding = shell_stream.Decoding(errors="surrogateescape")
+    for stream, text in (
+        (shell_stream.STREAM_OUT, res.out),
+        (shell_stream.STREAM_ERR, res.err),
+    ):
+        job.output.write(text.encode("utf-8", "surrogateescape"), stream=stream)
+    return BrishStreamRun(retcode=res.retcode)
 
 
 async def brishz(event, cwd, cmd, fork=True, shell=True, brish=None, **kwargs):
