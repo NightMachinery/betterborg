@@ -341,6 +341,20 @@ class GuestShellTests(unittest.TestCase):
         self.assertIn("RuntimeError: boom", self.edits[-1]["text"])
         self.assertEqual(list(Path(self.dl_base).iterdir()), [])
 
+    def test_a_brish_command_runs_on_the_shell_pool(self):
+        seen = []
+
+        async def capture(**kwargs):
+            seen.append(kwargs)
+            return util.CommandResult(output="hi", retcode=0)
+
+        with patch.object(util, "brishz_capture", capture):
+            self._run(_query(f"@{BOT_USERNAME} .a printf hi"))
+
+        (call,) = seen
+        self.assertIs(call["brish"], util.persistent_brish)
+        self.assertEqual(self.edits[-1]["text"], "hi")
+
 
 class ShellHandlerEchoTests(unittest.TestCase):
     def test_the_dot_a_handler_ignores_an_echoed_guest_answer(self):
@@ -353,6 +367,37 @@ class ShellHandlerEchoTests(unittest.TestCase):
 
         with patch.object(util, "isAdmin", AsyncMock(side_effect=AssertionError)):
             asyncio.run(handler(SimpleNamespace(message=echo)))
+
+
+class ShellHandlerPoolTests(unittest.TestCase):
+    def test_dot_a_runs_on_the_shell_pool_and_dot_aa_on_no_pool(self):
+        borg = _FakeBorg()
+        plugin = _load_plugin(borg)
+        (_builder, handler), *_rest = borg.handlers
+        runs = []
+
+        async def run_and_upload(*, event, to_await, album_mode):
+            runs.append(to_await)
+
+        for name, value in (
+            ("isAdmin", AsyncMock(return_value=True)),
+            ("run_and_upload", run_and_upload),
+        ):
+            patcher = patch.object(util, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        for text in (".a printf hi", ".aa printf hi"):
+            event = SimpleNamespace(
+                message=SimpleNamespace(out=False, forward=None),
+                pattern_match=plugin.pattern_a.match(text),
+            )
+            asyncio.run(handler(event))
+
+        brish_run, plain_run = runs
+        self.assertIs(brish_run.func, util.brishz)
+        self.assertIs(brish_run.keywords["brish"], util.persistent_brish)
+        self.assertIs(plain_run.func, util.simple_run)
 
 
 if __name__ == "__main__":

@@ -163,8 +163,8 @@ class CaptureTests(unittest.TestCase):
     def test_brishz_capture_reads_the_brish_result(self):
         calls = []
 
-        async def fake_helper(brish, cwd, cmd, fork=True, server_index=None):
-            calls.append((cwd, cmd, fork, server_index))
+        async def fake_helper(cwd, cmd, *, brish=None, fork=True, server_index=None):
+            calls.append((cwd, cmd, brish, fork, server_index))
             return SimpleNamespace(outerr="done", retcode=0)
 
         original = util.brishz_helper
@@ -174,7 +174,7 @@ class CaptureTests(unittest.TestCase):
         result = asyncio.run(util.brishz_capture(cwd="/w/", cmd="ls", fork=False))
 
         self.assertEqual(result, util.CommandResult(output="done", retcode=0))
-        self.assertEqual(calls, [("/w/", "ls", False, 0)])
+        self.assertEqual(calls, [("/w/", "ls", None, False, 0)])
 
 
 if __name__ == "__main__":
@@ -191,7 +191,7 @@ class BrishzHelperTests(unittest.TestCase):
     def run_helper(self, cmd):
         async def run(cwd):
             return await util.brishz_helper(
-                self.brish, cwd, cmd, fork=False, server_index=0
+                cwd, cmd, brish=self.brish, fork=False, server_index=0
             )
 
         with tempfile.TemporaryDirectory() as cwd:

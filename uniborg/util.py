@@ -35,6 +35,7 @@ import pexpect
 import re
 import itertools
 import shutil
+import threading
 from uniborg import util
 from uniborg import guest_util
 import telethon
@@ -192,7 +193,9 @@ adminChats = [
 ]
 ##
 brish_count = int(os.environ.get("borg_brish_count", 16))
-executor = ThreadPoolExecutor(max_workers=(brish_count + 16))
+#: Workers of the plugins' own pool (`plugin_brish`).
+plugin_brish_count = int(os.environ.get("borg_plugin_brish_count", 4))
+executor = ThreadPoolExecutor(max_workers=(brish_count + plugin_brish_count + 16))
 
 
 def force_async(f):
@@ -227,24 +230,51 @@ def brish_server_cleanup(brish_server):
         brish_server.cleanup()
 
 
+BRISH_BOOT_CMD = "export JBRISH=y ; unset FORCE_INTERACTIVE"
+
+#: The shell's pool: `.a`, `.af` and the guest shell run here.
 persistent_brish = None
+#: The pool of every other plugin; see `plugin_brish`.
+_plugin_brish = None
+_plugin_brish_lock = threading.Lock()
+
+
+def plugin_brish():
+    """The Brish pool of plugins other than the shell, started on first use.
+
+    A pool restarts after one of its workers dies (a stopped command that
+    needed SIGKILL, or `exit N` in a non-fork command), and that restart
+    waits for every command still running on it, an endless one included.
+    With a pool of their own, a restart of the shell's pool never stalls the
+    plugins, and theirs never stalls the shell.
+    """
+    global _plugin_brish
+    with _plugin_brish_lock:
+        if _plugin_brish is None:
+            _plugin_brish = Brish(
+                boot_cmd=BRISH_BOOT_CMD, server_count=plugin_brish_count
+            )
+        return _plugin_brish
 
 
 def init_brishes():
-    """Starts a fresh shell pool and retires the old one in the background.
+    """Starts a fresh shell pool and retires the old pools in the background.
 
-    The old pool is captured now: `executor` is also the event loop's default
-    executor, so the cleanup can wait behind running commands, and by then
-    `persistent_brish` is the new pool.
+    The old pools are captured now: `executor` is also the event loop's
+    default executor, so a cleanup can wait behind running commands, and by
+    then `persistent_brish` is the new pool. The plugin pool is not started
+    again here; `plugin_brish` starts it at its next use.
     """
     print(f"Initializing {brish_count} brishes ...")
-    global persistent_brish
+    global persistent_brish, _plugin_brish
 
     old_brish = persistent_brish
-    boot_cmd = "export JBRISH=y ; unset FORCE_INTERACTIVE"
-    persistent_brish = Brish(boot_cmd=boot_cmd, server_count=brish_count)
-    if old_brish is not None:
-        executor.submit(brish_server_cleanup, old_brish)
+    persistent_brish = Brish(boot_cmd=BRISH_BOOT_CMD, server_count=brish_count)
+    with _plugin_brish_lock:
+        old_plugin_brish, _plugin_brish = _plugin_brish, None
+    for old in (old_brish, old_plugin_brish):
+        if old is not None:
+            executor.submit(brish_server_cleanup, old)
     ##
     # global brishes
     # brishes = [Brish(boot_cmd=boot_cmd) for i in range(brish_count)] # range includes 0
@@ -1800,8 +1830,11 @@ BRISH_EVAL_STDIN = '{ eval "$(< /dev/stdin)"; } 2>&1'
 
 
 @force_async
-def brishz_helper(myBrish, cwd, cmd, fork=True, server_index=None, **kwargs):
-    """Runs `cmd` on one worker of `myBrish`, in `cwd` when given.
+def brishz_helper(cwd, cmd, *, brish=None, fork=True, server_index=None, **kwargs):
+    """Runs `cmd` on one worker of `brish`, in `cwd` when given.
+
+    `brish` defaults to the plugin pool (`plugin_brish`); the shell passes
+    `persistent_brish`.
 
     A worker that is gone (after `exit N` in a non-fork command) fails every
     later call under the same lock with BrishWorkerDiedException, and the
@@ -1809,6 +1842,7 @@ def brishz_helper(myBrish, cwd, cmd, fork=True, server_index=None, **kwargs):
     stands if the command ran, and a command that never ran is tried once
     more.
     """
+    myBrish = plugin_brish() if brish is None else brish
     for attempt in range(2):
         lock, index = myBrish.acquire_lock(server_index=server_index, lock_sleep=1)
         res = None
@@ -1844,8 +1878,8 @@ def brishz_helper(myBrish, cwd, cmd, fork=True, server_index=None, **kwargs):
             lock.release()
 
 
-async def brishz_capture(*, cwd, cmd, fork=True) -> CommandResult:
-    """Runs `cmd` on the persistent Brish in `cwd` and captures it.
+async def brishz_capture(*, cwd, cmd, fork=True, brish=None) -> CommandResult:
+    """Runs `cmd` on `brish` (by default the plugin pool) in `cwd` and captures it.
 
     `fork=False` runs it on server 0 itself, which keeps its state between
     commands (a persistent REPL).
@@ -1855,14 +1889,15 @@ async def brishz_capture(*, cwd, cmd, fork=True) -> CommandResult:
         server_index = 0
 
     res = await brishz_helper(
-        persistent_brish, cwd, cmd, fork=fork, server_index=server_index
+        cwd, cmd, brish=brish, fork=fork, server_index=server_index
     )
     return CommandResult(output=res.outerr, retcode=res.retcode)
 
 
-async def brishz(event, cwd, cmd, fork=True, shell=True, **kwargs):
+async def brishz(event, cwd, cmd, fork=True, shell=True, brish=None, **kwargs):
+    """Runs `cmd` like `brishz_capture` and sends its output to the chat."""
     # print(f"entering brishz with cwd: '{cwd}', cmd: '{cmd}'")
-    result = await brishz_capture(cwd=cwd, cmd=cmd, fork=fork)
+    result = await brishz_capture(cwd=cwd, cmd=cmd, fork=fork, brish=brish)
     await send_output(event, result.output, retcode=result.retcode, shell=shell)
 
 

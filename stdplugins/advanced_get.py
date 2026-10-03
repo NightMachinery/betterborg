@@ -50,7 +50,12 @@ async def _(event):
 
     request = await parse_shell_request(event.pattern_match)
     if request.brish_mode:
-        to_await = partial(brishz, cmd=request.command, fork=request.fork)
+        to_await = partial(
+            brishz,
+            cmd=request.command,
+            fork=request.fork,
+            brish=util.persistent_brish,
+        )
     else:
         to_await = partial(util.simple_run, command=request.command, shell=True)
     await util.run_and_upload(
@@ -191,7 +196,10 @@ async def _run_guest_shell(query, request, answer):
     async def to_await(*, cwd, event):
         if request.brish_mode:
             result = await util.brishz_capture(
-                cwd=cwd, cmd=request.command, fork=request.fork
+                cwd=cwd,
+                cmd=request.command,
+                fork=request.fork,
+                brish=util.persistent_brish,
             )
         else:
             result = await util.simple_run_capture(cwd=cwd, command=request.command)

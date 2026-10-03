@@ -128,7 +128,7 @@ async def process_ebooks_and_clean(cwd, event, *, include_conversion=True):
 
     # Directly use the brishz_helper to get the command result, which allows
     # us to control the output sent back to the user.
-    res = await util.brishz_helper(util.persistent_brish, cwd, full_command, fork=True)
+    res = await util.brishz_helper(cwd, full_command, fork=True)
 
     if res.retcode == 0:
         # On success, delete the original ebook files to prevent re-upload.
