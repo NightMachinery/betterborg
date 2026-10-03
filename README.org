@@ -148,7 +148,7 @@ and =uniborg/term_render.py= shows progress bars as a terminal would. Other
 plugins run on a brish pool of their own. In chats, a command that runs longer
 than 2 s shows its output live, in a draft (private chats with a bot, with a
 Stop button on Telethon 1.45) or an edited message, which becomes its output
-when it ends;
+when it ends, and =.k= stops a running command;
 on a bot, each admin picks drafts or edits, how a preview ends and whether
 the renderer runs in a =/settings= panel. =borg_shell_streaming=0= turns this
 off. See

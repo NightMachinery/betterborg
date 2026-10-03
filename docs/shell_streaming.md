@@ -4,8 +4,9 @@ How the shell (`.a`, `.af`, `.aa` and the guest shell in
 `stdplugins/advanced_get.py`) runs commands so that their output can be shown
 while they run, and stopped. It describes the producers (the code that runs a
 command and collects its bytes), the settings and their `/settings` panel,
-and the live output of `.a`, `.af` and `.aa` in chats. `.k`, the Stop button
-of edited previews and the guest shell's live answers are not written yet.
+the live output of `.a`, `.af` and `.aa` in chats, and `.k`, which stops a
+running command. The Stop button of edited previews and the guest shell's
+live answers are not written yet.
 
 ## Terms
 
@@ -518,7 +519,50 @@ Tests: `tests/test_advanced_get_shell.py` drives the handler with a fake chat
 and a fake producer that follows a script, with the timings injected
 (`LIVE_TIMING`); a few tests run inert commands in a real zsh.
 
+## Stopping a command: `.k`
+
+`.k` (`kill_handler` in `stdplugins/advanced_get.py`) stops a job. It is
+registered right after the `.a` handler, has the same gate (a non-admin, a
+forwarded `.k` and an echoed guest answer get nothing), and its pattern,
+`.k` alone or with one argument, never matches `pattern_a`. Every `.k` from
+an admin gets a plain-text reply.
+
+The jobs it can see are the **visible** jobs (`shell_stream.visible`): the
+jobs of this chat, any admin's, and in an admin's private chat with the bot
+also that admin's guest jobs. Of those, only the **running** ones count:
+QUEUED, RUNNING or STOPPING. An ENDED job, whose final or files are still
+being sent, has nothing left to stop.
+
+- **As a reply** to a command, or to its preview: stops that job
+  (`shell_stream.find` matches either message). In a topic, where every
+  message carries a reply header, only a real reply counts
+  (`topics.resolve_reply_target`); a reply to any other message says "That
+  message has no running command."
+- **Alone**: stops the only running job; with several, lists them instead of
+  guessing; with none, says "No running command here."
+- **`.k N`** (or `.k #N`): stops job N, if it is visible and running.
+- **`.k all`**: stops every running visible job, one reply line each.
+- **`.k ls`**: lists them, a line each: id, age, "waiting" or "stopping"
+  when it is, and the first 60 characters of the command on one line.
+- Anything else gets the usage line.
+
+A stop is `job.cancel(reason=StopReason.USER)`. Its reply follows the
+`CancelOutcome`: "⏹ Stopping #3…" (STOPPING, or NOT_STARTED for a job that
+was still waiting for a shell and will now never run), "#3 is already
+stopping." or "#3 has already ended." The command may take seconds to end
+(see the producers above); the preview's header says "⏹ #3 stopping…" until
+it does, and the final ends with the stop note.
+
+`.k` sees only jobs, so a reply that finds nothing says why a command might
+still be running unseen: with `borg_shell_streaming=0` no command is a job
+("Live output is off (borg_shell_streaming=0), so no command can be
+stopped."), and on a brish without `popen` `.a` and `.af` are not jobs
+(".a cannot be stopped until brish is upgraded; .aa can.").
+
+The registry lives in the core module `shell_stream`, so a `.k` from a
+reloaded plugin still sees the jobs that started on the old code.
+
 ## Still to come
 
-`.k` and the Stop button of edited previews on bots, live guest answers (and
-the renderer in them), and stopping jobs before a shutdown.
+The Stop button of edited previews on bots, live guest answers (and the
+renderer in them, and `@bot .k`), and stopping jobs before a shutdown.

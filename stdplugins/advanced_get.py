@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import uuid
 import subprocess
+import time
 import traceback
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -26,7 +27,7 @@ from uniborg import (
     util,
 )
 from uniborg.shell_settings import FinalMode, ShellPrefs
-from uniborg.shell_stream import JobState, ShellJob, StopReason
+from uniborg.shell_stream import CancelOutcome, JobState, ShellJob, StopReason
 from uniborg.stream_driver import STREAM_MODE_NAMES, STREAM_SCOPE_NAMES, StreamMode
 from uniborg.util import clean_cmd, embed2, brishz
 from IPython import embed
@@ -510,6 +511,143 @@ async def _(event):
         shell_stream.finish(job)
 
 
+##
+#: `.k`: stops a running command (a job), as a reply to it or its preview, or
+#: by number. Visible jobs are `shell_stream.visible`'s: the jobs of this chat,
+#: and in an admin's private chat with the bot also their guest jobs.
+
+pattern_k = re.compile(r"(?i)^\.k(?:\s+(?P<arg>\S+))?\s*$")
+NO_RUNNING_JOB = "No running command here."
+NOT_A_JOB = "That message has no running command."
+OLD_BRISH_NOTE = ".a cannot be stopped until brish is upgraded; .aa can."
+STREAMING_OFF_NOTE = (
+    "Live output is off (borg_shell_streaming=0), so no command can be stopped."
+)
+KILL_USAGE = (
+    "Usage: .k as a reply to a command or its preview, or alone; "
+    ".k N stops #N, .k all stops every one here, .k ls lists them."
+)
+#: How much of a command a list shows.
+COMMAND_PREVIEW_CHARS = 60
+
+
+def _is_running(job) -> bool:
+    """Whether JOB's command still waits, runs or is being stopped."""
+    match job.state:
+        case JobState.QUEUED | JobState.RUNNING | JobState.STOPPING:
+            return True
+        case JobState.ENDED | JobState.DONE:
+            return False
+        case _:
+            raise ValueError(f"Unknown job state: {job.state!r}")
+
+
+def stop_text(job, outcome) -> str:
+    """What a stop of JOB that gave OUTCOME says, as a reply or a toast."""
+    match outcome:
+        case CancelOutcome.STOPPING | CancelOutcome.NOT_STARTED:
+            return f"⏹ Stopping #{job.id}…"
+        case CancelOutcome.ALREADY_STOPPING:
+            return f"#{job.id} is already stopping."
+        case CancelOutcome.FINISHED:
+            return f"#{job.id} has already ended."
+        case _:
+            raise ValueError(f"Unknown cancel outcome: {outcome!r}")
+
+
+def _stop(job) -> str:
+    return stop_text(job, job.cancel(reason=StopReason.USER))
+
+
+def _age_text(seconds) -> str:
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
+
+
+def _job_line(job, *, now) -> str:
+    command = " ".join(job.command.split())
+    if len(command) > COMMAND_PREVIEW_CHARS:
+        command = command[:COMMAND_PREVIEW_CHARS] + "…"
+    match job.state:
+        case JobState.QUEUED:
+            note = " · waiting"
+        case JobState.STOPPING:
+            note = " · stopping"
+        case JobState.RUNNING | JobState.ENDED | JobState.DONE:
+            note = ""
+        case _:
+            raise ValueError(f"Unknown job state: {job.state!r}")
+    return f"#{job.id} · {_age_text(now - job.started_at)}{note} · {command}"
+
+
+def job_list_text(jobs, *, now) -> str:
+    """The running JOBS, a line each; NOW is `time.monotonic()`."""
+    lines = [_job_line(job, now=now) for job in jobs]
+    return "\n".join(
+        ["Running here:", *lines, "", ".k N stops one; .k all stops them all."]
+    )
+
+
+def _nothing_text(text) -> str:
+    """TEXT, and why a command may be running that `.k` cannot see."""
+    if not shell_settings.SHELL_STREAMING:
+        return f"{text}\n{STREAMING_OFF_NOTE}"
+    if not util.BRISH_POPEN:
+        return f"{text}\n{OLD_BRISH_NOTE}"
+    return text
+
+
+async def kill_reply(event, *, clock=time.monotonic) -> str:
+    """Stops what `.k` in EVENT names, and says what it did."""
+    arg = (event.pattern_match.group("arg") or "").lower()
+    jobs = [
+        job
+        for job in shell_stream.visible(
+            chat_id=event.chat_id, caller_id=event.sender_id
+        )
+        if _is_running(job)
+    ]
+    if not arg:
+        #: In a topic every message has a reply header; only a real reply
+        #: names a job.
+        target = await topics.resolve_reply_target(event.message)
+        if target is not None:
+            job = shell_stream.find(chat_id=event.chat_id, message_id=target.msg_id)
+            return _stop(job) if job is not None else _nothing_text(NOT_A_JOB)
+        if not jobs:
+            return _nothing_text(NO_RUNNING_JOB)
+        if len(jobs) == 1:
+            return _stop(jobs[0])
+        return job_list_text(jobs, now=clock())
+    if arg == "ls":
+        return (
+            job_list_text(jobs, now=clock()) if jobs else _nothing_text(NO_RUNNING_JOB)
+        )
+    if arg == "all":
+        return "\n".join(map(_stop, jobs)) if jobs else _nothing_text(NO_RUNNING_JOB)
+    number = re.fullmatch(r"#?(\d+)", arg)
+    if number is None:
+        return KILL_USAGE
+    job_id = int(number.group(1))
+    for job in jobs:
+        if job.id == job_id:
+            return _stop(job)
+    return _nothing_text(f"No running command #{job_id} here.")
+
+
+@borg.on(events.NewMessage(pattern=pattern_k))
+async def kill_handler(event):
+    if not await _is_admin_command(event):
+        return
+    await event.reply(await kill_reply(event), parse_mode=None, link_preview=False)
+
+
 if borg.me.bot:
     stream_driver.register_draft_stop(borg, module=__name__)
 
@@ -567,6 +705,7 @@ HELP_TEXT = """**Shell**
 • `.ad`: each file on its own, not in albums;
 • `.an`: `noglob` before CMD.
 A command still running after 2 s shows its output live.
+`.k` stops a running command: as a reply to it or its preview, or alone. `.k N` stops #N, `.k all` stops every one here, `.k ls` lists them.
 `.x` (or `.sbb`, `.xf`) restarts the shell pool.
 /settings: how live output shows, what it becomes when the command ends, and the renderer.
 `@{username} .a CMD` runs CMD from any chat, where guest mode is on."""

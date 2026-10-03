@@ -9,6 +9,7 @@ in tenths of a second.
 """
 
 import asyncio
+from functools import partial
 import itertools
 from pathlib import Path
 import tempfile
@@ -692,6 +693,200 @@ class RendererTests(_ShellTestCase):
         self.assertEqual(
             [entry[1] for entry in rendered + raw], ["XYcdef", "abcdef\rXY"]
         )
+
+
+class _KillEvent(_Event):
+    """A `.k` message, as a reply to REPLY_TO when given."""
+
+    def __init__(self, plugin, text, *, private=False, reply_to=None):
+        super().__init__(plugin, ".a x", private=private)
+        self.message.reply_to_msg_id = reply_to
+        self.pattern_match = plugin.pattern_k.match(text)
+        assert self.pattern_match, text
+
+
+class KillTests(_ShellTestCase):
+    def setUp(self):
+        super().setUp()
+        (self.kill_handler,) = [
+            fn for _b, fn in self.borg.handlers if fn.__name__ == "kill_handler"
+        ]
+
+    def kill(self, text, **kwargs):
+        """Sends `.k` TEXT; returns the replies."""
+        event = _KillEvent(self.plugin, text, **kwargs)
+        asyncio.run(self.kill_handler(event))
+        return [entry[1] for entry in event.sent("reply")]
+
+    def jobs(self, *commands, chat_id=CHAT, start=True):
+        """Registers a running job per command, each with a recording kill hook."""
+        killed = []
+
+        async def make():
+            made = []
+            for command in commands:
+                job = shell_stream.register(
+                    shell_stream.ShellJob(
+                        owner_id=ADMIN, chat_id=chat_id, command=command
+                    )
+                )
+                if start:
+                    job.try_start()
+                    job.attach(partial(killed.append, job.id))
+                made.append(job)
+            return made
+
+        return asyncio.run(make()), killed
+
+    def test_dot_k_is_not_dot_a(self):
+        self.assertIsNone(self.plugin.pattern_a.match(".k"))
+        self.assertIsNone(self.plugin.pattern_k.match(".a ls"))
+        self.assertIsNone(self.plugin.pattern_k.match(".kx"))
+        self.assertIsNone(self.plugin.pattern_k.match(".k 1 2"))
+
+    def test_it_comes_right_after_dot_a(self):
+        self.assertIs(self.borg.handlers[1][1], self.kill_handler)
+
+    def test_bare_stops_the_only_running_command(self):
+        replies = []
+
+        async def kill(event):
+            await _until(lambda: event.log)
+            k = _KillEvent(self.plugin, ".k")
+            await self.kill_handler(k)
+            replies.extend(entry[1] for entry in k.sent("reply"))
+
+        event = self.run_script(["started", STOP], during=kill)
+
+        self.assertRegex(replies[0], r"^⏹ Stopping #\d+…$")
+        self.assertEqual(event.log[-1][2], "started\n\n⏹ Stopped (exit 130).")
+
+    def test_a_reply_to_the_command_or_its_preview_stops_that_job(self):
+        replies = []
+
+        async def kill(event):
+            await _until(lambda: event.log)
+            for reply_to in (COMMAND_ID, 100):
+                k = _KillEvent(self.plugin, ".k", reply_to=reply_to)
+                await self.kill_handler(k)
+                replies.extend(entry[1] for entry in k.sent("reply"))
+
+        self.run_script(["started", STOP], during=kill)
+
+        self.assertRegex(replies[0], r"^⏹ Stopping #(\d+)…$")
+        job_id = replies[0].split("#")[1].rstrip("…")
+        self.assertEqual(replies[1], f"#{job_id} is already stopping.")
+
+    def test_a_reply_to_another_message_names_no_job(self):
+        self.jobs("sleep 100")
+
+        self.assertEqual(self.kill(".k", reply_to=55), [self.plugin.NOT_A_JOB])
+
+    def test_nothing_running(self):
+        self.assertEqual(self.kill(".k"), [self.plugin.NO_RUNNING_JOB])
+        self.assertEqual(self.kill(".k ls"), [self.plugin.NO_RUNNING_JOB])
+        self.assertEqual(self.kill(".k all"), [self.plugin.NO_RUNNING_JOB])
+        self.assertEqual(self.kill(".k 7"), ["No running command #7 here."])
+
+    def test_several_are_listed_not_stopped(self):
+        (first, second), killed = self.jobs("sleep 100", "tail -f x")
+
+        (reply,) = self.kill(".k")
+
+        self.assertEqual(killed, [])
+        self.assertIn(f"#{first.id} · 0s · sleep 100", reply)
+        self.assertIn(f"#{second.id} · 0s · tail -f x", reply)
+        self.assertEqual(self.kill(".k ls"), [reply])
+
+    def test_by_number_and_all(self):
+        (first, second, third), killed = self.jobs("a", "b", "c")
+
+        self.assertEqual(self.kill(f".k {second.id}"), [f"⏹ Stopping #{second.id}…"])
+        self.assertEqual(
+            self.kill(f".K #{second.id}"), [f"#{second.id} is already stopping."]
+        )
+        (reply,) = self.kill(".k all")
+
+        self.assertEqual(killed, [second.id, first.id, third.id])
+        self.assertEqual(
+            reply.splitlines(),
+            [
+                f"⏹ Stopping #{first.id}…",
+                f"#{second.id} is already stopping.",
+                f"⏹ Stopping #{third.id}…",
+            ],
+        )
+
+    def test_other_chats_jobs_are_not_visible(self):
+        (job,), killed = self.jobs("sleep 100", chat_id=-1002)
+
+        self.assertEqual(self.kill(".k"), [self.plugin.NO_RUNNING_JOB])
+        self.assertEqual(
+            self.kill(f".k {job.id}"), [f"No running command #{job.id} here."]
+        )
+        self.assertEqual(killed, [])
+
+    def test_a_queued_job_is_stopped_before_it_runs(self):
+        (job,), _killed = self.jobs("sleep 100", start=False)
+
+        self.assertIn(" · waiting · sleep 100", self.kill(".k ls")[0])
+        self.assertEqual(self.kill(".k"), [f"⏹ Stopping #{job.id}…"])
+        self.assertTrue(job.dropped)
+
+    def test_an_ended_job_is_not_running(self):
+        (job,), _killed = self.jobs("true")
+        job.detach()
+
+        self.assertEqual(self.kill(".k"), [self.plugin.NO_RUNNING_JOB])
+        self.assertEqual(self.kill(".k", reply_to=COMMAND_ID), [self.plugin.NOT_A_JOB])
+
+    def test_the_list_shows_age_and_the_commands_start(self):
+        async def main():
+            job = shell_stream.ShellJob(
+                owner_id=ADMIN, chat_id=CHAT, command="echo " + "x " * 60, started_at=0
+            )
+            job.try_start()
+            return job, self.plugin.job_list_text([job], now=3725)
+
+        job, text = asyncio.run(main())
+
+        line = text.splitlines()[1]
+        self.assertEqual(line, f"#{job.id} · 1h 02m · echo {'x ' * 27}x…")
+
+    def test_bad_arguments_get_the_usage(self):
+        self.assertEqual(self.kill(".k now"), [self.plugin.KILL_USAGE])
+
+    def test_old_brish_and_streaming_off_say_why_nothing_is_seen(self):
+        with patch.object(util, "BRISH_POPEN", False):
+            (old,) = self.kill(".k")
+        with patch.object(shell_settings, "SHELL_STREAMING", False):
+            (off,) = self.kill(".k")
+
+        self.assertEqual(
+            old, f"{self.plugin.NO_RUNNING_JOB}\n{self.plugin.OLD_BRISH_NOTE}"
+        )
+        self.assertEqual(
+            off, f"{self.plugin.NO_RUNNING_JOB}\n{self.plugin.STREAMING_OFF_NOTE}"
+        )
+
+    def test_a_non_admin_gets_nothing(self):
+        _jobs, killed = self.jobs("sleep 100")
+
+        with patch.object(util, "isAdmin", AsyncMock(return_value=False)):
+            self.assertEqual(self.kill(".k"), [])
+        self.assertEqual(killed, [])
+
+    def test_a_forwarded_k_does_nothing(self):
+        _jobs, killed = self.jobs("sleep 100")
+        event = _KillEvent(self.plugin, ".k")
+        event.message.forward = object()
+
+        asyncio.run(self.kill_handler(event))
+
+        self.assertEqual((event.log, killed), ([], []))
+
+    def test_help_names_it(self):
+        self.assertIn("`.k`", self.plugin.HELP_TEXT)
 
 
 class PreviewHeaderTests(_ShellTestCase):

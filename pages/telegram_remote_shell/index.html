@@ -238,6 +238,9 @@ done</code></pre>
 <pre><code>.an curl -sL https://example.com/api?q=1</code></pre>
 </dd>
 
+<dt><code>.k</code></dt>
+<dd>Stop a running command. See <a href="#long-running">Long commands and restarts</a>.</dd>
+
 <dt><code>.x</code> or <code>.sbb</code></dt>
 <dd>Restart the shell pool. See <a href="#long-running">Long commands and restarts</a>.</dd>
 
@@ -375,8 +378,17 @@ done</code></pre>
 <summary><h2>Long commands and restarts</h2></summary>
 <div class="body">
 <ul>
-<li>The plugin sets no time limit. A command that never exits keeps its shell busy, and you get no reply for it.</li>
-<li>In a private chat with a bot, the live draft's Stop button stops the command, where the draft has one (see <a href="#live">Live output</a>). Otherwise, find its process id and stop it from a second command. <code>.aa</code> works even when every pool shell is busy:
+<li>The plugin sets no time limit. A command that never exits keeps its shell busy until you stop it, and its preview keeps showing its latest output.</li>
+<li><code>.k</code> stops a running command. Each command gets a number, shown in its preview's header (<code>⏳ #3</code>):
+<ul>
+<li>as a reply to the command, or to its preview, <code>.k</code> stops that command;</li>
+<li>alone, it stops the only command running in this chat, or lists them when there are several;</li>
+<li><code>.k 3</code> stops #3, <code>.k all</code> stops every command running in this chat, and <code>.k ls</code> lists them with their age and the start of the command.</li>
+</ul>
+<p>It sees the commands of this chat, whichever admin started them. The bot replies <code>⏹ Stopping #3…</code>; the preview's header then says <code>⏹ #3 stopping…</code>, and the output ends with <code>⏹ Stopped (exit N).</code> A command that ignores the interrupt is sent stronger signals, so stopping it can take a few seconds. A command stopped while it waited for a free shell never runs. Only admins can use <code>.k</code>, as with <code>.a</code>.</p>
+</li>
+<li>In a private chat with a bot, the live draft's Stop button does the same, where the draft has one (see <a href="#live">Live output</a>).</li>
+<li><code>.k</code> sees only commands that show live output: with live output turned off it stops nothing, and on an old Brish library it cannot stop <code>.a</code> or <code>.af</code> (it says so). Then find the process id and stop it from a second command. <code>.aa</code> works even when every pool shell is busy:
 <pre><code>.aa pgrep -l ffmpeg
 .aa kill 12345</code></pre>
 </li>
