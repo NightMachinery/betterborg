@@ -297,8 +297,12 @@ The settings, with their defaults:
 
 The **kill switch** is the environment variable `borg_shell_streaming`, read
 once when the module is first imported: "1" or unset is on, "0" is off, and
-any other value raises at startup rather than guess. Off, `.a`, `.af` and
-`.aa` run exactly as before live output: no job, no preview and no renderer.
+any other value raises rather than guess. `uniborg/uniborg.py` imports the
+module, so that error stops the bot at startup. Were the shell plugin the
+first to import it, the plugin loader would only log the error and skip the
+plugin, and the bot would run on with `.a` answering nothing. Off, `.a`, `.af`
+and `.aa` run exactly as before live output: no job, no preview and no
+renderer.
 
 ## Live output in chats
 

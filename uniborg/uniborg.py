@@ -23,6 +23,10 @@ from uniborg import (
     tts_util,
     llm_db,
     guest_util,
+    #: It reads `borg_shell_streaming` on import, and refuses a value it does
+    #: not know. Imported here so such a value stops startup: the shell
+    #: plugin's own import of it would only get that plugin skipped.
+    shell_settings,
     telethon_compat,
     telethon_safety,
     topics,

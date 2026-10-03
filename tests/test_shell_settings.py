@@ -1,6 +1,10 @@
 """Each admin's shell settings (`uniborg/shell_settings.py`), on a temp dir."""
 
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -101,6 +105,23 @@ class StreamingSwitchTests(unittest.TestCase):
         for value in ("", "yes", "off", " 1"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 shell_settings.streaming_switch(value)
+
+    def test_a_bad_value_stops_the_bot_at_startup(self):
+        #: The plugin loader skips a plugin that fails to load, which would
+        #: leave `.a` silent; so importing uniborg itself, as stdborg does
+        #: first, must fail.
+        env = {**os.environ, shell_settings.STREAMING_ENV: "yes"}
+        result = subprocess.run(
+            [sys.executable, "-c", "import uniborg"],
+            cwd=Path(__file__).resolve().parent.parent,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("borg_shell_streaming must be 0 or 1", result.stderr)
 
 
 if __name__ == "__main__":
