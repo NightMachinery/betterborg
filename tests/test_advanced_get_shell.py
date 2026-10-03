@@ -658,11 +658,13 @@ class RendererTests(_ShellTestCase):
 
         with patch.object(shell_stream.term_render, "render", recording):
             self.run_script(["a\rb"])
-            self.assertEqual(threads, [True])
+            on_loop, threads[:] = list(threads), []
             with patch.object(self.plugin, "RENDER_ON_LOOP_BYTES", 2):
                 event = self.run_script(["a\rb"])
 
-        self.assertEqual(threads, [True, False])
+        #: One render per stream.
+        self.assertEqual(on_loop, [True, True])
+        self.assertEqual(threads, [False, False])
         self.assertEqual(event.log[-1][1], "b")
 
     def test_old_brish_renders_dot_a_too(self):

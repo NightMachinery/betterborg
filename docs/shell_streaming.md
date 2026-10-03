@@ -129,7 +129,12 @@ Reading:
   them stdout first. Without `render` this is exactly what capturing the same
   bytes gave before: brish's `CmdResult.outerr`, or for `.aa`
   `subprocess.run(text=True)` with `\r\n` and `\r` turned into `\n`. With
-  `render`, `term_render.render` replaces that newline translation.
+  `render`, `term_render.render` replaces that newline translation, and
+  renders each stream on its own: they are joined one after the other, not
+  in the order they arrived, so a `\r` or a cursor-up at the start of
+  stderr must not overwrite the end of stdout. (Both producers send the
+  command's stderr into its stdout, `2>&1` for brish and `stderr=STDOUT` for
+  `.aa`, so the stderr stream is usually empty.)
 
 ## Jobs and the registry
 

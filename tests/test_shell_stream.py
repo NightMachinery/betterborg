@@ -89,6 +89,19 @@ class FinalTextTests(unittest.TestCase):
         self.assertEqual(output.final_text(render=False), "10%\r\x1b[32m100%\x1b[0m\n")
         self.assertEqual(output.final_text(render=True), "100%\n")
 
+    def test_render_keeps_each_stream_to_itself(self):
+        #: The streams are joined one after the other, not as they arrived,
+        #: so stderr's \r or cursor-up must not reach stdout's lines.
+        output = _output()
+        output.write(b"answer: 42", stream="out")
+        output.write(b"\r  0%|   |\r100%|###|\n", stream="err")
+        self.assertEqual(output.final_text(render=True), "answer: 42100%|###|\n")
+
+        output = _output()
+        output.write(b"Downloading\n", stream="out")
+        output.write(b"\x1b[1Awarning: x\n", stream="err")
+        self.assertEqual(output.final_text(render=True), "Downloading\nwarning: x\n")
+
     def test_nothing_written_is_empty(self):
         self.assertEqual(_output().final_text(render=True), "")
 

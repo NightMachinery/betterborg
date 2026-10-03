@@ -268,7 +268,10 @@ class LiveOutput:
         Without RENDER this is what capturing the same bytes gives today:
         brish's `CmdResult.outerr`, or `subprocess.run(text=True)` with
         `translate_newlines`. RENDER applies `term_render` instead of the
-        newline translation. Markers say what the memory caps left out.
+        newline translation, to each stream on its own: they are joined one
+        after the other, not as they arrived, so a `\r` or cursor-up in
+        stderr must not overwrite stdout. Markers say what the memory caps
+        left out.
         """
         with self._lock:
             parts = [
@@ -276,11 +279,12 @@ class LiveOutput:
                 for name in (STREAM_OUT, STREAM_ERR)
             ]
             not_kept_after_stop = self._not_kept_after_stop
-        text = "".join(parts)
         if render:
-            text = term_render.render(text)
-        elif self.decoding.translate_newlines:
-            text = text.replace("\r\n", "\n").replace("\r", "\n")
+            text = "".join(term_render.render(part) for part in parts)
+        else:
+            text = "".join(parts)
+            if self.decoding.translate_newlines:
+                text = text.replace("\r\n", "\n").replace("\r", "\n")
         if not_kept_after_stop:
             text += _not_kept_line(not_kept_after_stop, what="written after the stop ")
         return text
