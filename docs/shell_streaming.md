@@ -354,8 +354,10 @@ frees its shell whenever it gets one and runs nothing.
   silently, and edits never notify.
 - **Header**: "⏳ #3" while the command runs, "⏳ #3 waiting for a free shell"
   while the job is QUEUED (every shell of the pool is busy), and "⏹ #3
-  stopping…" once it is stopped. An edited preview adds " · .k to stop",
-  since it shows no Stop button.
+  stopping…" once it is stopped. A preview with no Stop button adds
+  " · .k to stop": an edited message, and a draft on a Telethon that cannot
+  build the button (before 1.45). That draft is the worse case: on Android it
+  disables the send button for as long as it lives.
 - **Kind**: a draft (`draft_stream.DraftAnswerMessage`, opened through
   `stream_driver.open_stream_target` with `parse_mode=None`) when the account
   is a bot, the installed Telethon can send drafts, and the caller's setting
@@ -364,7 +366,8 @@ frees its shell whenever it gets one and runs nothing.
   a reply to the command and edited. In a private topic the draft shows in
   that topic.
 - **Stop**: a draft has a Stop button on Telethon 1.45
-  (`draft_stream.STOP_SUPPORTED`). `stream_driver.stop_wired` points it at
+  (`draft_stream.STOP_SUPPORTED`; `_shows_stop_button` asks both). It shows
+  on Telegram 10.3 clients. `stream_driver.stop_wired` points it at
   `job.cancel(reason=USER)`, and the plugin registers the press handler with
   `stream_driver.register_draft_stop(borg, module=__name__)`, so a plugin
   reload removes it.

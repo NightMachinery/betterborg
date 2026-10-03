@@ -493,10 +493,21 @@ class DraftPreviewTests(_ShellTestCase):
 
         ((kind, text, kwargs),) = event.log
         self.assertEqual((kind, text, kwargs), ("reply", "*a* `b`\nc", FINAL_EDIT))
-        self.assertRegex(self.borg.drafts[0], r"^⏳ #\d+\n\n\*a\* `b`\n▌$")
+        hint = "" if draft_stream.STOP_SUPPORTED else r" · \.k to stop"
+        self.assertRegex(self.borg.drafts[0], rf"^⏳ #\d+{hint}\n\n\*a\* `b`\n▌$")
         #: The last draft is the sync draft, which the reply adopts.
         self.assertEqual(self.borg.drafts[-1], "*a* `b`\nc")
         self.assertEqual(set(self.borg.parse_modes), {None})
+
+    def test_a_draft_without_a_stop_button_names_dot_k(self):
+        #: Telethon before 1.45 cannot give a draft its Stop button.
+        with patch.object(draft_stream, "STOP_SUPPORTED", False):
+            self.run_script(["a\n", 1.2, "b\n", 1.5, "c"], private=True)
+
+        *partials, _sync = self.borg.drafts
+        self.assertGreater(len(partials), 1)
+        for draft in partials:
+            self.assertRegex(draft, r"^⏳ #\d+ · \.k to stop\n")
 
     def test_new_reply_ends_the_draft_with_a_sync_draft_then_replies(self):
         self.set_prefs(final_mode=FinalMode.NEW_REPLY)

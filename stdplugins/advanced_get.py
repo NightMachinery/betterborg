@@ -249,7 +249,11 @@ def _preview_text(job, *, render, stop_hint) -> str:
 
 
 def _shows_stop_button(preview) -> bool:
-    return isinstance(preview, draft_stream.DraftAnswerMessage)
+    """Whether PREVIEW has a Stop button: a draft, on a Telethon that can
+    build one (1.45; `draft_stream.STOP_SUPPORTED`)."""
+    return draft_stream.STOP_SUPPORTED and isinstance(
+        preview, draft_stream.DraftAnswerMessage
+    )
 
 
 async def _send_preview(event, text):
@@ -283,7 +287,7 @@ async def _open_chat_preview(event, *, job, drafts, render):
         client=borg,
         drafts=drafts,
         placeholder_text=text(stop_hint=True) + PREVIEW_CURSOR,
-        draft_text=text(stop_hint=False) + PREVIEW_CURSOR,
+        draft_text=text(stop_hint=not draft_stream.STOP_SUPPORTED) + PREVIEW_CURSOR,
         send_placeholder=_send_preview,
         top_msg_id=topics.private_topic_id(event.message) if drafts else None,
         parse_mode=None,
