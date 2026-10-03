@@ -543,8 +543,10 @@ and a fake producer that follows a script, with the timings injected
 `.k` (`kill_handler` in `stdplugins/advanced_get.py`) stops a job. It is
 registered right after the `.a` handler, has the same gate (a non-admin, a
 forwarded `.k` and an echoed guest answer get nothing), and its pattern,
-`.k` alone or with one argument, never matches `pattern_a`. Every `.k` from
-an admin gets a plain-text reply.
+`.k` alone or followed by whitespace and any text, never matches
+`pattern_a`. Every `.k` from an admin gets a plain-text reply: the pattern
+takes any text after `.k`, so a form it does not know (`.k 3 5`) gets the
+usage line rather than silence.
 
 The jobs it can see are the **visible** jobs (`shell_stream.visible`): the
 jobs of this chat, any admin's, and in an admin's private chat with the bot

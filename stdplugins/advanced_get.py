@@ -540,7 +540,8 @@ async def _(event):
 #: by number. Visible jobs are `shell_stream.visible`'s: the jobs of this chat,
 #: and in an admin's private chat with the bot also their guest jobs.
 
-pattern_k = re.compile(r"(?i)^\.k(?:\s+(?P<arg>\S+))?\s*$")
+#: Any text after `.k` matches, so a form it does not know gets the usage.
+pattern_k = re.compile(r"(?is)^\.k(?:\s+(?P<arg>.*?))?\s*$")
 NO_RUNNING_JOB = "No running command here."
 NOT_A_JOB = "That message has no running command."
 OLD_BRISH_NOTE = ".a cannot be stopped until brish is upgraded; .aa can."

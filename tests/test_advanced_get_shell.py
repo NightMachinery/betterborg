@@ -763,7 +763,6 @@ class KillTests(_ShellTestCase):
         self.assertIsNone(self.plugin.pattern_a.match(".k"))
         self.assertIsNone(self.plugin.pattern_k.match(".a ls"))
         self.assertIsNone(self.plugin.pattern_k.match(".kx"))
-        self.assertIsNone(self.plugin.pattern_k.match(".k 1 2"))
 
     def test_it_comes_right_after_dot_a(self):
         self.assertIs(self.borg.handlers[1][1], self.kill_handler)
@@ -876,6 +875,14 @@ class KillTests(_ShellTestCase):
 
     def test_bad_arguments_get_the_usage(self):
         self.assertEqual(self.kill(".k now"), [self.plugin.KILL_USAGE])
+
+    def test_several_arguments_get_the_usage_too(self):
+        _jobs, killed = self.jobs("sleep 100")
+
+        for text in (".k 3 5", ".k all now", ".k 3,5", ".k 3\n5"):
+            with self.subTest(text=text):
+                self.assertEqual(self.kill(text), [self.plugin.KILL_USAGE])
+        self.assertEqual(killed, [])
 
     def test_old_brish_and_streaming_off_say_why_nothing_is_seen(self):
         with patch.object(util, "BRISH_POPEN", False):
