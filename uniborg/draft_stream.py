@@ -185,7 +185,8 @@ class DraftAnswerMessage(_DraftPart):
         self._heartbeat_seconds = heartbeat_seconds
         self._call_timeout = call_timeout
         self._clock = clock
-        self._log = logger or _log
+        #: Where the stream logs; the plugin's logger when it passed one.
+        self.logger = logger or _log
         self._started_at = None
         self._last_draft_at = None
         self._blocked_until = 0.0
@@ -244,7 +245,7 @@ class DraftAnswerMessage(_DraftPart):
         except Exception as e:
             if isinstance(e, errors.RPCError) and e.message == PEER_REFUSED:
                 _REFUSED_CHATS.add(self.chat_id)
-            self._log.info(
+            self.logger.info(
                 "No draft in chat %s (%r); streaming by edits", self.chat_id, e
             )
             return False
@@ -289,7 +290,7 @@ class DraftAnswerMessage(_DraftPart):
             except errors.FloodWaitError as e:
                 self._blocked_until = self._clock() + e.seconds
             except Exception:
-                self._log.warning("Could not update a draft", exc_info=True)
+                self.logger.warning("Could not update a draft", exc_info=True)
 
     def stop_pressed(self) -> None:
         """The user pressed Stop: no more drafts, and `on_stop` is called."""
@@ -409,7 +410,7 @@ class DraftAnswerMessage(_DraftPart):
             try:
                 await self._send_draft(part.text, part.parse_mode)
             except Exception:
-                self._log.info("The sync draft failed", exc_info=True)
+                self.logger.info("The sync draft failed", exc_info=True)
         part.message = await self.event.reply(
             part.text,
             parse_mode=part.parse_mode,

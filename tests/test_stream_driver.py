@@ -340,5 +340,130 @@ class StreamSettingTests(unittest.TestCase):
         self.assertEqual(prefs.stream_groups, StreamMode.DRAFTS)
 
 
+def _draft(**kwargs):
+    return draft_stream.DraftAnswerMessage(
+        object(), event=SimpleNamespace(chat_id=1, sender_id=1), **kwargs
+    )
+
+
+class OpenStreamTargetTests(unittest.TestCase):
+    def setUp(self):
+        self.start = AsyncMock(return_value=True)
+        patcher = patch.object(draft_stream.DraftAnswerMessage, "start", self.start)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.sent = AsyncMock(return_value="placeholder")
+        self.event = SimpleNamespace(chat_id=1, sender_id=1, reply=self.sent)
+
+    def open(self, **kwargs):
+        kwargs.setdefault("placeholder_text", "⏳ #3")
+        return asyncio.run(
+            stream_driver.open_stream_target(self.event, client="client", **kwargs)
+        )
+
+    def test_drafts_give_a_started_draft(self):
+        target = self.open(drafts=True, top_msg_id=9)
+
+        self.assertIsInstance(target, draft_stream.DraftAnswerMessage)
+        self.assertEqual((target.client, target.top_msg_id), ("client", 9))
+        self.start.assert_awaited_once_with("⏳ #3")
+        self.sent.assert_not_awaited()
+
+    def test_the_first_draft_can_differ_from_the_placeholder(self):
+        self.open(drafts=True, draft_text="")
+
+        self.start.assert_awaited_once_with("")
+
+    def test_without_drafts_the_placeholder_is_sent_as_a_reply(self):
+        self.assertEqual(self.open(drafts=False), "placeholder")
+
+        self.start.assert_not_awaited()
+        self.sent.assert_awaited_once_with("⏳ #3")
+
+    def test_a_refused_draft_sends_the_placeholder_through_the_injected_sender(self):
+        self.start.return_value = False
+        send = AsyncMock(return_value="sent")
+
+        self.assertEqual(self.open(drafts=True, send_placeholder=send), "sent")
+        send.assert_awaited_once_with(self.event, "⏳ #3")
+
+
+class StopWiringTests(unittest.TestCase):
+    def test_stop_calls_any_callable_and_leaving_ends_the_stream(self):
+        stops = []
+
+        async def run():
+            draft = _draft()
+            draft.streaming = True
+            async with stream_driver.stop_wired(draft, on_stop=lambda: stops.append(1)):
+                draft.stop_pressed()
+                self.assertTrue(draft.streaming)
+            return draft
+
+        draft = asyncio.run(run())
+
+        self.assertEqual(stops, [1])
+        self.assertFalse(draft.streaming)
+
+    def test_an_error_inside_still_ends_the_stream(self):
+        async def run():
+            draft = _draft()
+            draft.streaming = True
+            with self.assertRaises(RuntimeError):
+                async with stream_driver.stop_wired(draft, on_stop=lambda: None):
+                    raise RuntimeError("the command failed")
+            return draft
+
+        self.assertFalse(asyncio.run(run()).streaming)
+
+    def test_a_target_that_is_not_a_draft_is_left_alone(self):
+        target = SimpleNamespace()
+
+        async def run():
+            async with stream_driver.stop_wired(target, on_stop=lambda: None):
+                return "ran"
+
+        self.assertEqual(asyncio.run(run()), "ran")
+        self.assertEqual(vars(target), {})
+
+    def test_run_stoppable_returns_the_result_and_ends_the_stream(self):
+        async def work():
+            return "answer"
+
+        async def run():
+            draft = _draft()
+            draft.streaming = True
+            return await stream_driver.run_stoppable(draft, work()), draft
+
+        result, draft = asyncio.run(run())
+
+        self.assertEqual(result, "answer")
+        self.assertFalse(draft.streaming)
+
+
+class FlushDraftTests(unittest.TestCase):
+    def test_a_draft_is_flushed(self):
+        draft = _draft()
+        draft.flush = AsyncMock()
+
+        asyncio.run(stream_driver.flush_draft(draft))
+
+        draft.flush.assert_awaited_once_with()
+
+    def test_a_failed_flush_is_logged_to_the_draft_logger(self):
+        draft = _draft(logger=logging.getLogger("test.stream_driver.draft"))
+        draft.flush = AsyncMock(side_effect=RuntimeError("chat gone"))
+
+        with self.assertLogs("test.stream_driver.draft", level="WARNING"):
+            asyncio.run(stream_driver.flush_draft(draft))
+
+    def test_a_target_that_is_not_a_draft_is_left_alone(self):
+        target = SimpleNamespace(flush=AsyncMock())
+
+        asyncio.run(stream_driver.flush_draft(target))
+
+        target.flush.assert_not_awaited()
+
+
 if __name__ == "__main__":
     unittest.main()

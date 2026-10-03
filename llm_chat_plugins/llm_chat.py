@@ -12237,16 +12237,21 @@ async def _response_placeholder(event, placeholder_text: str, *, prefs):
     one; otherwise PLACEHOLDER_TEXT, sent.
     """
     scope = stream_driver.stream_scope(event)
-    if IS_BOT and stream_driver.stream_mode(prefs, scope=scope) == StreamMode.DRAFTS:
-        draft = draft_stream.DraftAnswerMessage(
-            borg, event=event, top_msg_id=_thread_topic_id(event), logger=logger
-        )
+    drafts = bool(
+        IS_BOT and stream_driver.stream_mode(prefs, scope=scope) == StreamMode.DRAFTS
+    )
+    return await stream_driver.open_stream_target(
+        event,
+        client=borg,
+        drafts=drafts,
+        placeholder_text=placeholder_text,
         #: An empty draft shows Telegram's own "Thinking…".
-        if await draft.start(
-            "" if placeholder_text == RESPONSE_PLACEHOLDER else placeholder_text
-        ):
-            return draft
-    return await send_info_message(event, placeholder_text)
+        draft_text="" if placeholder_text == RESPONSE_PLACEHOLDER else None,
+        send_placeholder=send_info_message,
+        top_msg_id=_thread_topic_id(event) if drafts else None,
+        #: Only a draft logs; tests import the plugin with no `logger`.
+        logger=logger if drafts else None,
+    )
 
 
 async def _generate_streamed(req: GenerationRequest) -> GenerationResult:
@@ -12254,15 +12259,9 @@ async def _generate_streamed(req: GenerationRequest) -> GenerationResult:
 
     The draft's Stop button cancels the generation, as /stop would.
     """
-    draft = req.response_message
-    if not isinstance(draft, draft_stream.DraftAnswerMessage):
-        return await _generate_response(req)
-    task = asyncio.ensure_future(_generate_response(req))
-    draft.on_stop = task.cancel
-    try:
-        return await task
-    finally:
-        await draft.end_stream()
+    return await stream_driver.run_stoppable(
+        req.response_message, _generate_response(req)
+    )
 
 
 async def _generate_response(req: GenerationRequest) -> GenerationResult:
@@ -12895,13 +12894,9 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
             error_id_p=True,
         )
     finally:
-        if isinstance(response_message, draft_stream.DraftAnswerMessage):
-            #: Whatever the draft last showed and nothing replaced, such as an
-            #: error or a cancelled partial answer, is sent for real.
-            try:
-                await response_message.flush()
-            except Exception:
-                logger.warning("Could not send a draft's last text", exc_info=True)
+        #: Whatever the draft last showed and nothing replaced, such as an
+        #: error or a cancelled partial answer, is sent for real.
+        await stream_driver.flush_draft(response_message)
         if group_id:
             bot_util.PROCESSED_GROUP_IDS.discard(group_id)
         if temp_dir.exists():

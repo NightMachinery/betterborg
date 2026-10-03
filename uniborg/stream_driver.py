@@ -18,20 +18,30 @@ as drafts or by edits (`StreamMode`). The settings live in the plugin's own
 preferences, any object with a `stream_private` and a `stream_groups` field;
 `stream_mode` and `set_stream_mode` read and write them.
 
+A *stream target* is the message a reply streams into: a draft stand-in
+(`draft_stream.DraftAnswerMessage`) where the user streams drafts and
+Telegram shows one, otherwise a sent placeholder message.
+`open_stream_target` picks it, `stop_wired` and `run_stoppable` connect a
+draft's Stop button to the work that fills it, and `flush_draft` sends what
+a draft last showed once the work is over.
+
 This is a core module, so a plugin reload never re-executes it. How the chat
 bot uses it is in docs/draft_streaming.md.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 from enum import Enum
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TypeVar
 
 from telethon import errors
 
 from uniborg import draft_stream, util
 
 _log = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 #: A pace function: `(message, *, elapsed, edit_interval) -> StreamingPace`.
 PaceFunction = Callable[..., draft_stream.StreamingPace]
@@ -80,6 +90,85 @@ def stream_mode(prefs: Any, *, scope: str) -> StreamMode:
 def set_stream_mode(prefs: Any, *, scope: str, mode: StreamMode) -> None:
     """Sets PREFS's mode for SCOPE to MODE."""
     setattr(prefs, _stream_field(scope), mode)
+
+
+async def _reply(event: Any, text: str) -> Any:
+    return await event.reply(text)
+
+
+async def open_stream_target(
+    event: Any,
+    *,
+    client: Any,
+    drafts: bool,
+    placeholder_text: str,
+    draft_text: Optional[str] = None,
+    send_placeholder: Callable[[Any, str], Awaitable[Any]] = _reply,
+    top_msg_id: Optional[int] = None,
+    logger: Optional[logging.Logger] = None,
+) -> Any:
+    """The stream target of a reply to EVENT.
+
+    With DRAFTS, a draft stand-in that first shows DRAFT_TEXT (by default
+    PLACEHOLDER_TEXT; "" shows Telegram's own "Thinking…"), in the private
+    topic TOP_MSG_ID when given. Without DRAFTS, or when the first draft
+    fails or Telegram refuses one in this chat, the message that
+    `send_placeholder(event, PLACEHOLDER_TEXT)` sends, by default a reply.
+    """
+    if drafts:
+        draft = draft_stream.DraftAnswerMessage(
+            client, event=event, top_msg_id=top_msg_id, logger=logger
+        )
+        if await draft.start(placeholder_text if draft_text is None else draft_text):
+            return draft
+    return await send_placeholder(event, placeholder_text)
+
+
+@asynccontextmanager
+async def stop_wired(target: Any, *, on_stop: Callable[[], Any]) -> AsyncIterator[None]:
+    """Inside, a press of draft TARGET's Stop button calls ON_STOP.
+
+    On leaving, by a return or an error, the draft stream ends, so no draft
+    can arrive after the reply. A TARGET that is not a draft is left alone.
+    """
+    if not isinstance(target, draft_stream.DraftAnswerMessage):
+        yield
+        return
+    target.on_stop = on_stop
+    try:
+        yield
+    finally:
+        await target.end_stream()
+
+
+async def run_stoppable(target: Any, work: Awaitable[_T]) -> _T:
+    """Awaits WORK, which fills TARGET; a draft's Stop button cancels it.
+
+    For a draft TARGET, WORK runs as its own task, so that Stop can cancel
+    it, and the draft stream ends when it returns or fails (`stop_wired`).
+    """
+    if not isinstance(target, draft_stream.DraftAnswerMessage):
+        return await work
+    task = asyncio.ensure_future(work)
+    async with stop_wired(target, on_stop=task.cancel):
+        return await task
+
+
+async def flush_draft(target: Any, *, logger: Optional[logging.Logger] = None) -> None:
+    """Sends what draft TARGET last showed and nothing replaced, for real.
+
+    Such as an error or a cancelled partial answer. Call it once the work is
+    over, whatever its outcome. A failure is logged to LOGGER, by default the
+    draft's own, and not raised. A TARGET that is not a draft is left alone.
+    """
+    if not isinstance(target, draft_stream.DraftAnswerMessage):
+        return
+    try:
+        await target.flush()
+    except Exception:
+        (logger or target.logger).warning(
+            "Could not send a draft's last text", exc_info=True
+        )
 
 
 class ShowResult(Enum):

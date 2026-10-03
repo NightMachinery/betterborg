@@ -79,13 +79,17 @@ streams by edits.
 ## How it works
 
 1. `chat_handler` asks `_response_placeholder` for the message to stream into.
-   When the user's setting for this kind of chat is Drafts and the account is a
-   bot, it builds a stand-in and calls `start`, which sends the first draft.
-   If `start` fails, it sends the usual placeholder message instead, so the
-   answer streams by edits.
-2. `_generate_streamed` runs the generation as its own task and points the
-   stand-in's `on_stop` at that task's `cancel`, so the Stop button can cancel
-   it. When the generation returns or fails, it calls `end_stream`.
+   It decides whether to use drafts (the user's setting for this kind of chat
+   is Drafts and the account is a bot), and `stream_driver.open_stream_target`
+   does the rest: with drafts it builds a stand-in and calls `start`, which
+   sends the first draft. Without drafts, or if `start` fails, it sends the
+   usual placeholder message instead, so the answer streams by edits.
+2. `_generate_streamed` runs the generation through
+   `stream_driver.run_stoppable`, as its own task, and `stream_driver.stop_wired`
+   points the stand-in's `on_stop` at that task's `cancel`, so the Stop button
+   can cancel it. When the generation returns or fails, `stop_wired` calls
+   `end_stream`. `stop_wired` takes any callable, so other work, such as a
+   shell command, can be stopped the same way.
 3. While streaming, an edit only records the new text and wakes the **draft
    worker**, a background task that sends the last live part as a draft, at
    most once per second (`DRAFT_MIN_INTERVAL`), and sends a heartbeat after
@@ -102,8 +106,8 @@ streams by edits.
 5. After `end_stream`, the final delivery edits the stand-in as it would a
    real message, and the first edit of each part sends it: a sync draft, then
    the real message (a reply to the question, or to the previous part).
-6. `chat_handler`'s `finally` calls `flush`, which sends every part that was
-   never edited after the stream ended. This is how an error message, a
+6. `chat_handler`'s `finally` calls `stream_driver.flush_draft`, whose
+   `flush` sends every part that was never edited after the stream ended. This is how an error message, a
    cancelled partial answer or the text left by Stop still reaches the chat.
 
 An edit that carries buttons ends the stream at once and sends the part for
@@ -176,7 +180,8 @@ while it lasts. The answer itself never waits for a draft.
   strict interval check, failed and unchanged edits, the pace tiers and the
   fixed pace), and on a real loop `stream_driver.follow`, the trailing-edge
   pump for producers that go quiet, such as a shell command (the chat bot's
-  loops do not use it).
+  loops do not use it). Also the stream settings, and the stream target's
+  opening, Stop wiring and flush on their own.
 - `tests/test_gemini_image_stream.py`: native Gemini images' partial edits
   keep one pace and cursor past 30 s.
 - `tests/test_llm_chat_stream.py`: the plugin's choice of drafts or edits per
