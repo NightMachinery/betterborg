@@ -38,9 +38,10 @@ async def _wait_until(predicate, *, job, timeout=5.0):
 
 class _BrishTestCase(unittest.TestCase):
     brish_class = Brish
+    server_count = 1
 
     def setUp(self):
-        self.brish = self.brish_class(server_count=1)
+        self.brish = self.brish_class(server_count=self.server_count)
         self.addCleanup(self.brish.cleanup)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -202,6 +203,35 @@ class BrishStreamTests(_BrishTestCase):
         self.assertEqual(job.stop_reason, StopReason.SHUTDOWN)
         self.assertEqual(after, util.CommandResult(output="free\n", retcode=0))
         self.assertLess(took, 3)
+
+
+class WorkerZeroTests(_BrishTestCase):
+    server_count = 2
+
+    def test_a_non_fork_command_runs_on_worker_zero(self):
+        #: `.af` keeps a REPL's state on worker 0; a free worker 1 has other
+        #: state, and must not be taken instead while worker 0 is busy.
+        self.brish.send_cmd("typeset -g kept=zero", server_index=0)
+        self.brish.send_cmd("typeset -g kept=one", server_index=1)
+
+        async def main(streamed):
+            job = _job() if streamed else None
+            lock, _index = self.brish.acquire_lock(server_index=0)
+            try:
+                task = asyncio.create_task(
+                    self.capture("print -r -- $kept", job=job, fork=False)
+                )
+                await asyncio.sleep(0.5)
+                waited = not task.done()
+            finally:
+                lock.release()
+            return waited, await asyncio.wait_for(task, 10)
+
+        for streamed in (False, True):
+            with self.subTest(streamed=streamed):
+                waited, result = asyncio.run(main(streamed))
+                self.assertTrue(waited)
+                self.assertEqual(result, util.CommandResult(output="zero\n", retcode=0))
 
 
 class PluginPoolTests(_BrishTestCase):

@@ -182,7 +182,10 @@ says whether the installed one does):
    session `brishz_helper` also uses: the worker lock, `$jd`, `cd` and
    `jinit`, the command, `cd /tmp`. Without `brish=`, that thread also looks
    up the plugin pool, whose first use (and first use after `.x`) boots its
-   workers for seconds; the event loop never waits for it.
+   workers for seconds; the event loop never waits for it. A non-fork
+   command (`.af`) takes worker 0, which keeps its state between commands,
+   as without a job: while another command holds worker 0 it waits, QUEUED,
+   even when other workers are free.
 2. Right after taking the lock it asks `job.try_start()`. False (the job was
    stopped while it waited for a free worker) frees the lock, runs nothing,
    and the result is None.
