@@ -9916,10 +9916,8 @@ def _stream_menu_text(prefs) -> str:
         "private chats, so elsewhere they fall back to edits.",
         "• **Edits**: a message edited as the answer grows.",
         "",
+        *stream_driver.stream_mode_lines(prefs),
     ]
-    for scope, name in STREAM_SCOPE_NAMES.items():
-        mode = stream_driver.stream_mode(prefs, scope=scope)
-        lines.append(f"{name}: **{STREAM_MODE_NAMES[mode]}**")
     if not draft_stream.DRAFTS_SUPPORTED:
         lines.append(
             "\nThis bot's Telethon cannot send drafts, so every answer streams "
@@ -9929,20 +9927,7 @@ def _stream_menu_text(prefs) -> str:
 
 
 def _stream_menu_buttons(prefs) -> list:
-    rows = []
-    for scope, name in STREAM_SCOPE_NAMES.items():
-        current = stream_driver.stream_mode(prefs, scope=scope)
-        rows.append(
-            [
-                tg_compat.callback_button(
-                    f"{'✅ ' if mode == current else ''}{name}: "
-                    f"{STREAM_MODE_NAMES[mode]}",
-                    data=f"{STREAM_CALLBACK_PREFIX}{scope}:{mode.value}",
-                )
-                for mode in StreamMode
-            ]
-        )
-    return rows
+    return stream_driver.stream_mode_rows(prefs, callback_prefix=STREAM_CALLBACK_PREFIX)
 
 
 STREAM_USAGE = "Usage: `/stream`, or `/stream private|groups drafts|edits`."
@@ -9956,13 +9941,13 @@ async def stream_handler(event):
         )
         return
     user_id = event.sender_id
-    args = (event.pattern_match.group("args") or "").lower().split()
+    args = (event.pattern_match.group("args") or "").split()
     if args:
-        modes = {mode.value: mode for mode in StreamMode}
-        if len(args) != 2 or args[0] not in STREAM_SCOPE_NAMES or args[1] not in modes:
+        choice = stream_driver.stream_choice_of_args(args)
+        if choice is None:
             await send_info_message(event, STREAM_USAGE, parse_mode="md")
             return
-        user_manager.set_stream_mode(user_id, scope=args[0], mode=modes[args[1]])
+        user_manager.set_stream_mode(user_id, scope=choice.scope, mode=choice.mode)
     prefs = user_manager.get_prefs(user_id)
     await send_info_message(
         event,
@@ -10755,10 +10740,8 @@ async def callback_handler(event):
         )
         await event.answer("Reasoning effort updated.")
     elif data_str.startswith(STREAM_CALLBACK_PREFIX):
-        scope, mode = data_str[len(STREAM_CALLBACK_PREFIX) :].split(":", 1)
-        if scope not in STREAM_SCOPE_NAMES:
-            raise ValueError(f"Unknown stream scope: {scope!r}")
-        await _stream_menu_press_handler(event, scope=scope, mode=StreamMode(mode))
+        choice = stream_driver.stream_choice(data_str[len(STREAM_CALLBACK_PREFIX) :])
+        await _stream_menu_press_handler(event, scope=choice.scope, mode=choice.mode)
     elif data_str.startswith("tool_"):
         tool_name = data_str.split("_")[1]
         is_enabled = tool_name not in prefs.enabled_tools

@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, patch
 from telethon import Button, TelegramClient, errors, events
 from telethon.tl import types
 
-from uniborg import draft_stream, stream_driver, util
+from uniborg import draft_stream, stream_driver, tg_compat, util
 from uniborg.uniborg import Uniborg
 from uniborg.stream_driver import PacedEditor, ShowResult, StreamMode
 
@@ -491,6 +491,77 @@ class StreamSettingTests(unittest.TestCase):
         )
         self.assertEqual(prefs.stream_private, StreamMode.EDITS)
         self.assertEqual(prefs.stream_groups, StreamMode.DRAFTS)
+
+
+class StreamMenuTests(unittest.TestCase):
+    def prefs(self, private, groups):
+        return SimpleNamespace(stream_private=private, stream_groups=groups)
+
+    def test_a_line_per_scope(self):
+        lines = stream_driver.stream_mode_lines(
+            self.prefs(StreamMode.EDITS, StreamMode.DRAFTS)
+        )
+
+        self.assertEqual(lines, ["Private chats: **Edits**", "Groups: **Drafts**"])
+
+    def test_a_row_per_scope_with_the_current_mode_checked(self):
+        rows = stream_driver.stream_mode_rows(
+            self.prefs(StreamMode.DRAFTS, StreamMode.EDITS), callback_prefix="p:"
+        )
+
+        self.assertEqual(
+            [
+                [(tg_compat.button_text(b), tg_compat.button_data(b)) for b in row]
+                for row in rows
+            ],
+            [
+                [
+                    ("✅ Private chats: Drafts", b"p:private:drafts"),
+                    ("Private chats: Edits", b"p:private:edits"),
+                ],
+                [
+                    ("Groups: Drafts", b"p:groups:drafts"),
+                    ("✅ Groups: Edits", b"p:groups:edits"),
+                ],
+            ],
+        )
+
+    def test_a_buttons_data_reads_back_as_its_choice(self):
+        rows = stream_driver.stream_mode_rows(
+            self.prefs(StreamMode.DRAFTS, StreamMode.EDITS), callback_prefix="p:"
+        )
+
+        choices = [
+            stream_driver.stream_choice(
+                tg_compat.button_data(b).decode().removeprefix("p:")
+            )
+            for row in rows
+            for b in row
+        ]
+
+        self.assertEqual(
+            [(c.scope, c.mode) for c in choices],
+            [
+                ("private", StreamMode.DRAFTS),
+                ("private", StreamMode.EDITS),
+                ("groups", StreamMode.DRAFTS),
+                ("groups", StreamMode.EDITS),
+            ],
+        )
+
+    def test_other_data_raises(self):
+        for data in ("channels:drafts", "private:typing", "private"):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                stream_driver.stream_choice(data)
+
+    def test_arguments_name_a_choice_in_any_case(self):
+        self.assertEqual(
+            stream_driver.stream_choice_of_args(["Groups", "DRAFTS"]),
+            stream_driver.StreamChoice(scope="groups", mode=StreamMode.DRAFTS),
+        )
+        for args in ([], ["groups"], ["groups", "x"], ["x", "drafts"], ["a"] * 3):
+            with self.subTest(args=args):
+                self.assertIsNone(stream_driver.stream_choice_of_args(args))
 
 
 def _draft(**kwargs):

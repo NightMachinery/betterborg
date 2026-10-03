@@ -64,7 +64,12 @@ settings are per user, kept with the other preferences (`stream_private`,
 `stream_groups` in `UserPrefs`), and `/status` lists them. The modes
 (`StreamMode`), the scope names and the choice of scope for a chat live in
 `uniborg/stream_driver.py` (`stream_scope`, `stream_mode`, `set_stream_mode`),
-so another plugin can offer the same setting with its own preferences.
+so another plugin can offer the same setting with its own preferences. So does
+the menu's part for the two scopes: `stream_mode_lines` (a line per scope),
+`stream_mode_rows` (a row of buttons per scope, whose data is the plugin's
+prefix, then `scope:mode`), `stream_choice` (reads that data back) and
+`stream_choice_of_args` (reads `private edits`). The shell's `/settings`
+(docs/shell_streaming.md) shows the same rows.
 
 The groups setting exists for when Telegram allows drafts there. Today it
 refuses them (`TEXTDRAFT_PEER_INVALID`), so a group set to Drafts costs one

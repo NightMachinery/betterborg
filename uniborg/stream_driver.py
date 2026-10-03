@@ -17,7 +17,10 @@ that pump: it waits for changes and shows the latest text once it is due.
 A user picks per *scope* (private chats, or groups) whether answers stream
 as drafts or by edits (`StreamMode`). The settings live in the plugin's own
 preferences, any object with a `stream_private` and a `stream_groups` field;
-`stream_mode` and `set_stream_mode` read and write them.
+`stream_mode` and `set_stream_mode` read and write them, and
+`stream_mode_lines`, `stream_mode_rows`, `stream_choice` and
+`stream_choice_of_args` draw and read the menu that changes them (the chat
+bot's /stream, the shell's /settings).
 
 A *stream target* is the message a reply streams into: a draft stand-in
 (`draft_stream.DraftAnswerMessage`) where the user streams drafts and
@@ -34,6 +37,7 @@ bot uses it is in docs/draft_streaming.md.
 
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from enum import Enum
 import logging
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TypeVar
@@ -41,7 +45,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TypeVar
 from telethon import errors, events
 from telethon.tl.types import UpdateUserTyping
 
-from uniborg import draft_stream, util
+from uniborg import draft_stream, tg_compat, util
 
 _log = logging.getLogger(__name__)
 
@@ -94,6 +98,64 @@ def stream_mode(prefs: Any, *, scope: str) -> StreamMode:
 def set_stream_mode(prefs: Any, *, scope: str, mode: StreamMode) -> None:
     """Sets PREFS's mode for SCOPE to MODE."""
     setattr(prefs, _stream_field(scope), mode)
+
+
+@dataclass(frozen=True)
+class StreamChoice:
+    """A mode for a scope, as a menu button or a command names it."""
+
+    scope: str
+    mode: StreamMode
+
+
+def stream_mode_lines(prefs: Any) -> list[str]:
+    """A Markdown line per scope that names the mode PREFS set for it."""
+    return [
+        f"{name}: **{STREAM_MODE_NAMES[stream_mode(prefs, scope=scope)]}**"
+        for scope, name in STREAM_SCOPE_NAMES.items()
+    ]
+
+
+def stream_mode_rows(prefs: Any, *, callback_prefix: str) -> list[list]:
+    """A row of buttons per scope, one per mode, with PREFS's mode checked.
+
+    A button sends CALLBACK_PREFIX, then `scope:mode`, which `stream_choice`
+    reads back.
+    """
+    rows = []
+    for scope, name in STREAM_SCOPE_NAMES.items():
+        current = stream_mode(prefs, scope=scope)
+        rows.append(
+            [
+                tg_compat.callback_button(
+                    f"{'✅ ' if mode == current else ''}{name}: "
+                    f"{STREAM_MODE_NAMES[mode]}",
+                    data=f"{callback_prefix}{scope}:{mode.value}",
+                )
+                for mode in StreamMode
+            ]
+        )
+    return rows
+
+
+def stream_choice(data: str) -> StreamChoice:
+    """The choice a `stream_mode_rows` button sends, as DATA after its prefix.
+
+    Raises ValueError for data no such button sends.
+    """
+    scope, mode = data.split(":", 1)
+    if scope not in STREAM_SCOPE_NAMES:
+        raise ValueError(f"Unknown stream scope: {scope!r}")
+    return StreamChoice(scope=scope, mode=StreamMode(mode))
+
+
+def stream_choice_of_args(args: list[str]) -> Optional[StreamChoice]:
+    """The choice that ARGS (`["groups", "drafts"]`, any case) name, or None."""
+    words = [arg.lower() for arg in args]
+    modes = {mode.value: mode for mode in StreamMode}
+    if len(words) != 2 or words[0] not in STREAM_SCOPE_NAMES or words[1] not in modes:
+        return None
+    return StreamChoice(scope=words[0], mode=modes[words[1]])
 
 
 async def _reply(event: Any, text: str) -> Any:
