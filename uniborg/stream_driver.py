@@ -5,7 +5,8 @@ message as it grows. `PacedEditor` is the step each loop repeats: when an
 edit is due, edit the message to the text so far, plus a cursor that says
 more is coming. How often an edit is due is the *pace*, chosen per message by
 a pace function: by default `draft_stream.streaming_pace`, which slows edits
-down as the answer ages and keeps a draft's own pace.
+down as the answer ages and keeps a draft's own pace; `fixed_pace` and
+`tiered_pace` build others.
 
 The editor only edits when it is asked to show new text (the leading edge),
 and it creates no task or timer, so a streaming loop stays a plain loop.
@@ -22,9 +23,10 @@ A *stream target* is the message a reply streams into: a draft stand-in
 (`draft_stream.DraftAnswerMessage`) where the user streams drafts and
 Telegram shows one, otherwise a sent placeholder message.
 `open_stream_target` picks it, `stop_wired` and `run_stoppable` connect a
-draft's Stop button to the work that fills it, and `flush_draft` sends what
-a draft last showed once the work is over. `register_draft_stop` lets a
-plugin receive the Stop button's presses.
+draft's Stop button to the work that fills it, `flush_draft` sends what a
+draft last showed once the work is over, and `show_final` makes a target
+show its final text instead. `register_draft_stop` lets a plugin receive
+the Stop button's presses.
 
 This is a core module, so a plugin reload never re-executes it. How the chat
 bot uses it is in docs/draft_streaming.md.
@@ -107,23 +109,44 @@ async def open_stream_target(
     draft_text: Optional[str] = None,
     send_placeholder: Callable[[Any, str], Awaitable[Any]] = _reply,
     top_msg_id: Optional[int] = None,
+    parse_mode: Any = (),
     logger: Optional[logging.Logger] = None,
 ) -> Any:
     """The stream target of a reply to EVENT.
 
     With DRAFTS, a draft stand-in that first shows DRAFT_TEXT (by default
-    PLACEHOLDER_TEXT; "" shows Telegram's own "Thinking…"), in the private
-    topic TOP_MSG_ID when given. Without DRAFTS, or when the first draft
-    fails or Telegram refuses one in this chat, the message that
+    PLACEHOLDER_TEXT; "" shows Telegram's own "Thinking…") in the private
+    topic TOP_MSG_ID when given, parsed with PARSE_MODE (by default the
+    stand-in's own, Markdown; None is plain text). Without DRAFTS, or when the
+    first draft fails or Telegram refuses one in this chat, the message that
     `send_placeholder(event, PLACEHOLDER_TEXT)` sends, by default a reply.
     """
     if drafts:
         draft = draft_stream.DraftAnswerMessage(
             client, event=event, top_msg_id=top_msg_id, logger=logger
         )
-        if await draft.start(placeholder_text if draft_text is None else draft_text):
+        first = placeholder_text if draft_text is None else draft_text
+        start_kwargs = {} if parse_mode == () else {"parse_mode": parse_mode}
+        if await draft.start(first, **start_kwargs):
             return draft
     return await send_placeholder(event, placeholder_text)
+
+
+async def show_final(target: Any, text: str) -> Any:
+    """Makes stream TARGET show TEXT for good, as plain text with no buttons.
+
+    A message is edited in place, and loses any buttons: `Message.edit`
+    keeps the old ones unless told otherwise. A draft's stream ends, and TEXT
+    is sent as a real reply to the draft's event, after a sync draft so that
+    the client adopts the draft into it. Returns the message that shows TEXT.
+    Errors propagate.
+    """
+    kwargs = {"parse_mode": None, "link_preview": False, "buttons": None}
+    if isinstance(target, draft_stream.DraftAnswerMessage):
+        await target.end_stream()
+        await target.edit(text, **kwargs)
+        return target.message
+    return await target.edit(text, **kwargs) or target
 
 
 @asynccontextmanager
@@ -218,6 +241,27 @@ def fixed_pace(*, cursor: str = "▌") -> PaceFunction:
         response_message: Any, *, elapsed: float, edit_interval: float
     ) -> draft_stream.StreamingPace:
         return draft_stream.StreamingPace(interval=edit_interval, cursor=cursor)
+
+    return pace
+
+
+def tiered_pace(
+    *, slow_after: float, slow_interval: float, cursor: str = "▌"
+) -> PaceFunction:
+    """A pace function: EDIT_INTERVAL, then SLOW_INTERVAL after SLOW_AFTER seconds.
+
+    A draft keeps the draft pace (`draft_stream.streaming_pace`).
+    """
+
+    def pace(
+        response_message: Any, *, elapsed: float, edit_interval: float
+    ) -> draft_stream.StreamingPace:
+        if isinstance(response_message, draft_stream.DraftAnswerMessage):
+            return draft_stream.streaming_pace(
+                response_message, elapsed=elapsed, edit_interval=edit_interval
+            )
+        interval = slow_interval if elapsed > slow_after else edit_interval
+        return draft_stream.StreamingPace(interval=interval, cursor=cursor)
 
     return pace
 

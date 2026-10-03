@@ -82,8 +82,9 @@ streams by edits.
    It decides whether to use drafts (the user's setting for this kind of chat
    is Drafts and the account is a bot), and `stream_driver.open_stream_target`
    does the rest: with drafts it builds a stand-in and calls `start`, which
-   sends the first draft. Without drafts, or if `start` fails, it sends the
-   usual placeholder message instead, so the answer streams by edits.
+   sends the first draft (in Markdown unless the caller passes another
+   `parse_mode`). Without drafts, or if `start` fails, it sends the usual
+   placeholder message instead, so the answer streams by edits.
 2. `_generate_streamed` runs the generation through
    `stream_driver.run_stoppable`, as its own task, and
    `stream_driver.stop_wired` points the stand-in's `on_stop` at that task's
@@ -115,6 +116,16 @@ streams by edits.
    `flush` sends every part that was never edited after the stream ended.
    This is how an error message, a cancelled partial answer or the text left
    by Stop still reaches the chat.
+
+Two pieces serve a plugin that ends its stream another way.
+`stream_driver.show_final(target, text)` makes a stream target show its final
+text for good, as plain text with no buttons: a message is edited in place
+(with `buttons=None`, since Telethon's `Message.edit` otherwise keeps the old
+buttons), and a stand-in ends its stream and sends the text as a real reply,
+after a sync draft. `DraftAnswerMessage.sync_draft(text)` sends just the sync
+draft, for a final that the plugin sends itself; it sends nothing after Stop,
+before any draft, or during a flood wait. The shell uses both
+([shell_streaming.md](shell_streaming.md)).
 
 An edit that carries buttons ends the stream at once and sends the part for
 real, since a draft cannot carry buttons. An answer that turns out to be only
@@ -185,13 +196,15 @@ while it lasts. The answer itself never waits for a draft.
   draft, buttons, refused chats, flood waits, a hanging call, heartbeats, Stop,
   and `streaming_pace`.
 - `tests/test_stream_driver.py`: `PacedEditor` on a scripted clock (the
-  strict interval check, failed and unchanged edits, the pace tiers and the
-  fixed pace), and on a real loop `stream_driver.follow`, the trailing-edge
+  strict interval check, failed and unchanged edits, the pace tiers, the
+  fixed pace and `tiered_pace`), and on a real loop `stream_driver.follow`, the trailing-edge
   pump for producers that go quiet, such as a shell command (the chat bot's
   loops do not use it), which backs off from a deleted message through the
   real `util.edit_message`. Also the stream settings, the stream target's
-  opening, Stop wiring and flush on their own, and the Stop handler's
-  registration and its removal with the plugin.
+  opening, Stop wiring, flush, `show_final` (with the installed Telethon's
+  `Message.edit`, which keeps a message's buttons unless told) and the sync
+  draft on their own, and the Stop handler's registration and its removal
+  with the plugin.
 - `tests/test_gemini_image_stream.py`: native Gemini images' partial edits
   keep one pace and cursor past 30 s.
 - `tests/test_llm_chat_stream.py`: the plugin's choice of drafts or edits per

@@ -320,6 +320,26 @@ class DraftAnswerMessage(_DraftPart):
         for part in self._parts:
             await self._send_part(part)
 
+    async def sync_draft(self, text: str, *, parse_mode: Any = None) -> None:
+        """Shows TEXT as the last draft, for a message about to start with it.
+
+        Telegram Desktop adopts the draft into the next message only when the
+        last draft shares its start; otherwise the draft lingers beside it.
+        Call it after `end_stream`, just before sending that message. Nothing
+        is sent after a Stop, before any draft, or during a flood wait, and a
+        failure is logged, not raised.
+        """
+        if (
+            self.stopped
+            or self._last_draft_at is None
+            or self._clock() < self._blocked_until
+        ):
+            return
+        try:
+            await self._send_draft(text, parse_mode)
+        except Exception:
+            self.logger.info("The sync draft failed", exc_info=True)
+
     # --- The parts ---
 
     def _changed_part(self) -> None:
@@ -400,17 +420,7 @@ class DraftAnswerMessage(_DraftPart):
                 buttons=part.buttons,
             )
             return
-        if (
-            not self.stopped
-            and self._last_draft_at is not None
-            and self._clock() >= self._blocked_until
-        ):
-            #: Telegram Desktop adopts the draft into the answer only when the
-            #: last draft shares its start; otherwise the draft lingers.
-            try:
-                await self._send_draft(part.text, part.parse_mode)
-            except Exception:
-                self.logger.info("The sync draft failed", exc_info=True)
+        await self.sync_draft(part.text, parse_mode=part.parse_mode)
         part.message = await self.event.reply(
             part.text,
             parse_mode=part.parse_mode,

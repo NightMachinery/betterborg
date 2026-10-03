@@ -12,7 +12,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from telethon import errors, events
+from telethon import Button, TelegramClient, errors, events
+from telethon.tl import types
 
 from uniborg import draft_stream, stream_driver, util
 from uniborg.uniborg import Uniborg
@@ -121,6 +122,25 @@ class PacedEditorTests(unittest.TestCase):
         editor = self.editor(message=draft, edit_interval=2.0)
 
         self.assertEqual(self.show(editor, "a", at=1.5), ShowResult.SHOWN)
+
+    def test_tiered_pace_slows_after_its_threshold_and_keeps_a_drafts_pace(self):
+        pace = stream_driver.tiered_pace(slow_after=30, slow_interval=5)
+
+        self.assertEqual(
+            pace("message", elapsed=30, edit_interval=2),
+            draft_stream.StreamingPace(interval=2, cursor="▌"),
+        )
+        self.assertEqual(
+            pace("message", elapsed=30.5, edit_interval=2),
+            draft_stream.StreamingPace(interval=5, cursor="▌"),
+        )
+        draft = draft_stream.DraftAnswerMessage(
+            object(), event=SimpleNamespace(chat_id=1, sender_id=1)
+        )
+        self.assertEqual(
+            pace(draft, elapsed=300, edit_interval=2).interval,
+            draft_stream.DRAFT_MIN_INTERVAL,
+        )
 
     def test_render_builds_the_text(self):
         editor = self.editor(render=lambda text, pace: f"[{text}]")
@@ -502,6 +522,11 @@ class OpenStreamTargetTests(unittest.TestCase):
         self.start.assert_awaited_once_with("⏳ #3")
         self.sent.assert_not_awaited()
 
+    def test_the_first_draft_takes_the_parse_mode(self):
+        self.open(drafts=True, parse_mode=None)
+
+        self.start.assert_awaited_once_with("⏳ #3", parse_mode=None)
+
     def test_the_first_draft_can_differ_from_the_placeholder(self):
         self.open(drafts=True, draft_text="")
 
@@ -519,6 +544,103 @@ class OpenStreamTargetTests(unittest.TestCase):
 
         self.assertEqual(self.open(drafts=True, send_placeholder=send), "sent")
         send.assert_awaited_once_with(self.event, "⏳ #3")
+
+
+class _EditClient:
+    """Records `edit_message`, as `Message.edit` calls it."""
+
+    def __init__(self):
+        self.edits = []
+
+    async def edit_message(self, *args, **kwargs):
+        self.edits.append((args, kwargs))
+        return "edited"
+
+
+def _message_with_a_button(client):
+    message = types.Message(
+        id=5,
+        peer_id=types.PeerUser(1),
+        message="⏳ #3",
+        out=True,
+        reply_markup=TelegramClient.build_reply_markup(Button.inline("⏹", b"x")),
+    )
+    message._client = client
+    message._input_chat = types.InputPeerUser(1, 0)
+    return message
+
+
+class ShowFinalTests(unittest.TestCase):
+    def test_telethon_keeps_a_messages_buttons_unless_told(self):
+        #: Why `show_final` passes `buttons=None`: Message.edit fills in the
+        #: old reply markup when the caller leaves `buttons` out.
+        client = _EditClient()
+        message = _message_with_a_button(client)
+
+        asyncio.run(message.edit("done"))
+
+        ((_args, kwargs),) = client.edits
+        self.assertIs(kwargs["buttons"], message.reply_markup)
+
+    def test_a_message_is_edited_in_place_as_plain_text_without_buttons(self):
+        client = _EditClient()
+        message = _message_with_a_button(client)
+
+        shown = asyncio.run(stream_driver.show_final(message, "done"))
+
+        ((args, kwargs),) = client.edits
+        self.assertEqual(args[1:], (5, "done"))
+        self.assertEqual(
+            kwargs, {"parse_mode": None, "link_preview": False, "buttons": None}
+        )
+        self.assertIsNone(TelegramClient.build_reply_markup(kwargs["buttons"]))
+        self.assertEqual(shown, "edited")
+
+    def test_a_draft_ends_and_its_text_is_sent_after_a_sync_draft(self):
+        from test_draft_stream import _Client, _Event, _draft as _test_draft
+
+        client, log = _Client(), []
+        event = _Event(log)
+
+        async def run():
+            draft = _test_draft(client, event)
+            await draft.start("⏳ #3", parse_mode=None)
+            shown = await stream_driver.show_final(draft, "done *plain*")
+            return draft, shown
+
+        draft, shown = asyncio.run(run())
+
+        self.assertFalse(draft.streaming)
+        self.assertEqual(client.drafts, ["⏳ #3", "done *plain*"])
+        self.assertEqual(log, [("send", "done *plain*")])
+        (sent,) = event.sent
+        self.assertIs(shown, sent)
+        self.assertEqual(
+            sent.kwargs, {"parse_mode": None, "link_preview": False, "buttons": None}
+        )
+
+
+class SyncDraftTests(unittest.TestCase):
+    def test_a_sync_draft_is_sent_only_while_a_draft_could_show(self):
+        from test_draft_stream import _Client, _Event, _draft as _test_draft
+
+        client, log = _Client(), []
+        event = _Event(log)
+
+        async def run():
+            fresh = _test_draft(client, event)
+            await fresh.sync_draft("never started")
+            draft = _test_draft(client, event)
+            await draft.start("⏳", parse_mode=None)
+            await draft.end_stream()
+            await draft.sync_draft("final")
+            draft.stop_pressed()
+            await draft.sync_draft("after Stop")
+
+        asyncio.run(run())
+
+        self.assertEqual(client.drafts, ["⏳", "final"])
+        self.assertEqual(log, [])
 
 
 class StopWiringTests(unittest.TestCase):
