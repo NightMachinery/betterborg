@@ -86,11 +86,14 @@ streams by edits.
 3. While streaming, an edit only records the new text and wakes the **draft
    worker**, a background task that sends the last live part as a draft, at
    most once per second (`DRAFT_MIN_INTERVAL`), and sends a heartbeat after
-   20 s without changes (`DRAFT_HEARTBEAT_SECONDS`). The streaming loops of
-   litellm, Pioneer and Codex show the answer through a
-   `stream_driver.PacedEditor`, which edits only when an edit is due. The pace comes from `draft_stream.streaming_pace`: for a stand-in it
+   20 s without changes (`DRAFT_HEARTBEAT_SECONDS`). Every streaming loop
+   (litellm, Pioneer, Codex and native Gemini images) shows the answer
+   through a `stream_driver.PacedEditor`, which edits only when an edit is
+   due. The pace comes from `draft_stream.streaming_pace`: for a stand-in it
    is at most once a second with a plain cursor, and for a real message it is
-   the slowing edit pace.
+   the slowing edit pace. Native Gemini images keep one pace at any age
+   (`stream_driver.fixed_pace`): the model's streaming delay and a plain
+   cursor.
 4. `end_stream` cancels the worker and waits for it, so no draft can arrive
    after the answer and show as a ghost draft.
 5. After `end_stream`, the final delivery edits the stand-in as it would a
@@ -167,7 +170,10 @@ while it lasts. The answer itself never waits for a draft.
   draft, buttons, refused chats, flood waits, a hanging call, heartbeats, Stop,
   and `streaming_pace`.
 - `tests/test_stream_driver.py`: `PacedEditor` on a scripted clock (the
-  strict interval check, failed and unchanged edits, and the pace tiers).
+  strict interval check, failed and unchanged edits, the pace tiers and the
+  fixed pace).
+- `tests/test_gemini_image_stream.py`: native Gemini images' partial edits
+  keep one pace and cursor past 30 s.
 - `tests/test_llm_chat_stream.py`: the plugin's choice of drafts or edits per
   scope, Stop cancelling the generation, and the `/stream` command, menu and
   buttons.

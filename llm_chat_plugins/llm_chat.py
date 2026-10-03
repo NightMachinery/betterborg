@@ -4690,8 +4690,11 @@ async def _handle_native_gemini_image_generation(
         model_in_use, _ = _get_effective_model_and_service(
             event.chat_id, event.sender_id, topic_id=_thread_topic_id(event)
         )
-        edit_interval = get_streaming_delay(model_in_use)
-        last_edit_time = asyncio.get_event_loop().time()
+        editor = stream_driver.PacedEditor(
+            response_message,
+            edit_interval=get_streaming_delay(model_in_use),
+            pace=stream_driver.fixed_pace(),
+        )
 
         # Stream the response
         try:
@@ -4736,19 +4739,7 @@ async def _handle_native_gemini_image_generation(
                 # Handle text data
                 if hasattr(chunk, "text") and chunk.text:
                     response_text += chunk.text
-
-                    # Update message periodically during streaming
-                    current_time = asyncio.get_event_loop().time()
-                    if (current_time - last_edit_time) > edit_interval:
-                        try:
-                            await util.edit_message(
-                                response_message, f"{response_text}▌", parse_mode="md"
-                            )
-                            last_edit_time = current_time
-                        except errors.rpcerrorlist.MessageNotModifiedError:
-                            pass
-                        except Exception as e:
-                            print(f"Error during message edit: {e}")
+                    await editor.show(response_text)
 
         except (
             httpx.HTTPStatusError,
