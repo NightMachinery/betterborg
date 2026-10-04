@@ -7,6 +7,7 @@ import struct
 import sys
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import telethon
 from telethon import errors, functions, types
@@ -254,6 +255,24 @@ class EnvSwitchTests(unittest.TestCase):
         self.assertIsNone(client.difference_fallback)
         self.assertIs(MessageContainer.__dict__["from_reader"], original_reader)
         self.assertFalse(telethon_safety.uninstall_safety_nets())
+
+
+class ByPathLoadTests(unittest.TestCase):
+    def test_loading_it_from_its_file_imports_no_uniborg_package(self):
+        #: `None` in sys.modules makes every import of the package fail, as
+        #: it would for a tool without the repository on sys.path.
+        with patch.dict(sys.modules, {"uniborg": None}):
+            spec = importlib.util.spec_from_file_location(
+                "telethon_safety_without_uniborg", _MODULE_PATH
+            )
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+
+        self.assertTrue(module.safety_nets_enabled(environ={}))
+        self.assertFalse(
+            module.safety_nets_enabled(environ={module.SAFETY_NETS_ENV: "off"})
+        )
 
 
 class _FakeTelethonClient:

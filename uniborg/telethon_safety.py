@@ -27,15 +27,19 @@ requests rather than failing to parse them:
   with `mark_at_most_once`, such as a guest answer.
 
 This module imports only the standard library, Telethon and
-``uniborg.env_switch`` (itself standard library only), so tests and tools can
-load it without ``uniborg.util``.
+``uniborg.env_switch`` (itself standard library only). Loaded from its file,
+outside the package, it loads ``env_switch`` from its file too, so tests and
+tools can load it without the ``uniborg`` package, whose __init__ imports
+``uniborg.util`` and starts a brish pool.
 """
 import asyncio
 from collections import Counter
 from dataclasses import dataclass, field
 import enum
 import functools
+import importlib.util
 import logging
+from pathlib import Path
 import time
 from typing import Any, Awaitable, Callable, Iterable, Optional
 import weakref
@@ -50,7 +54,14 @@ import telethon.tl.core.messagecontainer
 import telethon.tl.core.tlmessage
 from telethon.tl.tlobject import TLObject
 
-from uniborg import env_switch
+if __package__:
+    from . import env_switch
+else:
+    _ENV_SWITCH_SPEC = importlib.util.spec_from_file_location(
+        f"{__name__}_env_switch", Path(__file__).with_name("env_switch.py")
+    )
+    env_switch = importlib.util.module_from_spec(_ENV_SWITCH_SPEC)
+    _ENV_SWITCH_SPEC.loader.exec_module(env_switch)
 
 SAFETY_NETS_ENV = "borg_tg_safety_nets"
 
