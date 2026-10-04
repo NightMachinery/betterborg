@@ -728,34 +728,34 @@ ebook processor: when a user replies `.split` to an epub, get the epub's  chapte
 
 ```
 Traceback (most recent call last):
-  File "/home/eva/code/betterborg/tts_plugins/tts_bot.py", line 234, in message_handl
+  File "/home/bot/code/betterborg/tts_plugins/tts_bot.py", line 234, in message_handl
 er
     ogg_file_path = await tts_util.generate_tts_audio(
-  File "/home/eva/code/betterborg/uniborg/tts_util.py", line 294, in generate_tts_aud
+  File "/home/bot/code/betterborg/uniborg/tts_util.py", line 294, in generate_tts_aud
 io
     async for chunk in await client.aio.models.generate_content_stream(
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/mode
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/mode
 ls.py", line 7995, in async_generator
     async for chunk in response:  # type: ignore[attr-defined]
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/mode
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/mode
 ls.py", line 6770, in async_generator
     async for response in response_stream:
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/_api
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/_api
 _client.py", line 1320, in async_generator
     async for chunk in response:
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/_api
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/_api
 _client.py", line 257, in __anext__
     return await self.segment_iterator.__anext__()
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/_api
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/_api
 _client.py", line 289, in async_segments
     async for chunk in self._aiter_response_stream():
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/_api
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/_api
 _client.py", line 392, in _aiter_response_stream
     line_bytes = await self.response_stream.content.readline()
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/aiohttp/streams.p
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/aiohttp/streams.p
 y", line 352, in readline
     return await self.readuntil()
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/aiohttp/streams.p
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/aiohttp/streams.p
 y", line 380, in readuntil
     raise ValueError("Chunk too big")
 ValueError: Chunk too big
@@ -767,15 +767,15 @@ how do I solve this bug?
 #+begin_verse
 ```
 Traceback (most recent call last):
-  File "/home/eva/code/betterborg/uniborg/util.py", line 960, in async_remove_dir
+  File "/home/bot/code/betterborg/uniborg/util.py", line 960, in async_remove_dir
     await aiofiles.os.removedirs(dir_path)
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/aiofiles/ospath.p
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/aiofiles/ospath.p
 y", line 14, in run
     return await loop.run_in_executor(executor, pfunc)
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/concurrent/futures/thread.py",
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/concurrent/futures/thread.py",
 line 58, in run
     result = self.fn(*self.args, **self.kwargs)
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/os.py", line 243, in removedirs
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/os.py", line 243, in removedirs
     rmdir(name)
 OSError: [Errno 39] Directory not empty: 'temp_tts_bot_159'
 ```
@@ -812,11 +812,11 @@ read https://ai.google.dev/gemini-api/docs/live ,  https://colab.research.google
 ** TODO _
 #+begin_verse
 Traceback (most recent call last):
-  File "/home/eva/code/betterborg/llm_chat_plugins/llm_chat.py", line 3354, in handle_live_mode_message
+  File "/home/bot/code/betterborg/llm_chat_plugins/llm_chat.py", line 3354, in handle_live_mode_message
     session._live_connection = await session._session_context.__aenter__()
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/contextlib.py", line 199, in __aenter__
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/contextlib.py", line 199, in __aenter__
     return await anext(self.gen)
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/live.py", line 918, in connect
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/genai/live.py", line 918, in connect
     raise ValueError(
 ValueError: google.genai.client.aio.live.connect() does not support http_options at request-level in LiveConnectConfig yet. Please use the client-level http_options configuration instead.
 #+end_verse
@@ -988,9 +988,9 @@ Give your edits as diffs.
 #+begin_verse
 ```
 Traceback (most recent call last):
-  File "/home/eva/code/betterborg/llm_chat_plugins/llm_chat.py", line 770, in _call_llm_with_retry
+  File "/home/bot/code/betterborg/llm_chat_plugins/llm_chat.py", line 770, in _call_llm_with_retry
     async for chunk in response:
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/litellm/litellm_core_utils/streaming_handler.py", line 1875, in __anext__
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/litellm/litellm_core_utils/streaming_handler.py", line 1875, in __anext__
     raise MidStreamFallbackError(
 litellm.exceptions.MidStreamFallbackError: litellm.ServiceUnavailableError: litellm.MidStreamFallbackError: litellm.BadRequestError: VertexAIException BadRequestError - b'{\n  "error": {\n    "code": 400,\n    "message": "Request contains an invalid argument.",\n    "status": "INVALID_ARGUMENT"\n  }\n}\n' Original exception: BadRequestError: litellm.BadRequestError: VertexAIException BadRequestError - b'{\n  "error": {\n    "code": 400,\n    "message": "Request contains an invalid argument.",\n    "status": "INVALID_ARGUMENT"\n  }\n}\n'
 ```
@@ -1427,15 +1427,15 @@ I am using @client.on(events.NewMessage(outgoing=True)) for catching the message
 ** DONE _
 #+begin_example
 Traceback (most recent call last):
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py", line 1441, in make_call
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py", line 1441, in make_call
     response = await client.post(api_base, headers=headers, data=data, stream=True)
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/litellm/litellm_core_utils/logging_utils.py", line 135, in async_wrapper
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/litellm/litellm_core_utils/logging_utils.py", line 135, in async_wrapper
     result = await func(*args, **kwargs)
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/litellm/llms/custom_httpx/http_handler.py", line 324, in post
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/litellm/llms/custom_httpx/http_handler.py", line 324, in post
     raise e
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/litellm/llms/custom_httpx/http_handler.py", line 280, in post
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/litellm/llms/custom_httpx/http_handler.py", line 280, in post
     response.raise_for_status()
-  File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/httpx/_models.py", line 829, in raise_for_status
+  File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/httpx/_models.py", line 829, in raise_for_status
     raise HTTPStatusError(message, request=request, response=self)
 httpx.HTTPStatusError: Server error '500 Internal Server Error' for url 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?key=...&alt=sse'
 For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500

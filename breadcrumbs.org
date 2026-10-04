@@ -11,52 +11,52 @@ llm_chat:
 
 ```
 Traceback (most recent call last):
-File "/home/eva/code/betterborg/llm_chat_plugins/llm_chat.py", line 3634, in
+File "/home/bot/code/betterborg/llm_chat_plugins/llm_chat.py", line 3634, in
 chat_handler
     response_text, has_image = await _handle_native_gemini_image_generation(
-File "/home/eva/code/betterborg/llm_chat_plugins/llm_chat.py", line 758, in 
+File "/home/bot/code/betterborg/llm_chat_plugins/llm_chat.py", line 758, in 
 _handle_native_gemini_image_generation
     for chunk in client.models.generate_content_stream(
-File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/gen
+File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/gen
 ai/models.py", line 6290, in generate_content_stream
     for chunk in response:
-File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/gen
+File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/gen
 ai/models.py", line 5041, in _generate_content_stream
     for response in self._api_client.request_streamed(
-File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/gen
+File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/gen
 ai/_api_client.py", line 1283, in request_streamed
     session_response = self._request(http_request, http_options, stream=True)
-File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/gen
+File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/gen
 ai/_api_client.py", line 1086, in _request
     return self._retry(self._request_once, http_request, stream)  # type: 
 ignore[no-any-return]
-File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/tenacity/_
+File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/tenacity/_
 _init__.py", line 477, in __call__
     do = self.iter(retry_state=retry_state)
-File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/tenacity/_
+File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/tenacity/_
 _init__.py", line 378, in iter
     result = action(retry_state)
-File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/tenacity/_
+File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/tenacity/_
 _init__.py", line 420, in exc_check
     raise retry_exc.reraise()
-File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/tenacity/_
+File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/tenacity/_
 _init__.py", line 187, in reraise
     raise self.last_attempt.result()
 File 
-"/home/eva/micromamba/envs/p310/lib/python3.10/concurrent/futures/_base.py", 
+"/home/bot/micromamba/envs/p310/lib/python3.10/concurrent/futures/_base.py", 
 line 451, in result
     return self.__get_result()
 File 
-"/home/eva/micromamba/envs/p310/lib/python3.10/concurrent/futures/_base.py", 
+"/home/bot/micromamba/envs/p310/lib/python3.10/concurrent/futures/_base.py", 
 line 403, in __get_result
     raise self._exception
-File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/tenacity/_
+File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/tenacity/_
 _init__.py", line 480, in __call__
     result = fn(*args, **kwargs)
-File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/gen
+File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/gen
 ai/_api_client.py", line 1051, in _request_once
     errors.APIError.raise_for_response(response)
-File "/home/eva/micromamba/envs/p310/lib/python3.10/site-packages/google/gen
+File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/gen
 ai/errors.py", line 105, in raise_for_response
     raise ClientError(status_code, response_json, response)
 google.genai.errors.ClientError: 404 NOT_FOUND. {'error': {'code': 404, 
