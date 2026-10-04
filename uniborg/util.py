@@ -920,7 +920,9 @@ async def _stream_zsh(*, cwd, command, job) -> typing.Optional[CommandResult]:
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
-    killer = _ProcessGroupKiller(proc.pid, loop=asyncio.get_running_loop())
+    killer = _ProcessGroupKiller(
+        proc.pid, loop=asyncio.get_running_loop(), grace=ZSH_KILL_GRACE
+    )
     job.attach(killer)
     try:
         while chunk := await proc.stdout.read(65536):
