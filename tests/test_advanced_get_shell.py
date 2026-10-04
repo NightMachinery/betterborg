@@ -28,6 +28,7 @@ from uniborg import (
     guest_util,
     shell_settings,
     shell_stream,
+    stream_driver,
     tg_compat,
     util,
 )
@@ -1383,14 +1384,15 @@ class GuestLiveTests(_GuestTestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def run_guest(self, steps, *, command=".aa x", retcode=0, during=None):
-        """Runs COMMAND as a guest query, the producers following STEPS
-        (`_producer`); DURING() runs alongside. Returns the answer's texts."""
+    def run_guest(self, steps, *, command=".aa x", retcode=0, during=None, peer=None):
+        """Runs COMMAND as a guest query from PEER (`_query`), the producers
+        following STEPS (`_producer`); DURING() runs alongside. Returns the
+        answer's texts."""
         capture = _producer(steps, retcode=retcode)
 
         async def main():
             task = asyncio.ensure_future(
-                self.plugin.guest_shell(_query(f"@{BOT_USERNAME} {command}"))
+                self.plugin.guest_shell(_query(f"@{BOT_USERNAME} {command}", peer=peer))
             )
             if during is not None:
                 await during()
@@ -1417,6 +1419,30 @@ class GuestLiveTests(_GuestTestCase):
         self.assertEqual(final, "a\nb")
         self.assertTrue(all(edit.get("parse_mode") is None for edit in self.edits))
         self.assertEqual(shell_stream.JOBS, {})
+
+    def test_a_group_answer_edits_at_the_group_pace(self):
+        """And a private chat's at the private pace, as a chat preview does."""
+        timing = SimpleNamespace(
+            preview_delay=0.3,
+            private=SimpleNamespace(interval=0.1, slow_interval=0.1),
+            groups=SimpleNamespace(interval=0.2, slow_interval=0.2),
+            slow_after=30,
+        )
+        intervals = []
+
+        class _Editor(stream_driver.PacedEditor):
+            def __init__(self, message, **kwargs):
+                intervals.append(kwargs["edit_interval"])
+                super().__init__(message, **kwargs)
+
+        with patch.object(self.plugin, "LIVE_TIMING", timing), patch.object(
+            stream_driver, "PacedEditor", _Editor
+        ):
+            self.run_guest(SLOW, peer=types.PeerChannel(1234))
+            self.run_guest(SLOW, peer=types.PeerChat(1234))
+            self.run_guest(SLOW)
+
+        self.assertEqual(intervals, [0.2, 0.2, 0.1])
 
     def test_a_fast_command_still_makes_one_edit(self):
         texts = self.run_guest(["hi\n"])

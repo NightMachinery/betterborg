@@ -80,10 +80,12 @@ def _load_plugin(borg):
         util.borg = previous
 
 
-def _query(text, *, caller=ADMIN, entities=None, reference_grouped_id=None):
+def _query(text, *, caller=ADMIN, entities=None, reference_grouped_id=None, peer=None):
+    """A guest query for TEXT, in a private chat with a stranger unless PEER."""
+    peer = peer or types.PeerUser(STRANGER)
     trigger = types.Message(
         id=10,
-        peer_id=types.PeerUser(STRANGER),
+        peer_id=peer,
         date=NOW,
         message=text,
         from_id=types.PeerUser(caller),
@@ -96,7 +98,7 @@ def _query(text, *, caller=ADMIN, entities=None, reference_grouped_id=None):
         references.append(
             types.Message(
                 id=9,
-                peer_id=types.PeerUser(STRANGER),
+                peer_id=peer,
                 date=NOW,
                 message="",
                 from_id=types.PeerUser(STRANGER),
