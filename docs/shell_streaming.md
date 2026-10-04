@@ -62,19 +62,20 @@ apart; the bot runs on either version.
 and retires both old pools on `util.executor`. The plugin pool is not started
 again there; the next plugin command starts it. A retired pool shuts down once
 the commands still running on it end. A restart stops none of them, so the
-reply (`old_pool_note` in the plugin) adds a line such as "2 commands still
-run on old pools; .k stops them." when jobs that are still running (QUEUED,
+reply (`old_pool_note` in the plugin) adds a line such as "2 commands are
+queued or running on old pools; .k stops them." when unfinished jobs (QUEUED,
 RUNNING or STOPPING) have a retired pool as their `ShellJob.pool`: any pool
 but the current `util.persistent_brish`, so one that an earlier restart
 retired counts too. The consumer sets that field when it picks the pool,
 after the downloads; `.aa` jobs and jobs still downloading have none, and an
 old-brish `.a` is no job, so none of these is counted. Only the jobs that a
 `.k` in the chat of the restart can see (`shell_stream.visible`) get that
-line. The others get a second line, "1 command in another chat still runs on
-an old pool; .k in that chat stops it.", since a `.k` here would not find
+line. The others get a second line, "1 command in another chat is queued or
+running on an old pool; .k in that chat stops it.", since a `.k` here would not find
 them, and the caller's own guest jobs among them a third, "1 guest command
-still runs on an old pool; @bot .k in its chat stops it." A fourth line, "1
-command of another admin still runs on an old pool; they can stop it.",
+is queued or running on an old pool; @bot .k in its chat stops it." A fourth
+line, "1 command of another admin is queued or running on an old pool; they
+can stop it.",
 counts the jobs that the caller cannot reach at all: another admin's guest
 jobs (`@bot .k` sees only its caller's own) and their jobs in a private chat
 (a positive chat id), which on a bot only they can write in. Another admin's

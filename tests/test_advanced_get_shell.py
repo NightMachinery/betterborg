@@ -1130,7 +1130,7 @@ class StopButtonTests(_ShellTestCase):
 
 
 class OldPoolTests(_ShellTestCase):
-    """`.x`, `.sbb` and `.xf` say how many jobs still run on old pools."""
+    """`.x`, `.sbb` and `.xf` say how many jobs are queued or running on old pools."""
 
     def restart(self, text, *, pools):
         """Runs TEXT's handler; `init_brishes` swaps in the next of POOLS."""
@@ -1177,16 +1177,16 @@ class OldPoolTests(_ShellTestCase):
 
         self.assertEqual(
             self.restart(".x", pools=[old, new]),
-            "Restarted brishes.\n2 commands still run on old pools; .k stops them.",
+            "Restarted brishes.\n2 commands are queued or running on old pools; .k stops them.",
         )
         first.detach()
         self.assertEqual(
             self.restart(".sbb", pools=[old, new]),
-            "Restarted brishes.\n1 command still runs on an old pool; .k stops it.",
+            "Restarted brishes.\n1 command is queued or running on an old pool; .k stops it.",
         )
         self.assertTrue(
             self.restart(".xf", pools=[old, new]).endswith(
-                "can still rejoin.\n1 command still runs on an old pool; .k stops it."
+                "can still rejoin.\n1 command is queued or running on an old pool; .k stops it."
             )
         )
 
@@ -1196,11 +1196,11 @@ class OldPoolTests(_ShellTestCase):
 
         self.assertEqual(
             self.restart(".x", pools=[p1, p2]),
-            "Restarted brishes.\n1 command still runs on an old pool; .k stops it.",
+            "Restarted brishes.\n1 command is queued or running on an old pool; .k stops it.",
         )
         self.assertEqual(
             self.restart(".x", pools=[p2, p3]),
-            "Restarted brishes.\n1 command still runs on an old pool; .k stops it.",
+            "Restarted brishes.\n1 command is queued or running on an old pool; .k stops it.",
         )
 
     def test_jobs_in_other_chats_are_counted_apart(self):
@@ -1210,15 +1210,15 @@ class OldPoolTests(_ShellTestCase):
 
         self.assertEqual(
             self.restart(".x", pools=[old, new]),
-            "Restarted brishes.\n1 command in another chat still runs on an old"
+            "Restarted brishes.\n1 command in another chat is queued or running on an old"
             " pool; .k in that chat stops it.",
         )
         self.jobs(old, old)
         self.jobs(old, chat_id=-1003)
         self.assertEqual(
             self.restart(".x", pools=[old, new]),
-            "Restarted brishes.\n2 commands still run on old pools; .k stops them."
-            "\n2 commands in other chats still run on old pools; .k in their chats"
+            "Restarted brishes.\n2 commands are queued or running on old pools; .k stops them."
+            "\n2 commands in other chats are queued or running on old pools; .k in their chats"
             " stops them.",
         )
 
@@ -1239,7 +1239,7 @@ class OldPoolTests(_ShellTestCase):
 
         self.assertEqual(
             self.restart(".x", pools=[old, new]),
-            "Restarted brishes.\n1 guest command still runs on an old pool;"
+            "Restarted brishes.\n1 guest command is queued or running on an old pool;"
             f" @{BOT_USERNAME} .k in its chat stops it.",
         )
 
@@ -1270,9 +1270,9 @@ class OldPoolTests(_ShellTestCase):
 
         self.assertEqual(
             self.restart(".x", pools=[old, new]),
-            "Restarted brishes.\n1 command in another chat still runs on an old"
-            " pool; .k in that chat stops it.\n2 commands of other admins still"
-            " run on old pools; they can stop them.",
+            "Restarted brishes.\n1 command in another chat is queued or running on an old"
+            " pool; .k in that chat stops it.\n2 commands of other admins are queued or running"
+            " on old pools; they can stop them.",
         )
 
     def test_a_streamed_dot_a_records_its_pool(self):

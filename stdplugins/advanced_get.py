@@ -814,7 +814,7 @@ def _counted(count, *, one, many) -> list[str]:
 
 
 def old_pool_note(*, chat_id, caller_id) -> str:
-    """Lines on the jobs still running on a retired shell pool.
+    """Lines on jobs queued or running on a retired shell pool.
 
     A restart does not stop them: they keep their pool until they end. Call
     it after the restart: every pool but `util.persistent_brish` is retired,
@@ -851,28 +851,28 @@ def old_pool_note(*, chat_id, caller_id) -> str:
     lines = [
         *_counted(
             here,
-            one="1 command still runs on an old pool; .k stops it.",
-            many="{count} commands still run on old pools; .k stops them.",
+            one="1 command is queued or running on an old pool; .k stops it.",
+            many="{count} commands are queued or running on old pools; .k stops them.",
         ),
         *_counted(
             elsewhere,
-            one="1 command in another chat still runs on an old pool;"
+            one="1 command in another chat is queued or running on an old pool;"
             " .k in that chat stops it.",
-            many="{count} commands in other chats still run on old pools;"
+            many="{count} commands in other chats are queued or running on old pools;"
             " .k in their chats stops them.",
         ),
         *_counted(
             guests,
-            one=f"1 guest command still runs on an old pool; {kill} in its chat"
+            one=f"1 guest command is queued or running on an old pool; {kill} in its chat"
             " stops it.",
-            many="{count} guest commands still run on old pools;"
+            many="{count} guest commands are queued or running on old pools;"
             f" {kill} in their chats stops them.",
         ),
         *_counted(
             others,
-            one="1 command of another admin still runs on an old pool;"
+            one="1 command of another admin is queued or running on an old pool;"
             " they can stop it.",
-            many="{count} commands of other admins still run on old pools;"
+            many="{count} commands of other admins are queued or running on old pools;"
             " they can stop them.",
         ),
     ]
