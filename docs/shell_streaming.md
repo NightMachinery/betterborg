@@ -63,11 +63,16 @@ retired counts too. The consumer sets that field when it picks the pool,
 after the downloads; `.aa` jobs and jobs still downloading have none, and an
 old-brish `.a` is no job, so none of these is counted. Only the jobs that a
 `.k` in the chat of the restart can see (`shell_stream.visible`) get that
-line. The others get a second line, "1 command in another chat still runs
-on an old pool; .k in that chat stops it.", since a `.k` here would not find
-them, and guest jobs among them a third, "1 guest command still runs on an
-old pool; @bot .k in its chat stops it." A guest job records its pool as a
-chat job does.
+line. The others get a second line, "1 command in another chat still runs on
+an old pool; .k in that chat stops it.", since a `.k` here would not find
+them, and the caller's own guest jobs among them a third, "1 guest command
+still runs on an old pool; @bot .k in its chat stops it." A fourth line, "1
+command of another admin still runs on an old pool; they can stop it.",
+counts the jobs that the caller cannot reach at all: another admin's guest
+jobs (`@bot .k` sees only its caller's own) and their jobs in a private chat
+(a positive chat id), which on a bot only they can write in. Another admin's
+job in a group counts on the second line, since any admin there can stop it.
+A guest job records its pool as a chat job does.
 
 Nothing here depends on whole-pool restarts. Brish 0.4.1 is announced to
 restart only the dead worker; the separate plugin pool is still worth keeping

@@ -775,14 +775,26 @@ if borg.me.bot:
     )
 
 
+def _counted(count, *, one, many) -> list[str]:
+    """ONE when COUNT is 1, MANY formatted with COUNT when it is more."""
+    if count == 1:
+        return [one]
+    if count > 1:
+        return [many.format(count=count)]
+    return []
+
+
 def old_pool_note(*, chat_id, caller_id) -> str:
     """Lines on the jobs still running on a retired shell pool.
 
     A restart does not stop them: they keep their pool until they end. Call
     it after the restart: every pool but `util.persistent_brish` is retired,
     whichever restart retired it. The jobs that `.k` from CALLER_ID in
-    CHAT_ID can see are counted apart from the others, and of those, guest
-    jobs apart from chat jobs.
+    CHAT_ID can see are counted apart from the others. Of the others, the
+    caller's guest jobs are stopped from their guest chat, and chat jobs from
+    their chat, unless only another admin can send there: that admin's
+    private chat with the bot, or their guest chat, where `@bot .k` sees only
+    its caller's own jobs.
     """
     old = [
         job
@@ -794,35 +806,47 @@ def old_pool_note(*, chat_id, caller_id) -> str:
     seen = {
         job.id for job in shell_stream.visible(chat_id=chat_id, caller_id=caller_id)
     }
-    here = sum(1 for job in old if job.id in seen)
-    #: Of the others, a guest job is stopped from its guest chat.
-    guests = sum(1 for job in old if job.id not in seen and job.thread_key is not None)
-    elsewhere = len(old) - here - guests
-    lines = []
-    if here == 1:
-        lines.append("1 command still runs on an old pool; .k stops it.")
-    elif here > 1:
-        lines.append(f"{here} commands still run on old pools; .k stops them.")
-    if elsewhere == 1:
-        lines.append(
-            "1 command in another chat still runs on an old pool;"
-            " .k in that chat stops it."
-        )
-    elif elsewhere > 1:
-        lines.append(
-            f"{elsewhere} commands in other chats still run on old pools;"
-            " .k in their chats stops them."
-        )
-    if guests == 1:
-        lines.append(
-            "1 guest command still runs on an old pool;"
-            f" {_guest_kill_command()} in its chat stops it."
-        )
-    elif guests > 1:
-        lines.append(
-            f"{guests} guest commands still run on old pools;"
-            f" {_guest_kill_command()} in their chats stops them."
-        )
+    here = elsewhere = guests = others = 0
+    for job in old:
+        #: Chat ids are marked: a group's is negative.
+        in_a_group = job.chat_id is not None and job.chat_id < 0
+        if job.id in seen:
+            here += 1
+        elif job.owner_id != caller_id and not in_a_group:
+            others += 1
+        elif job.thread_key is not None:
+            guests += 1
+        else:
+            elsewhere += 1
+    kill = _guest_kill_command()
+    lines = [
+        *_counted(
+            here,
+            one="1 command still runs on an old pool; .k stops it.",
+            many="{count} commands still run on old pools; .k stops them.",
+        ),
+        *_counted(
+            elsewhere,
+            one="1 command in another chat still runs on an old pool;"
+            " .k in that chat stops it.",
+            many="{count} commands in other chats still run on old pools;"
+            " .k in their chats stops them.",
+        ),
+        *_counted(
+            guests,
+            one=f"1 guest command still runs on an old pool; {kill} in its chat"
+            " stops it.",
+            many="{count} guest commands still run on old pools;"
+            f" {kill} in their chats stops them.",
+        ),
+        *_counted(
+            others,
+            one="1 command of another admin still runs on an old pool;"
+            " they can stop it.",
+            many="{count} commands of other admins still run on old pools;"
+            " they can stop them.",
+        ),
+    ]
     return "".join(f"\n{line}" for line in lines)
 
 

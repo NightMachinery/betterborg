@@ -1230,6 +1230,38 @@ class OldPoolTests(_ShellTestCase):
             f" @{BOT_USERNAME} .k in its chat stops it.",
         )
 
+    def test_jobs_only_another_admin_can_reach_are_counted_apart(self):
+        """The caller cannot send `.k` in another admin's private chat with the
+        bot, and `@bot .k` sees only the caller's own guest jobs."""
+        other = ADMIN + 1
+        old, new = object(), object()
+
+        async def make():
+            for chat_id, thread_key in (
+                (None, "chat:-5"),
+                (other, None),
+                (-1002, None),
+            ):
+                job = shell_stream.register(
+                    shell_stream.ShellJob(
+                        owner_id=other,
+                        chat_id=chat_id,
+                        command="x",
+                        thread_key=thread_key,
+                    )
+                )
+                job.pool = old
+                job.try_start()
+
+        asyncio.run(make())
+
+        self.assertEqual(
+            self.restart(".x", pools=[old, new]),
+            "Restarted brishes.\n1 command in another chat still runs on an old"
+            " pool; .k in that chat stops it.\n2 commands of other admins still"
+            " run on old pools; they can stop them.",
+        )
+
     def test_a_streamed_dot_a_records_its_pool(self):
         pools = []
 
