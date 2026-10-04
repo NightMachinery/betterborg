@@ -1,12 +1,12 @@
 """Automatic titles for new private topics.
 
 A message typed in a bot's "All" view makes Telegram open a topic for it,
-named after the message and flagged `title_missing`. When the bot starts
+named implicitly and flagged `title_missing`. When the bot starts
 answering the first message of such a topic, it renames the topic at once to
 the model's badge (its emoji and reasoning-effort symbol) and Telegram's
-name, and sets the model's topic icon. Once the answer is delivered, it
+name (New Chat or question text), and sets the model's topic icon. Once the answer is delivered, it
 renames the topic again, to the badge and a short title from the user's title
-model, and deletes the first rename's service message. Each topic is claimed
+model, optionally chooses a matching icon, and deletes the first rename's service message. Each topic is claimed
 at most once. See docs/topic_titles.md.
 
 The topic id here is T, the id Telegram puts in `reply_to_top_id`
@@ -15,7 +15,7 @@ The topic id here is T, the id Telegram puts in `reply_to_top_id`
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Dict, Optional
 
@@ -36,6 +36,8 @@ EXCHANGE_SIDE_CHARS = 3000
 #: Claims kept in memory when Redis is unreachable. Forgetting an old claim
 #: costs one `getForumTopicsByID`: its topic is past the window by then.
 MEMORY_MARKS_MAX = 4096
+INITIAL_NAME_STYLES = {"new_chat": "New Chat", "question": "Question text"}
+DEFAULT_INITIAL_NAME_STYLE = "new_chat"
 
 TOPIC_TITLE_PROMPT = """Write a title for a chat topic that starts with the exchange below.
 
@@ -56,6 +58,9 @@ logger = logging.getLogger(__name__)
 class TopicTitle(BaseModel):
     title: str = Field(
         description=f"The topic's title, at most {TOPIC_TITLE_MAX_WORDS} words."
+    )
+    icon_emoji: str = Field(
+        default="", description="One topic icon emoji from the supplied list."
     )
 
 
@@ -181,10 +186,7 @@ class TopicIcons:
     def _plain(emoji: str) -> str:
         return emoji.replace("\ufe0f", "")
 
-    async def document_id(self, client, emoji: str) -> Optional[int]:
-        """The custom emoji id of the default topic icon EMOJI, or None."""
-        if not emoji:
-            return None
+    async def _load(self, client) -> None:
         if self._by_emoji is None:
             try:
                 icons = await client(
@@ -195,14 +197,25 @@ class TopicIcons:
                 )
             except Exception:
                 logger.exception("Could not load the default topic icons")
-                return None
+                return
             self._by_emoji = {
                 self._plain(attribute.alt): document.id
                 for document in icons.documents
                 for attribute in document.attributes
                 if isinstance(attribute, types.DocumentAttributeCustomEmoji)
             }
-        return self._by_emoji.get(self._plain(emoji))
+
+    async def emojis(self, client) -> list[str]:
+        """Supported emoji, for the title model to choose from."""
+        await self._load(client)
+        return list(self._by_emoji or {})
+
+    async def document_id(self, client, emoji: str) -> Optional[int]:
+        """The custom emoji id of the default topic icon EMOJI, or None."""
+        if not emoji:
+            return None
+        await self._load(client)
+        return (self._by_emoji or {}).get(self._plain(emoji))
 
 
 ICONS = TopicIcons()
@@ -236,12 +249,31 @@ def is_first_message_of_untitled_topic(
     return message_date - topic.date <= window
 
 
-def topic_title_prompt(question: str, answer: str) -> str:
-    return TOPIC_TITLE_PROMPT.format(
+def topic_title_prompt(
+    question: str, answer: str, *, icon_emojis: Optional[list[str]] = None
+) -> str:
+    prompt = TOPIC_TITLE_PROMPT.format(
         max_words=TOPIC_TITLE_MAX_WORDS,
         question=question[:EXCHANGE_SIDE_CHARS].strip() or "(no text)",
         answer=answer[:EXCHANGE_SIDE_CHARS].strip() or "(no text)",
     )
+    if icon_emojis:
+        prompt += (
+            "\n\nChoose icon_emoji to match the subject, from these topic icons: "
+            + " ".join(icon_emojis)
+            + ". Keep the title itself free of emoji."
+        )
+    return prompt
+
+
+def initial_topic_title(question: str, *, style: str) -> str:
+    """The initial name while the first answer is being generated."""
+    if style == "new_chat":
+        return "New Chat"
+    elif style == "question":
+        return " ".join(question.split()) or "New Chat"
+    else:
+        raise ValueError(f"Unknown initial topic name style: {style!r}")
 
 
 def _with_prefix(title: str, *, prefix: str) -> str:
@@ -311,10 +343,11 @@ async def _claim_new_topic(
 async def prefix_new_topic(
     client,
     topic: TopicRef,
-    badge: TopicBadge,
     *,
+    badge: TopicBadge,
     marks: Optional[TopicTitleMarks] = None,
     icons: Optional[TopicIcons] = None,
+    initial_title: Optional[str] = None,
 ) -> Optional[PrefixedTopic]:
     """Claim TOPIC if it is new, and rename it at once to BADGE's prefix and
     the name Telegram gave it, with BADGE's icon.
@@ -329,7 +362,10 @@ async def prefix_new_topic(
         service_message_id = await _rename(
             client,
             topic,
-            title=prefixed_topic_title(forum_topic.title, badge=badge),
+            title=prefixed_topic_title(
+                forum_topic.title if initial_title is None else initial_title,
+                badge=badge,
+            ),
             badge=badge,
             icons=icons or ICONS,
         )
@@ -358,6 +394,7 @@ async def title_new_topic(
     prefixed: Optional[Awaitable[Optional[PrefixedTopic]]] = None,
     marks: Optional[TopicTitleMarks] = None,
     icons: Optional[TopicIcons] = None,
+    choose_icon: bool = False,
 ) -> Optional[str]:
     """Rename REQUEST's topic to its title if this was its first answer;
     return the title.
@@ -378,13 +415,18 @@ async def title_new_topic(
         if claimed is None:
             return None
         prefix_message_id = claimed.service_message_id
-    generated = await generate(topic_title_prompt(request.question, request.answer))
+    icons = icons or ICONS
+    icon_emojis = await icons.emojis(client) if choose_icon else []
+    generated = await generate(
+        topic_title_prompt(request.question, request.answer, icon_emojis=icon_emojis)
+    )
     title = compose_topic_title(generated.title, badge=request.badge)
     if title is None:
         return None
-    await _rename(
-        client, request.topic, title=title, badge=request.badge, icons=icons or ICONS
-    )
+    badge = request.badge
+    if choose_icon and TopicIcons._plain(generated.icon_emoji) in icon_emojis:
+        badge = replace(badge, icon_emoji=generated.icon_emoji)
+    await _rename(client, request.topic, title=title, badge=badge, icons=icons)
     if prefix_message_id is not None:
         await _delete_service_message(client, prefix_message_id)
     return title
@@ -421,14 +463,22 @@ def _in_background(make, *, what: str, topic: TopicRef) -> asyncio.Task:
 def schedule_prefix_new_topic(
     client,
     topic: TopicRef,
-    badge: TopicBadge,
     *,
+    badge: TopicBadge,
     marks: Optional[TopicTitleMarks] = None,
     icons: Optional[TopicIcons] = None,
+    initial_title: Optional[str] = None,
 ) -> asyncio.Task:
     """Run `prefix_new_topic` in the background; the task gives its result."""
     return _in_background(
-        lambda: prefix_new_topic(client, topic, badge, marks=marks, icons=icons),
+        lambda: prefix_new_topic(
+            client,
+            topic,
+            badge=badge,
+            marks=marks,
+            icons=icons,
+            initial_title=initial_title,
+        ),
         what="prefix",
         topic=topic,
     )
@@ -442,6 +492,7 @@ def schedule_title_new_topic(
     prefixed: Optional[Awaitable[Optional[PrefixedTopic]]] = None,
     marks: Optional[TopicTitleMarks] = None,
     icons: Optional[TopicIcons] = None,
+    choose_icon: bool = False,
 ) -> asyncio.Task:
     """Run `title_new_topic` in the background."""
     return _in_background(
@@ -452,6 +503,7 @@ def schedule_title_new_topic(
             prefixed=prefixed,
             marks=marks,
             icons=icons,
+            choose_icon=choose_icon,
         ),
         what="title",
         topic=request.topic,

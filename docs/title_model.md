@@ -14,7 +14,8 @@ model** is the model that makes these calls. Each user picks theirs with
   sent, the title is written after it, so a slow title delays only the file.
 - **`/asfile` exports** of the conversation.
 - **New private topics** that Telegram named, after their first answer
-  (`docs/topic_titles.md`). Only the title is written there.
+  (`docs/topic_titles.md`). The title and a matching topic icon are chosen
+  together; the model and effort badge stays in the name.
 
 The STT bot names its transcript files with Gemini Flash Lite, as before. It
 runs as a separate instance and does not read the chat bot's settings.
@@ -22,7 +23,10 @@ runs as a separate instance and does not read the chat bot's settings.
 ## Choices
 
 `/setTitleModel` opens a menu: **Auto**, then the chat models the user may
-use, then **Cancel**. A custom model id can be typed instead, and
+use, the initial topic-name choices **New Chat** (default) and
+**Question text**, then **Cancel**. The initial name appears while the first
+answer is generated, and both styles end with a generated title. A custom
+model id can be typed instead, and
 `/setTitleModel MODEL_ID` sets one directly. `auto`, `reset` and the other
 reset words go back to Auto.
 

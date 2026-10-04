@@ -196,9 +196,11 @@ their menus have an "Apply to" row that switches them to the whole chat. See
 [[file:docs/private_topics.md][docs/private_topics.md]].
 In a topic that Telegram named (one opened by typing in "All"), the bot puts
 the model's emoji and a circle that fills with the reasoning effort before the
-name as soon as it starts answering, and sets the model's topic icon. After
-the answer it renames the topic to that badge and a short title, as in
-=⚡◕ Monads explained=. See [[file:docs/topic_titles.md][docs/topic_titles.md]].
+initial name as soon as it starts answering, and sets the model's topic icon.
+The =/setTitleModel= panel offers =New Chat= (default) or the question text
+as that initial name. After the answer it renames the topic to that badge and
+a short title, as in =⚡◕ Monads explained=, and sets a topic icon chosen by
+the title model. See [[file:docs/topic_titles.md][docs/topic_titles.md]].
 
 ** timetracker time zones
 The timetracker stores each activity's local times together with its IANA

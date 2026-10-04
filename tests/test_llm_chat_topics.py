@@ -2210,6 +2210,7 @@ class TopicTitleHookTests(_BotChatCase):
         )
         self.assertTrue(callable(self.schedule.call_args.kwargs["generate"]))
         self.assertIs(self.schedule.call_args.kwargs["prefixed"], self.PREFIXED)
+        self.assertTrue(self.schedule.call_args.kwargs["choose_icon"])
 
     def start(self, message, *, prefix_effort=None, get_input_chat=None):
         event = self.event(message, get_input_chat=get_input_chat)
@@ -2232,13 +2233,24 @@ class TopicTitleHookTests(_BotChatCase):
 
         schedule_prefix.assert_called_once()
         self.assertIs(started, schedule_prefix.return_value)
-        _client, topic, badge = schedule_prefix.call_args.args
+        _client, topic = schedule_prefix.call_args.args
+        badge = schedule_prefix.call_args.kwargs["badge"]
         self.assertEqual(topic, self.topic(message))
+        self.assertEqual(schedule_prefix.call_args.kwargs["initial_title"], "New Chat")
         self.assertEqual(
             badge,
             plugin.topic_titles.TopicBadge(
                 model_emoji="🌙", effort_symbol="●", icon_emoji="🔮"
             ),
+        )
+
+    def test_question_text_can_be_the_initial_title(self):
+        self.prefs.topic_initial_name = "question"
+
+        _, schedule_prefix = self.start(_said(330, self.QUESTION))
+
+        self.assertEqual(
+            schedule_prefix.call_args.kwargs["initial_title"], self.QUESTION
         )
 
     def test_no_badge_outside_topics(self):

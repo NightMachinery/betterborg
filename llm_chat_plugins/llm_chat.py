@@ -1267,7 +1267,7 @@ BOT_COMMANDS = [
     {"command": "setmodel", "description": "Set your preferred chat model"},
     {
         "command": "settitlemodel",
-        "description": "Set the model for file titles, summaries and topic names",
+        "description": "Title model, topic icons and initial topic names",
     },
     {
         "command": "codexstatus",
@@ -1870,6 +1870,7 @@ class UserPrefs(_SavedSettings):
     #: topics: a model id, or "auto" (`title_util.resolve_title_model`). Set
     #: with /setTitleModel.
     title_model: str = Field(default=title_util.AUTO_TITLE_MODEL)
+    topic_initial_name: str = Field(default=topic_titles.DEFAULT_INITIAL_NAME_STYLE)
     last_n_messages_limit: Optional[int] = Field(default=None)
     thread_last_n_messages_limit: Optional[int] = Field(default=None)
     include_reply_chain: bool = Field(default=True)
@@ -1925,8 +1926,10 @@ class CodexQuotaFallback:
 class UserManager:
     """High-level manager for user preferences, using the UserStorage class."""
 
-    def __init__(self):
-        self.storage = UserStorage(purpose="llm_chat")
+    def __init__(self, *, storage: Optional[UserStorage] = None):
+        self.storage = (
+            storage if storage is not None else UserStorage(purpose="llm_chat")
+        )
 
     def get_prefs(self, user_id: int) -> UserPrefs:
         data = self.storage.get(user_id)
@@ -2044,6 +2047,24 @@ class UserManager:
     def set_title_model(self, user_id: int, model: str):
         prefs = self.get_prefs(user_id)
         prefs.title_model = model
+        self._save_prefs(user_id, prefs)
+
+    def get_topic_initial_name(self, user_id: int) -> str:
+        style = getattr(
+            self.get_prefs(user_id),
+            "topic_initial_name",
+            topic_titles.DEFAULT_INITIAL_NAME_STYLE,
+        )
+        if style not in topic_titles.INITIAL_NAME_STYLES:
+            logger.warning("Unknown initial topic name style: %r", style)
+            return topic_titles.DEFAULT_INITIAL_NAME_STYLE
+        return style
+
+    def set_topic_initial_name(self, user_id: int, *, style: str) -> None:
+        if style not in topic_titles.INITIAL_NAME_STYLES:
+            raise ValueError(f"Unknown initial topic name style: {style!r}")
+        prefs = self.get_prefs(user_id)
+        prefs.topic_initial_name = style
         self._save_prefs(user_id, prefs)
 
     def get_last_n_messages_limit(self, user_id: int) -> Optional[int]:
@@ -2925,6 +2946,7 @@ class ModelMenu:
     current_value: str
     #: None for a picker without reasoning levels (the title model's).
     think_state: Optional[ThinkMenuState]
+    extra_rows: list = field(default_factory=list)
 
 
 #: The model menu of /setTitleModel. It is not a reasoning scope: titles take
@@ -2941,10 +2963,20 @@ def _build_title_model_menu(user_id: int, *, admin_p: bool, codex_p: bool) -> Mo
         title_util.AUTO_TITLE_MODEL: f"Auto ({_model_display_name(auto_model)})",
         **_model_choices_for_access(admin_p=admin_p, codex_p=codex_p),
     }
+    initial_name = user_manager.get_topic_initial_name(user_id)
     return ModelMenu(
         options=options,
         current_value=user_manager.get_title_model(user_id),
         think_state=None,
+        extra_rows=[
+            [
+                tg_compat.callback_button(
+                    f"{'✅ ' if style == initial_name else ''}Initial: {label}",
+                    data=f"topictitle:initial:{style}",
+                )
+                for style, label in topic_titles.INITIAL_NAME_STYLES.items()
+            ]
+        ],
     )
 
 
@@ -3018,7 +3050,11 @@ async def _start_topic_title(
         return topic_titles.schedule_prefix_new_topic(
             event.client,
             await _topic_ref(event, topic_id),
-            _topic_badge(model, reasoning_level=reasoning.level),
+            badge=_topic_badge(model, reasoning_level=reasoning.level),
+            initial_title=topic_titles.initial_topic_title(
+                event.text or "",
+                style=user_manager.get_topic_initial_name(event.sender_id),
+            ),
         )
     except Exception:
         logger.exception("Could not start the title of topic %s", topic_id)
@@ -3057,6 +3093,7 @@ async def _schedule_topic_title(
             ),
             generate=_topic_title_generator(event.sender_id, codex_p=codex_p),
             prefixed=prefixed,
+            choose_icon=True,
         )
     except Exception:
         logger.exception("Could not schedule the title of topic %s", topic_id)
@@ -3206,6 +3243,7 @@ def _model_menu_rows(menu: ModelMenu, *, scope: str, apply_to_p: bool = False) -
         callback_data=lambda key: f"{prefix}{bot_util.sanitize_callback_data(key)}",
     )
     rows = util.build_menu(buttons, n_cols=2)
+    rows.extend(menu.extra_rows)
     if apply_to_p:
         rows.append(_apply_to_row(APPLY_TO_KIND_MODEL, scope=scope))
     rows.append(
@@ -3225,6 +3263,11 @@ def _model_menu_text(*, scope: str, prompt_p: bool = True) -> str:
         if prompt_p
         else MODEL_MENU_GROUP_CUSTOM_ID_HINT
     )
+    if scope == MODEL_MENU_SCOPE_TITLE:
+        hint += (
+            "\n\nInitial topic name: New Chat or the question text. After the"
+            " answer, the title model chooses a short title and topic icon."
+        )
     return f"{BOT_META_INFO_PREFIX}{MODEL_MENU_TITLES[scope]}\n\n{hint}"
 
 
@@ -7443,7 +7486,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /asfile or ..: Export conversation history as markdown file.
 - /setgeminikey: Sets or updates your Gemini API key.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
-- /setTitleModel: The model that writes file titles and summaries, and names new topics. Current: `{prefs.title_model}`.
+- /setTitleModel: The model that writes file titles and summaries, and names new topics with a matching topic icon. Its panel also chooses the initial name: New Chat or Question text. Current model: `{prefs.title_model}`.
 - /codexStatus: Codex usage limits and the temporary stand-in model.
 - /setSystemPrompt: Change my core instructions or reset to default.
 - /setModelHere: Set the AI model for the current chat only.
@@ -7786,6 +7829,7 @@ async def status_handler(event):
         f"**Your Personal Bot Settings**\n\n"
         f"• **Model:** {model_status}\n"
         f"• **Title Model:** `{prefs.title_model}`\n"
+        f"• **Initial Topic Name:** `{topic_titles.INITIAL_NAME_STYLES[user_manager.get_topic_initial_name(user_id)]}`\n"
         f"{codex_quota_line}"
         f"• **Reasoning Effort ({_model_display_name(effective_model)}):** {thinking_status}\n"
         f"• **Enabled Tools:** `{enabled_tools_str}`\n"
@@ -10905,6 +10949,20 @@ async def callback_handler(event):
         #: this toast.
         await event.answer(feedback)
         await event.edit(buttons=_model_menu_rows(menu, scope=REASONING_SCOPE_PERSONAL))
+
+    elif data_str.startswith("topictitle:"):
+        setting, _, choice = data_str[len("topictitle:") :].partition(":")
+        if setting != "initial" or choice not in topic_titles.INITIAL_NAME_STYLES:
+            await event.answer("Unknown topic title setting.", alert=True)
+            return
+        user_manager.set_topic_initial_name(user_id, style=choice)
+        menu = _build_title_model_menu(
+            user_id, admin_p=await util.isAdmin(event), codex_p=codex_p
+        )
+        await event.answer(
+            f"Initial topic name: {topic_titles.INITIAL_NAME_STYLES[choice]}"
+        )
+        await event.edit(buttons=_model_menu_rows(menu, scope=MODEL_MENU_SCOPE_TITLE))
 
     elif data_str.startswith(MODEL_MENU_CALLBACK_PREFIXES[MODEL_MENU_SCOPE_TITLE]):
         choice = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])

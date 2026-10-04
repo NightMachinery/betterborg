@@ -25,6 +25,7 @@ from telethon.tl.types import Message, MessageReplyHeader, PeerChannel, PeerUser
 
 from uniborg import llm_db, tg_compat
 from uniborg.constants import BOT_META_INFO_PREFIX
+from test_llm_chat_topics import _MemoryStorage
 
 
 class _FakeLoop:
@@ -600,6 +601,8 @@ class TitleModelMenuTests(_IsolatedStateTest):
     def setUp(self):
         super().setUp()
         enter = self.stack.enter_context
+        self.manager = plugin.UserManager(storage=_MemoryStorage())
+        enter(patch.object(plugin, "user_manager", self.manager))
         self.title_models = {}
         self.codex_p = False
         enter(patch.object(plugin, "IS_BOT", True))
@@ -667,10 +670,47 @@ class TitleModelMenuTests(_IsolatedStateTest):
                 (f"✅ Auto ({flash_lite})", b"titlemodel_auto"),
                 ("Model A", b"titlemodel_model/a"),
                 ("Model B", b"titlemodel_model/b"),
+                ("✅ Initial: New Chat", b"topictitle:initial:new_chat"),
+                ("Initial: Question text", b"topictitle:initial:question"),
                 ("❌ Cancel", b"mm:cancel:title"),
             ],
         )
         self.assertEqual(self.pending[USER_ID]["type"], "titlemodel")
+
+    def test_initial_name_choice_is_saved_without_closing_custom_model_input(self):
+        self.open_menu()
+        press = _press("topictitle:initial:question")
+
+        asyncio.run(plugin.callback_handler(press))
+
+        self.assertEqual(self.manager.get_topic_initial_name(USER_ID), "question")
+        reloaded = plugin.UserManager(storage=self.manager.storage)
+        self.assertEqual(reloaded.get_topic_initial_name(USER_ID), "question")
+        self.assertEqual(self.pending[USER_ID]["type"], "titlemodel")
+        self.assertEqual(
+            press.edit.await_args.kwargs["buttons"][-2][1].text,
+            "✅ Initial: Question text",
+        )
+        press.answer.assert_awaited_once_with("Initial topic name: Question text")
+
+    def test_unknown_initial_name_choice_is_refused(self):
+        for data in ("topictitle:initial:unknown", "topictitle:other:question"):
+            press = _press(data)
+            asyncio.run(plugin.callback_handler(press))
+            self.assertEqual(self.manager.get_topic_initial_name(USER_ID), "new_chat")
+            press.edit.assert_not_awaited()
+            self.assertTrue(press.answer.await_args.kwargs["alert"])
+
+    def test_invalid_stored_initial_name_falls_back_without_losing_other_prefs(self):
+        self.manager.storage.set(
+            USER_ID, {"topic_initial_name": "unknown", "model": "model/a"}
+        )
+        with patch.object(plugin, "logger", create=True) as logger:
+            self.assertEqual(self.manager.get_topic_initial_name(USER_ID), "new_chat")
+            logger.warning.assert_called_once()
+        self.assertEqual(self.manager.get_prefs(USER_ID).model, "model/a")
+        with self.assertRaises(ValueError):
+            self.manager.set_topic_initial_name(USER_ID, style="unknown")
 
     def test_with_codex_auto_names_the_reserve(self):
         self.codex_p = True

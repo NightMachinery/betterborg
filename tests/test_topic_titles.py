@@ -412,7 +412,7 @@ class PrefixNewTopicTests(unittest.IsolatedAsyncioTestCase):
         return await topic_titles.prefix_new_topic(
             client,
             _ref(**overrides),
-            _badge(icon_emoji="⚡"),
+            badge=_badge(icon_emoji="⚡"),
             marks=self.marks,
             icons=self.icons,
         )
@@ -477,6 +477,89 @@ class PrefixNewTopicTests(unittest.IsolatedAsyncioTestCase):
             prefixed = await self.prefix(client)
 
         self.assertEqual(prefixed, topic_titles.PrefixedTopic(service_message_id=None))
+
+
+class TopicPresentationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_initial_name_styles_override_either_telegram_name(self):
+        for telegram_name in ("New Chat", "what is a monad"):
+            for style, expected in (
+                ("new_chat", "New Chat"),
+                ("question", "What is a monad?"),
+            ):
+                with self.subTest(telegram_name=telegram_name, style=style):
+                    topic = _forum_topic()
+                    topic.title = telegram_name
+                    client = _Client(topic)
+                    await topic_titles.prefix_new_topic(
+                        client,
+                        _ref(),
+                        badge=_badge(),
+                        marks=_memory_marks(),
+                        initial_title=topic_titles.initial_topic_title(
+                            "What is a monad?", style=style
+                        ),
+                    )
+                    (edit,) = client.of(functions.messages.EditForumTopicRequest)
+                    self.assertEqual(edit.title, f"⚡◕ {expected}")
+
+    def test_blank_question_falls_back_and_unknown_style_raises(self):
+        self.assertEqual(
+            topic_titles.initial_topic_title("   ", style="question"), "New Chat"
+        )
+        with self.assertRaises(ValueError):
+            topic_titles.initial_topic_title("hi", style="unknown")
+
+    async def test_title_model_chooses_only_a_supported_icon(self):
+        for choice, expected in (
+            ("💎", 502),
+            ("⚡️", 501),
+            ("not an icon", 503),
+            ("", 503),
+        ):
+            with self.subTest(choice=choice):
+                client = _Client(_forum_topic())
+                generated = mock.AsyncMock(
+                    return_value=topic_titles.TopicTitle(
+                        title="Monads", icon_emoji=choice
+                    )
+                )
+                await topic_titles.title_new_topic(
+                    client,
+                    _request(icon_emoji="🔮"),
+                    generate=generated,
+                    marks=_memory_marks(),
+                    icons=topic_titles.TopicIcons(),
+                    choose_icon=True,
+                )
+                (edit,) = client.of(functions.messages.EditForumTopicRequest)
+                self.assertEqual(edit.icon_emoji_id, expected)
+                self.assertEqual(edit.title, "⚡◕ Monads")
+                prompt = generated.await_args.args[0]
+                self.assertIn("Choose icon_emoji", prompt)
+                for emoji in ("⚡", "💎", "🔮"):
+                    self.assertIn(emoji, prompt)
+                self.assertEqual(
+                    len(client.of(functions.messages.GetStickerSetRequest)), 1
+                )
+
+    async def test_failed_icon_lookup_still_generates_the_title(self):
+        client = _Client(_forum_topic(), fail=[functions.messages.GetStickerSetRequest])
+        generated = mock.AsyncMock(
+            return_value=topic_titles.TopicTitle(title="Monads", icon_emoji="💎")
+        )
+        with self.assertLogs(topic_titles.logger, logging.ERROR):
+            await topic_titles.title_new_topic(
+                client,
+                _request(icon_emoji="🔮"),
+                generate=generated,
+                marks=_memory_marks(),
+                icons=topic_titles.TopicIcons(),
+                choose_icon=True,
+            )
+        (edit,) = client.of(functions.messages.EditForumTopicRequest)
+        self.assertEqual(edit.title, "⚡◕ Monads")
+        self.assertIsNone(edit.icon_emoji_id)
+        self.assertNotIn("Choose icon_emoji", generated.await_args.args[0])
 
 
 class TitleAfterPrefixTests(unittest.IsolatedAsyncioTestCase):
@@ -550,7 +633,7 @@ class TitleAfterPrefixTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertLogs(topic_titles.logger, logging.ERROR) as logs:
             task = topic_titles.schedule_prefix_new_topic(
-                client, _ref(), _badge(), marks=self.marks
+                client, _ref(), badge=_badge(), marks=self.marks
             )
             self.assertIsNone(await task)
 

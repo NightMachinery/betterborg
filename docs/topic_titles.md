@@ -1,16 +1,18 @@
 # Automatic Topic Titles
 
 In a bot's private chat with threaded mode on, a message typed in "All" makes
-Telegram open a new topic for it and name the topic after that message. The
-chat bot then renames such a topic twice:
+Telegram open a new topic for it, initially called "New Chat" or named after
+the message, depending on the client. The chat bot renames such a topic twice:
 
 1. **The badge, at once.** As soon as the bot starts answering the topic's
    first message, it puts the model's *badge* (its emoji and effort symbol)
-   before the name Telegram gave the topic, and sets the topic icon to the
-   model's icon: `⚡◕ what is a monad`.
+   before the initial name, and sets the topic icon to the model's icon.
+   `/setTitleModel` offers **Initial: New Chat** (the default) or
+   **Initial: Question text**: `⚡◕ New Chat` or `⚡◕ what is a monad`.
 2. **The title, after the answer.** Once the answer is delivered, it renames
-   the topic to the badge and a short title, and deletes the service message
-   the first rename posted, so the chat shows one rename:
+   the topic to the badge and a short title, sets the title model's chosen
+   topic icon, and deletes the first rename's service message, so the chat
+   shows one rename:
 
        ⚡◕ Monads explained
 
@@ -19,7 +21,7 @@ The name has three parts:
 - the emoji of the model (`⚡` is Gemini Flash);
 - a circle showing the reasoning effort (`◕` is high), left out for models
   without reasoning levels;
-- Telegram's name for the topic, kept as it is, and then a title of at most
+- the selected initial name, and then a title of at most
   six words, written by the user's title model (`/setTitleModel`,
   `docs/title_model.md`) from the first question and its answer.
 
@@ -37,7 +39,7 @@ All of these must hold:
 - For the badge: the request passed the model and API-key checks. For the
   title: the answer was delivered. After an error, the Codex quota panel, a
   cancelled request or the "No response" notice, the topic keeps the badge
-  and Telegram's name. An image-only answer counts; its title comes from the
+  and the initial name. An image-only answer counts; its title comes from the
   question alone.
 - Telegram, not the user, named the topic: the topic carries `title_missing`.
   Every topic opened from "All" does. A topic the user creates with a name of
@@ -82,6 +84,12 @@ A custom model id gets its provider's emoji (`_synthesized_spec`): 🔷 Codex,
 🧭 Pioneer, ♊ Gemini, 🔀 OpenRouter, and 🤖 for anything else.
 
 ## Topic icons
+
+After the answer, the title model chooses an icon matching the conversation
+from the supported emoji list supplied in its prompt. The model and effort
+badge in the name is kept. An empty or unsupported choice keeps the model's
+icon; an unavailable icon list leaves the icon alone. This uses the same
+title-model request, with no extra model call.
 
 A bot cannot have Telegram Premium, so the only icons it may set are
 Telegram's 112 default topic icons (`inputStickerSetEmojiDefaultTopicIcons`,
@@ -190,6 +198,8 @@ generated; the title's rename waits for it.
   task; `_topic_badge`; `_topic_title_generator`, which uses the same title
   settings as file titles (`_title_settings`); and
   `GenerationResult.reasoning_level`, the effort that was sent.
+- `UserPrefs.topic_initial_name`: the personal initial-name style, persisted
+  through `UserManager` and selected in the `/setTitleModel` panel.
 - Tests: `tests/test_topic_titles.py`, `tests/test_llm_models.py`,
   `TopicTitleHookTests` in `tests/test_llm_chat_topics.py`, and
   `TopicTitleHandoffTests` in `tests/test_delivery_golden.py`.
