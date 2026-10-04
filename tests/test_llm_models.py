@@ -88,5 +88,44 @@ class ModelEmojiTests(unittest.TestCase):
                 self.assertEqual(llm_models.model_emoji(model), emoji)
 
 
+#: Telegram's default topic icons (`inputStickerSetEmojiDefaultTopicIcons`),
+#: the only icons a bot may set, as a canary bot read them on 2026-10-04,
+#: without U+FE0F.
+DEFAULT_TOPIC_ICONS = set(
+    "📰 💡 ⚡ 🎙 🔝 🗣 🆒 ❗ 📝 📆 📁 🔎 📣 🔥 ❤ ❓ 📈 📉 💎 💰 💸 🪙 💱 ⁉ 🎮 💻 📱"
+    " 🚗 🏠 💘 🎉 ‼ 🏆 🏁 🎬 🎵 🔞 📚 👑 ⚽ 🏀 📺 👀 🫦 🍓 💄 👠 ✈ 🧳 🏖 ⛅ 🦄 🛍 👜"
+    " 🛒 🚂 🛥 🏔 🏕 🤖 🪩 🎟 🏴\u200d☠ 🗳 🎓 🔭 🔬 🎶 🎤 🕺 💃 🪖 💼 🧪"
+    " 👨\u200d👩\u200d👧\u200d👦 👶 🤰 💅 🏛 🧮 🖨 👮\u200d♂ 🩺 💊 💉 🧼 🪪 🛃 🍽 🐟 🎨"
+    " 🎭 🎩 🔮 🍹 🎂 ☕ 🍣 🍔 🍕 🦠 💬 🎄 🎃 ✍ ⭐ ✅ 🎖 🤡 🧠 🦮 🐈".split()
+)
+
+
+class TopicIconTests(unittest.TestCase):
+    def test_every_model_has_an_icon_a_bot_may_set(self):
+        models = [spec.id for spec in llm_models.MODEL_SPECS] + [
+            "openai-codex/gpt-9",
+            "pioneer/model",
+            "gemini/gemini-9-ultra",
+            "openrouter/vendor/model",
+            "somebody/else",
+            None,
+        ]
+        for model in models:
+            with self.subTest(model=model):
+                self.assertIn(llm_models.topic_icon_emoji(model), DEFAULT_TOPIC_ICONS)
+
+    def test_an_emoji_in_the_set_is_its_own_icon(self):
+        self.assertEqual(llm_models.topic_icon_emoji(GEMINI_FLASH_LITE_LATEST), "💡")
+        self.assertEqual(llm_models.topic_icon_emoji(None), "🤖")
+        for spec in llm_models.MODEL_SPECS:
+            plain = spec.emoji.replace("\ufe0f", "")
+            if plain in DEFAULT_TOPIC_ICONS:
+                with self.subTest(model=spec.id):
+                    self.assertEqual(llm_models.topic_icon_emoji(spec.id), plain)
+
+    def test_luna_gets_a_stand_in(self):
+        self.assertEqual(llm_models.topic_icon_emoji(OPENAI_CODEX_LUNA_RESERVE), "🔮")
+
+
 if __name__ == "__main__":
     unittest.main()

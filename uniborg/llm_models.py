@@ -308,5 +308,36 @@ def model_emoji(model: Optional[str]) -> str:
     return spec_for_model(model).emoji
 
 
+#: The topic icon for each model emoji that is not itself one of Telegram's
+#: default topic icons, the only icons a bot may set (docs/topic_titles.md).
+#: Written without the U+FE0F variation selector, as `topic_icon_emoji`
+#: compares them.
+TOPIC_ICON_STAND_INS = {
+    "🪶": "💡",
+    "🌩": "⛅",
+    "💥": "🔥",
+    "🌞": "⭐",
+    "☀": "⭐",
+    "✨": "🔭",
+    "🌙": "🔮",
+    "🌕": "🔮",
+    "🐋": "🐟",
+    "🐳": "🐟",
+    "🌬": "💬",
+    "🧙": "🎩",
+    "🖼": "🎨",
+    "🔷": "💻",
+    "🧭": "🧪",
+    "♊": "💎",
+    "🔀": "🤖",
+}
+
+
+def topic_icon_emoji(model: Optional[str]) -> str:
+    """The default topic icon that stands for MODEL, without U+FE0F."""
+    emoji = model_emoji(model).replace("️", "")
+    return TOPIC_ICON_STAND_INS.get(emoji, emoji)
+
+
 def reasoning_levels_for_model(model: Optional[str]) -> Tuple[str, ...]:
     return spec_for_model(model).reasoning_levels
