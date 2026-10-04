@@ -520,12 +520,14 @@ def _run_chat(
     stop_when_parked: bool = False,
     reasoning_level: Optional[str] = None,
     schedule_topic_title=None,
+    start_topic_title=None,
 ) -> list:
     """Run one message through `chat_handler` and return its delivery log.
 
     With `stop_when_parked`, the stream parks after its events and the test
     then cancels the user's LLM tasks, which is what /stop does.
-    `schedule_topic_title`, when given, replaces `_schedule_topic_title`.
+    `schedule_topic_title` and `start_topic_title`, when given, replace
+    `_schedule_topic_title` and `_start_topic_title`.
     """
     log = _DeliveryLog()
     event = _event(log, text=text, is_private=is_private)
@@ -621,6 +623,8 @@ def _run_chat(
             enter(
                 patch.object(plugin, "_schedule_topic_title", new=schedule_topic_title)
             )
+        if start_topic_title is not None:
+            enter(patch.object(plugin, "_start_topic_title", new=start_topic_title))
         enter(
             patch.object(
                 plugin,
@@ -726,17 +730,25 @@ class TopicTitleHandoffTests(unittest.TestCase):
     """What a delivered answer hands to the automatic topic title."""
 
     def test_the_answer_its_model_and_effort_are_handed_over(self):
+        prefixed = object()
+        start = AsyncMock(return_value=prefixed)
         schedule = AsyncMock()
         timeline = ((0.1, "  Hi there.  "),)
 
         _run_chat(
             LITELLM,
-            text=".fl hello",
+            text=".fl .th hello",
             timed_events=_timed_events(LITELLM, timeline),
             reasoning_level="high",
             schedule_topic_title=schedule,
+            start_topic_title=start,
         )
 
+        start.assert_awaited_once()
+        self.assertEqual(
+            start.await_args.kwargs,
+            {"model": plugin.GEMINI_FLASH_LITE_LATEST, "prefix_effort": "high"},
+        )
         schedule.assert_awaited_once()
         self.assertEqual(
             schedule.await_args.kwargs,
@@ -746,6 +758,7 @@ class TopicTitleHandoffTests(unittest.TestCase):
                 "model": plugin.GEMINI_FLASH_LITE_LATEST,
                 "reasoning_level": "high",
                 "codex_p": True,
+                "prefixed": prefixed,
             },
         )
 

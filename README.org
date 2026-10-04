@@ -190,9 +190,10 @@ Inside a topic, =/setModelHere=, =/setThinkHere= and =/setSystemPromptHere=
 set that topic's own model, effort and prompt, which come before the chat's;
 their menus have an "Apply to" row that switches them to the whole chat. See
 [[file:docs/private_topics.md][docs/private_topics.md]].
-After the first answer in a topic that Telegram named (one opened by typing in
-"All"), the bot renames it once: the answering model's emoji, a circle that
-fills with the reasoning effort, then a short title, as in
+In a topic that Telegram named (one opened by typing in "All"), the bot puts
+the model's emoji and a circle that fills with the reasoning effort before the
+name as soon as it starts answering, and sets the model's topic icon. After
+the answer it renames the topic to that badge and a short title, as in
 =⚡◕ Monads explained=. See [[file:docs/topic_titles.md][docs/topic_titles.md]].
 
 ** timetracker time zones

@@ -1698,14 +1698,17 @@ class TopicTitleHookTests(_BotChatCase):
     QUESTION = "What is a monad?"
     ANSWER = "A way to chain computations."
 
+    #: What the prefix step handed over, passed through to the title step.
+    PREFIXED = object()
+
     def setUp(self):
         super().setUp()
         schedule = patch.object(plugin.topic_titles, "schedule_title_new_topic")
         self.schedule = schedule.start()
         self.addCleanup(schedule.stop)
 
-    def hand_over(self, message, *, answer=ANSWER, get_input_chat=None):
-        event = _Event(
+    def event(self, message, *, get_input_chat=None):
+        return _Event(
             message,
             client=self.chat.client,
             chat_id=USER_ID,
@@ -1713,6 +1716,9 @@ class TopicTitleHookTests(_BotChatCase):
             is_private=True,
             get_input_chat=get_input_chat or AsyncMock(return_value=self.PEER),
         )
+
+    def hand_over(self, message, *, answer=ANSWER, get_input_chat=None):
+        event = self.event(message, get_input_chat=get_input_chat)
         asyncio.run(
             plugin._schedule_topic_title(
                 event,
@@ -1721,9 +1727,18 @@ class TopicTitleHookTests(_BotChatCase):
                 model=plugin.OPENAI_CODEX_LUNA_RESERVE,
                 reasoning_level="low",
                 codex_p=True,
+                prefixed=self.PREFIXED,
             )
         )
         return event
+
+    def topic(self, message):
+        return plugin.topic_titles.TopicRef(
+            peer=self.PEER,
+            chat_id=USER_ID,
+            topic_id=TOPIC_ID,
+            message_date=message.date,
+        )
 
     def test_an_answer_in_a_topic_schedules_its_title(self):
         message = _said(330, self.QUESTION)
@@ -1736,17 +1751,65 @@ class TopicTitleHookTests(_BotChatCase):
         self.assertEqual(
             request,
             plugin.topic_titles.TopicTitleRequest(
-                peer=self.PEER,
-                chat_id=USER_ID,
-                topic_id=TOPIC_ID,
-                message_date=message.date,
+                topic=self.topic(message),
                 question=self.QUESTION,
                 answer=self.ANSWER,
-                model_emoji="🌙",
-                effort_symbol="◔",
+                badge=plugin.topic_titles.TopicBadge(
+                    model_emoji="🌙", effort_symbol="◔", icon_emoji="🔮"
+                ),
             ),
         )
         self.assertTrue(callable(self.schedule.call_args.kwargs["generate"]))
+        self.assertIs(self.schedule.call_args.kwargs["prefixed"], self.PREFIXED)
+
+    def start(self, message, *, prefix_effort=None, get_input_chat=None):
+        event = self.event(message, get_input_chat=get_input_chat)
+        with patch.object(
+            plugin.topic_titles, "schedule_prefix_new_topic"
+        ) as schedule_prefix:
+            started = asyncio.run(
+                plugin._start_topic_title(
+                    event,
+                    model=plugin.OPENAI_CODEX_LUNA_RESERVE,
+                    prefix_effort=prefix_effort,
+                )
+            )
+        return started, schedule_prefix
+
+    def test_a_message_in_a_topic_badges_it_at_once(self):
+        message = _said(330, self.QUESTION)
+
+        started, schedule_prefix = self.start(message, prefix_effort="xhigh")
+
+        schedule_prefix.assert_called_once()
+        self.assertIs(started, schedule_prefix.return_value)
+        _client, topic, badge = schedule_prefix.call_args.args
+        self.assertEqual(topic, self.topic(message))
+        self.assertEqual(
+            badge,
+            plugin.topic_titles.TopicBadge(
+                model_emoji="🌙", effort_symbol="●", icon_emoji="🔮"
+            ),
+        )
+
+    def test_no_badge_outside_topics(self):
+        started, schedule_prefix = self.start(
+            _said(330, "hi", top_id=None, parent=None)
+        )
+
+        self.assertIsNone(started)
+        schedule_prefix.assert_not_called()
+
+    def test_a_failure_to_badge_does_not_reach_the_answer(self):
+        with patch.object(plugin, "logger", create=True) as logger:
+            started, schedule_prefix = self.start(
+                _said(330, "hi"),
+                get_input_chat=AsyncMock(side_effect=ConnectionError("gone")),
+            )
+
+        self.assertIsNone(started)
+        logger.exception.assert_called_once()
+        schedule_prefix.assert_not_called()
 
     def test_no_title_outside_topics_for_meta_answers_or_on_user_accounts(self):
         cases = {

@@ -1,22 +1,32 @@
 # Automatic Topic Titles
 
 In a bot's private chat with threaded mode on, a message typed in "All" makes
-Telegram open a new topic for it and name the topic after that message. Once
-the chat bot has answered the first message of such a topic, it renames the
-topic once, to something like:
+Telegram open a new topic for it and name the topic after that message. The
+chat bot then renames such a topic twice:
 
-    ⚡◕ Monads explained
+1. **The badge, at once.** As soon as the bot starts answering the topic's
+   first message, it puts the model's *badge* (its emoji and effort symbol)
+   before the name Telegram gave the topic, and sets the topic icon to the
+   model's icon: `⚡◕ what is a monad`.
+2. **The title, after the answer.** Once the answer is delivered, it renames
+   the topic to the badge and a short title, and deletes the service message
+   the first rename posted, so the chat shows one rename:
+
+       ⚡◕ Monads explained
 
 The name has three parts:
 
-- the emoji of the model that answered (`⚡` is Gemini Flash);
-- a circle showing the reasoning effort sent with the request (`◕` is high),
-  left out for models without reasoning levels;
-- a title of at most six words, written by the user's title model
-  (`/setTitleModel`, `docs/title_model.md`) from the first question and its
-  answer.
+- the emoji of the model (`⚡` is Gemini Flash);
+- a circle showing the reasoning effort (`◕` is high), left out for models
+  without reasoning levels;
+- Telegram's name for the topic, kept as it is, and then a title of at most
+  six words, written by the user's title model (`/setTitleModel`,
+  `docs/title_model.md`) from the first question and its answer.
 
-The whole name is cut to 128 characters, the Bot API's limit.
+The badge of the first rename uses the model and effort the request resolved
+to; the second uses those the answer was sent with. They differ only when a
+request falls back to another model. The whole name is cut to 128
+characters, the Bot API's limit.
 
 ## Which topics are renamed
 
@@ -24,9 +34,11 @@ All of these must hold:
 
 - The bot is a bot (not a user account), and the message is in one of its
   private topics (`docs/private_topics.md`).
-- The answer was delivered. Errors, the Codex quota panel, a cancelled
-  request and the "No response" notice rename nothing. An image-only answer
-  counts; its title comes from the question alone.
+- For the badge: the request passed the model and API-key checks. For the
+  title: the answer was delivered. After an error, the Codex quota panel, a
+  cancelled request or the "No response" notice, the topic keeps the badge
+  and Telegram's name. An image-only answer counts; its title comes from the
+  question alone.
 - Telegram, not the user, named the topic: the topic carries `title_missing`.
   Every topic opened from "All" does. A topic the user creates with a name of
   their own should not, by the flag's meaning (the Bot API calls it
@@ -35,9 +47,10 @@ All of these must hold:
   (`NEW_TOPIC_WINDOW`). A topic typed in "All" opens with its first message,
   so this keeps older topics out. A Reserve re-run from the quota panel
   answers the original message, so it still counts.
-- No earlier answer in the topic claimed it. The first answer to reach the
+- No earlier answer in the topic claimed it. The first request to reach the
   check claims the topic whether or not it turns out to qualify, so each
-  topic is checked once and renamed at most once.
+  topic is checked once. The badge's rename claims it, and the title's rename
+  follows only that claim.
 
 The claim is a Redis key, `borg:topic_titled:<chat>:<topic>`, kept for the
 long expiry (a month by default), so a restart does not rename a topic twice.
@@ -67,6 +80,32 @@ distinct.
 
 A custom model id gets its provider's emoji (`_synthesized_spec`): 🔷 Codex,
 🧭 Pioneer, ♊ Gemini, 🔀 OpenRouter, and 🤖 for anything else.
+
+## Topic icons
+
+A bot cannot have Telegram Premium, so the only icons it may set are
+Telegram's 112 default topic icons (`inputStickerSetEmojiDefaultTopicIcons`,
+the Bot API's `getForumTopicIconStickers`); any other custom emoji needs
+Premium. `TopicIcons` loads that set once per process and finds an icon by
+its emoji. A model whose emoji is in the set uses it (⚡, 💎, 🤖); the others
+use a stand-in (`TOPIC_ICON_STAND_INS` in `uniborg/llm_models.py`):
+
+- 🪶 Flash Lite: 💡
+- 🌩️ Gemini 2.5 Flash: ⛅
+- 💥 Gemini 3 Flash: 🔥
+- 🌞 and ☀️ Sol: ⭐
+- ✨ Astra: 🔭
+- 🌙 Luna Reserve and 🌕 Luna: 🔮
+- 🐋 and 🐳 DeepSeek: 🐟
+- 🌬️ Mistral Medium: 💬
+- 🧙 Magistral: 🎩
+- 🖼️ Pixtral: 🎨
+- 🔷 Codex custom ids: 💻
+- 🧭 Pioneer: 🧪
+- ♊ Gemini custom ids: 💎
+- 🔀 OpenRouter custom ids: 🤖
+
+A test checks every model's icon against the set as read on 2026-10-04.
 
 ## Effort symbols
 
@@ -106,21 +145,30 @@ Observed on a canary bot (Telethon 1.45, layer 229):
 - Ten renames in a row drew no flood wait.
 - A 129-character title was accepted, though the Bot API documents 128 as the
   limit; names are cut to 128.
+- A bot sets a private topic's icon with `editForumTopic(icon_emoji_id=...)`,
+  without Premium, given one of the default topic icons. A title and an icon
+  in one request post one service message. A later rename without
+  `icon_emoji_id` keeps the icon.
+- The bot can delete its own rename service message
+  (`messages.deleteMessages(revoke=True)` answered `pts_count=1`).
 
 ## Costs
 
-- Every answer in a private topic: one Redis `SET NX`.
+- Every request in a private topic: one Redis `SET NX`.
 - Each new topic, once: one `getForumTopicsByID`, and for a qualifying
-  topic, one title-model request (with its Flash Lite fallback) and one
-  `editForumTopic`.
+  topic, two `editForumTopic`, one `deleteMessages` and one title-model
+  request (with its Flash Lite fallback).
+- Each process, once: one `getStickerSet` for the default topic icons.
 
-The rename runs as a background task after the answer is delivered, so a slow
-title model or a flood wait never delays the answer.
+Both renames run as background tasks, so a slow title model or a flood wait
+never delays the answer. The badge's rename starts before the answer is
+generated; the title's rename waits for it.
 
 ## Limits
 
-- A failed rename is not retried: the topic was claimed, and keeps
-  Telegram's name. Failures are logged.
+- A failed rename is not retried: the topic was claimed, and keeps the name
+  it had. A failed badge rename still lets the title's rename run. Failures
+  are logged.
 - If the user renames a topic before its first answer arrives, the bot may
   still rename it: whether a user's rename clears `title_missing` has not
   been observed.
@@ -131,13 +179,16 @@ title model or a flood wait never delays the answer.
 ## Code
 
 - `uniborg/topic_titles.py`: the claim (`TopicTitleMarks`), the checks,
-  the prompt, `compose_topic_title`, `title_new_topic` and
-  `schedule_title_new_topic`.
+  `TopicBadge`, `TopicIcons`, the prompt, `compose_topic_title`,
+  `prefix_new_topic` and `title_new_topic`, and their `schedule_` versions.
 - `uniborg/llm_models.py`: `ModelSpec.emoji`, `model_emoji`,
-  `REASONING_LEVEL_SYMBOLS` and `reasoning_level_symbol`.
-- `llm_chat_plugins/llm_chat.py`: `_schedule_topic_title`, called after the
-  final delivery in `chat_handler`; `_topic_title_generator`, which uses the
-  same title settings as file titles (`_title_settings`); and
+  `TOPIC_ICON_STAND_INS`, `topic_icon_emoji`, `REASONING_LEVEL_SYMBOLS` and
+  `reasoning_level_symbol`.
+- `llm_chat_plugins/llm_chat.py`: `_start_topic_title`, called in
+  `chat_handler` once the model and API key are settled, and
+  `_schedule_topic_title`, called after the final delivery with the start's
+  task; `_topic_badge`; `_topic_title_generator`, which uses the same title
+  settings as file titles (`_title_settings`); and
   `GenerationResult.reasoning_level`, the effort that was sent.
 - Tests: `tests/test_topic_titles.py`, `tests/test_llm_models.py`,
   `TopicTitleHookTests` in `tests/test_llm_chat_topics.py`, and

@@ -349,9 +349,10 @@ a few fields.
 
 ## Automatic titles
 
-After the first answer in a topic Telegram named, llm_chat renames it once,
-with the answering model's emoji, a circle for the effort and a short title. See
-`docs/topic_titles.md`.
+In a topic Telegram named, llm_chat puts the model's emoji and a circle for
+the effort before Telegram's name as soon as it starts answering the first
+message, and sets the model's topic icon. After the answer it renames the
+topic to that badge and a short title. See `docs/topic_titles.md`.
 
 ## Related files
 

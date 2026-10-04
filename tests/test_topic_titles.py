@@ -43,20 +43,83 @@ def _forum_topics(*topics):
     )
 
 
-class _Client:
-    """Answers `getForumTopicsByID` with TOPICS and records every request."""
+#: The custom emoji ids of a few default topic icons, as Telegram lists them
+#: (with U+FE0F where Telegram writes it).
+ICON_IDS = {"⚡️": 501, "💎": 502, "🔮": 503}
+#: The id of the service message a rename posts.
+RENAME_MESSAGE_ID = 900
 
-    def __init__(self, *topics):
+
+def _icon_set():
+    documents = [
+        types.Document(
+            id=document_id,
+            access_hash=0,
+            file_reference=b"",
+            date=T0,
+            mime_type="application/x-tgsticker",
+            size=0,
+            dc_id=1,
+            attributes=[
+                types.DocumentAttributeCustomEmoji(
+                    alt=alt, stickerset=types.InputStickerSetEmpty()
+                )
+            ],
+        )
+        for alt, document_id in ICON_IDS.items()
+    ]
+    return messages_types.StickerSet(
+        set=None, packs=[], keywords=[], documents=documents
+    )
+
+
+def _rename_updates(title):
+    return types.Updates(
+        updates=[
+            types.UpdateNewMessage(
+                message=types.MessageService(
+                    id=RENAME_MESSAGE_ID,
+                    peer_id=types.PeerUser(CHAT_ID),
+                    date=T0,
+                    action=types.MessageActionTopicEdit(title=title),
+                ),
+                pts=1,
+                pts_count=1,
+            )
+        ],
+        users=[],
+        chats=[],
+        date=T0,
+        seq=0,
+    )
+
+
+class _Client:
+    """Answers `getForumTopicsByID` with TOPICS, the default topic icons with
+    `ICON_IDS`, and records every request. A request whose type is in FAIL
+    raises."""
+
+    def __init__(self, *topics, fail=()):
         self.topics = topics
+        self.fail = tuple(fail)
         self.requests = []
 
     async def __call__(self, request):
         self.requests.append(request)
+        if isinstance(request, self.fail):
+            raise ConnectionError(f"{type(request).__name__} failed")
         if isinstance(request, functions.messages.GetForumTopicsByIDRequest):
             return _forum_topics(*self.topics)
         if isinstance(request, functions.messages.EditForumTopicRequest):
-            return types.Updates(updates=[], users=[], chats=[], date=T0, seq=0)
+            return _rename_updates(request.title)
+        if isinstance(request, functions.messages.GetStickerSetRequest):
+            return _icon_set()
+        if isinstance(request, functions.messages.DeleteMessagesRequest):
+            return types.messages.AffectedMessages(pts=2, pts_count=1)
         raise AssertionError(f"Unexpected request: {request!r}")
+
+    def of(self, request_type):
+        return [r for r in self.requests if isinstance(r, request_type)]
 
 
 class _Redis:
@@ -74,19 +137,25 @@ class _Redis:
         return True
 
 
-def _request(**overrides):
-    fields = dict(
-        peer=PEER,
-        chat_id=CHAT_ID,
-        topic_id=TOPIC_ID,
-        message_date=T0 + timedelta(seconds=1),
+def _ref(*, message_date=T0 + timedelta(seconds=1)):
+    return topic_titles.TopicRef(
+        peer=PEER, chat_id=CHAT_ID, topic_id=TOPIC_ID, message_date=message_date
+    )
+
+
+def _badge(*, icon_emoji=""):
+    return topic_titles.TopicBadge(
+        model_emoji="⚡", effort_symbol="◕", icon_emoji=icon_emoji
+    )
+
+
+def _request(*, message_date=T0 + timedelta(seconds=1), icon_emoji=""):
+    return topic_titles.TopicTitleRequest(
+        topic=_ref(message_date=message_date),
         question="What is a monad?",
         answer="A monad is a monoid in the category of endofunctors.",
-        model_emoji="⚡",
-        effort_symbol="◕",
+        badge=_badge(icon_emoji=icon_emoji),
     )
-    fields.update(overrides)
-    return topic_titles.TopicTitleRequest(**fields)
 
 
 def _memory_marks():
@@ -99,7 +168,10 @@ def _memory_marks():
 class ComposeTopicTitleTests(unittest.TestCase):
     def compose(self, title, *, model_emoji="⚡", effort_symbol="◕"):
         return topic_titles.compose_topic_title(
-            title, model_emoji=model_emoji, effort_symbol=effort_symbol
+            title,
+            badge=topic_titles.TopicBadge(
+                model_emoji=model_emoji, effort_symbol=effort_symbol
+            ),
         )
 
     def test_emoji_and_symbol_come_first(self):
@@ -211,7 +283,11 @@ class TitleNewTopicTests(unittest.IsolatedAsyncioTestCase):
 
     async def title(self, client, **overrides):
         return await topic_titles.title_new_topic(
-            client, _request(**overrides), generate=self.generate, marks=self.marks
+            client,
+            _request(**overrides),
+            generate=self.generate,
+            marks=self.marks,
+            icons=topic_titles.TopicIcons(),
         )
 
     async def test_the_first_answer_renames_the_topic_by_its_topic_id(self):
@@ -273,6 +349,208 @@ class TitleNewTopicTests(unittest.IsolatedAsyncioTestCase):
                 _request(),
                 generate=failing,
                 marks=self.marks,
+            )
+            self.assertIsNone(await task)
+
+        self.assertIn(str(TOPIC_ID), logs.output[0])
+
+    async def test_the_title_sets_the_badges_icon(self):
+        client = _Client(_forum_topic())
+
+        await self.title(client, icon_emoji="⚡")
+
+        (edit,) = client.of(functions.messages.EditForumTopicRequest)
+        self.assertEqual(edit.icon_emoji_id, ICON_IDS["⚡️"])
+
+    async def test_without_an_icon_the_topics_icon_is_left_alone(self):
+        client = _Client(_forum_topic())
+
+        await self.title(client)
+
+        (edit,) = client.of(functions.messages.EditForumTopicRequest)
+        self.assertIsNone(edit.icon_emoji_id)
+        self.assertEqual(client.of(functions.messages.GetStickerSetRequest), [])
+
+
+class TopicIconsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_icons_load_once_and_match_without_the_variation_selector(self):
+        icons = topic_titles.TopicIcons()
+        client = _Client()
+
+        self.assertEqual(await icons.document_id(client, "⚡"), ICON_IDS["⚡️"])
+        self.assertEqual(await icons.document_id(client, "⚡️"), ICON_IDS["⚡️"])
+        self.assertEqual(await icons.document_id(client, "💎"), ICON_IDS["💎"])
+        self.assertEqual(len(client.requests), 1)
+
+    async def test_an_emoji_outside_the_set_has_no_icon(self):
+        icons = topic_titles.TopicIcons()
+
+        self.assertIsNone(await icons.document_id(_Client(), "🌙"))
+
+    async def test_no_emoji_asks_nothing(self):
+        client = _Client()
+
+        self.assertIsNone(await topic_titles.TopicIcons().document_id(client, ""))
+        self.assertEqual(client.requests, [])
+
+    async def test_a_failed_load_is_logged_and_retried(self):
+        icons = topic_titles.TopicIcons()
+        broken = _Client(fail=[functions.messages.GetStickerSetRequest])
+
+        with self.assertLogs(topic_titles.logger, logging.ERROR):
+            self.assertIsNone(await icons.document_id(broken, "⚡"))
+
+        self.assertEqual(await icons.document_id(_Client(), "⚡"), ICON_IDS["⚡️"])
+
+
+class PrefixNewTopicTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.marks = _memory_marks()
+        self.icons = topic_titles.TopicIcons()
+
+    async def prefix(self, client, **overrides):
+        return await topic_titles.prefix_new_topic(
+            client,
+            _ref(**overrides),
+            _badge(icon_emoji="⚡"),
+            marks=self.marks,
+            icons=self.icons,
+        )
+
+    async def test_a_new_topic_gets_the_badge_and_icon_at_once(self):
+        client = _Client(_forum_topic())
+
+        prefixed = await self.prefix(client)
+
+        self.assertEqual(
+            prefixed,
+            topic_titles.PrefixedTopic(service_message_id=RENAME_MESSAGE_ID),
+        )
+        (edit,) = client.of(functions.messages.EditForumTopicRequest)
+        self.assertEqual(
+            (edit.peer, edit.topic_id, edit.title, edit.icon_emoji_id),
+            (PEER, TOPIC_ID, "⚡◕ what is a monad", ICON_IDS["⚡️"]),
+        )
+
+    async def test_telegrams_name_is_kept_as_it_is(self):
+        topic = _forum_topic()
+        topic.title = "\"Hi What's Bitcoi..."
+        client = _Client(topic)
+
+        await self.prefix(client)
+
+        (edit,) = client.of(functions.messages.EditForumTopicRequest)
+        self.assertEqual(edit.title, "⚡◕ \"Hi What's Bitcoi...")
+
+    async def test_a_topic_is_prefixed_once(self):
+        await self.prefix(_Client(_forum_topic()))
+        client = _Client(_forum_topic())
+
+        self.assertIsNone(await self.prefix(client))
+        self.assertEqual(client.requests, [])
+
+    async def test_topics_that_are_not_new_are_left_alone(self):
+        cases = {
+            "named by the user": (_forum_topic(title_missing=None), {}),
+            "an older topic": (
+                _forum_topic(),
+                {"message_date": T0 + timedelta(hours=1)},
+            ),
+            "deleted": (types.ForumTopicDeleted(id=TOPIC_ID), {}),
+        }
+        for name, (topic, overrides) in cases.items():
+            with self.subTest(name):
+                self.marks = _memory_marks()
+                client = _Client(topic)
+
+                self.assertIsNone(await self.prefix(client, **overrides))
+                self.assertEqual(
+                    client.of(functions.messages.EditForumTopicRequest), []
+                )
+
+    async def test_a_failed_rename_keeps_the_claim_for_the_title(self):
+        client = _Client(
+            _forum_topic(), fail=[functions.messages.EditForumTopicRequest]
+        )
+
+        with self.assertLogs(topic_titles.logger, logging.ERROR):
+            prefixed = await self.prefix(client)
+
+        self.assertEqual(prefixed, topic_titles.PrefixedTopic(service_message_id=None))
+
+
+class TitleAfterPrefixTests(unittest.IsolatedAsyncioTestCase):
+    """The title's rename when the prefix's rename ran for the same answer."""
+
+    def setUp(self):
+        self.marks = _memory_marks()
+        self.prompts = []
+
+    async def generate(self, prompt):
+        self.prompts.append(prompt)
+        return topic_titles.TopicTitle(title="Monads explained")
+
+    async def title(self, client, prefixed):
+        async def outcome():
+            return prefixed
+
+        return await topic_titles.title_new_topic(
+            client,
+            _request(icon_emoji="⚡"),
+            generate=self.generate,
+            prefixed=outcome(),
+            marks=self.marks,
+            icons=topic_titles.TopicIcons(),
+        )
+
+    async def test_the_title_replaces_the_prefix_and_its_rename_message(self):
+        client = _Client(_forum_topic())
+
+        title = await self.title(
+            client, topic_titles.PrefixedTopic(service_message_id=RENAME_MESSAGE_ID)
+        )
+
+        self.assertEqual(title, "⚡◕ Monads explained")
+        self.assertEqual(client.of(functions.messages.GetForumTopicsByIDRequest), [])
+        (edit,) = client.of(functions.messages.EditForumTopicRequest)
+        self.assertEqual(edit.title, "⚡◕ Monads explained")
+        (delete,) = client.of(functions.messages.DeleteMessagesRequest)
+        self.assertEqual((delete.id, delete.revoke), ([RENAME_MESSAGE_ID], True))
+
+    async def test_a_topic_the_prefix_left_alone_gets_no_title(self):
+        client = _Client(_forum_topic())
+
+        self.assertIsNone(await self.title(client, None))
+
+        self.assertEqual(client.requests, [])
+        self.assertEqual(self.prompts, [])
+
+    async def test_without_a_rename_message_nothing_is_deleted(self):
+        client = _Client(_forum_topic())
+
+        await self.title(client, topic_titles.PrefixedTopic(service_message_id=None))
+
+        self.assertEqual(client.of(functions.messages.DeleteMessagesRequest), [])
+
+    async def test_a_failed_delete_is_logged_and_the_title_stays(self):
+        client = _Client(
+            _forum_topic(), fail=[functions.messages.DeleteMessagesRequest]
+        )
+
+        with self.assertLogs(topic_titles.logger, logging.ERROR):
+            title = await self.title(
+                client,
+                topic_titles.PrefixedTopic(service_message_id=RENAME_MESSAGE_ID),
+            )
+
+        self.assertEqual(title, "⚡◕ Monads explained")
+
+    async def test_a_scheduled_prefix_failure_is_logged_not_raised(self):
+        client = _Client(fail=[functions.messages.GetForumTopicsByIDRequest])
+
+        with self.assertLogs(topic_titles.logger, logging.ERROR) as logs:
+            task = topic_titles.schedule_prefix_new_topic(
+                client, _ref(), _badge(), marks=self.marks
             )
             self.assertIsNone(await task)
 

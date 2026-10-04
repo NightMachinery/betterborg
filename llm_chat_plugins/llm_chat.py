@@ -2881,6 +2881,54 @@ def _topic_title_generator(
     return generate
 
 
+def _topic_badge(
+    model: str, *, reasoning_level: Optional[str]
+) -> topic_titles.TopicBadge:
+    return topic_titles.TopicBadge(
+        model_emoji=llm_models.model_emoji(model),
+        effort_symbol=llm_models.reasoning_level_symbol(reasoning_level),
+        icon_emoji=llm_models.topic_icon_emoji(model),
+    )
+
+
+async def _topic_ref(event, topic_id: int) -> topic_titles.TopicRef:
+    return topic_titles.TopicRef(
+        peer=await event.get_input_chat(),
+        chat_id=event.chat_id,
+        topic_id=topic_id,
+        message_date=event.message.date,
+    )
+
+
+async def _start_topic_title(
+    event, *, model: str, prefix_effort: Optional[str]
+) -> Optional[asyncio.Task]:
+    """Badge EVENT's private topic in the background now, if it is new
+    (docs/topic_titles.md); the task is what `_schedule_topic_title` waits on.
+
+    None outside private topics. Never raises: the answer comes first.
+    """
+    topic_id = _thread_topic_id(event)
+    if topic_id is None:
+        return None
+    try:
+        reasoning = _get_effective_reasoning(
+            event.chat_id,
+            event.sender_id,
+            model=model,
+            prefix_effort=prefix_effort,
+            topic_id=topic_id,
+        )
+        return topic_titles.schedule_prefix_new_topic(
+            event.client,
+            await _topic_ref(event, topic_id),
+            _topic_badge(model, reasoning_level=reasoning.level),
+        )
+    except Exception:
+        logger.exception("Could not start the title of topic %s", topic_id)
+        return None
+
+
 async def _schedule_topic_title(
     event,
     *,
@@ -2889,11 +2937,13 @@ async def _schedule_topic_title(
     model: str,
     reasoning_level: Optional[str],
     codex_p: bool,
+    prefixed: Optional[asyncio.Task] = None,
 ) -> None:
     """Name EVENT's private topic in the background, if this was its first
     answer (docs/topic_titles.md).
 
-    Never raises: the answer is already delivered.
+    PREFIXED is the task `_start_topic_title` returned for this answer. Never
+    raises: the answer is already delivered.
     """
     topic_id = _thread_topic_id(event)
     if topic_id is None or answer.startswith(BOT_META_INFO_PREFIX):
@@ -2904,16 +2954,13 @@ async def _schedule_topic_title(
         topic_titles.schedule_title_new_topic(
             event.client,
             topic_titles.TopicTitleRequest(
-                peer=await event.get_input_chat(),
-                chat_id=event.chat_id,
-                topic_id=topic_id,
-                message_date=event.message.date,
+                topic=await _topic_ref(event, topic_id),
                 question=question,
                 answer=answer,
-                model_emoji=llm_models.model_emoji(model),
-                effort_symbol=llm_models.reasoning_level_symbol(reasoning_level),
+                badge=_topic_badge(model, reasoning_level=reasoning_level),
             ),
             generate=_topic_title_generator(event.sender_id, codex_p=codex_p),
+            prefixed=prefixed,
         )
     except Exception:
         logger.exception("Could not schedule the title of topic %s", topic_id)
@@ -12735,6 +12782,10 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
         await llm_db.request_api_key_message(event, service_needed)
         return
 
+    topic_prefixed = await _start_topic_title(
+        event, model=model_in_use, prefix_effort=prefix_result.reasoning_effort
+    )
+
     if prefix_text and re.match(r"^\.s\b", prefix_text):
         RECENT_WAIT_TIME = 1
         override_chat_context_mode[event.chat_id] = "recent"
@@ -12853,6 +12904,7 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
             model=model_in_use,
             reasoning_level=generation.reasoning_level,
             codex_p=user_has_codex_access,
+            prefixed=topic_prefixed,
         )
 
         # TTS Integration Hook
