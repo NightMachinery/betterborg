@@ -36,9 +36,9 @@ images. The **speech model** is 3.5 Transcribe.
 ## Models the installed llm-gemini lacks
 
 Media models are called through the `llm` library and its llm-gemini plugin,
-which registers a fixed list of model ids. Eva's llm-gemini (0.28.2) stops at
-2.5 Flash plus the two aliases, and newer releases need a newer `llm`, which
-the Codex plugin may not support. So `load_media_model` builds a menu model
+which registers a fixed list of model ids. The server's llm-gemini (0.28.2)
+stops at 2.5 Flash plus the two aliases, and newer releases need a newer
+`llm`, which the Codex plugin may not support. So `load_media_model` builds a menu model
 that llm-gemini does not know from llm-gemini's own `AsyncGeminiPro` class,
 with schema support on. The class's constructor is the same in 0.28.2 and 0.32.
 

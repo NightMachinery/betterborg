@@ -218,7 +218,8 @@ are a retiring model's `upgrade` field and the descriptions above. OpenRouter,
 by contrast, has router aliases such as `~openai/gpt-sol-latest` and
 `~openai/gpt-luna-latest`.
 
-GPT-6 Astra answers live requests (guest answers on eva, 2026-10-01).
+GPT-6 Astra answers live requests (guest answers on the production bot,
+2026-10-01).
 
 ### Aliases
 

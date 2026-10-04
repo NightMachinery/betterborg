@@ -20,9 +20,10 @@ marker line for what was dropped between them, and after a stop at most
 `AFTER_STOP_BYTES` more.
 
 The registry (`JOBS`, `register`, `finish`, `find`, `visible`, `stop_all`,
-`stop_all_and_disconnect`) is used from the event loop thread only. This is a core module, so a plugin
-reload never re-executes it, and a reloaded plugin still sees the jobs that
-started on its old code. More is in docs/shell_streaming.md.
+`stop_all_and_disconnect`) is used from the event loop thread only. This is a
+core module, so a plugin reload never re-executes it, and a reloaded plugin
+still sees the jobs that started on its old code. More is in
+docs/shell_streaming.md.
 """
 
 import asyncio
