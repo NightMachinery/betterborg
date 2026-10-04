@@ -682,8 +682,10 @@ then disconnects. Three paths call it:
 - **Under uvicorn** (`start_server.py`), the server's shutdown event
   (`stdborg.shutdown_event`) runs on SIGINT or SIGTERM, while the event loop
   still runs.
-- **`.restart` and `.shutdown`** (`stdplugins/power_tools.py`) run it, then
-  re-execute the bot or exit. They do so in a task of their own: Telethon's
+- **`.restart` and `.shutdown`** (`stdplugins/power_tools.py`) reply
+  ("Restarted.", "Turning off ..."), run it, then re-execute the bot or exit.
+  Both reply rather than edit the command, since a bot cannot edit a message
+  it did not write. They run it in a task of their own: Telethon's
   `disconnect` cancels every running event handler, the one that calls it
   included, so code after it in the handler would never run.
 - **Leftovers**: a job that has not finished when the time runs out has its

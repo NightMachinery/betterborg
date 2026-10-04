@@ -17,6 +17,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from telethon import errors
+
 from uniborg import shell_stream, util
 
 from test_advanced_get_guest import _FakeBorg
@@ -87,9 +89,9 @@ class PowerToolsTests(unittest.TestCase):
         (handler,) = [fn for _b, fn in self.borg.handlers if fn.__name__ == name]
         return handler
 
-    def run_handler(self, name):
+    def run_handler(self, name, *, edit=None):
         """Runs handler NAME as Telethon would, as an event handler's task."""
-        event = SimpleNamespace(reply=AsyncMock(), edit=AsyncMock())
+        event = SimpleNamespace(reply=AsyncMock(), edit=edit or AsyncMock())
 
         async def main():
             task = asyncio.ensure_future(self.handler(name)(event))
@@ -106,10 +108,20 @@ class PowerToolsTests(unittest.TestCase):
         event.reply.assert_awaited_once_with("Restarted.")
         self.assertEqual(self.calls, [STOP_ALL, "disconnect", "restart"])
 
-    def test_shutdown_quits_after_the_disconnect(self):
+    def test_shutdown_replies_then_quits_after_the_disconnect(self):
         event = self.run_handler("shutdown_handler")
 
-        event.edit.assert_awaited_once_with("Turning off ...")
+        event.reply.assert_awaited_once_with("Turning off ...")
+        self.assertEqual(self.calls, [STOP_ALL, "disconnect", "quit"])
+
+    def test_shutdown_on_a_bot_never_edits_the_admins_message(self):
+        """A bot cannot edit a message it did not write."""
+        edit = AsyncMock(side_effect=errors.MessageAuthorRequiredError(request=None))
+
+        event = self.run_handler("shutdown_handler", edit=edit)
+
+        edit.assert_not_awaited()
+        event.reply.assert_awaited_once_with("Turning off ...")
         self.assertEqual(self.calls, [STOP_ALL, "disconnect", "quit"])
 
 

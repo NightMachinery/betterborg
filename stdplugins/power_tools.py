@@ -48,5 +48,6 @@ async def restart_handler(event):
 
 @borg.on(admin_cmd(pattern=".shutdown"))
 async def shutdown_handler(event):
-    await event.edit("Turning off ...")
+    #: A reply, not an edit: a bot cannot edit the admin's message.
+    await event.reply("Turning off ...")
     _after_the_handler(_quit)
