@@ -337,7 +337,7 @@ def _register_manual_prompt(shortcut, description):
 
 
 def _extract_shortcut_from_pattern(pattern):
-    """Extract user-friendly shortcut from regex pattern.
+    r"""Extract user-friendly shortcut from regex pattern.
 
     Examples:
         "^\.teach" -> ".teach"
@@ -374,7 +374,7 @@ def _register_prompt_family(
     regex_flags=re.IGNORECASE,
     description="",
 ):
-    """
+    r"""
     Helper function to register a family of related prompts with versions.
 
     Args:
