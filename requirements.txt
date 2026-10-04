@@ -35,7 +35,10 @@ fuzzyset2
 
 watchfiles
 
-plotly
+#: The time tracker's charts export through kaleido 0.2.1, which bundles its
+#: own Chromium. Kaleido 1.x, which newer plotly wants, needs Chrome installed.
+plotly<6
+kaleido==0.2.1
 
 icecream
 
