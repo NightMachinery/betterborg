@@ -3874,9 +3874,12 @@ async def _process_audio_url_magic(event, url: str) -> bool:
         )
         try:
             await chat_handler(proxy)
-        finally:
-            # We don't want this URL processed normally at this stage, even if an error happens.
-            return True
+        except Exception:
+            #: We don't want this URL processed normally at this stage, even if an error happens.
+            #: A cancellation (/stop, a disconnect) still propagates.
+            traceback.print_exc()
+            logger.error("Audio URL magic: answering the uploaded audio failed")
+        return True
 
     except Exception as e:
         traceback.print_exc()

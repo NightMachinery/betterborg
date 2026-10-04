@@ -1,6 +1,9 @@
 import asyncio
 import builtins
 import importlib
+import logging
+import os
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -127,6 +130,54 @@ class PlaceholderFailureTests(unittest.TestCase):
         self.assertIsNone(kwargs["response_message"])
         self.assertIs(kwargs["exception"], send_failure)
         build_history.assert_not_awaited()
+
+
+class _Action:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class AudioUrlMagicTests(unittest.TestCase):
+    """`_process_audio_url_magic` once the audio is downloaded and uploaded."""
+
+    def _run(self, answer):
+        event = SimpleNamespace(
+            id=1,
+            chat=None,
+            chat_id=1,
+            client=SimpleNamespace(
+                send_file=AsyncMock(return_value=SimpleNamespace(id=2))
+            ),
+            reply=AsyncMock(),
+        )
+        fake_borg = SimpleNamespace(action=lambda *args: _Action())
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = os.path.join(tmp, "audio.mp3")
+            open(audio, "wb").close()
+            downloaded = (audio, None)
+            with patch.object(plugin, "borg", fake_borg, create=True), patch.object(
+                plugin, "logger", logging.getLogger(__name__), create=True
+            ), patch.object(
+                plugin,
+                "_download_audio_from_url",
+                new=AsyncMock(return_value=downloaded),
+            ), patch.object(
+                plugin, "chat_handler", new=answer
+            ):
+                return asyncio.run(plugin._process_audio_url_magic(event, "u"))
+
+    def test_an_answered_audio_counts_as_handled(self):
+        self.assertTrue(self._run(AsyncMock()))
+
+    def test_a_failed_answer_still_counts_as_handled(self):
+        self.assertTrue(self._run(AsyncMock(side_effect=RuntimeError("boom"))))
+
+    def test_a_cancelled_answer_propagates(self):
+        with self.assertRaises(asyncio.CancelledError):
+            self._run(AsyncMock(side_effect=asyncio.CancelledError()))
 
 
 if __name__ == "__main__":
