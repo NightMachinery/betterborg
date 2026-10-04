@@ -28,6 +28,7 @@ started on its old code. More is in docs/shell_streaming.md.
 import asyncio
 import codecs
 from collections import deque
+import contextlib
 from dataclasses import dataclass, field
 from enum import Enum
 import itertools
@@ -465,11 +466,26 @@ class ShellJob:
 
 #: The jobs not yet finished, by id.
 JOBS: dict[int, ShellJob] = {}
+#: While a shutdown stops every job, its reason: a job registered then is
+#: stopped at once, so its command never runs.
+_refusing: Optional[StopReason] = None
 
 
 def register(job: ShellJob) -> ShellJob:
     JOBS[job.id] = job
+    if _refusing is not None:
+        job.cancel(reason=_refusing)
     return job
+
+
+@contextlib.contextmanager
+def _refusing_new_jobs(reason: StopReason):
+    global _refusing
+    previous, _refusing = _refusing, reason
+    try:
+        yield
+    finally:
+        _refusing = previous
 
 
 def finish(job: ShellJob) -> None:
@@ -522,18 +538,25 @@ def visible(
 async def stop_all(*, reason: StopReason, timeout: float) -> int:
     """Cancels every job and waits up to TIMEOUT seconds for them to finish.
 
+    A job registered meanwhile is stopped before it runs, and waited for too.
     Returns how many had still not finished when the time ran out.
     """
-    jobs = list(JOBS.values())
-    for job in jobs:
-        job.cancel(reason=reason)
-    waiters = [asyncio.ensure_future(job.done.wait()) for job in jobs]
-    if not waiters:
-        return 0
-    _done, pending = await asyncio.wait(waiters, timeout=timeout)
-    for waiter in pending:
-        waiter.cancel()
-    return len(pending)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    with _refusing_new_jobs(reason):
+        while JOBS:
+            jobs = list(JOBS.values())
+            for job in jobs:
+                job.cancel(reason=reason)
+            waiters = [asyncio.ensure_future(job.done.wait()) for job in jobs]
+            _done, pending = await asyncio.wait(
+                waiters, timeout=max(0.0, deadline - loop.time())
+            )
+            for waiter in pending:
+                waiter.cancel()
+            if pending:
+                break
+    return len(JOBS)
 
 
 async def stop_all_and_disconnect(
@@ -544,9 +567,13 @@ async def stop_all_and_disconnect(
     The jobs get up to TIMEOUT seconds to end and deliver their finals while
     CLIENT is still connected. Telethon's disconnect then cancels the event
     handlers still running, so a job that did not finish in time has its
-    command killed by its consumer's cancel path.
+    command killed by its consumer's cancel path. A job registered before the
+    disconnect is done never runs.
     """
-    left = await stop_all(reason=StopReason.SHUTDOWN, timeout=timeout)
-    if left:
-        _log.warning("%s shell jobs had not finished when the bot disconnected", left)
-    await client.disconnect()
+    with _refusing_new_jobs(StopReason.SHUTDOWN):
+        left = await stop_all(reason=StopReason.SHUTDOWN, timeout=timeout)
+        if left:
+            _log.warning(
+                "%s shell jobs had not finished when the bot disconnected", left
+            )
+        await client.disconnect()

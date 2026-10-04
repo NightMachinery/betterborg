@@ -677,7 +677,12 @@ N)." in a chat, "⏹ Stopped: julia is restarting" under the exit code of a
 guest answer. `shell_stream.stop_all_and_disconnect(client)` cancels every
 job with StopReason.SHUTDOWN, waits up to `SHUTDOWN_TIMEOUT` (15 s) for them
 to finish (their finals and files delivered), logs how many had not, and
-then disconnects. Three paths call it:
+then disconnects. The bot still takes commands while it waits, so until the
+disconnect is done, `shell_stream.register` stops each new job at once: its
+command never runs, and `stop_all` waits for its final ("⏹ Stopped before it
+ran.") as for the others; only a job that arrives during the disconnect
+itself may lose its final. A command that is no job (live output off, or
+`.a` on an old brish) is not stopped. Three paths call it:
 
 - **Under uvicorn** (`start_server.py`), the server's shutdown event
   (`stdborg.shutdown_event`) runs on SIGINT or SIGTERM, while the event loop

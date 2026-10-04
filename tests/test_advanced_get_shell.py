@@ -1272,6 +1272,28 @@ class ShutdownTests(_ShellTestCase):
         )
         self.assertEqual(shell_stream.JOBS, {})
 
+    def test_a_command_sent_during_the_shutdown_never_runs(self):
+        late = _Event(self.plugin, ".aa printf ran", private=False)
+        order = []
+
+        async def shut_down(event):
+            await _until(lambda: event.log)
+            client = SimpleNamespace(
+                disconnect=AsyncMock(side_effect=lambda: order.append("disconnect"))
+            )
+            stopping = asyncio.ensure_future(
+                shell_stream.stop_all_and_disconnect(client, timeout=15)
+            )
+            await asyncio.sleep(0)
+            await asyncio.wait_for(self.handler(late), 10)
+            order.append("late final")
+            await stopping
+
+        self.run_command(".aa sleep 100", during=shut_down)
+
+        self.assertEqual(late.log[-1][1], self.plugin.STOPPED_BEFORE_IT_RAN)
+        self.assertEqual(order, ["late final", "disconnect"])
+
     def test_the_loops_teardown_kills_a_command_still_running(self):
         """What `asyncio.run` does to a standalone bot on Ctrl-C: it cancels the
         handler's task, and the command dies with it."""

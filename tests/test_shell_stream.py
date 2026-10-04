@@ -483,6 +483,49 @@ class RegistryTests(unittest.TestCase):
         self.assertLess(elapsed, 1.5)
         self.assertTrue(all(job.stop_reason is StopReason.SHUTDOWN for job in jobs))
 
+    def test_a_job_registered_while_stopping_all_never_runs_and_is_waited_for(self):
+        """A shutdown keeps taking commands until it disconnects."""
+        seen = {}
+
+        async def main():
+            loop = asyncio.get_running_loop()
+            first = shell_stream.register(_job(output=LiveOutput()))
+            first.try_start()
+            first.attach(lambda: loop.call_later(0.2, shell_stream.finish, first))
+
+            def arrive():
+                #: As a consumer does: a dropped job's final goes out at once.
+                late = seen["late"] = shell_stream.register(_job(output=LiveOutput()))
+                if late.try_start():
+                    late.attach(lambda: loop.call_later(0.1, shell_stream.finish, late))
+                else:
+                    loop.call_later(0.3, shell_stream.finish, late)
+
+            loop.call_later(0.1, arrive)
+            seen["left"] = await shell_stream.stop_all(
+                reason=StopReason.SHUTDOWN, timeout=5
+            )
+            seen["after"] = shell_stream.register(_job(output=LiveOutput()))
+
+        asyncio.run(main())
+
+        self.assertEqual(seen["left"], 0)
+        self.assertIs(seen["late"].stop_reason, StopReason.SHUTDOWN)
+        self.assertFalse(seen["late"].ran)
+        self.assertTrue(seen["late"].done.is_set())
+        self.assertFalse(seen["after"].stopped)
+
+    def test_stop_all_counts_a_late_job_that_did_not_finish(self):
+        async def main():
+            loop = asyncio.get_running_loop()
+            quick = shell_stream.register(_job(output=LiveOutput()))
+            quick.try_start()
+            quick.attach(lambda: loop.call_later(0.1, shell_stream.finish, quick))
+            loop.call_later(0.05, shell_stream.register, _job(output=LiveOutput()))
+            return await shell_stream.stop_all(reason=StopReason.SHUTDOWN, timeout=0.3)
+
+        self.assertEqual(asyncio.run(main()), 1)
+
     def test_stop_all_with_no_jobs(self):
         self.assertEqual(
             asyncio.run(shell_stream.stop_all(reason=StopReason.SHUTDOWN, timeout=1)),
@@ -517,6 +560,23 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(calls, [("disconnect", []), ("disconnect", [stuck.id])])
         self.assertIs(quick.stop_reason, StopReason.SHUTDOWN)
         self.assertIs(stuck.stop_reason, StopReason.SHUTDOWN)
+
+    def test_a_job_registered_while_disconnecting_never_runs(self):
+        seen = {}
+
+        class _Client:
+            async def disconnect(self):
+                seen["during"] = shell_stream.register(_job(output=LiveOutput()))
+
+        async def main():
+            await shell_stream.stop_all_and_disconnect(_Client(), timeout=1)
+            seen["after"] = shell_stream.register(_job(output=LiveOutput()))
+
+        asyncio.run(main())
+
+        self.assertIs(seen["during"].stop_reason, StopReason.SHUTDOWN)
+        self.assertFalse(seen["during"].try_start())
+        self.assertFalse(seen["after"].stopped)
 
 
 if __name__ == "__main__":
