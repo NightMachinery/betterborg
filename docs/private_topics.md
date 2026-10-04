@@ -350,7 +350,7 @@ a few fields.
 ## Automatic titles
 
 After the first answer in a topic Telegram named, llm_chat renames it once,
-with the answering model's emoji, the effort's alias and a short title. See
+with the answering model's emoji, a bar for the effort and a short title. See
 `docs/topic_titles.md`.
 
 ## Related files

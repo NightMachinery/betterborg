@@ -42,8 +42,7 @@ OPENROUTER_REASONING_LEVELS = ("low", "medium", "high")
 PIONEER_REASONING_LEVELS = ("low", "medium", "high")
 
 #: Short text names of the reasoning levels. The `.t` effort prefixes are built
-#: from them (`.th` is high), and automatic topic titles show them
-#: (docs/topic_titles.md).
+#: from them (`.th` is high).
 REASONING_LEVEL_ALIASES = {
     "none": "n",
     "low": "l",
@@ -53,18 +52,29 @@ REASONING_LEVEL_ALIASES = {
     "max": "xx",
 }
 
+#: What automatic topic titles show for each reasoning level
+#: (docs/topic_titles.md): a bar that rises with the effort. Not emoji, which
+#: would clash with the models' own (Sol's ☀️, Luna's 🌕).
+REASONING_LEVEL_SYMBOLS = {
+    "none": "▁",
+    "low": "▂",
+    "medium": "▄",
+    "high": "▆",
+    "xhigh": "▇",
+    "max": "█",
+}
 
-def reasoning_level_alias(level: Optional[str]) -> str:
-    """The short text name of LEVEL, or "" when there is no level.
 
-    Gemini's `disable` has no prefix of its own; it shows as `none` does,
-    since both mean no reasoning. A level without an alias shows in full.
+def reasoning_level_symbol(level: Optional[str]) -> str:
+    """The symbol of LEVEL, or "" when there is no level or LEVEL has none.
+
+    Gemini's `disable` shows as `none` does, since both mean no reasoning.
     """
     if not level:
         return ""
     if level == "disable":
-        return REASONING_LEVEL_ALIASES["none"]
-    return REASONING_LEVEL_ALIASES.get(level, level)
+        return REASONING_LEVEL_SYMBOLS["none"]
+    return REASONING_LEVEL_SYMBOLS.get(level, "")
 
 
 @dataclass(frozen=True)

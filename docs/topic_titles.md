@@ -5,13 +5,13 @@ Telegram open a new topic for it and name the topic after that message. Once
 the chat bot has answered the first message of such a topic, it renames the
 topic once, to something like:
 
-    ⚡h Monads explained
+    ⚡▆ Monads explained
 
 The name has three parts:
 
 - the emoji of the model that answered (`⚡` is Gemini Flash);
-- the short alias of the reasoning effort sent with the request (`h` is
-  high), left out for models without reasoning levels;
+- a bar showing the reasoning effort sent with the request (`▆` is high),
+  left out for models without reasoning levels;
 - a title of at most six words, written by the user's title model
   (`/setTitleModel`, `docs/title_model.md`) from the first question and its
   answer.
@@ -68,20 +68,22 @@ distinct.
 A custom model id gets its provider's emoji (`_synthesized_spec`): 🔷 Codex,
 🧭 Pioneer, ♊ Gemini, 🔀 OpenRouter, and 🤖 for anything else.
 
-## Effort aliases
+## Effort symbols
 
-The aliases are the suffixes of the `.t` effort prefixes, which are built from
-the same map (`REASONING_LEVEL_ALIASES`), so `h` in a title is what `.th`
-asks for:
+The effort shows as a bar that rises with the level
+(`REASONING_LEVEL_SYMBOLS`). It is not an emoji, because a second emoji next
+to the model's would be hard to tell apart from it: a moon or a sun would
+clash with Sol's ☀️ and Luna's 🌕.
 
-- `n`: none, and Gemini's `disable`, which has no prefix of its own
-- `l`: low
-- `m`: medium
-- `h`: high
-- `x`: xhigh
-- `xx`: max
+- `▁`: none, and Gemini's `disable`
+- `▂`: low (`.tl`)
+- `▄`: medium (`.tm`)
+- `▆`: high (`.th`)
+- `▇`: xhigh (`.tx`)
+- `█`: max (`.txx`)
 
-A level without an alias is shown in full.
+A level without a symbol shows no bar. Topics named before the bars kept
+their letter aliases (`⚡h`), since a topic is renamed only once.
 
 ## What Telegram does
 
@@ -131,7 +133,7 @@ title model or a flood wait never delays the answer.
   the prompt, `compose_topic_title`, `title_new_topic` and
   `schedule_title_new_topic`.
 - `uniborg/llm_models.py`: `ModelSpec.emoji`, `model_emoji`,
-  `REASONING_LEVEL_ALIASES` and `reasoning_level_alias`.
+  `REASONING_LEVEL_SYMBOLS` and `reasoning_level_symbol`.
 - `llm_chat_plugins/llm_chat.py`: `_schedule_topic_title`, called after the
   final delivery in `chat_handler`; `_topic_title_generator`, which uses the
   same title settings as file titles (`_title_settings`); and

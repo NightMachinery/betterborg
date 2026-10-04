@@ -2911,7 +2911,7 @@ async def _schedule_topic_title(
                 question=question,
                 answer=answer,
                 model_emoji=llm_models.model_emoji(model),
-                effort_alias=llm_models.reasoning_level_alias(reasoning_level),
+                effort_symbol=llm_models.reasoning_level_symbol(reasoning_level),
             ),
             generate=_topic_title_generator(event.sender_id, codex_p=codex_p),
         )

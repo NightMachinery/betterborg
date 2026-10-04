@@ -1,4 +1,4 @@
-"""`llm_models`: the short names of reasoning levels and the emoji of models."""
+"""`llm_models`: the symbols of reasoning levels and the emoji of models."""
 
 import unittest
 
@@ -11,31 +11,33 @@ from uniborg.constants import (
 )
 
 
-class ReasoningLevelAliasTests(unittest.TestCase):
-    def test_each_level_has_its_prefix_suffix(self):
-        self.assertEqual(
-            {
-                level: llm_models.reasoning_level_alias(level)
-                for level in llm_models.OPENAI_REASONING_LEVELS
-            },
-            {
-                "none": "n",
-                "low": "l",
-                "medium": "m",
-                "high": "h",
-                "xhigh": "x",
-                "max": "xx",
-            },
-        )
+class ReasoningLevelSymbolTests(unittest.TestCase):
+    def test_each_level_has_a_bar_that_rises_with_it(self):
+        symbols = [
+            llm_models.reasoning_level_symbol(level)
+            for level in ("none", "low", "medium", "high", "xhigh", "max")
+        ]
+
+        self.assertEqual(symbols, ["▁", "▂", "▄", "▆", "▇", "█"])
+
+    def test_every_codex_level_has_a_symbol(self):
+        for level in llm_models.OPENAI_REASONING_LEVELS:
+            with self.subTest(level=level):
+                self.assertTrue(llm_models.reasoning_level_symbol(level))
 
     def test_gemini_disable_shows_as_none(self):
-        self.assertEqual(llm_models.reasoning_level_alias("disable"), "n")
+        self.assertEqual(llm_models.reasoning_level_symbol("disable"), "▁")
 
-    def test_no_level_has_no_alias(self):
-        self.assertEqual(llm_models.reasoning_level_alias(None), "")
+    def test_no_level_has_no_symbol(self):
+        self.assertEqual(llm_models.reasoning_level_symbol(None), "")
 
-    def test_a_level_without_an_alias_shows_in_full(self):
-        self.assertEqual(llm_models.reasoning_level_alias("minimal"), "minimal")
+    def test_an_unknown_level_has_no_symbol(self):
+        self.assertEqual(llm_models.reasoning_level_symbol("minimal"), "")
+
+    def test_no_symbol_is_a_model_emoji(self):
+        emojis = {spec.emoji for spec in llm_models.MODEL_SPECS_BY_ID.values()}
+
+        self.assertFalse(emojis & set(llm_models.REASONING_LEVEL_SYMBOLS.values()))
 
 
 class CodexModelTests(unittest.TestCase):

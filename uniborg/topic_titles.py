@@ -129,10 +129,10 @@ class TopicTitleRequest:
     message_date: datetime
     question: str
     answer: str
-    #: The answering model's emoji and its reasoning effort's alias ("" when
+    #: The answering model's emoji and its reasoning effort's symbol ("" when
     #: the model has no reasoning levels).
     model_emoji: str
-    effort_alias: str
+    effort_symbol: str
 
 
 async def fetch_forum_topic(client, peer, topic_id: int) -> Optional[types.ForumTopic]:
@@ -172,13 +172,13 @@ def topic_title_prompt(question: str, answer: str) -> str:
 
 
 def compose_topic_title(
-    title: str, *, model_emoji: str, effort_alias: str
+    title: str, *, model_emoji: str, effort_symbol: str
 ) -> Optional[str]:
-    """`<emoji><alias> <title>`, within Telegram's limit; None if TITLE is blank."""
+    """`<emoji><symbol> <title>`, within Telegram's limit; None if TITLE is blank."""
     title = " ".join(title.split()).strip(" \"'“”«».")
     if not title:
         return None
-    prefix = f"{model_emoji}{effort_alias}"
+    prefix = f"{model_emoji}{effort_symbol}"
     full = f"{prefix} {title}" if prefix else title
     return tg_format.truncate_utf16(full, TOPIC_TITLE_MAX_UNITS)
 
@@ -208,7 +208,7 @@ async def title_new_topic(
     title = compose_topic_title(
         generated.title,
         model_emoji=request.model_emoji,
-        effort_alias=request.effort_alias,
+        effort_symbol=request.effort_symbol,
     )
     if title is None:
         return None
