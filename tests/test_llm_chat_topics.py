@@ -1905,8 +1905,74 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
         self.assertIn("Source: the whole-chat default.", text)
         self.assertNotIn("Topic override:", text)
 
+    def test_get_model_here_reports_effort_inheritance_for_the_displayed_model(self):
+        model = self.CHAT_MODEL
+        self.chats.set_model(USER_ID, model)
+        self.topics.set_thinking(self.key(), model=self.TOPIC_MODEL, level="max")
+
+        def assert_effort(level, source, *, top_id=TOPIC_ID):
+            event = self.command(
+                plugin.get_model_here_handler, "/getModelHere", top_id=top_id
+            )
+            text = event.reply.await_args.args[0]
+            self.assertIn(f"Effective reasoning effort:** `{level}`", text)
+            self.assertIn(f"Effort source: {source}.", text)
+
+        assert_effort("Medium", "the model's default")
+        self.prefs.thinking_by_model[model] = "low"
+        assert_effort("Low", "your personal default")
+        self.chats.set_thinking(USER_ID, model=model, level="high")
+        assert_effort("High", "the whole-chat default")
+        self.topics.set_thinking(self.key(), model=model, level="disable")
+        assert_effort("Disable", "this topic's saved override")
+        assert_effort("High", "the whole-chat default", top_id=OTHER_TOPIC_ID)
+        assert_effort("High", "the whole-chat default", top_id=None)
+        self.chats.set_thinking(USER_ID, model=model, level=None)
+        assert_effort("Low", "your personal default", top_id=None)
+        self.prefs.thinking_by_model.clear()
+        assert_effort("Medium", "the model's default", top_id=None)
+
+    def test_get_model_here_skips_invalid_effort_and_displays_none_as_a_level(self):
+        model = self.TOPIC_MODEL
+        self.topics.set_model(self.key(), model)
+        self.chats.set_thinking(USER_ID, model=model, level="low")
+        self.topics.set_thinking(self.key(), model=model, level="disable")
+        event = self.command(plugin.get_model_here_handler, "/getModelHere")
+        text = event.reply.await_args.args[0]
+        self.assertIn("Effective reasoning effort:** `Low`", text)
+        self.assertIn("Effort source: the whole-chat default.", text)
+
+        self.topics.set_thinking(self.key(), model=model, level="none")
+        event = self.command(plugin.get_model_here_handler, "/getModelHere")
+        text = event.reply.await_args.args[0]
+        self.assertIn("Effective reasoning effort:** `None`", text)
+        self.assertIn("Effort source: this topic's saved override.", text)
+
+    def test_get_model_here_identifies_models_without_reasoning_support(self):
+        self.topics.set_model(self.key(), "custom/non-reasoning")
+        event = self.command(plugin.get_model_here_handler, "/getModelHere")
+        text = event.reply.await_args.args[0]
+        self.assertIn(
+            "Effective reasoning effort:** `Not supported by this model`", text
+        )
+        self.assertIn("Effort source: this model's capabilities.", text)
+
+    def test_get_model_here_distinguishes_provider_default_from_unsupported(self):
+        model = "custom/provider-default"
+        self.topics.set_model(self.key(), model)
+        spec = plugin.ModelSpec(
+            id=model, display_name=model, reasoning_levels=("low", "high")
+        )
+        with patch.object(plugin.llm_models, "spec_for_model", return_value=spec):
+            event = self.command(plugin.get_model_here_handler, "/getModelHere")
+        text = event.reply.await_args.args[0]
+        self.assertIn("Effective reasoning effort:** `Provider default`", text)
+        self.assertIn("Effort source: the model's default.", text)
+
     def test_get_model_here_keeps_saved_layers_visible_when_access_is_unavailable(self):
         self.topics.set_model(self.key(), self.TOPIC_MODEL)
+        self.topics.set_thinking(self.key(), model=self.TOPIC_MODEL, level="max")
+        self.chats.set_thinking(USER_ID, model=plugin.DEFAULT_MODEL, level="low")
         with patch.object(
             plugin, "_can_user_access_model", new=AsyncMock(return_value=False)
         ):
@@ -1917,6 +1983,8 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
         )
         self.assertIn("access to the saved model is unavailable", text)
         self.assertIn(f"Topic override: `{self.TOPIC_MODEL}`", text)
+        self.assertIn("Effective reasoning effort:** `Low`", text)
+        self.assertIn("Effort source: the whole-chat default.", text)
         self.assertEqual(self.topics.get_model(self.key()), self.TOPIC_MODEL)
 
     def test_last_n_here_in_a_topic_explains_the_outside_topic_scope(self):

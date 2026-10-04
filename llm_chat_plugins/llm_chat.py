@@ -1371,7 +1371,7 @@ BOT_COMMANDS = [
     },
     {
         "command": "getmodelhere",
-        "description": "View topic/chat model, its source and saved defaults",
+        "description": "View topic/chat model and effort with their sources",
     },
     {
         "command": "helpmagics",
@@ -7529,7 +7529,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setthink: Adjust the current model's reasoning effort (per model, personal).
 - /setThinkHere: Same, but for this chat only. Overrides your personal setting.
 
-**In private topics**, /setModelHere, /setThinkHere, /setSystemPromptHere and /contextModeHere set this topic's model, effort, prompt and context mode. Their menus have an **Apply to** row to set the whole chat instead (for context mode, the default for every topic of the chat). Topic overrides take precedence over whole-chat defaults. /getModelHere shows the effective model and its source alongside the saved defaults; /getContextModeHere shows the topic's effective mode and its source.
+**In private topics**, /setModelHere, /setThinkHere, /setSystemPromptHere and /contextModeHere set this topic's model, effort, prompt and context mode. Their menus have an **Apply to** row to set the whole chat instead (for context mode, the default for every topic of the chat). Topic overrides take precedence over whole-chat defaults. /getModelHere shows the effective model and reasoning effort with each setting's source alongside the saved model defaults; /getContextModeHere shows the topic's effective mode and its source.
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
 - /stream: Stream answers as live drafts or as edits, for private chats and for groups.
@@ -9974,7 +9974,7 @@ async def set_model_here_handler(event):
 
 
 async def get_model_here_handler(event):
-    """Gets and displays the effective model for the current chat or topic."""
+    """Display the effective model and effort for the current chat or topic."""
     user_id = event.sender_id
     chat_id = event.chat_id
     topic_id = _thread_topic_id(event)
@@ -9984,20 +9984,38 @@ async def get_model_here_handler(event):
     topic_model = _topic_setting(chat_id, topic_id, topic_manager.get_model)
     chat_model = chat_manager.get_model(chat_id)
     personal_model = user_manager.get_prefs(user_id).model
+    source_names = {
+        "topic": "this topic's saved override",
+        "chat": "the whole-chat default",
+        "personal": "your personal default",
+        "model_default": "the model's default",
+        "unsupported": "this model's capabilities",
+    }
     if topic_model:
-        source = "this topic's saved override"
+        source = source_names["topic"]
     elif chat_model:
-        source = "the whole-chat default"
+        source = source_names["chat"]
     else:
-        source = "your personal default"
+        source = source_names["personal"]
     config = llm_chat_config.load_config()
     if not await _can_user_access_model(event, effective_model, config=config):
         effective_model = DEFAULT_MODEL
         source = "the bot's default (access to the saved model is unavailable)"
+    reasoning = _get_effective_reasoning(
+        chat_id, user_id, model=effective_model, topic_id=topic_id
+    )
+    if reasoning.source == "unsupported":
+        effort = "Not supported by this model"
+    elif reasoning.level is None:
+        effort = "Provider default"
+    else:
+        effort = _reasoning_level_display(reasoning.level)
     where = "in this topic" if topic_id is not None else "for the whole chat"
     lines = [
         f"{BOT_META_INFO_PREFIX}**Effective model {where}:** `{effective_model}`",
         f"Source: {source}.",
+        f"**Effective reasoning effort:** `{effort}`",
+        f"Effort source: {source_names[reasoning.source]}.",
     ]
     if topic_id is not None:
         lines.append(

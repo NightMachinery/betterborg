@@ -103,6 +103,9 @@ included.
 
 `/status` shows the resolved level for the effective model and where it came
 from, plus any level stored for the current chat.
+`/getModelHere` also shows the effective model's reasoning effort and its
+source: this topic's override, whole-chat default, personal default or model
+default. It says when the displayed model does not support reasoning effort.
 
 ## Codex Luna Reserve
 
