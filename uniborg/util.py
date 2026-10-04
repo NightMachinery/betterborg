@@ -20,6 +20,10 @@ except ImportError:
     #: brish 0.3.5 (PyPI) has no such exception; an empty tuple catches nothing.
     BrishWorkerDiedException = ()
 try:
+    from brish import UninitializedBrishException
+except ImportError:
+    UninitializedBrishException = ()
+try:
     from brish import BrishCancelledException
 except ImportError:
     #: brish before 0.4.1 takes no `cancelled=`, so nothing raises it.

@@ -35,7 +35,11 @@ is a **pool**. The bot has two:
   reads the global when the command runs, after the replied-to files have
   downloaded: a `.x` during the download retires the pool of when the
   message came, and a retired pool refuses commands
-  (UninitializedBrishException).
+  (UninitializedBrishException). A job still waiting for a worker when `.x`
+  retires its pool waits until that pool shuts down (once the commands that
+  hold its workers end); the pool then refuses the wait, nothing has run,
+  and the job moves to the current pool (`_capture_on_shell_pool`). A job
+  whose command had started is never run twice: the error stands.
 - The **plugin pool**, `util.plugin_brish()`: `borg_plugin_brish_count`
   workers (4 by default), started on its first use. `brishz`,
   `brishz_capture` and `brishz_helper` default to it, so

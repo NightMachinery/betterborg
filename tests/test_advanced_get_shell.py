@@ -1278,6 +1278,43 @@ class OldPoolTests(_ShellTestCase):
         self.assertIs(pool, util.persistent_brish)
         self.assertIs(brish, pool)
 
+    def retired_while_queued(self, *, ran):
+        """`.af` whose pool `.x` retires while it waits for a worker; RAN
+        says whether brish let the command start before refusing."""
+        old, new = object(), object()
+        calls = []
+
+        async def capture(*, job, brish, **kwargs):
+            calls.append(brish)
+            if brish is old:
+                util.persistent_brish = new
+                if ran:
+                    job.try_start()
+                raise util.UninitializedBrishException("retired")
+            job.try_start()
+            job.output.write(b"hi")
+            job.detach()
+            return util.CommandResult(output="hi", retcode=0)
+
+        with patch.object(util, "persistent_brish", old), patch.object(
+            util, "brishz_capture", capture
+        ):
+            event = self.run_command(".af printf hi")
+        return event, calls, old, new
+
+    def test_a_job_queued_on_a_retired_pool_runs_on_the_new_one(self):
+        event, calls, old, new = self.retired_while_queued(ran=False)
+
+        self.assertEqual(calls, [old, new])
+        self.assertEqual([entry[:2] for entry in event.log], [("respond", "hi")])
+
+    def test_a_job_that_ran_is_not_run_again(self):
+        event, calls, old, _new = self.retired_while_queued(ran=True)
+
+        self.assertEqual(calls, [old])
+        ((_kind, text, _kwargs),) = event.log
+        self.assertIn("UninitializedBrishException", text)
+
 
 class ShutdownTests(_ShellTestCase):
     """A shutdown stops the running commands, with an inert `.aa sleep` in a

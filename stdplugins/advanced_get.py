@@ -482,19 +482,34 @@ async def _deliver_final(event, text, *, preview, mode):
             raise ValueError(f"Unknown final mode: {mode!r}")
 
 
+async def _capture_on_shell_pool(job, *, cwd, request):
+    """Runs JOB's brish command on the shell pool of now.
+
+    `.x` during the download retires the pool of when the message came, and
+    `.x` while the job waits for a worker retires the pool it waits on: once
+    that pool shuts down, it refuses the wait (UninitializedBrishException).
+    Nothing has run then, so the job moves to the current pool.
+    """
+    while True:
+        job.pool = util.persistent_brish
+        try:
+            return await util.brishz_capture(
+                cwd=cwd,
+                cmd=request.command,
+                fork=request.fork,
+                job=job,
+                brish=job.pool,
+            )
+        except util.UninitializedBrishException:
+            if job.ran or job.pool is util.persistent_brish:
+                raise
+            logger.info("Job #%s moves to the new shell pool", job.id)
+
+
 def _live_producer(job, *, cwd, request):
     """What runs JOB's command in CWD: brish on the shell pool, or `.aa`."""
     if request.brish_mode:
-        #: The pool of now: `.x` during the download retired the earlier one.
-        job.pool = util.persistent_brish
-        return partial(
-            util.brishz_capture,
-            cwd=cwd,
-            cmd=request.command,
-            fork=request.fork,
-            job=job,
-            brish=job.pool,
-        )
+        return partial(_capture_on_shell_pool, job, cwd=cwd, request=request)
     return partial(util.simple_run_capture, cwd=cwd, command=request.command, job=job)
 
 
