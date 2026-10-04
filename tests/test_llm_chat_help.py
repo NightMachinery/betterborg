@@ -147,6 +147,12 @@ class HelpTests(unittest.TestCase):
                     self.assertNotIn("**", parsed)
                 joined = "\n".join(messages)
                 self.assertIn("**Available Commands:**", joined)
+                self.assertIn(
+                    "/contextModeHere in a topic switches it to Reply Chain or Until Separator",
+                    joined,
+                )
+                self.assertIn("/getContextModeHere", joined)
+                self.assertIn("the default for every topic of the chat", joined)
                 self.assertIn("to make a level stick.", joined.replace("\n", " "))
 
 

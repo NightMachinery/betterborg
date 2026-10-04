@@ -24,9 +24,10 @@ conversation, and where that stops. The code is in `uniborg/topics.py`,
   one item per message the bot received or sent. It lives in Redis, or in
   memory when Redis is unavailable, and keeps at most 5000 items per chat
   (`HISTORY_LIMIT`).
-- **Thread context**: the conversation context llm_chat uses for a message
-  in a private topic, built from that topic's recorded history. See
-  "Thread context" below.
+- **Topic context mode**: Topic Thread, Reply Chain or Until Separator,
+  resolved as topic setting > chat default for topics > Topic Thread.
+- **Topic Thread (thread context)**: the topic's own recorded messages. See
+  "Context inside a topic" below.
 
 ## What private topics look like on the wire
 
@@ -142,65 +143,66 @@ logged as a warning, later ones at DEBUG, and all of them are counted in
 `client.topic_placement = None` switches placement off; the mixin then
 changes nothing.
 
-## Thread context
+## Context inside a topic
 
-Each topic is meant to be its own conversation, and a message in a topic
-usually replies to nothing, so the reply chain would give it almost no
-context. So inside a private topic a bot's llm_chat always uses thread
-context, whatever the context mode: reply chain, until separator, last N,
-smart mode and a chat's `/contextModeHere` setting all give way to it there.
-Outside topics every mode works exactly as before.
+Each private topic has a **topic context mode**: Topic Thread (the default),
+Reply Chain or Until Separator. Set it with `/contextModeHere` inside the
+topic. Resolution is the topic's setting, then the chat's default for topics,
+then Topic Thread. Personal modes, outside-topic chat modes and smart mode's
+per-user switching state do not apply or change here. Last N is omitted
+because it would duplicate Topic Thread with another limit; Smart is omitted
+because its switching state is per user.
 
-What the thread holds:
+- **Topic Thread** uses the topic's own recorded messages, oldest first,
+  up to the topic limit (200 by default). A message containing only `---`
+  does not cut it, is left out of the thread and gets an explanatory reply.
+  That reply points to Until Separator or a new topic to start fresh.
+- **Reply Chain** follows only explicit replies through `resolve_reply_target`.
+  A plain message gets just itself: its implicit header pointing at the
+  topic root is not a reply. Explicit chains can leave the topic and stop
+  below the root of the topic they reach. The topic limit does not cap this
+  mode; the existing `HISTORY_MESSAGE_LIMIT` applies. Twins are kept. A
+  `---` gets an explanation that a plain message already starts fresh.
+- **Until Separator** reads the topic's own recorded messages after its
+  latest `---`, still capped at the topic limit. A separator in another
+  topic or in All does not cut it. Cap and cut both keep a suffix, so their
+  order gives the same result: a separator older than the newest N items
+  leaves the whole capped window. Separators sent before switching modes
+  count too. Deleting a recorded separator reopens the earlier context.
+  A `---` gets “Context cleared in this topic” and never reaches the model.
 
-- The topic's own messages, the user's and the bot's, oldest first: the
-  latest N the recorded history holds for that topic, plus the message being
-  answered. N is the *topic limit*, 200 by default. It is separate from the
-  Last N limit (`docs/llm_chat_last_n_context.md`), which only applies
-  outside topics: `/setThreadLastN N` sets a personal topic limit,
-  `/setThreadLastN reset` clears it, `/getThreadLastN` shows it, and the
-  `/contextMode` menu offers quick picks when opened inside a topic. There is
-  no per-chat override, since private topics only exist in the user's own
-  chat with the bot.
-- A separator does nothing inside a topic. The topic is one conversation, so
-  a message whose text is only `---` does not cut the thread, is not sent to
-  the model, and is left out of the thread; the bot answers that it does
-  nothing there and that a new topic starts fresh. Smart mode's per-user
-  state is neither switched nor used inside a topic.
-- An explicit reply brings its reply chain when "Include Reply Chain" is on,
-  as in the other modes. A reply to a message inside the thread adds
-  nothing; a reply to one older than the cap brings that message back.
-- Files, media, albums, reactions and metadata go through the same code as
-  in every other mode.
+The topic limit is personal: `/setThreadLastN N`, `/setThreadLastN reset`
+and `/getThreadLastN` set, clear and show it. `/contextMode` opened inside a
+topic has quick picks. It caps Topic Thread and Until Separator, separately
+from the outside-topic Last N limit (`docs/llm_chat_last_n_context.md`).
 
-Where it comes from. Bots cannot read history (see above), so the thread
-comes from the recorded history. Each item carries `topic_id`, which
-`topics.private_message_topic_id` reads from the message's header. For the
-bot's own sends it reads the message Telegram echoes back, or, when Telegram
-answers with a bare `UpdateShortSentMessage`, the `top_msg_id` that placement
-gave the request. Items outside topics are stored byte for byte as before,
-without the field. The thread's ids are loaded in one batch by id, and each
-loaded message's own header has the last word: a message that turns out to
-sit elsewhere is dropped, and so are service messages such as the topic
-root.
+In Topic Thread and Until Separator, **Include Reply Chain** merges the
+trigger's explicit chain into the window. It can restore messages older than
+the cap or separator, including messages from another topic. It is one
+chat-wide setting, falling back to the user's personal value; Reply Chain
+mode ignores it. These window modes skip twin files, while an explicitly
+included chain keeps them (`docs/twin_files.md`). Files, albums, media,
+reactions and metadata use the same conversion as every other mode.
 
-Recording the topic was chosen over filtering at read time. The alternative,
-loading every recorded id of the chat and keeping those whose header names
-the topic, would also cover history recorded before topics were, but it
-costs up to 50 `getMessages` calls per answer (5000 ids, 100 per call).
-Recording costs nothing per answer.
+Bots cannot read history, so these windows use recorded ids filed with
+`topic_id`, loaded in one batch. A loaded message's own header has the last
+word: content from another topic and service messages are dropped. Recording
+costs nothing per answer; loading the entire chat and filtering each answer
+would cost up to 50 `getMessages` calls for 5000 ids.
 
-Where it shows. `/status` adds an "In This Topic" line with the topic limit. `/contextModeHere`
-and `/getContextModeHere` report `Topic Thread` and name the mode that
-applies outside topics, and the `/contextMode` menu notes that its choice
-applies outside topics and adds the topic limit's quick picks. A button pressed on such a menu carries no header, so
-the menu's topic comes from the registry, or from loading the menu message
-once after a restart.
+`/status`, `/getContextModeHere` and the `/contextModeHere` menu show the
+effective topic mode and its source. The latter menu's Apply-to row switches
+between **This Topic** and **Whole Chat**. Whole Chat sets the default for
+all topics without their own setting, never the outside-topic chat mode.
+The `/contextMode` menu explains its outside-topic scope and offers topic
+limit picks. A callback finds the menu's topic from the registry or by
+loading the menu message once after a restart.
 
-`/asfile` (and `..`) inside a topic exports that topic's thread, and sends the
-file into the topic as a reply to the command, since placement needs a reply
-target. Its warnings reply to the file. Outside topics the file is sent with
-no reply, as before.
+`/asfile` (and `..`) exports the topic's context in its selected mode. In a
+Reply Chain topic, reply `/asfile` to the last message to export its chain;
+a plain command has no earlier context. The file replies to the command so
+it lands in the topic, and warnings reply to the file. Outside topics the
+file is sent without a reply, as before.
 
 ## Limits
 
@@ -243,8 +245,9 @@ no reply, as before.
   thread would have gaps.
 - **Outside topics, history still spans the chat.** Last N, until separator
   and the `.s` prefix's recent mode read the whole chat's recorded history,
-  topic messages included, exactly as before. Only thread context filters by
-  topic, and `.s` sent inside a topic still uses its recent mode.
+  topic messages included, exactly as before. Topic Thread and Until Separator
+  inside a topic read only that topic's ids. `.s` inside a topic still uses
+  its chat-wide recent override, ahead of every topic mode.
 - **Pending input follows its topic.** A *pending input flow* is a prompt
   that waits for the user's next message: a custom model id after
   `/setmodel` or `/setmodelhere`, a new system prompt, or a numbered menu on a
@@ -270,8 +273,8 @@ no reply, as before.
 
 ## Per-topic settings
 
-A private topic can have its own model, reasoning effort and system prompt.
-For each of them a request uses the first one set, in this order:
+A private topic can have its own model, reasoning effort, system prompt and
+context mode. For model, effort and prompt a request uses the first one set, in this order:
 
 1. a message prefix (`.f`, `.th`, ...), for that message only;
 2. this topic's setting;
@@ -283,12 +286,17 @@ A *topic layer* means step 2: the settings stored for one topic. Reasoning
 effort is kept per model, in the topic as in the chat, so a topic's `high`
 for one model says nothing about another model.
 
+Context mode has its own order: topic setting > chat default for topics >
+Topic Thread. There is no prefix or personal layer for it.
+
 ### Commands inside a topic
 
 Inside a private topic, these commands write the topic layer by default:
 
 - `/setModelHere`, its menu, and a custom model ID typed after it;
 - `/setThinkHere` and its menu;
+- `/contextModeHere` and its menu (Topic Thread, Reply Chain, Until Separator,
+  and Not Set to inherit);
 - `/setSystemPromptHere`. Without text it opens a menu that shows the
   current prompt and takes the new one as the next message in the topic
   (`clear` removes it, `cancel` stops). Outside topics it still answers
@@ -298,14 +306,16 @@ Each of these menus has an **Apply to** row, `📍 This Topic` and
 `💬 Whole Chat`, with a check mark on the layer it writes now. Pressing the
 other one redraws the menu for that layer and writes nothing yet. A custom
 model ID or a prompt the menu is still waiting for moves to the new layer
-too.
+too. For context mode, Whole Chat sets the default for every topic without
+its own mode, leaving the outside-topic mode alone. The topic menu offers
+no Last N picks; `/setLastNHere` still sets the outside-topic limit.
 
 With an argument (`/setModelHere x/y`, `/setThinkHere high`,
 `/setSystemPromptHere text`) the command writes the topic, and its reply
 says how to reach the whole chat. `/resetSystemPromptHere` clears only the
 topic's prompt.
 
-`/getModelHere`, `/getSystemPromptHere` and `/status` report the topic
+`/getModelHere`, `/getSystemPromptHere`, `/getContextModeHere` and `/status` report the topic
 layer inside a topic: `/status` adds lines named "In This Topic" and says
 "overridden in this topic" when the topic's model wins.
 
@@ -335,14 +345,19 @@ every topic that inherits from the chat.
 `TopicManager` keeps the topic layer in its own store (purpose
 `llm_chat_topics`), keyed `<chat id>:<topic id>`, apart from the chat
 settings. Entries do not expire, and a deleted topic's entry stays; each is
-a few fields.
+a few fields. `TopicPrefs.context_mode` stores the topic mode;
+`ChatPrefs.topic_context_mode` in `llm_chat_chats` stores the default for
+topics. Unset fields are omitted, so existing JSON needs no migration.
 
 ### Limits
 
-- Only the model, the reasoning effort and the system prompt have a topic
-  layer. The context mode, the Last N limits, TTS and the other chat
-  settings stay chat-wide (and inside a topic the thread context replaces
-  the context mode anyway).
+- Model, reasoning effort, system prompt and context mode have a topic
+  layer. Last N limits, TTS and other chat settings stay chat-wide; the
+  topic limit is personal.
+- In a threaded chat, almost every message is in a topic, so the
+  outside-topic chat context menu is practically unreachable. Its saved
+  value remains visible in the Outside Topics status line. Old chat-mode
+  menus inside topics are refused; send `/contextModeHere` again.
 - `/setThink` (personal) ignores topics: its menu is for the chat's
   effective model, as before.
 - The STT bot has no topic layer.
@@ -365,9 +380,10 @@ topic to that badge and a short title. See `docs/topic_titles.md`.
   `record_message` and `get_last_n_topic_ids`.
 - `uniborg/topic_titles.py`: automatic titles for new topics.
 - `llm_chat_plugins/llm_chat.py`: `start_input_flow` and
-  `pending_input_flow`, which bind pending input to its topic; thread
-  context (`THREAD_CONTEXT_MODE`, `_thread_topic_id`, and its branch in
-  `build_conversation_history`); and the topic layer (`TopicManager`,
+  `pending_input_flow`, which bind pending input to its topic; topic
+  modes (`TOPIC_CONTEXT_MODES`, `TOPIC_UNTIL_SEPARATOR_MODE`,
+  `_get_effective_topic_context_mode`, `_topic_context_mode_menu`,
+  `TOPIC_CONTEXT_CALLBACK_PREFIX` and `build_conversation_history`); and the topic layer (`TopicManager`,
   `REASONING_SCOPE_TOPIC`, the Apply-to row and `_apply_to_press_handler`,
   the prompt menu, `retarget_menu_input_flows`).
 - `tests/test_topics.py`: placement per request type, the registry, the
@@ -377,8 +393,8 @@ topic to that badge and a short title. See `docs/topic_titles.md`.
 - `tests/test_history_topics.py`: topic recording, old items without a
   topic, and the stored form through a fake Redis.
 - `tests/test_llm_chat_topics.py`: reply detection as `llm_chat` uses it;
-  thread context: what a thread holds, the mode it replaces, the status
-  texts, and the modes outside topics; and the topic layer
+  topic context (`TopicContextModeResolutionTests`, `TopicReplyChainTests`,
+  `TopicUntilSeparatorTests`), status and modes outside topics; and the topic layer
   (`TopicSettingsResolutionTests`, `TopicSettingsMenuTests`).
 - `tests/test_llm_chat_awaited_input.py`: pending input in topics.
 - `docs/telegram_ai_apis.md`, section 2.4: the Bot API side of private

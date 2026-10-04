@@ -14,7 +14,7 @@ it leaves the file out of the model's context.
   sent only as a file, and its text message reads "[sent as file]". It is not
   a twin, since nothing else carries the answer.
 - **Window mode**: a context mode that takes a stretch of the chat rather than
-  following replies: Last N, Until Separator, a topic's thread, and the recent
+  following replies: Last N, Until Separator (including inside a topic), a topic's thread, and the recent
   messages used with the `.s` override. Smart mode resolves to Reply Chain or
   to one of these.
 

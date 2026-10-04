@@ -4,10 +4,10 @@
 
 The effective limit is resolved in this order:
 
-1. This chat's override, set with `/setLastNHere` or `/contextModeHere`.
+1. This chat's override, set with `/setLastNHere` or `/contextModeHere` outside topics.
 2. The user's personal default, set with `/setLastN` or the `/contextMode` and `/groupContextMode` inline menus.
 3. The global default of `100`.
 
-The thread context llm_chat uses inside a private topic has its own limit, 200 by default, set with `/setThreadLastN` (see `docs/private_topics.md`). The Last N limit does not apply there.
+Topic Thread and Until Separator inside a private topic share their own limit, 200 by default, set with `/setThreadLastN` (see `docs/private_topics.md`). The Last N limit does not apply there.
 
 Inline context menus expose quick picks for `50`, `100`, `200`, `400`, and `800`. Command input remains the advanced path and can still set any valid value up to the history cache maximum (`LAST_N_MAX`).

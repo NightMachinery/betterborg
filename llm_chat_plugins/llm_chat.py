@@ -1161,9 +1161,8 @@ CANCEL_KEYWORDS = ["cancel"]
 RESET_KEYWORDS = ["not set", "none", "clear", "remove", "reset"]
 
 LAST_N_MESSAGES_LIMIT = 100
-#: The default limit of thread context, which a private topic uses instead of
-#: the context mode. It is separate from the Last N limit: `/setThreadLastN`
-#: sets a personal one.
+#: The default cap for Topic Thread and Until Separator in a private topic.
+#: Separate from the Last N limit; `/setThreadLastN` sets a personal one.
 THREAD_LAST_N_MESSAGES_LIMIT = 200
 LAST_N_QUICK_PICK_LIMITS = (50, 100, 200, 400, 800)
 HISTORY_MESSAGE_LIMIT = 1000
@@ -1189,22 +1188,38 @@ CONTEXT_MODE_NAMES = {
     "smart": "Smart Mode (Auto-Switches)",
 }
 CONTEXT_MODES = list(CONTEXT_MODE_NAMES.keys())
-#: *Thread context*: what a bot uses for a message in a private topic,
-#: whatever the context mode. It is the topic's own recorded messages, oldest
-#: first, up to the topic limit (`_get_effective_thread_last_n_limit`). A
-#: separator does not cut it: a topic is one conversation. It is not in
-#: CONTEXT_MODES, since nobody chooses it.
+#: The default inside private topics: the topic's own recorded messages,
+#: oldest first, up to the topic limit. Separators do not cut Topic Thread.
+#: Kept out of CONTEXT_MODES so outside-topic setters still reject it.
 THREAD_CONTEXT_MODE = "thread"
 THREAD_CONTEXT_MODE_NAME = "Topic Thread"
+TOPIC_CONTEXT_MODE_NAMES = {
+    THREAD_CONTEXT_MODE: THREAD_CONTEXT_MODE_NAME,
+    "reply_chain": "Reply Chain",
+    "until_separator": "Until Separator",
+}
+TOPIC_CONTEXT_MODES = list(TOPIC_CONTEXT_MODE_NAMES)
+#: Internal build mode, never stored: the capped topic after its last separator.
+TOPIC_UNTIL_SEPARATOR_MODE = "topic_until_separator"
 THREAD_CONTEXT_MENU_NOTE = (
-    f"**In private topics:** I always use the topic's own messages "
-    f"(`{THREAD_CONTEXT_MODE_NAME}`), up to the topic limit below. "
+    f"**In private topics:** each topic has its own context mode: "
+    f"`{THREAD_CONTEXT_MODE_NAME}` (its own messages, up to the topic limit "
+    "below) unless you pick `Reply Chain` or `Until Separator` with "
+    "/contextModeHere inside the topic. "
     "The mode you pick here applies outside topics."
 )
 THREAD_SEPARATOR_REPLY = (
-    f"`{CONTEXT_SEPARATOR}` does nothing inside a topic: I always use this "
-    "topic's own messages, up to your topic limit (/setThreadLastN). "
-    "To start fresh, open a new topic."
+    f"`{CONTEXT_SEPARATOR}` does nothing in this topic: it uses "
+    f"`{THREAD_CONTEXT_MODE_NAME}`, all of the topic's own messages up to your "
+    "topic limit (/setThreadLastN). To make it start fresh, switch this topic "
+    "to `Until Separator` with /contextModeHere, or open a new topic."
+)
+TOPIC_REPLY_CHAIN_SEPARATOR_REPLY = (
+    f"`{CONTEXT_SEPARATOR}` does nothing in this topic: it uses `Reply Chain`, "
+    "so a message that replies to nothing already starts fresh."
+)
+TOPIC_CONTEXT_CLEARED_REPLY = (
+    "Context cleared in this topic. It starts fresh from your next message here."
 )
 THREAD_LAST_N_CALLBACK_PREFIX = "lastn_thread_"
 GROUP_ACTIVATION_MODES = {
@@ -1292,11 +1307,11 @@ BOT_COMMANDS = [
     },
     {
         "command": "contextmodehere",
-        "description": "Set context mode for the current chat",
+        "description": "Set context mode for this chat, or this topic",
     },
     {
         "command": "getcontextmodehere",
-        "description": "View context mode for the current chat",
+        "description": "View context mode for this chat, or this topic",
     },
     {
         "command": "setlastn",
@@ -1685,8 +1700,12 @@ async def _thread_topic_id_for_display(event) -> Optional[int]:
     return topic_id
 
 
-def _thread_mode_display_name(limit: int) -> str:
-    return f"{THREAD_CONTEXT_MODE_NAME} (Limit: {limit})"
+def _topic_context_mode_display_name(mode: str, *, limit: int) -> str:
+    if mode in (THREAD_CONTEXT_MODE, "until_separator"):
+        return f"{TOPIC_CONTEXT_MODE_NAMES[mode]} (Limit: {limit})"
+    if mode == "reply_chain":
+        return TOPIC_CONTEXT_MODE_NAMES[mode]
+    raise ValueError(f"Unknown topic context mode: {mode!r}")
 
 
 def start_input_flow(
@@ -1866,6 +1885,8 @@ class ChatPrefs(_SavedSettings):
 
     system_prompt: Optional[str] = Field(default=None)
     context_mode: Optional[str] = Field(default=None)
+    #: Default for private topics that have no context mode of their own.
+    topic_context_mode: Optional[str] = Field(default=None)
     model: Optional[str] = Field(default=None)
     #: Reasoning effort is per-model: {model_id: level}.
     thinking_by_model: Dict[str, str] = Field(default_factory=dict)
@@ -1878,13 +1899,16 @@ class ChatPrefs(_SavedSettings):
 
 
 class TopicPrefs(_SavedSettings):
-    """Settings of one private topic, layered between the message prefix and
-    the chat's settings (docs/private_topics.md, "Per-topic settings")."""
+    """Model, effort, prompt and context mode of one private topic.
+
+    See docs/private_topics.md, "Per-topic settings", for their resolution.
+    """
 
     model: Optional[str] = Field(default=None)
     #: Reasoning effort is per-model: {model_id: level}.
     thinking_by_model: Dict[str, str] = Field(default_factory=dict)
     system_prompt: Optional[str] = Field(default=None)
+    context_mode: Optional[str] = Field(default=None)
 
 
 @dataclass(frozen=True)
@@ -2136,11 +2160,26 @@ class _LayerManager:
         self._save_prefs(key, prefs)
 
 
+def _check_topic_context_mode(mode: Optional[str]) -> None:
+    """Raises unless MODE is a topic context mode or None (unset)."""
+    if mode is not None and mode not in TOPIC_CONTEXT_MODES:
+        raise ValueError(f"Unknown topic context mode: {mode!r}")
+
+
 class ChatManager(_LayerManager):
     """High-level manager for chat-specific settings, keyed by chat id."""
 
     prefs_class = ChatPrefs
     purpose = "llm_chat_chats"
+
+    def get_topic_context_mode(self, chat_id: int) -> Optional[str]:
+        return self.get_prefs(chat_id).topic_context_mode
+
+    def set_topic_context_mode(self, chat_id: int, mode: Optional[str]):
+        _check_topic_context_mode(mode)
+        prefs = self.get_prefs(chat_id)
+        prefs.topic_context_mode = mode
+        self._save_prefs(chat_id, prefs)
 
     def get_context_mode(self, chat_id: int) -> Optional[str]:
         return self.get_prefs(chat_id).context_mode
@@ -2217,6 +2256,15 @@ class TopicManager(_LayerManager):
 
     prefs_class = TopicPrefs
     purpose = "llm_chat_topics"
+
+    def get_context_mode(self, key: str) -> Optional[str]:
+        return self.get_prefs(key).context_mode
+
+    def set_context_mode(self, key: str, mode: Optional[str]):
+        _check_topic_context_mode(mode)
+        prefs = self.get_prefs(key)
+        prefs.context_mode = mode
+        self._save_prefs(key, prefs)
 
     @staticmethod
     def key(chat_id: int, topic_id: int) -> str:
@@ -2525,8 +2573,8 @@ class MenuContent:
 async def _personal_context_mode_menu(event, kind: str) -> MenuContent:
     """The /contextMode (KIND "private") or /groupContextMode ("group") menu.
 
-    Inside a private topic the private menu says that the topic thread
-    replaces the mode chosen there, and offers the topic limit.
+    Inside a private topic the private menu explains its separate context
+    mode, and offers the personal topic limit.
     """
     prefs = user_manager.get_prefs(event.sender_id)
     if kind == "group":
@@ -2571,18 +2619,18 @@ async def _edit_personal_context_mode_menu(event, kind: str):
     await event.edit(text=menu.text, buttons=menu.buttons, parse_mode="md")
 
 
+def _chat_include_reply_chain_display(chat_id: int) -> bool:
+    value = chat_manager.get_include_reply_chain(chat_id)
+    return value if value is not None else True
+
+
 async def _edit_chat_context_mode_menu(event):
     chat_prefs = chat_manager.get_prefs(event.chat_id)
-    display_include_rc = (
-        chat_prefs.include_reply_chain
-        if chat_prefs.include_reply_chain is not None
-        else True
-    )
     buttons = _build_chat_context_mode_menu(
         event.chat_id,
         event.sender_id,
         current_mode=chat_prefs.context_mode,
-        include_reply_chain=display_include_rc,
+        include_reply_chain=_chat_include_reply_chain_display(event.chat_id),
     )
     new_status_text = await _get_context_mode_status_text(event)
     new_title = (
@@ -2713,6 +2761,54 @@ NOT_SET_LABELS = {
     REASONING_SCOPE_CHAT: NOT_SET_HERE_DISPLAY_NAME,
     REASONING_SCOPE_TOPIC: NOT_SET_IN_TOPIC_DISPLAY_NAME,
 }
+
+TOPIC_CONTEXT_SOURCE_DEFAULT = "default"
+TOPIC_CONTEXT_SOURCE_NAMES = {
+    REASONING_SCOPE_TOPIC: "this topic's own setting",
+    REASONING_SCOPE_CHAT: "this chat's default for topics",
+    TOPIC_CONTEXT_SOURCE_DEFAULT: "the default inside private topics",
+}
+
+
+@dataclass(frozen=True)
+class TopicContextModeChoice:
+    """A private topic's effective mode and the layer it came from."""
+
+    mode: str
+    source: str
+
+
+def _get_effective_topic_context_mode(
+    chat_id: int, *, topic_id: int
+) -> TopicContextModeChoice:
+    """Topic > chat's default for topics > Topic Thread.
+
+    Unknown stored values are logged and skipped so they cannot break a
+    topic's messages or discard its other settings. Writes are validated.
+    Outside-topic and personal modes never apply here.
+    """
+    candidates = (
+        (
+            REASONING_SCOPE_TOPIC,
+            topic_manager.get_context_mode(TopicManager.key(chat_id, topic_id)),
+        ),
+        (REASONING_SCOPE_CHAT, chat_manager.get_topic_context_mode(chat_id)),
+    )
+    for source, mode in candidates:
+        if mode is None:
+            continue
+        if mode in TOPIC_CONTEXT_MODES:
+            return TopicContextModeChoice(mode=mode, source=source)
+        logger.warning(
+            "Skipping unknown topic context mode %r (%s layer, chat %s, topic %s)",
+            mode,
+            source,
+            chat_id,
+            topic_id,
+        )
+    return TopicContextModeChoice(
+        mode=THREAD_CONTEXT_MODE, source=TOPIC_CONTEXT_SOURCE_DEFAULT
+    )
 
 
 @dataclass
@@ -3078,6 +3174,7 @@ APPLY_TO_CALLBACK_PREFIX = "applyto:"
 APPLY_TO_KIND_MODEL = "model"
 APPLY_TO_KIND_THINK = "think"
 APPLY_TO_KIND_PROMPT = "prompt"
+APPLY_TO_KIND_CONTEXT = "context"
 APPLY_TO_TARGETS = {
     REASONING_SCOPE_TOPIC: "📍 This Topic",
     REASONING_SCOPE_CHAT: "💬 Whole Chat",
@@ -3455,6 +3552,10 @@ APPLY_TO_FEEDBACK = {
     REASONING_SCOPE_TOPIC: "Now applies to this topic.",
     REASONING_SCOPE_CHAT: "Now applies to the whole chat.",
 }
+APPLY_TO_CONTEXT_FEEDBACK = {
+    REASONING_SCOPE_TOPIC: "Now applies to this topic.",
+    REASONING_SCOPE_CHAT: "Now sets the default for every topic of this chat. Outside topics keep the chat's own mode.",
+}
 #: The flow type a model menu's custom ID answers, by the layer it writes.
 HERE_MODEL_FLOW_TYPES = {
     REASONING_SCOPE_TOPIC: "topicmodel",
@@ -3472,6 +3573,7 @@ async def _apply_to_press_handler(event, *, kind: str, scope: str) -> None:
         APPLY_TO_KIND_MODEL,
         APPLY_TO_KIND_THINK,
         APPLY_TO_KIND_PROMPT,
+        APPLY_TO_KIND_CONTEXT,
     ):
         #: Wire input from a button: an unknown value is answered, not raised.
         await event.answer("This menu is invalid.", alert=True)
@@ -3506,10 +3608,18 @@ async def _apply_to_press_handler(event, *, kind: str, scope: str) -> None:
         retarget_menu_input_flows(menu, {"scope": scope})
         text = _prompt_menu_text(chat_id, scope=scope, topic_id=topic_id)
         buttons = _prompt_menu_rows(scope=scope)
+    elif kind == APPLY_TO_KIND_CONTEXT:
+        content = await _topic_context_mode_menu(event, scope=scope, topic_id=topic_id)
+        text, buttons = content.text, content.buttons
     else:
         raise ValueError(f"Unknown Apply-to kind: {kind}")
 
-    await event.answer(APPLY_TO_FEEDBACK[scope])
+    feedback = (
+        APPLY_TO_CONTEXT_FEEDBACK[scope]
+        if kind == APPLY_TO_KIND_CONTEXT
+        else APPLY_TO_FEEDBACK[scope]
+    )
+    await event.answer(feedback)
     try:
         await event.edit(text, buttons=buttons, parse_mode="md")
     except errors.rpcerrorlist.MessageNotModifiedError:
@@ -3548,6 +3658,131 @@ async def _prompt_menu_press_handler(event, *, action: str, scope: str) -> None:
             buttons=None,
             parse_mode="md",
         )
+    except errors.rpcerrorlist.MessageNotModifiedError:
+        pass
+
+
+TOPIC_CONTEXT_CALLBACK_PREFIX = "topicctx:"
+TOPIC_CONTEXT_NOT_SET = "not_set"
+TOPIC_CONTEXT_REPLY_CHAIN_TOGGLE = "rc"
+TOPIC_CONTEXT_MENU_TITLES = {
+    REASONING_SCOPE_TOPIC: "**Set Context Mode for This Topic**",
+    REASONING_SCOPE_CHAT: "**Set Context Mode for All Topics of This Chat**",
+}
+TOPIC_CONTEXT_MENU_NOTES = {
+    REASONING_SCOPE_TOPIC: "Not set: this topic follows the chat's default for topics, else `Topic Thread`.",
+    REASONING_SCOPE_CHAT: "Topics with a mode of their own keep it. Outside topics, the chat keeps its own mode.",
+}
+TOPIC_CONTEXT_MENU_FOOTER = (
+    "`Reply Chain` follows explicit replies only. `Until Separator` starts "
+    f"fresh after a message that is only `{CONTEXT_SEPARATOR}`. The topic limit "
+    "caps `Topic Thread` and `Until Separator` (/setThreadLastN).\n"
+    "Include Reply Chain is one setting for the whole chat, inside and outside "
+    "topics; `Reply Chain` mode ignores it."
+)
+TOPIC_CONTEXT_FEEDBACK = {
+    REASONING_SCOPE_TOPIC: "Context mode set for this topic.",
+    REASONING_SCOPE_CHAT: "Default context mode set for every topic of this chat.",
+}
+
+
+def _topic_context_layer_value(
+    chat_id: int, *, scope: str, topic_id: int
+) -> Optional[str]:
+    if scope == REASONING_SCOPE_TOPIC:
+        return topic_manager.get_context_mode(_topic_key(chat_id, topic_id))
+    if scope == REASONING_SCOPE_CHAT:
+        return chat_manager.get_topic_context_mode(chat_id)
+    raise ValueError(f"Unknown topic context scope: {scope!r}")
+
+
+def _set_topic_context_layer(
+    chat_id: int, *, scope: str, topic_id: int, mode: Optional[str]
+) -> None:
+    if scope == REASONING_SCOPE_TOPIC:
+        topic_manager.set_context_mode(_topic_key(chat_id, topic_id), mode)
+    elif scope == REASONING_SCOPE_CHAT:
+        chat_manager.set_topic_context_mode(
+            chat_id, None if mode == THREAD_CONTEXT_MODE else mode
+        )
+    else:
+        raise ValueError(f"Unknown topic context scope: {scope!r}")
+
+
+def _topic_context_mode_rows(
+    chat_id: int, user_id: int, *, scope: str, topic_id: int
+) -> list:
+    options = {
+        mode: _topic_context_mode_display_name(
+            mode, limit=_get_effective_thread_last_n_limit(user_id)
+        )
+        for mode in TOPIC_CONTEXT_MODES
+    }
+    value = _topic_context_layer_value(chat_id, scope=scope, topic_id=topic_id)
+    if scope == REASONING_SCOPE_TOPIC:
+        options[TOPIC_CONTEXT_NOT_SET] = NOT_SET_IN_TOPIC_DISPLAY_NAME
+        current_mode = value if value is not None else TOPIC_CONTEXT_NOT_SET
+    elif scope == REASONING_SCOPE_CHAT:
+        options[THREAD_CONTEXT_MODE] += " (Default)"
+        current_mode = value if value is not None else THREAD_CONTEXT_MODE
+    else:
+        raise ValueError(f"Unknown topic context scope: {scope!r}")
+    prefix = f"{TOPIC_CONTEXT_CALLBACK_PREFIX}{scope}:"
+    buttons = _build_context_mode_buttons(
+        options,
+        current_mode=current_mode,
+        mode_callback_prefix=prefix,
+        include_reply_chain=_chat_include_reply_chain_display(chat_id),
+        reply_chain_callback=f"{prefix}{TOPIC_CONTEXT_REPLY_CHAIN_TOGGLE}",
+    )
+    return [[button] for button in buttons] + [
+        _apply_to_row(APPLY_TO_KIND_CONTEXT, scope=scope)
+    ]
+
+
+async def _topic_context_mode_menu(event, *, scope: str, topic_id: int) -> MenuContent:
+    buttons = _topic_context_mode_rows(
+        event.chat_id, event.sender_id, scope=scope, topic_id=topic_id
+    )
+    text = (
+        f"{BOT_META_INFO_PREFIX}**Current Status:**\n"
+        f"{await _get_context_mode_status_text(event)}\n\n"
+        f"{_format_thread_last_n_menu_text(event.sender_id)}\n\n"
+        f"{TOPIC_CONTEXT_MENU_TITLES[scope]}\n"
+        f"{TOPIC_CONTEXT_MENU_NOTES[scope]}\n\n{TOPIC_CONTEXT_MENU_FOOTER}"
+    )
+    return MenuContent(text=text, buttons=buttons)
+
+
+async def _topic_context_press_handler(event, *, scope: str, choice: str) -> None:
+    if scope not in APPLY_TO_TARGETS or choice not in (
+        *TOPIC_CONTEXT_MODES,
+        TOPIC_CONTEXT_NOT_SET,
+        TOPIC_CONTEXT_REPLY_CHAIN_TOGGLE,
+    ):
+        await event.answer("This menu is invalid.", alert=True)
+        return
+    topic_id = await _thread_topic_id_for_display(event)
+    if topic_id is None:
+        await event.answer(MENU_TOPIC_UNKNOWN, alert=True)
+        return
+    if choice == TOPIC_CONTEXT_REPLY_CHAIN_TOGGLE:
+        enabled = chat_manager.toggle_include_reply_chain(event.chat_id)
+        feedback = (
+            f"Include Reply Chain {'enabled' if enabled else 'disabled'} for this chat."
+        )
+    else:
+        _set_topic_context_layer(
+            event.chat_id,
+            scope=scope,
+            topic_id=topic_id,
+            mode=None if choice == TOPIC_CONTEXT_NOT_SET else choice,
+        )
+        feedback = TOPIC_CONTEXT_FEEDBACK[scope]
+    menu = await _topic_context_mode_menu(event, scope=scope, topic_id=topic_id)
+    await event.answer(feedback)
+    try:
+        await event.edit(menu.text, buttons=menu.buttons, parse_mode="md")
     except errors.rpcerrorlist.MessageNotModifiedError:
         pass
 
@@ -5216,13 +5451,15 @@ async def _get_context_mode_status_text(event) -> str:
     if effective_mode == "last_N":
         mode_name = f"{mode_name_base} (Limit: {effective_last_n_limit})"
 
-    if await _thread_topic_id_for_display(event) is not None:
+    topic_id = await _thread_topic_id_for_display(event)
+    if topic_id is not None:
+        choice = _get_effective_topic_context_mode(chat_id, topic_id=topic_id)
+        limit = _get_effective_thread_last_n_limit(user_id)
         return "\n".join(
             [
                 "∙ **Current Mode:** "
-                f"`{_thread_mode_display_name(_get_effective_thread_last_n_limit(user_id))}`",
-                "∙ **Source:** This is a private topic, and inside private "
-                "topics I always use the topic's own messages.",
+                f"`{_topic_context_mode_display_name(choice.mode, limit=limit)}`",
+                f"∙ **Source:** Using {TOPIC_CONTEXT_SOURCE_NAMES[choice.source]}.",
                 f"∙ **Outside Topics:** `{mode_name}`, from {source_text}.",
             ]
         )
@@ -6342,29 +6579,41 @@ async def _get_initial_messages_for_reply_chain(
     return messages
 
 
+def _is_separator_text(text: Optional[str]) -> bool:
+    return bool(text) and text.strip() == CONTEXT_SEPARATOR
+
+
 def _after_last_separator(messages: List[Message]) -> List[Message]:
     """MESSAGES after the last one whose text is only `CONTEXT_SEPARATOR`."""
     context_slice = []
     for msg in reversed(messages):
-        if msg.text and msg.text.strip() == CONTEXT_SEPARATOR:
+        if _is_separator_text(msg.text):
             break
         context_slice.append(msg)
     return list(reversed(context_slice))
 
 
-def _thread_messages(messages: List[Message], *, topic_id: int) -> List[Message]:
+def _topic_messages(messages: List[Message], *, topic_id: int) -> List[Message]:
     """The MESSAGES that are content of private topic TOPIC_ID.
 
     The history filed each message under a topic, but a loaded message's own
     header has the last word. Service messages, such as the topic's root, are
-    not content, and neither are separators, which do nothing in a topic.
+    not content. Separators are kept so Until Separator can cut at them.
     """
     return [
         message
         for message in messages
         if not isinstance(message, MessageService)
         and topics.private_message_topic_id(message) == topic_id
-        and not (message.text and message.text.strip() == CONTEXT_SEPARATOR)
+    ]
+
+
+def _thread_messages(messages: List[Message], *, topic_id: int) -> List[Message]:
+    """Topic content without separators, which do nothing in Topic Thread."""
+    return [
+        message
+        for message in _topic_messages(messages, topic_id=topic_id)
+        if not _is_separator_text(message.text)
     ]
 
 
@@ -6483,10 +6732,10 @@ async def build_conversation_history(
             )
         elif context_mode == "until_separator":
             message_ids = await history_util.get_all_ids(chat_id)
-        elif context_mode == THREAD_CONTEXT_MODE:
+        elif context_mode in (THREAD_CONTEXT_MODE, TOPIC_UNTIL_SEPARATOR_MODE):
             thread_topic_id = _thread_topic_id(event)
             if thread_topic_id is None:
-                raise ValueError("Thread context needs a message in a private topic")
+                raise ValueError("Topic context needs a message in a private topic")
             message_ids = await history_util.get_last_n_topic_ids(
                 chat_id,
                 thread_topic_id,
@@ -6512,6 +6761,10 @@ async def build_conversation_history(
                 elif context_mode == THREAD_CONTEXT_MODE:
                     messages_to_process = _thread_messages(
                         fetched_messages, topic_id=thread_topic_id
+                    )
+                elif context_mode == TOPIC_UNTIL_SEPARATOR_MODE:
+                    messages_to_process = _after_last_separator(
+                        _topic_messages(fetched_messages, topic_id=thread_topic_id)
                     )
                 else:  # last_N and recent
                     messages_to_process = fetched_messages
@@ -7159,7 +7412,7 @@ To get started, you'll need an API key. Send me /setgeminikey for Gemini models,
 
 **▶️ In Private Chats**
 To continue a conversation, simply **reply** to my last message. I will remember our previous messages in that chain. To start a new, separate conversation, just send a message without replying to anything.
-With topics (threaded mode), each topic is its own conversation: inside a topic I read its earlier messages, so you need not reply.
+With topics (threaded mode), each topic is its own conversation: inside a topic I read its earlier messages by default; /contextModeHere in a topic switches it to Reply Chain or Until Separator.
 
 **▶️ In Group Chats**
 To talk to me in a group, {group_trigger_text}. Conversation history works the same way (e.g., reply to my last message in the group to continue a thread).
@@ -7169,9 +7422,9 @@ I remember our conversations based on your chosen settings. You can configure th
 
 - **Context Mode:** This controls *which* messages are included.
   - `Reply Chain (Default)`: Only messages in the current reply thread.
-  - `Until Separator`: The reply chain up to a message containing only `{CONTEXT_SEPARATOR}`.
-  - `Last N Messages`: The most recent messages in the chat. The default limit is `{LAST_N_MESSAGES_LIMIT}`, and `/contextMode`, `/groupContextMode`, and `/contextModeHere` include quick buttons for `{", ".join(map(str, LAST_N_QUICK_PICK_LIMITS))}`.
-  - `{THREAD_CONTEXT_MODE_NAME}`: Used inside a private topic, whatever the mode: the topic's own messages, up to the topic limit (default `{THREAD_LAST_N_MESSAGES_LIMIT}`, set with /setThreadLastN). `{CONTEXT_SEPARATOR}` does nothing there; open a new topic to start fresh.
+  - `Until Separator`: Messages after the last message containing only `{CONTEXT_SEPARATOR}`.
+  - `Last N Messages`: The most recent messages in the chat. The default limit is `{LAST_N_MESSAGES_LIMIT}`, and `/contextMode`, `/groupContextMode`, and `/contextModeHere` outside topics include quick buttons for `{", ".join(map(str, LAST_N_QUICK_PICK_LIMITS))}`.
+  - `{THREAD_CONTEXT_MODE_NAME}`: The default inside a private topic: its own messages, up to the topic limit (default `{THREAD_LAST_N_MESSAGES_LIMIT}`, /setThreadLastN). Inside a topic, /contextModeHere picks it, `Reply Chain` (explicit replies only) or `Until Separator` (the topic's messages after its last `{CONTEXT_SEPARATOR}`), for this topic or every topic of the chat. The separator cuts context only in Until Separator mode.
 
 - **Metadata Mode:** This controls *how* messages are formatted for the AI.
   - `No Metadata`: Merges consecutive messages and adds no extra info.
@@ -7203,6 +7456,8 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setThreadLastN: Set how many messages of a private topic I read (default: `{THREAD_LAST_N_MESSAGES_LIMIT}`).
 - /getThreadLastN: View your private-topic message limit.
 - /contextMode: Change how **private** chat history is gathered.
+- /contextModeHere: Set context mode for this chat, or this topic.
+- /getContextModeHere: View the effective context mode and its source here.
 - /groupContextMode: Change how **group** chat history is gathered.
 - /metadataMode: Change how **private** chat metadata is handled.
 - /groupMetadataMode: Change how **group** chat metadata is handled.
@@ -7210,7 +7465,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setthink: Adjust the current model's reasoning effort (per model, personal).
 - /setThinkHere: Same, but for this chat only. Overrides your personal setting.
 
-**In private topics**, /setModelHere, /setThinkHere and /setSystemPromptHere set this topic's own model, effort and prompt, which override the chat's. Their menus have an **Apply to** row to set the whole chat instead.
+**In private topics**, /setModelHere, /setThinkHere, /setSystemPromptHere and /contextModeHere set this topic's model, effort, prompt and context mode. Their menus have an **Apply to** row to set the whole chat instead (for context mode, the default for every topic of the chat). /getContextModeHere shows the topic's effective mode and its source.
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
 - /stream: Stream answers as live drafts or as edits, for private chats and for groups.
@@ -7427,12 +7682,13 @@ async def status_handler(event):
     #: Only rendered inside a private topic, so the block is unchanged
     #: everywhere else.
     thread_status_line = ""
-    if _thread_topic_id(event) is not None:
+    if topic_id is not None:
+        choice = _get_effective_topic_context_mode(chat_id, topic_id=topic_id)
         thread_status_line = (
             "• **In This Topic:** "
-            f"`{_thread_mode_display_name(_get_effective_thread_last_n_limit(user_id))}`, "
-            "which replaces the context mode inside private topics "
-            "(limit: /setThreadLastN)\n"
+            f"`{_topic_context_mode_display_name(choice.mode, limit=_get_effective_thread_last_n_limit(user_id))}`, "
+            f"from {TOPIC_CONTEXT_SOURCE_NAMES[choice.source]} "
+            "(/contextModeHere; limit: /setThreadLastN)\n"
         )
 
     group_context_mode_name = CONTEXT_MODE_NAMES.get(
@@ -9702,7 +9958,7 @@ async def get_model_here_handler(event):
 
 
 async def context_mode_here_handler(event):
-    """Sets the context mode and Last-N limit for the current chat."""
+    """Sets the current topic's context mode, or chat settings outside topics."""
     is_bot_admin = await util.isAdmin(event)
     is_group_admin = await util.is_group_admin(event)
 
@@ -9712,18 +9968,21 @@ async def context_mode_here_handler(event):
         )
         return
 
+    topic_id = _thread_topic_id(event)
+    if topic_id is not None:
+        menu = await _topic_context_mode_menu(
+            event, scope=REASONING_SCOPE_TOPIC, topic_id=topic_id
+        )
+        await event.reply(menu.text, buttons=menu.buttons, parse_mode="md")
+        return
+
     status_text = await _get_context_mode_status_text(event)
     chat_prefs = chat_manager.get_prefs(event.chat_id)
-    display_include_rc = (
-        chat_prefs.include_reply_chain
-        if chat_prefs.include_reply_chain is not None
-        else True
-    )
     buttons = _build_chat_context_mode_menu(
         event.chat_id,
         event.sender_id,
         current_mode=chat_prefs.context_mode,
-        include_reply_chain=display_include_rc,
+        include_reply_chain=_chat_include_reply_chain_display(event.chat_id),
     )
     await event.reply(
         f"{BOT_META_INFO_PREFIX}**Current Status:**\n{status_text}\n\n"
@@ -9755,10 +10014,11 @@ async def reset_context_mode_here_handler(event):
 
 
 async def get_context_mode_here_handler(event):
-    """Gets and displays the context mode for the current chat."""
+    """Displays the current topic's context mode, or the chat's outside topics."""
     status_text = await _get_context_mode_status_text(event)
+    scope_name = "Topic" if _thread_topic_id(event) is not None else "Chat"
     await event.reply(
-        f"{BOT_META_INFO_PREFIX}**Chat Context Mode Status**\n\n{status_text}",
+        f"{BOT_META_INFO_PREFIX}**{scope_name} Context Mode Status**\n\n{status_text}",
         parse_mode="md",
     )
 
@@ -10031,9 +10291,15 @@ async def sep_handler(event):
     # Set smart context mode to until_separator
     await set_smart_context_mode(user_id, "until_separator")
 
+    topic_note = (
+        " This applies outside topics; in this topic, use /contextModeHere."
+        if _thread_topic_id(event) is not None
+        else ""
+    )
     await event.reply(
         f"{BOT_META_INFO_PREFIX}✅ Switched to **Smart Mode** with `Until Separator` context. "
         f"All messages will be included until you reply to a message or send `{CONTEXT_SEPARATOR}`."
+        f"{topic_note}"
     )
 
 
@@ -10266,6 +10532,15 @@ async def callback_handler(event):
     data_str = event.data.decode("utf-8")
     user_id = event.sender_id
     #: @Claude Based on the Telethon documentation, I can now confirm that event.sender_id in a CallbackQuery event is indeed the ID of the person who clicked the button, not the original sender of the menu message.
+
+    if (
+        data_str == "replychainhere_toggle"
+        or data_str.startswith(("contexthere_", "lastnhere_"))
+    ) and await _thread_topic_id_for_display(event) is not None:
+        await event.answer(
+            "This menu is outdated. Send /contextModeHere again.", alert=True
+        )
+        return
 
     if data_str.startswith(MODEL_MENU_CANCEL_PREFIX):
         await _model_menu_cancel_handler(
@@ -10729,6 +11004,10 @@ async def callback_handler(event):
     elif data_str.startswith(APPLY_TO_CALLBACK_PREFIX):
         kind, _, scope = data_str[len(APPLY_TO_CALLBACK_PREFIX) :].partition(":")
         await _apply_to_press_handler(event, kind=kind, scope=scope)
+
+    elif data_str.startswith(TOPIC_CONTEXT_CALLBACK_PREFIX):
+        scope, _, choice = data_str[len(TOPIC_CONTEXT_CALLBACK_PREFIX) :].partition(":")
+        await _topic_context_press_handler(event, scope=scope, choice=choice)
 
     elif data_str.startswith(PROMPT_MENU_CALLBACK_PREFIX):
         action, _, scope = data_str[len(PROMPT_MENU_CALLBACK_PREFIX) :].partition(":")
@@ -11531,6 +11810,26 @@ async def testlive_handler(event):
         )
 
 
+async def _topic_context_mode_for_message(event, *, topic_id: int) -> Optional[str]:
+    """The topic's build mode, or None when its separator was answered."""
+    choice = _get_effective_topic_context_mode(event.chat_id, topic_id=topic_id)
+    if choice.mode == THREAD_CONTEXT_MODE:
+        build_mode = THREAD_CONTEXT_MODE
+        separator_reply = THREAD_SEPARATOR_REPLY
+    elif choice.mode == "reply_chain":
+        build_mode = "reply_chain"
+        separator_reply = TOPIC_REPLY_CHAIN_SEPARATOR_REPLY
+    elif choice.mode == "until_separator":
+        build_mode = TOPIC_UNTIL_SEPARATOR_MODE
+        separator_reply = TOPIC_CONTEXT_CLEARED_REPLY
+    else:
+        raise ValueError(f"Unknown topic context mode: {choice.mode!r}")
+    if _is_separator_text(event.text):
+        await send_info_message(event, separator_reply)
+        return None
+    return build_mode
+
+
 async def _determine_context_mode_and_handle_transitions(
     event,
     *,
@@ -11553,14 +11852,9 @@ async def _determine_context_mode_and_handle_transitions(
         if override_mode == "recent":
             return None  # Early return - first message handles the rest
         context_mode_to_use = override_mode
-    elif _thread_topic_id(event) is not None:
-        #: Thread context replaces every context mode inside a private topic,
-        #: so smart mode's per-user state neither switches nor applies here.
-        #: A separator does nothing to the thread; the reply says so.
-        if event.text and event.text.strip() == CONTEXT_SEPARATOR:
-            await send_info_message(event, THREAD_SEPARATOR_REPLY)
-            return None
-        return THREAD_CONTEXT_MODE
+    elif (topic_id := _thread_topic_id(event)) is not None:
+        #: Topics resolve separately; smart mode's per-user state is untouched.
+        return await _topic_context_mode_for_message(event, topic_id=topic_id)
     else:
         # Check for chat-specific context mode
         chat_context_mode = chat_manager.get_context_mode(event.chat_id)

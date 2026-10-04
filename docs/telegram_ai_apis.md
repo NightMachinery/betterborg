@@ -424,8 +424,9 @@ safety rules and per-bot behaviour are in [guest_mode.md](guest_mode.md).
   root's id. A rename posts a `MessageActionTopicEdit` service message, and
   `title_missing` (MTProto's `is_name_implicit`) stays set after it.
 - Status: bot replies are placed in their topic, pending inputs are bound to
-  the topic that asked for them, each topic is its own conversation (thread
-  context), and a topic Telegram named is renamed after its first answer.
+  the topic that asked for them, and each topic has its own context mode:
+  Topic Thread, Reply Chain or Until Separator. A topic Telegram named is
+  renamed after its first answer.
   See [private_topics.md](private_topics.md) and
   [topic_titles.md](topic_titles.md).
 

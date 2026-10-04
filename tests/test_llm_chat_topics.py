@@ -6,8 +6,10 @@ Terms used below:
   opens a topic.
 - A *plain* topic message is one the user sent without replying to anything.
   Telegram still gives it a reply header, pointing at the topic root.
-- *Thread context* is what a bot uses for a message in a private topic: the
+- *Thread context* is the default for a bot's message in a private topic: the
   topic's own recorded messages (`llm_chat.THREAD_CONTEXT_MODE`).
+- A *topic context mode* is Topic Thread, Reply Chain or Until Separator.
+  Its topic setting overrides the chat's default for topics.
 - The shapes are the ones a canary bot observed live (Telethon 1.45, layer
   229; layer 224 carries the same `MessageReplyHeader` fields):
   - private chat: the root is message 322 in the bot's box, the topic id
@@ -515,6 +517,8 @@ class _BotChatCase(unittest.TestCase):
         self.prefs = plugin.UserPrefs()
         self.smart_state = {}
         self.chat_mode = None
+        self.chat_topic_mode = None
+        self.topics = plugin.TopicManager(storage=_MemoryStorage())
         self.info = AsyncMock()
         history_util._history_cache.clear()
         history_util._message_id_to_chat_id_map.clear()
@@ -524,6 +528,12 @@ class _BotChatCase(unittest.TestCase):
         self.addCleanup(stack.close)
         enter = stack.enter_context
         enter(patch.object(plugin, "IS_BOT", True))
+        enter(patch.object(plugin, "topic_manager", self.topics))
+        enter(
+            patch.object(
+                plugin, "chat_manager", plugin.ChatManager(storage=_MemoryStorage())
+            )
+        )
         enter(patch.object(plugin, "override_chat_context_mode", {}))
         enter(patch.object(plugin, "SMART_CONTEXT_STATE", self.smart_state))
         enter(patch.object(plugin, "send_info_message", new=self.info))
@@ -531,6 +541,13 @@ class _BotChatCase(unittest.TestCase):
         enter(patch.object(topics, "TOPIC_ROOTS", topics.TopicRootCache()))
         enter(patch.object(plugin.redis_util, "is_redis_available", return_value=False))
         enter(patch.object(plugin.user_manager, "get_prefs", return_value=self.prefs))
+        enter(
+            patch.object(
+                plugin.chat_manager,
+                "get_topic_context_mode",
+                side_effect=lambda chat_id: self.chat_topic_mode,
+            )
+        )
         enter(
             patch.object(
                 plugin.chat_manager,
@@ -549,6 +566,9 @@ class _BotChatCase(unittest.TestCase):
             )
         )
         self.temp_dir = Path(enter(tempfile.TemporaryDirectory()))
+
+    def topic_mode(self, mode, *, topic_id=TOPIC_ID):
+        self.topics.set_context_mode(plugin.TopicManager.key(USER_ID, topic_id), mode)
 
     def see(self, *messages):
         """The bot receives or sends MESSAGES, and records them."""
@@ -679,6 +699,65 @@ class ThreadContextTests(_BotChatCase):
 
 
 class ThreadContextModeTests(_BotChatCase):
+    def test_topic_modes_override_personal_and_chat_modes_without_switching_smart(self):
+        self.prefs.context_mode = "smart"
+        self.chat_mode = "smart"
+        self.smart_state[USER_ID] = "until_separator"
+        self.see(_said(330, "hi"))
+        for mode, build_mode in (
+            ("thread", plugin.THREAD_CONTEXT_MODE),
+            ("reply_chain", "reply_chain"),
+            ("until_separator", plugin.TOPIC_UNTIL_SEPARATOR_MODE),
+        ):
+            with self.subTest(mode=mode):
+                self.topic_mode(mode)
+                self.assertEqual(
+                    self.mode_for(_said(331, "reply", parent=330)), build_mode
+                )
+                self.assertEqual(self.smart_state, {USER_ID: "until_separator"})
+                self.info.assert_not_awaited()
+
+    def test_the_chat_topic_default_applies_and_the_topic_wins(self):
+        self.chat_topic_mode = "reply_chain"
+        self.assertEqual(self.mode_for(_said(330, "hi")), "reply_chain")
+        self.topic_mode("thread")
+        self.assertEqual(self.mode_for(_said(330, "hi")), plugin.THREAD_CONTEXT_MODE)
+        self.assertEqual(
+            self.mode_for(
+                _said(332, "other", top_id=OTHER_TOPIC_ID, parent=OTHER_ROOT_ID)
+            ),
+            "reply_chain",
+        )
+
+    def test_outside_topics_and_user_accounts_ignore_topic_modes(self):
+        self.chat_topic_mode = "reply_chain"
+        self.topic_mode("until_separator")
+        self.prefs.context_mode = "last_N"
+        self.assertEqual(
+            self.mode_for(_said(330, "hi", top_id=None, parent=None)), "last_N"
+        )
+        with patch.object(plugin, "IS_BOT", False):
+            self.assertEqual(self.mode_for(_said(330, "hi")), "last_N")
+
+    def test_each_topic_mode_answers_a_separator_without_calling_the_model(self):
+        for mode, reply in (
+            ("thread", plugin.THREAD_SEPARATOR_REPLY),
+            ("reply_chain", plugin.TOPIC_REPLY_CHAIN_SEPARATOR_REPLY),
+            ("until_separator", plugin.TOPIC_CONTEXT_CLEARED_REPLY),
+        ):
+            with self.subTest(mode=mode):
+                self.topic_mode(mode)
+                self.info.reset_mock()
+                self.assertIsNone(self.mode_for(_said(330, "  ---\n")))
+                self.assertEqual(self.info.await_args.args[1], reply)
+
+    def test_the_recent_override_still_wins_in_every_topic_mode(self):
+        for mode in plugin.TOPIC_CONTEXT_MODES:
+            with self.subTest(mode=mode):
+                self.topic_mode(mode)
+                with patch.dict(plugin.override_chat_context_mode, {USER_ID: "recent"}):
+                    self.assertIsNone(self.mode_for(_said(330, "hi")))
+
     def test_every_context_mode_gives_way_in_a_topic(self):
         for mode in plugin.CONTEXT_MODES:
             with self.subTest(mode=mode):
@@ -720,6 +799,108 @@ class ThreadContextModeTests(_BotChatCase):
             self.assertEqual(self.mode_for(_said(330, "hi")), "last_N")
 
 
+class TopicReplyChainTests(_BotChatCase):
+    def setUp(self):
+        super().setUp()
+        self.see(*CONVERSATION)
+        self.topic_mode("reply_chain")
+
+    def test_a_plain_message_gets_only_itself(self):
+        self.assertEqual(self.context_of(CONVERSATION[-1]), ("reply_chain", [336]))
+        self.assertEqual(self.chat.batches, [])
+        self.assertEqual(self.chat.fetched, [ROOT_ID])
+
+    def test_an_explicit_reply_gets_its_chain_not_the_thread(self):
+        reply = _said(337, "Back?", parent=331)
+        self.see(reply)
+        self.assertEqual(self.context_of(reply), ("reply_chain", [330, 331, 337]))
+
+    def test_the_topic_limit_does_not_cap_the_reply_chain(self):
+        self.prefs.thread_last_n_messages_limit = 1
+        self.test_an_explicit_reply_gets_its_chain_not_the_thread()
+
+    def test_an_explicit_chain_leaving_the_topic_is_followed(self):
+        reply = _said(337, "Other topic?", parent=332)
+        self.see(reply)
+        self.assertEqual(self.context_of(reply)[1], [332, 337])
+
+
+class TopicUntilSeparatorTests(_BotChatCase):
+    def setUp(self):
+        super().setUp()
+        self.topic_mode("until_separator")
+
+    def test_without_a_separator_it_is_the_whole_thread(self):
+        self.see(*CONVERSATION)
+        self.assertEqual(
+            self.context_of(CONVERSATION[-1]),
+            (plugin.TOPIC_UNTIL_SEPARATOR_MODE, THREAD_IDS),
+        )
+
+    def test_it_starts_after_the_latest_separator_and_drops_service_messages(self):
+        self.see(
+            *CONVERSATION,
+            _said(337, "---"),
+            _said(338, "first"),
+            _said(339, " --- "),
+            _said(340, "last"),
+        )
+        asyncio.run(history_util.add_message(USER_ID, ROOT_ID, T0, topic_id=TOPIC_ID))
+        self.assertEqual(self.context_of(self.chat.by_id[340])[1], [340])
+
+    def test_separators_elsewhere_or_misfiled_do_not_cut_it(self):
+        self.see(
+            *CONVERSATION,
+            _said(337, "---", top_id=OTHER_TOPIC_ID, parent=OTHER_ROOT_ID),
+            _said(338, "---", top_id=None, parent=None),
+            _said(339, "next"),
+        )
+        asyncio.run(
+            history_util.add_message(
+                USER_ID, 337, self.chat.by_id[337].date, topic_id=TOPIC_ID
+            )
+        )
+        self.assertEqual(self.context_of(self.chat.by_id[339])[1], THREAD_IDS + [339])
+
+    def test_cap_and_cut_keep_the_same_suffix(self):
+        self.see(
+            *CONVERSATION, _said(337, "---"), _said(338, "first"), _said(339, "second")
+        )
+        for limit in (2, 3):
+            with self.subTest(limit=limit):
+                self.prefs.thread_last_n_messages_limit = limit
+                self.assertEqual(self.context_of(self.chat.by_id[339])[1], [338, 339])
+
+    def test_a_separator_as_the_first_message_starts_fresh(self):
+        separator, question = _said(330, "---"), _said(331, "hi")
+        self.see(separator, question)
+        self.assertIsNone(self.mode_for(separator))
+        self.assertEqual(
+            self.info.await_args.args[1], plugin.TOPIC_CONTEXT_CLEARED_REPLY
+        )
+        self.assertEqual(self.context_of(question)[1], [331])
+
+    def test_include_reply_chain_can_restore_pre_separator_messages(self):
+        reply = _said(338, "About Maybe", parent=335)
+        self.see(*CONVERSATION, _said(337, "---"), reply)
+        self.assertEqual(self.context_of(reply)[1], [334, 335, 338])
+        with patch.object(
+            plugin.chat_manager, "get_include_reply_chain", return_value=False
+        ):
+            self.assertEqual(self.context_of(reply)[1], [338])
+
+    def test_earlier_separators_count_after_switching_and_deleting_reopens_context(
+        self,
+    ):
+        self.topic_mode("thread")
+        self.see(*CONVERSATION, _said(337, "---"), _said(338, "new"))
+        self.assertEqual(self.context_of(self.chat.by_id[338])[1], THREAD_IDS + [338])
+        self.topic_mode("until_separator")
+        self.assertEqual(self.context_of(self.chat.by_id[338])[1], [338])
+        asyncio.run(history_util.mark_as_deleted(USER_ID, [337]))
+        self.assertEqual(self.context_of(self.chat.by_id[338])[1], THREAD_IDS + [338])
+
+
 class OutsideTopicsContextTests(_BotChatCase):
     """Outside topics, each mode builds the context it built before."""
 
@@ -749,6 +930,10 @@ class OutsideTopicsContextTests(_BotChatCase):
     def test_thread_context_needs_a_topic(self):
         with self.assertRaises(ValueError):
             self.context_of(self.chain[-1], mode=plugin.THREAD_CONTEXT_MODE)
+
+    def test_topic_until_separator_needs_a_topic(self):
+        with self.assertRaises(ValueError):
+            self.context_of(self.chain[-1], mode=plugin.TOPIC_UNTIL_SEPARATOR_MODE)
 
 
 def _file(msg_id, caption, *, top_id=None, parent=None, bot=True, forwarded=False):
@@ -845,6 +1030,16 @@ class TwinFileContextTests(_BotChatCase):
             [350, 351, 353],
         )
 
+    def test_a_topic_until_separator_skips_the_twin(self):
+        self.see(
+            _said(350, "question"),
+            _said(351, "answer", parent=350, bot=True),
+            _twin(352, top_id=TOPIC_ID, parent=350),
+            _said(353, "next"),
+        )
+        self.topic_mode("until_separator")
+        self.assertEqual(self.context_of(self.chat.by_id[353])[1], [350, 351, 353])
+
     def test_our_id_identifies_twins_that_carry_a_sender(self):
         twin = _twin(343)
         twin.from_id = PeerUser(BOT_ID)
@@ -940,6 +1135,22 @@ class AsFileTests(_BotChatCase):
         self.assertIs(self.send.await_args.kwargs["reply_to"], event.message)
         self.assertEqual(self.exported, THREAD_IDS + [337])
 
+    def test_a_reply_chain_topic_exports_the_commands_explicit_chain(self):
+        self.topic_mode("reply_chain")
+        self.export(_said(337, "/asfile", parent=331))
+        self.assertEqual(self.exported, [330, 331, 337])
+
+    def test_a_plain_export_in_a_reply_chain_topic_has_only_the_command(self):
+        self.topic_mode("reply_chain")
+        self.export(_said(337, ".."))
+        self.assertEqual(self.exported, [337])
+
+    def test_an_until_separator_topic_exports_after_its_separator(self):
+        self.topic_mode("until_separator")
+        self.see(_said(337, "---"))
+        self.export(_said(338, "/asfile"))
+        self.assertEqual(self.exported, [338])
+
     def test_outside_topics_the_file_is_sent_as_before(self):
         self.prefs.context_mode = "last_N"
         self.export(_said(337, "/asfile", top_id=None, parent=None))
@@ -960,8 +1171,7 @@ class AsFileTests(_BotChatCase):
 class ThreadStatusTests(_BotChatCase):
     IN_TOPIC_STATUS = (
         "∙ **Current Mode:** `Topic Thread (Limit: 200)`\n"
-        "∙ **Source:** This is a private topic, and inside private topics I "
-        "always use the topic's own messages.\n"
+        "∙ **Source:** Using the default inside private topics.\n"
         "∙ **Outside Topics:** `Reply Chain`, from your **personal default** "
         "for private chats."
     )
@@ -989,6 +1199,17 @@ class ThreadStatusTests(_BotChatCase):
             self.status_text(self.event(_said(330, "/contextModeHere"))),
             self.IN_TOPIC_STATUS,
         )
+
+    def test_the_status_names_the_topic_mode_and_its_layer(self):
+        self.topic_mode("reply_chain")
+        status = self.status_text(self.event(_said(330, "/getContextModeHere")))
+        self.assertIn("`Reply Chain`", status)
+        self.assertIn("Using this topic's own setting.", status)
+        self.topic_mode(None)
+        self.chat_topic_mode = "until_separator"
+        status = self.status_text(self.event(_said(330, "/getContextModeHere")))
+        self.assertIn("`Until Separator (Limit: 200)`", status)
+        self.assertIn("Using this chat's default for topics.", status)
 
     def test_outside_topics_the_status_is_unchanged(self):
         outside = _said(330, "/contextModeHere", top_id=None, parent=None)
@@ -1133,6 +1354,9 @@ class ThreadLimitCommandTests(_BotChatCase):
     def test_the_commands_are_registered_with_telegram(self):
         commands = {c["command"] for c in plugin.BOT_COMMANDS}
         self.assertLessEqual({"setthreadlastn", "getthreadlastn"}, commands)
+        descriptions = {c["command"]: c["description"] for c in plugin.BOT_COMMANDS}
+        for name in ("contextmodehere", "getcontextmodehere"):
+            self.assertIn("topic", descriptions[name])
 
 
 class _MemoryStorage:
@@ -1275,6 +1499,88 @@ class TopicSettingsResolutionTests(_TopicSettingsCase):
         )
         self.assertEqual(self.chats.storage.data, {})
         self.assertIsNone(self.chats.get_model(USER_ID))
+
+
+class TopicContextModeResolutionTests(_TopicSettingsCase):
+    def choice(self, *, topic_id=TOPIC_ID):
+        return plugin._get_effective_topic_context_mode(USER_ID, topic_id=topic_id)
+
+    def test_topic_over_chat_topic_default_over_thread(self):
+        self.assertEqual(
+            self.choice(),
+            plugin.TopicContextModeChoice(mode="thread", source="default"),
+        )
+        self.chats.set_topic_context_mode(USER_ID, "reply_chain")
+        self.assertEqual(
+            self.choice(),
+            plugin.TopicContextModeChoice(mode="reply_chain", source="chat"),
+        )
+        self.topics.set_context_mode(self.key(), "thread")
+        self.assertEqual(
+            self.choice(), plugin.TopicContextModeChoice(mode="thread", source="topic")
+        )
+        self.assertEqual(self.choice(topic_id=OTHER_TOPIC_ID).mode, "reply_chain")
+
+    def test_outside_modes_do_not_reach_topics(self):
+        self.chats.set_context_mode(USER_ID, "until_separator")
+        self.prefs.context_mode = "smart"
+        self.assertEqual(self.choice().mode, "thread")
+
+    def test_invalid_stored_modes_are_skipped_without_losing_other_settings(self):
+        self.topics.storage.data[self.key()] = {
+            "context_mode": "smart",
+            "system_prompt": "keep me",
+        }
+        self.chats.set_topic_context_mode(USER_ID, "until_separator")
+        with patch.object(plugin, "logger", create=True) as log:
+            self.assertEqual(
+                self.choice(),
+                plugin.TopicContextModeChoice(mode="until_separator", source="chat"),
+            )
+            log.warning.assert_called_once()
+        self.chats.storage.data[USER_ID] = {"topic_context_mode": "last_N"}
+        with patch.object(plugin, "logger", create=True) as log:
+            self.assertEqual(self.choice().mode, "thread")
+            self.assertEqual(log.warning.call_count, 2)
+        self.assertEqual(self.topics.get_system_prompt(self.key()), "keep me")
+
+    def test_setters_validate_and_clear_both_stores(self):
+        for mode in ("last_N", "smart", "topic_until_separator", "nope"):
+            with self.subTest(mode=mode):
+                with self.assertRaises(ValueError):
+                    self.topics.set_context_mode(self.key(), mode)
+                with self.assertRaises(ValueError):
+                    self.chats.set_topic_context_mode(USER_ID, mode)
+        self.assertEqual(self.topics.storage.data, {})
+        self.assertEqual(self.chats.storage.data, {})
+        for mode in plugin.TOPIC_CONTEXT_MODES:
+            self.topics.set_context_mode(self.key(), mode)
+            self.chats.set_topic_context_mode(USER_ID, mode)
+            self.assertEqual(self.topics.get_context_mode(self.key()), mode)
+            self.assertEqual(self.chats.get_topic_context_mode(USER_ID), mode)
+        self.topics.set_context_mode(self.key(), None)
+        self.chats.set_topic_context_mode(USER_ID, None)
+        self.assertEqual(self.topics.storage.data[self.key()], {})
+        self.assertEqual(self.chats.storage.data[USER_ID], {})
+
+    def test_storage_shape_and_reload_keep_outside_mode_separate(self):
+        self.topics.set_context_mode(self.key(), "reply_chain")
+        self.chats.set_topic_context_mode(USER_ID, "until_separator")
+        self.assertEqual(
+            self.topics.storage.data, {self.key(): {"context_mode": "reply_chain"}}
+        )
+        self.assertEqual(
+            self.chats.storage.data,
+            {USER_ID: {"topic_context_mode": "until_separator"}},
+        )
+        reloaded = plugin.TopicManager(storage=self.topics.storage)
+        self.assertEqual(reloaded.get_context_mode(self.key()), "reply_chain")
+        self.chats.set_context_mode(USER_ID, "last_N")
+        reloaded_chat = plugin.ChatManager(storage=self.chats.storage)
+        self.assertEqual(
+            reloaded_chat.get_topic_context_mode(USER_ID), "until_separator"
+        )
+        self.assertEqual(reloaded_chat.get_context_mode(USER_ID), "last_N")
 
 
 MENU_ID = 700
@@ -1466,6 +1772,10 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
             "thinktopic_high",
             "applyto:model:chat",
             "prompthere:clear:chat",
+            "topicctx:topic:reply_chain",
+            "topicctx:chat:reply_chain",
+            "topicctx:topic:rc",
+            "applyto:context:chat",
         ):
             with self.subTest(data=data):
                 press = self.press(data, top_id=None)
@@ -1674,6 +1984,145 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
         )
         self.assertEqual(self.chats.get_system_prompt(USER_ID), "Be terse.")
         self.assertEqual(self.topics.storage.data, {})
+
+    # Context mode
+
+    def test_context_mode_here_offers_topic_modes_and_apply_to(self):
+        event = self.command(plugin.context_mode_here_handler, "/contextModeHere")
+        self.assertIn(
+            "**Set Context Mode for This Topic**", event.reply.await_args.args[0]
+        )
+        rows = event.reply.await_args.kwargs["buttons"]
+        self.assertEqual(
+            _button_rows(rows)[:-1],
+            [
+                [("Topic Thread (Limit: 200)", "topicctx:topic:thread")],
+                [("Reply Chain", "topicctx:topic:reply_chain")],
+                [("Until Separator (Limit: 200)", "topicctx:topic:until_separator")],
+                [("✅ Not Set for This Topic", "topicctx:topic:not_set")],
+                [("✅ Include Reply Chain: ON", "topicctx:topic:rc")],
+            ],
+        )
+        self.assert_apply_to_row(rows, "context", scope="topic")
+
+    def test_a_context_press_writes_only_the_topic_and_clear_inherits(self):
+        press = self.press("topicctx:topic:reply_chain")
+        self.assertEqual(self.topics.get_context_mode(self.key()), "reply_chain")
+        self.assertEqual(self.chats.storage.data, {})
+        press.answer.assert_awaited_once_with(plugin.TOPIC_CONTEXT_FEEDBACK["topic"])
+        self.assertIn(
+            [("✅ Reply Chain", "topicctx:topic:reply_chain")],
+            _button_rows(press.edit.await_args.kwargs["buttons"]),
+        )
+        self.press("topicctx:topic:not_set")
+        self.assertIsNone(self.topics.get_context_mode(self.key()))
+
+    def test_apply_to_context_redraws_without_writing(self):
+        press = self.press("applyto:context:chat")
+        self.assertIn("All Topics of This Chat", press.edit.await_args.args[0])
+        self.assert_apply_to_row(
+            press.edit.await_args.kwargs["buttons"], "context", scope="chat"
+        )
+        self.assertEqual(self.chats.storage.data, {})
+        self.assertEqual(self.topics.storage.data, {})
+        press.answer.assert_awaited_once_with(plugin.APPLY_TO_CONTEXT_FEEDBACK["chat"])
+
+    def test_chat_scope_sets_only_the_topic_default_and_thread_resets_it(self):
+        self.chats.set_context_mode(USER_ID, "last_N")
+        self.topics.set_context_mode(self.key(), "reply_chain")
+        press = self.press("topicctx:chat:until_separator")
+        self.assertEqual(self.chats.get_topic_context_mode(USER_ID), "until_separator")
+        self.assertEqual(self.chats.get_context_mode(USER_ID), "last_N")
+        self.assertEqual(self.topics.get_context_mode(self.key()), "reply_chain")
+        self.assertIn("Current Mode:** `Reply Chain`", press.edit.await_args.args[0])
+        self.assertIn(
+            [("✅ Until Separator (Limit: 200)", "topicctx:chat:until_separator")],
+            _button_rows(press.edit.await_args.kwargs["buttons"]),
+        )
+        self.press("topicctx:chat:thread")
+        self.assertIsNone(self.chats.get_topic_context_mode(USER_ID))
+        self.assertEqual(self.chats.get_context_mode(USER_ID), "last_N")
+
+    def test_context_reply_chain_toggle_is_chat_wide_and_keeps_the_menu(self):
+        press = self.press("topicctx:topic:rc")
+        self.assertFalse(self.chats.get_include_reply_chain(USER_ID))
+        self.assertIn("Set Context Mode for This Topic", press.edit.await_args.args[0])
+        self.assertEqual(self.topics.storage.data, {})
+
+    def test_invalid_context_presses_write_nothing(self):
+        for data in (
+            "topicctx:topic:last_N",
+            "topicctx:topic:smart",
+            "topicctx:nowhere:thread",
+            "topicctx:chat:reply_chain:extra",
+        ):
+            with self.subTest(data=data):
+                press = self.press(data)
+                press.answer.assert_awaited_once_with(
+                    "This menu is invalid.", alert=True
+                )
+                press.edit.assert_not_awaited()
+        self.assertEqual(self.chats.storage.data, {})
+        self.assertEqual(self.topics.storage.data, {})
+
+    def test_stale_chat_context_menus_inside_topics_are_refused(self):
+        for data in ("contexthere_last_N", "replychainhere_toggle", "lastnhere_50"):
+            with self.subTest(data=data):
+                press = self.press(data)
+                press.answer.assert_awaited_once_with(
+                    "This menu is outdated. Send /contextModeHere again.", alert=True
+                )
+                press.edit.assert_not_awaited()
+        self.assertEqual(self.chats.storage.data, {})
+
+    def test_outside_topics_context_menu_and_presses_stay_chat_wide(self):
+        event = self.command(
+            plugin.context_mode_here_handler, "/contextModeHere", top_id=None
+        )
+        self.assertTrue(
+            event.reply.await_args.args[0].endswith(
+                "**Set Context Mode for This Chat**"
+            )
+        )
+        rows = _button_rows(event.reply.await_args.kwargs["buttons"])
+        data = [value for row in rows for _, value in row]
+        self.assertIn("contexthere_last_N", data)
+        self.assertIn("replychainhere_toggle", data)
+        self.assertIn("lastnhere_50", data)
+        self.assertFalse(
+            any(value.startswith(("applyto:", "topicctx:")) for value in data)
+        )
+        self.press("contexthere_last_N", top_id=None)
+        self.press("lastnhere_50", top_id=None)
+        self.press("replychainhere_toggle", top_id=None)
+        self.assertEqual(self.chats.get_context_mode(USER_ID), "last_N")
+        self.assertEqual(self.chats.get_last_n_messages_limit(USER_ID), 50)
+        self.assertFalse(self.chats.get_include_reply_chain(USER_ID))
+        self.assertIsNone(self.chats.get_topic_context_mode(USER_ID))
+        self.assertEqual(self.topics.storage.data, {})
+
+    def test_get_context_mode_here_heading_depends_on_topic(self):
+        for top_id, title in ((TOPIC_ID, "Topic"), (None, "Chat")):
+            with self.subTest(top_id=top_id):
+                event = self.command(
+                    plugin.get_context_mode_here_handler,
+                    "/getContextModeHere",
+                    top_id=top_id,
+                )
+                self.assertIn(
+                    f"**{title} Context Mode Status**", event.reply.await_args.args[0]
+                )
+
+    def test_status_shows_the_topics_context_mode_and_source(self):
+        self.topics.set_context_mode(self.key(), "reply_chain")
+        with patch.object(
+            plugin.user_manager, "get_codex_quota_fallback", return_value=None
+        ):
+            self.command(plugin.status_handler, "/status")
+        self.assertIn(
+            "• **In This Topic:** `Reply Chain`, from this topic's own setting",
+            self.info.await_args.args[1],
+        )
 
     # Status
 

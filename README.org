@@ -183,9 +183,13 @@ With threaded mode on in BotFather, a bot's DM holds topics, and a message
 typed in "All" opens a new one. Uniborg adds the topic to every reply to a
 message inside a private topic, so answers land next to their question, and
 llm_chat's pending prompts only take an answer from the topic that asked.
-Inside a topic, llm_chat always uses that topic's own earlier messages as the
-conversation (thread context), whatever the context mode, up to its own topic
-limit (200 by default, =/setThreadLastN=); =---= does nothing there.
+Inside a topic, llm_chat defaults to Topic Thread: its own earlier messages,
+up to the topic limit (200 by default, =/setThreadLastN=). =/contextModeHere=
+switches it to Reply Chain (explicit replies only) or Until Separator
+(after that topic's last =---=), or sets the default for all topics of the
+chat. Resolution is topic setting, chat default for topics, then Topic Thread.
+The separator does nothing in Topic Thread; Until Separator uses the same
+topic limit. Outside-topic context modes stay separate.
 Inside a topic, =/setModelHere=, =/setThinkHere= and =/setSystemPromptHere=
 set that topic's own model, effort and prompt, which come before the chat's;
 their menus have an "Apply to" row that switches them to the whole chat. See
@@ -236,7 +240,7 @@ context, not as reply wording. See [[file:docs/llm_chat_prompting.md][docs/llm_c
 
 =llm_chat= defaults =Last N Messages= context to 100 messages. The effective
 limit is resolved as chat override, then personal default, then the global
-default. Use =/contextMode=, =/groupContextMode=, or =/contextModeHere= for
+default. Use =/contextMode=, =/groupContextMode=, or =/contextModeHere= outside topics for
 inline quick picks (=50=, =100=, =200=, =400=, =800=), or use =/setLastN= and
 =/setLastNHere= for arbitrary valid values. See
 [[file:docs/llm_chat_last_n_context.md][docs/llm_chat_last_n_context.md]].
