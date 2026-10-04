@@ -10,7 +10,7 @@ import sys
 import socks
 from uniborg import Uniborg, shell_stream
 from uniborg.util import executor
-from watchgod import awatch, Change
+from watchfiles import awatch, Change
 from brish import z, zp, zq
 
 borg: Uniborg = None
@@ -45,7 +45,11 @@ async def borg_init(background_mode=True):
     zp("((${{+functions[bell-batman-cave-open]}})) && bell-batman-cave-open")
 
     async def watch_plugins(plugin_path):
-        async for changes in awatch(plugin_path, normal_sleep=5000):
+        #: Polling, as watchgod did: native file events can report a git pull
+        #: or an atomic save as a deletion and an addition, not a modification.
+        async for changes in awatch(
+            plugin_path, force_polling=True, poll_delay_ms=5000
+        ):
             for change_type, path in changes:
                 bname = os.path.basename(path)
                 _, ext = os.path.splitext(path)

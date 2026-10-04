@@ -33,7 +33,7 @@ fuzzywuzzy[speedup]
 rapidfuzz
 fuzzyset2
 
-watchgod
+watchfiles
 
 plotly
 

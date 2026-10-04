@@ -18,7 +18,7 @@ BetterBorg is a highly modular and extensible Telegram userbot/bot built on Tele
 - **AI/ML**: litellm, google-genai with live support
 - **Storage**: SQLite (via Peewee), SQLAlchemy, Redis
 - **Media Processing**: Pillow, eyed3, typed-ffmpeg
-- **Other Key Dependencies**: aiohttp, watchgod, brish, plotly, icecream
+- **Other Key Dependencies**: aiohttp, watchfiles, brish, plotly, icecream
 
 ## Public Bot Instances
 - **Transcribe Bot**: https://t.me/llm_stt_bot

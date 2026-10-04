@@ -32,7 +32,7 @@
 
 ## Plugin Architecture
 - Plugins get automatic injection of `borg`, `logger`, `storage` variables
-- Hot reload capability with file watching (watchgod)
+- Hot reload capability with file watching (watchfiles)
 - Per-plugin storage with automatic path management
 - Event-driven architecture using Telethon decorators
 
