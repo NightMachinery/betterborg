@@ -759,6 +759,8 @@ async def run_and_upload(event, to_await, quiet=True, reply_exc=True, album_mode
         chat = await event.get_chat()
         try:
             await borg.send_read_acknowledge(chat, event.message)
+        except asyncio.CancelledError:
+            raise
         except:
             pass
         trying_to_dl = await util.discreet_send(

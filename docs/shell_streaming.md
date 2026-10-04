@@ -567,7 +567,9 @@ On a brish without `popen`, `.a` renders its captured output the same way.
   job is stopped with StopReason.SHUTDOWN, the producer is cancelled, and
   the cancel propagates. A cancel while the files are sent propagates too
   (`util.upload_output_files` and `send_files` re-raise it), rather than
-  being reported as a failed upload through a closing client.
+  being reported as a failed upload through a closing client. So does one
+  during the read receipt that `util.run_and_upload` sends first, and the
+  command then never runs; a receipt that fails is still ignored.
 - `util.forget_edit_chain(preview)` drops `util.edit_message`'s record of the
   preview once the pump is done, so it does not outlive the command.
 - **`borg_shell_streaming=0`**: `.a`, `.af` and `.aa` run exactly as before:

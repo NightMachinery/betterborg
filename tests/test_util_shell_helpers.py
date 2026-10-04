@@ -298,6 +298,52 @@ class RunAndUploadTests(_BorgTestCase):
 
         self.assertEqual(self.reports, [])
 
+    def test_a_cancel_during_the_read_receipt_propagates_and_runs_nothing(self):
+        event = self._event()
+        ran = []
+
+        async def main():
+            acking = asyncio.Event()
+
+            async def send_read_acknowledge(chat, message):
+                acking.set()
+                await asyncio.sleep(3600)
+
+            self.borg.send_read_acknowledge = send_read_acknowledge
+
+            async def to_await(*, cwd, event):
+                ran.append(cwd)
+
+            task = asyncio.create_task(
+                util.run_and_upload(event=event, to_await=to_await)
+            )
+            await acking.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        asyncio.run(main())
+
+        self.assertEqual(ran, [])
+        self.assertEqual(self.reports, [])
+
+    def test_a_failed_read_receipt_is_ignored(self):
+        event = self._event()
+        ran = []
+
+        async def send_read_acknowledge(chat, message):
+            raise RuntimeError("no receipt")
+
+        self.borg.send_read_acknowledge = send_read_acknowledge
+
+        async def to_await(*, cwd, event):
+            ran.append(cwd)
+
+        asyncio.run(util.run_and_upload(event=event, to_await=to_await))
+
+        self.assertEqual(len(ran), 1)
+        self.assertEqual(self.reports, [])
+
     def test_a_failure_is_still_reported(self):
         event = self._event()
 
