@@ -60,6 +60,35 @@ class RunAndGetMessagesTests(_BorgTestCase):
         #: Untouched downloads are removed; the one the command changed stays.
         self.assertEqual(os.listdir(self.cwd), ["5_voice.ogg"])
 
+    def _left_after(self, change):
+        """What run_and_get leaves of one download that CHANGE(path) altered
+        within one tick of a coarse clock: the modification time is put back,
+        as Linux, which stamps files every few milliseconds, would leave it."""
+        messages = [SimpleNamespace(id=5, file=SimpleNamespace(name="voice.ogg"))]
+
+        async def to_await(*, cwd, event):
+            path = Path(cwd, "5_voice.ogg")
+            before = os.stat(path)
+            change(path)
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+        asyncio.run(util.run_and_get(None, to_await, self.cwd, messages=messages))
+        return os.listdir(self.cwd)
+
+    def test_a_rewrite_in_the_same_tick_is_kept(self):
+        self.assertEqual(
+            self._left_after(lambda path: path.write_text("changed")),
+            ["5_voice.ogg"],
+        )
+
+    def test_a_replacement_of_the_same_size_in_the_same_tick_is_kept(self):
+        def replace(path):
+            new = path.with_name("new")
+            new.write_text("MEDIA OF 5")
+            os.replace(new, path)
+
+        self.assertEqual(self._left_after(replace), ["5_voice.ogg"])
+
 
 class _Action:
     async def __aenter__(self):

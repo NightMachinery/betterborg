@@ -540,6 +540,30 @@ async def is_read(borg, entity, message, is_out=None):
     return message_id <= max_id
 
 
+@dataclass(frozen=True)
+class _FileState:
+    """What tells whether a command changed a downloaded file.
+
+    The modification time alone misses a write within the same tick of a
+    coarse clock (Linux stamps files every few milliseconds), so the size and
+    the inode count too; a replacing write (`sed -i`, an editor's save) gives
+    a new inode.
+    """
+
+    mtime_ns: int
+    size: int
+    inode: int
+
+    @classmethod
+    def of(cls, path) -> typing.Optional["_FileState"]:
+        """PATH's state, or None when it does not exist."""
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            return None
+        return cls(mtime_ns=st.st_mtime_ns, size=st.st_size, inode=st.st_ino)
+
+
 async def run_and_get(
     event,
     to_await,
@@ -573,8 +597,7 @@ async def run_and_get(
             dled_path = await a.download_media(
                 message=guest_util.download_target(z), file=dled_path
             )
-            mdate = os.path.getmtime(dled_path)
-            dled_files.append((dled_path, mdate, dled_file_name))
+            dled_files.append((dled_path, _FileState.of(dled_path), dled_file_name))
 
     if messages is not None:
         todl_map = {m.id: m for m in messages if m is not None}
@@ -592,8 +615,8 @@ async def run_and_get(
     await to_await(cwd=cwd, event=event)
 
     if delete_p:
-        for dled_path, mdate, _ in dled_files:
-            if os.path.exists(dled_path) and mdate == os.path.getmtime(dled_path):
+        for dled_path, state, _ in dled_files:
+            if state is not None and _FileState.of(dled_path) == state:
                 await remove_potential_file(dled_path, event)
     return cwd
 

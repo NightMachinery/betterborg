@@ -328,7 +328,7 @@ done</code></pre>
 
 <h3>Files</h3>
 <p>After the text, the bot sends every file left at the top level of the scratch directory, including files whose names start with a dot. Directories are skipped with everything inside them, so pack a directory with <code>zip</code> or <code>tar</code> to get it back.</p>
-<p>Downloaded inputs that the command left untouched are deleted first, so they are not echoed back. "Untouched" means the file's modification time did not change. To get an input back as it is, <code>touch</code> it or copy it under another name.</p>
+<p>Downloaded inputs that the command left untouched are deleted first, so they are not echoed back. "Untouched" means the file's modification time and size did not change and it was not replaced by a new file. To get an input back as it is, <code>touch</code> it or copy it under another name.</p>
 <p><b>Album mode</b> is how several files are sent by default: the bot groups them by extension and sends each group as one album (GIFs go one by one). These albums are not replies to your command.</p>
 <p>When there is exactly one file, or with the <code>.ad</code> flag (album mode off), each file goes as its own message, in name order, as a reply to your command. In this mode a prefix in the file name chooses how Telegram shows the file:</p>
 <dl>
