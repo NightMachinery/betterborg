@@ -879,7 +879,7 @@ def old_pool_note(*, chat_id, caller_id) -> str:
     return "".join(f"\n{line}" for line in lines)
 
 
-@borg.on(util.admin_cmd(pattern="^\.xf$"))
+@borg.on(util.admin_cmd(pattern=r"^\.xf$"))
 async def reinit_brishes_handler(event):
     util.init_brishes()
     await event.reply(
@@ -888,7 +888,7 @@ async def reinit_brishes_handler(event):
     )
 
 
-@borg.on(util.admin_cmd(pattern="^\.(x|sbb)$"))
+@borg.on(util.admin_cmd(pattern=r"^\.(x|sbb)$"))
 async def restart_brishes_handler(event):
     util.restart_brishes()
     await event.reply(

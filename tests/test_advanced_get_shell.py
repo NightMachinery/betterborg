@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import tempfile
 import threading
+import warnings
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -613,6 +614,17 @@ class DraftPreviewTests(_ShellTestCase):
         later = [fn for _builder, fn in self.borg.handlers[1:]]
 
         self.assertIn(self.plugin.__name__, [fn.__module__ for fn in later])
+
+
+class SourceTests(unittest.TestCase):
+    def test_the_plugin_compiles_without_warnings(self):
+        """An invalid escape such as "\\." warns now, and is an error in a
+        future Python, where the loader would skip the plugin."""
+        path = Path(__file__).resolve().parent.parent / "stdplugins/advanced_get.py"
+        source = path.read_text()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            compile(source, str(path), "exec")
 
 
 class OldPathTests(_ShellTestCase):
