@@ -666,8 +666,11 @@ def activity_list_buckets_get(low, high, which_bucket, mode=0, correct_overlap=T
 if not is_local:
     import plotly.io as pio
 
-    # install `xvfb` via apt
-    pio.orca.config.use_xvfb = True
+    #: Orca, plotly's old image exporter, needs a display: install `xvfb` via
+    #: apt. Plotly 6 dropped it; kaleido, which exports images by default,
+    #: needs no display.
+    if hasattr(pio, "orca"):
+        pio.orca.config.use_xvfb = True
 ##
 import plotly.graph_objects as go
 

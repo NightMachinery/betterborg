@@ -9,6 +9,8 @@ import tempfile
 _store_dir = tempfile.mkdtemp(prefix="borg-tests-")
 atexit.register(shutil.rmtree, _store_dir, ignore_errors=True)
 os.environ["borg_media_store_path"] = os.path.join(_store_dir, "media_store.sqlite3")
+#: uniborg.timetracker_util opens its database there when imported.
+os.environ["timetracker_dir"] = os.path.join(_store_dir, "timetracker")
 
 #: Every zsh the tests start (`.aa`'s `zsh -c`, the brish workers, which run
 #: as zsh scripts) reads `$ZDOTDIR/.zshenv` instead of `~/.zshenv`; an empty
