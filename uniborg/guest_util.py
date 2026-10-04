@@ -32,14 +32,13 @@ import hashlib
 import itertools
 import json
 import logging
-import os
 import re
 import time
 from typing import Any, Awaitable, Callable, Optional
 
 from telethon import errors, events, functions, types, utils
 
-from uniborg import tg_format, tg_raw
+from uniborg import env_switch, tg_format, tg_raw
 
 _log = logging.getLogger(__name__)
 
@@ -1193,9 +1192,6 @@ class GuestAnswerMessage:
 
 TRIGGER_GUARD_ENV = "borg_guest_trigger_guard"
 
-_ENABLED_VALUES = frozenset({"", "1", "true", "yes", "on"})
-_DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
-
 #: A leading bot mention, then any `MENTION_SEPARATORS` (or none), then `.a`
 #: or `.k`: wider than the shell's strict trigger
 #: (`shell_command_after_mention`), so the guard covers every shape the shell
@@ -1212,18 +1208,8 @@ _MENTION_ENTITIES = (types.MessageEntityMention, types.InputMessageEntityMention
 
 
 def trigger_guard_enabled(*, environ=None) -> bool:
-    """Reads `TRIGGER_GUARD_ENV`; unset means on. Unknown values raise."""
-    environ = os.environ if environ is None else environ
-    raw = environ.get(TRIGGER_GUARD_ENV, "")
-    value = raw.strip().lower()
-    if value in _ENABLED_VALUES:
-        return True
-    if value in _DISABLED_VALUES:
-        return False
-    raise ValueError(
-        f"{TRIGGER_GUARD_ENV}={raw!r} is not a recognised switch; "
-        "use 1/true/yes/on or 0/false/no/off"
-    )
+    """Reads `TRIGGER_GUARD_ENV` (`env_switch`); unset means on."""
+    return env_switch.env_switch(TRIGGER_GUARD_ENV, environ=environ)
 
 
 def defang_guest_trigger(text: Optional[str], entities: Optional[list] = None):

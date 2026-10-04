@@ -10,8 +10,9 @@ The settings are kept per user in `UserStorage(purpose="shell")`:
   `term_render`), or raw.
 
 `SHELL_STREAMING`, read once from the environment variable
-`borg_shell_streaming`, turns live output off altogether: "0" is off, "1" or
-unset is on, and anything else is refused at startup.
+`borg_shell_streaming`, turns live output off altogether. It takes the words
+of every switch (`env_switch`): unset, 1, true, yes or on is on; 0, false, no
+or off is off; anything else is refused at startup.
 
 This is a core module, so a plugin reload never re-executes it. More is in
 docs/shell_streaming.md.
@@ -20,9 +21,9 @@ docs/shell_streaming.md.
 from dataclasses import dataclass, fields
 from enum import Enum
 import logging
-import os
-from typing import Any, Optional
+from typing import Any
 
+from uniborg import env_switch
 from uniborg.storage import UserStorage
 from uniborg.stream_driver import StreamMode
 
@@ -33,19 +34,14 @@ PURPOSE = "shell"
 STREAMING_ENV = "borg_shell_streaming"
 
 
-def streaming_switch(value: Optional[str]) -> bool:
-    """Whether VALUE of `borg_shell_streaming` turns live output on."""
-    if value is None or value == "1":
-        return True
-    elif value == "0":
-        return False
-    else:
-        raise ValueError(f"{STREAMING_ENV} must be 0 or 1, not {value!r}")
+def streaming_switch(*, environ=None) -> bool:
+    """Whether `borg_shell_streaming` in ENVIRON turns live output on."""
+    return env_switch.env_switch(STREAMING_ENV, environ=environ)
 
 
 #: Off, `.a`, `.af` and `.aa` run as they did before live output: no job, no
 #: preview, no renderer.
-SHELL_STREAMING = streaming_switch(os.environ.get(STREAMING_ENV))
+SHELL_STREAMING = streaming_switch()
 
 
 class FinalMode(str, Enum):

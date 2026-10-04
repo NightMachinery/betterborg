@@ -474,9 +474,9 @@ python3 start_server.py    # or with the FastAPI server</code></pre>
 <dt><code>borg_api_id</code>, <code>borg_api_hash</code></dt>
 <dd>Telegram API credentials (<code>TELEGRAM_API_ID</code> and <code>TELEGRAM_API_HASH</code> also work). Built-in defaults are used when unset.</dd>
 <dt><code>borg_shell_streaming</code></dt>
-<dd><code>0</code> turns <a href="#live">live output</a> off: every command replies only when it ends, with its raw output, as before. <code>1</code> or unset leaves it on; any other value stops the bot at startup.</dd>
+<dd><code>0</code> turns <a href="#live">live output</a> off: every command replies only when it ends, with its raw output, as before. <code>false</code>, <code>no</code> and <code>off</code> do the same; <code>1</code>, <code>true</code>, <code>yes</code>, <code>on</code> or unset leaves it on, in any letter case; any other value stops the bot at startup.</dd>
 <dt><code>borg_guest_trigger_guard</code></dt>
-<dd><code>0</code> turns off the "＠" rewriting described under <a href="#guest">Guest mode</a>.</dd>
+<dd><code>0</code> turns off the "＠" rewriting described under <a href="#guest">Guest mode</a>. It takes the same words as <code>borg_shell_streaming</code>.</dd>
 </dl>
 <p>For example, an instance with its own session, a smaller pool and one extra admin:</p>
 <pre><code>borg_session=session_shell \

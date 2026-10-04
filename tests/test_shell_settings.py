@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from uniborg import shell_settings, stream_driver
+from uniborg import guest_util, shell_settings, stream_driver
 from uniborg.shell_settings import FinalMode, ShellPrefs, ShellSettings
 from uniborg.storage import UserStorage
 from uniborg.stream_driver import StreamMode
@@ -107,21 +107,49 @@ class ShellSettingsTests(unittest.TestCase):
 
 
 class StreamingSwitchTests(unittest.TestCase):
-    def test_unset_and_one_are_on_zero_is_off(self):
-        self.assertTrue(shell_settings.streaming_switch(None))
-        self.assertTrue(shell_settings.streaming_switch("1"))
-        self.assertFalse(shell_settings.streaming_switch("0"))
+    @staticmethod
+    def switch(value):
+        return shell_settings.streaming_switch(
+            environ={shell_settings.STREAMING_ENV: value}
+        )
+
+    def test_it_takes_the_words_of_the_trigger_guard(self):
+        self.assertTrue(shell_settings.streaming_switch(environ={}))
+        for value, on in (
+            ("", True),
+            ("1", True),
+            (" Yes ", True),
+            ("TRUE", True),
+            ("on", True),
+            ("0", False),
+            ("false", False),
+            ("No", False),
+            (" off\n", False),
+        ):
+            with self.subTest(value=value):
+                self.assertIs(self.switch(value), on)
+                self.assertIs(
+                    guest_util.trigger_guard_enabled(
+                        environ={guest_util.TRIGGER_GUARD_ENV: value}
+                    ),
+                    on,
+                )
 
     def test_anything_else_is_refused(self):
-        for value in ("", "yes", "off", " 1"):
-            with self.subTest(value=value), self.assertRaises(ValueError):
-                shell_settings.streaming_switch(value)
+        for value in ("2", "maybe", "o n", "enabled"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    self.switch(value)
+                with self.assertRaises(ValueError):
+                    guest_util.trigger_guard_enabled(
+                        environ={guest_util.TRIGGER_GUARD_ENV: value}
+                    )
 
     def test_a_bad_value_stops_the_bot_at_startup(self):
         #: The plugin loader skips a plugin that fails to load, which would
         #: leave `.a` silent; so importing uniborg itself, as stdborg does
         #: first, must fail.
-        env = {**os.environ, shell_settings.STREAMING_ENV: "yes"}
+        env = {**os.environ, shell_settings.STREAMING_ENV: "maybe"}
         result = subprocess.run(
             [sys.executable, "-c", "import uniborg"],
             cwd=Path(__file__).resolve().parent.parent,
@@ -132,7 +160,9 @@ class StreamingSwitchTests(unittest.TestCase):
         )
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("borg_shell_streaming must be 0 or 1", result.stderr)
+        self.assertIn(
+            "borg_shell_streaming='maybe' is not a recognised switch", result.stderr
+        )
 
 
 if __name__ == "__main__":

@@ -26,8 +26,9 @@ requests rather than failing to parse them:
 - the at-most-once guard keeps a reconnect from re-sending requests marked
   with `mark_at_most_once`, such as a guest answer.
 
-This module imports only the standard library and Telethon, so tests and tools
-can load it without ``uniborg.util``.
+This module imports only the standard library, Telethon and
+``uniborg.env_switch`` (itself standard library only), so tests and tools can
+load it without ``uniborg.util``.
 """
 import asyncio
 from collections import Counter
@@ -35,7 +36,6 @@ from dataclasses import dataclass, field
 import enum
 import functools
 import logging
-import os
 import time
 from typing import Any, Awaitable, Callable, Iterable, Optional
 import weakref
@@ -49,6 +49,8 @@ import telethon.network.mtprotosender
 import telethon.tl.core.messagecontainer
 import telethon.tl.core.tlmessage
 from telethon.tl.tlobject import TLObject
+
+from uniborg import env_switch
 
 SAFETY_NETS_ENV = "borg_tg_safety_nets"
 
@@ -69,9 +71,6 @@ ALERT_INTERVAL_SECONDS = 10 * 60
 
 #: The record `MTProtoSender._recv_loop` logs when it drops a whole message.
 TELETHON_TYPE_NOT_FOUND_MSG = "Type %08x not found, remaining data %r"
-
-_ENABLED_VALUES = frozenset({"", "1", "true", "yes", "on"})
-_DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
 
 _log = logging.getLogger(__name__)
 
@@ -801,18 +800,8 @@ class DifferenceFallbackMixin:
 
 
 def safety_nets_enabled(*, environ=None) -> bool:
-    """Reads `SAFETY_NETS_ENV`; unset means on. Unknown values raise."""
-    environ = os.environ if environ is None else environ
-    raw = environ.get(SAFETY_NETS_ENV, "")
-    value = raw.strip().lower()
-    if value in _ENABLED_VALUES:
-        return True
-    if value in _DISABLED_VALUES:
-        return False
-    raise ValueError(
-        f"{SAFETY_NETS_ENV}={raw!r} is not a recognised switch; "
-        "use 1/true/yes/on or 0/false/no/off"
-    )
+    """Reads `SAFETY_NETS_ENV` (`env_switch`); unset means on."""
+    return env_switch.env_switch(SAFETY_NETS_ENV, environ=environ)
 
 
 @dataclass
