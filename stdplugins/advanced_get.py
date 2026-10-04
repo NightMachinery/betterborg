@@ -1130,9 +1130,10 @@ async def help_handler(event):
 
 
 def _bot_command_pattern(command) -> str:
-    """`/COMMAND`, also as `/COMMAND@thisbot`, with optional arguments."""
+    """`/COMMAND`, also as `/COMMAND@thisbot`, with optional arguments,
+    which may span lines."""
     mention = f"(?:@{re.escape(borg.me.username)})?" if borg.me.username else ""
-    return rf"(?i)^/{command}{mention}(?:\s+(?P<args>.*))?\s*$"
+    return rf"(?is)^/{command}{mention}(?:\s+(?P<args>.*))?\s*$"
 
 
 def register_bot_handlers():

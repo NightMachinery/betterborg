@@ -359,8 +359,9 @@ forwarded, not an echoed guest answer), and a non-admin gets no reply.
   and changes nothing.
 - Text forms change one setting, then show the panel: `/settings private
   drafts|edits`, `/settings groups drafts|edits`, `/settings final
-  edit|reply` and `/settings render on|off`, in any letter case. Anything
-  else gets the usage line. `/settings@thisbot` works too.
+  edit|reply` and `/settings render on|off`, in any letter case, with any
+  blanks between the words, line breaks included. Anything else gets the
+  usage line. `/settings@thisbot` works too.
 - A button's callback data is `shs:` and the same words joined by ":"
   (`shs:private:edits`, `shs:final:reply`, `shs:render:off`), so a press and
   a text form go through one parser, `setting_change`. Its handler takes

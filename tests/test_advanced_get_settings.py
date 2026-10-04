@@ -184,6 +184,15 @@ class PanelTests(_SettingsTestCase):
             ["When it ends: Edit the preview", "✅ When it ends: New reply"],
         )
 
+    def test_arguments_may_span_lines(self):
+        ((_text, _kwargs),) = self.command("/settings render\noff")
+        self.assertEqual(self.prefs(), ShellPrefs(render=False))
+
+        ((text, _kwargs),) = self.command("/settings x\ny")
+        self.assertEqual(text, self.plugin.SETTINGS_USAGE)
+
+        self.assertTrue(self.command("/help\nme", handler="help_handler"))
+
     def test_a_bad_argument_gets_the_usage(self):
         for args in ("render", "render maybe", "final edit now", "channels drafts"):
             with self.subTest(args=args):
