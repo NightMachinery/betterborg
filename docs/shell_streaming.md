@@ -312,6 +312,14 @@ group at once. If it is empty, the pending step is cancelled: the group's id
 another streamed `.aa`. A background job left in the group keeps the id
 reserved and gets the later steps.
 
+A process that left the group (a daemon, or one started with `setsid`) can
+hold the output open after the whole group is gone, and the read would wait
+for it for good, with the job STOPPING and its preview saying "stopping…".
+So once a step finds the group empty (a grace after SIGKILL, one more check
+does), the transport is closed a grace later: the read ends, and so does
+the job, with zsh's exit status. That process is not signalled, and what it
+writes after that is not read. Without a stop the job reads it, as before.
+
 A cancelled await (the client disconnecting) cancels the job with
 StopReason.SHUTDOWN, sends the group SIGKILL at once and re-raises. Every way
 out closes the subprocess transport: a process that left the group (a
@@ -781,7 +789,8 @@ a `tail -f` no longer keeps the process from exiting.
   process tree); for `.aa`, the command's process group. A program that
   detached itself (a daemon that forked twice and was reparented, or one
   started with `setsid`) is not signalled, and outlives the stop and a
-  shutdown, as before live output.
+  shutdown, as before live output. A streamed `.aa` whose output such a
+  process holds open still ends after a stop (see "The `.aa` producer").
 - **Binary output.** A preview shows invalid UTF-8 as U+FFFD; the final shows
   it as `\xNN` escapes, for `.aa` too. With brish, an output line that holds
   only a NUL still ends the stream early (popen-api.md, legacy mode), as it

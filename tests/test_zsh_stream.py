@@ -261,6 +261,64 @@ class ZshStreamTests(unittest.TestCase):
         self.assertEqual(_steps(sent), [signal.SIGINT, signal.SIGTERM])
         self.assertGreater(took, grace - 0.5)
 
+    def stop_with_the_output_held(self, *, group_signals):
+        """Stops `print $$; sleep 30` while it stands in for a daemon that
+        left the group and holds the output open: no group signal is
+        delivered, and GROUP_SIGNALS(sig) says whether the group still has
+        a process. Returns the result and the job."""
+        withheld = []
+        pids = []
+
+        def unreachable(pgid, sig):
+            withheld.append(sig)
+            return group_signals(sig)
+
+        async def main():
+            job = _job()
+            task = asyncio.create_task(self.capture("print $$; sleep 30", job=job))
+            text = await _wait_for_output(job, lambda text: text.strip().isdigit())
+            pids.append(int(text))
+            job.cancel(reason=StopReason.USER)
+            return await asyncio.wait_for(task, 10), job
+
+        def kill_the_stand_in():
+            for pid in pids:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(pid, signal.SIGKILL)
+
+        self.addCleanup(kill_the_stand_in)
+        with patch.object(util, "_signal_group", unreachable), patch.object(
+            util, "ZSH_KILL_GRACE", 0.2
+        ):
+            result, job = asyncio.run(main())
+        return result, job, withheld
+
+    def test_a_stop_ends_a_job_whose_output_a_daemon_holds(self):
+        #: The group is empty at the interrupt (the command has exited), yet
+        #: the output stays open; before, the read waited for good.
+        result, job, withheld = self.stop_with_the_output_held(
+            group_signals=lambda sig: False
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(job.state, JobState.ENDED)
+        self.assertEqual(job.stop_reason, StopReason.USER)
+        self.assertEqual(withheld[0], signal.SIGINT)
+
+    def test_after_the_last_step_the_group_is_checked_once_more(self):
+        #: Every step finds the group alive, the check after SIGKILL finds
+        #: it empty.
+        result, job, withheld = self.stop_with_the_output_held(
+            group_signals=lambda sig: sig != 0
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(job.state, JobState.ENDED)
+        self.assertEqual(
+            [sig for sig in withheld if sig != 0][:3],
+            [signal.SIGINT, signal.SIGTERM, signal.SIGKILL],
+        )
+
     def test_a_cancelled_await_kills_the_group_and_stops_the_job(self):
         async def main():
             job = _job()

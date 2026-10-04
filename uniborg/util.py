@@ -862,12 +862,17 @@ class _ProcessGroupKiller:
     system may give that id to a new process, and a later step would signal
     whatever group it leads: so the steps end when `command_ended` finds the
     group empty, not a grace later.
+
+    `on_gone`, when given, is called on the loop once a step finds the group
+    empty, or a grace after the last step finds it so. Only a process that
+    left the group (a daemon) can then still hold the command's output open.
     """
 
-    def __init__(self, pgid: int, *, loop, grace: float = ZSH_KILL_GRACE):
+    def __init__(self, pgid: int, *, loop, grace: float = ZSH_KILL_GRACE, on_gone=None):
         self.pgid = pgid
         self.loop = loop
         self.grace = grace
+        self.on_gone = on_gone
         self._started = False
         #: The group is gone: no step may signal its id again.
         self._finished = False
@@ -899,12 +904,16 @@ class _ProcessGroupKiller:
             self._step(0)
 
     def _step(self, index: int) -> None:
+        """Sends step INDEX; past the last one, only checks the group."""
         self._next_step = None
         if self._finished:
             return
-        if not _signal_group(self.pgid, ZSH_KILL_SIGNALS[index]):
+        sig = ZSH_KILL_SIGNALS[index] if index < len(ZSH_KILL_SIGNALS) else 0
+        if not _signal_group(self.pgid, sig):
             self._finished = True
-        elif index + 1 < len(ZSH_KILL_SIGNALS):
+            if self.on_gone is not None:
+                self.on_gone()
+        elif index < len(ZSH_KILL_SIGNALS):
             self._next_step = self.loop.call_later(self.grace, self._step, index + 1)
 
 
@@ -915,9 +924,11 @@ async def _stream_zsh(*, cwd, command, job) -> typing.Optional[CommandResult]:
     The output is read on the event loop, so a running `.aa` holds no
     executor thread: it still works when every thread is busy. The command
     gets a session of its own, so a stop reaches its whole process group,
-    background jobs included (`_ProcessGroupKiller`). A cancelled await
-    kills the group at once and re-raises. The subprocess transport is
-    closed on every way out.
+    background jobs included (`_ProcessGroupKiller`). Once a stop finds the
+    group empty, only a process that left it (a daemon) can still hold the
+    output open: a grace later the transport is closed, so the read ends and
+    the job with it. A cancelled await kills the group at once and
+    re-raises. The subprocess transport is closed on every way out.
 
     The result's output is `job.output.final_text(render=False)`: UTF-8 with
     `\\r\\n` and `\\r` turned into `\\n`, as `text=True` gives for valid output;
@@ -936,8 +947,12 @@ async def _stream_zsh(*, cwd, command, job) -> typing.Optional[CommandResult]:
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
+    loop = asyncio.get_running_loop()
     killer = _ProcessGroupKiller(
-        proc.pid, loop=asyncio.get_running_loop(), grace=ZSH_KILL_GRACE
+        proc.pid,
+        loop=loop,
+        grace=ZSH_KILL_GRACE,
+        on_gone=lambda: loop.call_later(ZSH_KILL_GRACE, proc._transport.close),
     )
     job.attach(killer)
     try:
