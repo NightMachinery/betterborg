@@ -74,7 +74,7 @@ def _steps(sent, *, until=float("inf")):
     return [sig for at, sig in sent if sig != 0 and at <= until]
 
 
-def _wait_gone(pid, *, timeout=3.0):
+def _wait_gone(pid, *, timeout=10.0):
     deadline = time.monotonic() + timeout
     while _alive(pid) and time.monotonic() < deadline:
         time.sleep(0.05)
@@ -187,15 +187,19 @@ class ZshStreamTests(unittest.TestCase):
 
     def test_a_stop_reaches_a_background_grandchild(self):
         #: Background jobs of a non-interactive zsh ignore SIGINT, so this
-        #: one lives until the SIGTERM step, holding the output open.
-        text, _outcome, result, took = self.stop(
-            "sleep 30 & print $!; wait", ready=lambda text: text.strip().isdigit()
-        )
+        #: one lives until the SIGTERM step, holding the output open. Which
+        #: steps ended it, not how long they took on a loaded machine: a
+        #: SIGKILL would come a whole grace after the SIGTERM.
+        grace = 3
+        with _signals_sent() as sent, patch.object(util, "ZSH_KILL_GRACE", grace):
+            text, _outcome, result, took = self.stop(
+                "sleep 30 & print $!; wait", ready=lambda text: text.strip().isdigit()
+            )
         pid = int(text)
 
-        self.assertTrue(_wait_gone(pid))
-        self.assertGreater(took, 1.5)
-        self.assertLess(took, 5)
+        self.assertTrue(_wait_gone(pid, timeout=10))
+        self.assertEqual(_steps(sent), [signal.SIGINT, signal.SIGTERM])
+        self.assertGreater(took, grace - 0.5)
 
     def test_the_steps_stop_once_the_group_is_gone(self):
         #: Its process group id is free again, and could name another group.
@@ -246,14 +250,16 @@ class ZshStreamTests(unittest.TestCase):
         self.assertFalse(alive)
 
     def test_a_command_that_ignores_the_interrupt_ends_at_sigterm(self):
-        _text, _outcome, result, took = self.stop(
-            "trap '' INT; print started; sleep 30",
-            ready=lambda text: "started" in text,
-        )
+        grace = 3
+        with _signals_sent() as sent, patch.object(util, "ZSH_KILL_GRACE", grace):
+            _text, _outcome, result, took = self.stop(
+                "trap '' INT; print started; sleep 30",
+                ready=lambda text: "started" in text,
+            )
 
         self.assertEqual(result.retcode, -15)
-        self.assertGreater(took, 1.5)
-        self.assertLess(took, 5)
+        self.assertEqual(_steps(sent), [signal.SIGINT, signal.SIGTERM])
+        self.assertGreater(took, grace - 0.5)
 
     def test_a_cancelled_await_kills_the_group_and_stops_the_job(self):
         async def main():
@@ -269,7 +275,7 @@ class ZshStreamTests(unittest.TestCase):
 
         pid, job = asyncio.run(main())
 
-        self.assertTrue(_wait_gone(pid, timeout=2))
+        self.assertTrue(_wait_gone(pid, timeout=10))
         self.assertEqual(job.stop_reason, StopReason.SHUTDOWN)
         self.assertEqual(job.state, JobState.ENDED)
 
