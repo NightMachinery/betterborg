@@ -318,12 +318,14 @@ topic's prompt.
 `/getModelHere`, `/getSystemPromptHere`, `/getContextModeHere` and `/status`
 report the topic layer inside a topic. `/getModelHere` names the effective
 model and reasoning effort with each setting's source, then shows the saved
-topic, whole-chat and personal model settings separately.
+personal, whole-chat and topic settings in separate blocks with whitespace.
+Each block lists its model and every saved per-model effort, including settings
+for models that are not currently selected. Unset values and empty blocks are
+omitted. Long lists are split into replies without dropping settings.
 Effort is resolved for the displayed model: topic, whole chat, personal, then
 model default. Models without a reasoning setting are identified as unsupported.
-"Not set (inherit)" means that layer has no override; it can still use a
-model from another layer. `/status` adds
-lines named "In This Topic" and says "overridden in this topic" when the
+An omitted setting inherits from another layer. `/status` adds lines named
+"In This Topic" and says "overridden in this topic" when the
 topic's model wins.
 
 The model picker contains two settings: the model and the selected model's

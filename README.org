@@ -200,6 +200,8 @@ set that topic's own model, effort and prompt, which come before the chat's;
 their menus have an "Apply to" row that switches them to the whole chat.
 =/getModelHere= shows the effective model and reasoning effort with each
 setting's source, plus the saved topic, whole-chat and personal model defaults.
+Separate saved-settings blocks include every per-model effort and omit unset
+values and empty layers.
 Model and =🧠 Effort= choices have separate checkmarks in the model picker. See
 [[file:docs/private_topics.md][docs/private_topics.md]].
 In a topic that Telegram named (one opened by typing in "All"), the bot puts

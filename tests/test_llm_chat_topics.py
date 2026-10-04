@@ -1812,13 +1812,22 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
             return event.reply.await_args.args[0]
 
         self.chats.set_model(USER_ID, self.CHAT_MODEL)
-        self.assertIn(f"Effective model in this topic:** `{self.CHAT_MODEL}`", said())
+        self.assertIn(
+            f"**Effective settings in this topic**\n\n**Model:** `{self.CHAT_MODEL}`",
+            said(),
+        )
         self.assertIn("Source: the whole-chat default.", said())
-        self.assertIn("Topic override: Not set (inherit).", said())
+        self.assertNotIn("Saved settings in this topic", said())
+        self.assertNotIn("Not set", said())
         self.topics.set_model(self.key(), self.TOPIC_MODEL)
-        self.assertIn(f"Effective model in this topic:** `{self.TOPIC_MODEL}`", said())
+        self.assertIn(
+            f"**Effective settings in this topic**\n\n**Model:** `{self.TOPIC_MODEL}`",
+            said(),
+        )
         self.assertIn("Source: this topic's saved override.", said())
-        self.assertIn(f"Whole-chat default: `{self.CHAT_MODEL}`", said())
+        self.assertIn(
+            f"**Saved whole-chat settings**\n\nModel: `{self.CHAT_MODEL}`", said()
+        )
 
     def test_model_and_effort_checkmarks_are_distinct_settings(self):
         model = plugin.OPENAI_CODEX_SOL
@@ -1900,10 +1909,11 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
         )
         text = outside.reply.await_args.args[0]
         self.assertIn(
-            f"Effective model for the whole chat:** `{self.CHAT_MODEL}`", text
+            f"**Effective settings for the whole chat**\n\n**Model:** `{self.CHAT_MODEL}`",
+            text,
         )
         self.assertIn("Source: the whole-chat default.", text)
-        self.assertNotIn("Topic override:", text)
+        self.assertNotIn("Saved settings in this topic", text)
 
     def test_get_model_here_reports_effort_inheritance_for_the_displayed_model(self):
         model = self.CHAT_MODEL
@@ -1915,8 +1925,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
                 plugin.get_model_here_handler, "/getModelHere", top_id=top_id
             )
             text = event.reply.await_args.args[0]
-            self.assertIn(f"Effective reasoning effort:** `{level}`", text)
-            self.assertIn(f"Effort source: {source}.", text)
+            self.assertIn(f"**Reasoning effort:** `{level}`\nSource: {source}.", text)
 
         assert_effort("Medium", "the model's default")
         self.prefs.thinking_by_model[model] = "low"
@@ -1939,23 +1948,23 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
         self.topics.set_thinking(self.key(), model=model, level="disable")
         event = self.command(plugin.get_model_here_handler, "/getModelHere")
         text = event.reply.await_args.args[0]
-        self.assertIn("Effective reasoning effort:** `Low`", text)
-        self.assertIn("Effort source: the whole-chat default.", text)
+        self.assertIn(
+            "**Reasoning effort:** `Low`\nSource: the whole-chat default.", text
+        )
 
         self.topics.set_thinking(self.key(), model=model, level="none")
         event = self.command(plugin.get_model_here_handler, "/getModelHere")
         text = event.reply.await_args.args[0]
-        self.assertIn("Effective reasoning effort:** `None`", text)
-        self.assertIn("Effort source: this topic's saved override.", text)
+        self.assertIn(
+            "**Reasoning effort:** `None`\nSource: this topic's saved override.", text
+        )
 
     def test_get_model_here_identifies_models_without_reasoning_support(self):
         self.topics.set_model(self.key(), "custom/non-reasoning")
         event = self.command(plugin.get_model_here_handler, "/getModelHere")
         text = event.reply.await_args.args[0]
-        self.assertIn(
-            "Effective reasoning effort:** `Not supported by this model`", text
-        )
-        self.assertIn("Effort source: this model's capabilities.", text)
+        self.assertIn("**Reasoning effort:** `Not supported by this model`", text)
+        self.assertIn("Source: this model's capabilities.", text)
 
     def test_get_model_here_distinguishes_provider_default_from_unsupported(self):
         model = "custom/provider-default"
@@ -1966,8 +1975,10 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
         with patch.object(plugin.llm_models, "spec_for_model", return_value=spec):
             event = self.command(plugin.get_model_here_handler, "/getModelHere")
         text = event.reply.await_args.args[0]
-        self.assertIn("Effective reasoning effort:** `Provider default`", text)
-        self.assertIn("Effort source: the model's default.", text)
+        self.assertIn(
+            "**Reasoning effort:** `Provider default`\nSource: the model's default.",
+            text,
+        )
 
     def test_get_model_here_keeps_saved_layers_visible_when_access_is_unavailable(self):
         self.topics.set_model(self.key(), self.TOPIC_MODEL)
@@ -1979,13 +1990,108 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
             event = self.command(plugin.get_model_here_handler, "/getModelHere")
         text = event.reply.await_args.args[0]
         self.assertIn(
-            f"Effective model in this topic:** `{plugin.DEFAULT_MODEL}`", text
+            f"**Effective settings in this topic**\n\n**Model:** `{plugin.DEFAULT_MODEL}`",
+            text,
         )
         self.assertIn("access to the saved model is unavailable", text)
-        self.assertIn(f"Topic override: `{self.TOPIC_MODEL}`", text)
-        self.assertIn("Effective reasoning effort:** `Low`", text)
-        self.assertIn("Effort source: the whole-chat default.", text)
+        self.assertIn(
+            f"**Saved settings in this topic**\n\nModel: `{self.TOPIC_MODEL}`\n"
+            f"Effort for `{self.TOPIC_MODEL}`: `Max`",
+            text,
+        )
+        self.assertIn(
+            "**Reasoning effort:** `Low`\nSource: the whole-chat default.", text
+        )
         self.assertEqual(self.topics.get_model(self.key()), self.TOPIC_MODEL)
+
+    def test_get_model_here_has_spaced_blocks_and_omits_empty_layers(self):
+        model = plugin.OPENAI_CODEX_SOL
+        self.prefs.model = model
+        self.prefs.thinking_by_model[model] = "low"
+        event = self.command(
+            plugin.get_model_here_handler, "/getModelHere", top_id=None
+        )
+        self.assertEqual(
+            event.reply.await_args.args[0],
+            f"{plugin.BOT_META_INFO_PREFIX}**Effective settings for the whole chat**\n\n"
+            f"**Model:** `{model}`\nSource: your personal default.\n\n"
+            "**Reasoning effort:** `Low`\nSource: your personal default.\n\n"
+            f"**Saved personal defaults**\n\nModel: `{model}`\n"
+            f"Effort for `{model}`: `Low`",
+        )
+
+    def test_get_model_here_lists_every_saved_model_and_effort_in_its_layer(self):
+        self.chats.set_model(USER_ID, self.CHAT_MODEL)
+        self.topics.set_model(self.key(), self.TOPIC_MODEL)
+        self.prefs.thinking_by_model = {
+            self.PERSONAL_MODEL: "low",
+            self.TOPIC_MODEL: "none",
+        }
+        self.chats.set_thinking(USER_ID, model=self.CHAT_MODEL, level="disable")
+        self.chats.set_thinking(USER_ID, model=self.TOPIC_MODEL, level="high")
+        self.topics.set_thinking(self.key(), model=self.TOPIC_MODEL, level="max")
+        self.topics.set_thinking(self.key(), model=self.CHAT_MODEL, level="medium")
+        self.topics.set_thinking(
+            self.key(OTHER_TOPIC_ID), model="custom/other-topic-only", level="low"
+        )
+        event = self.command(plugin.get_model_here_handler, "/getModelHere")
+        text = event.reply.await_args.args[0]
+        self.assertIn(
+            f"**Saved personal defaults**\n\nModel: `{self.PERSONAL_MODEL}`\n"
+            f"Effort for `{self.PERSONAL_MODEL}`: `Low`\n"
+            f"Effort for `{self.TOPIC_MODEL}`: `None`",
+            text,
+        )
+        self.assertIn(
+            f"**Saved whole-chat settings**\n\nModel: `{self.CHAT_MODEL}`\n"
+            f"Effort for `{self.CHAT_MODEL}`: `Disable`\n"
+            f"Effort for `{self.TOPIC_MODEL}`: `High`",
+            text,
+        )
+        self.assertIn(
+            f"**Saved settings in this topic**\n\nModel: `{self.TOPIC_MODEL}`\n"
+            f"Effort for `{self.CHAT_MODEL}`: `Medium`\n"
+            f"Effort for `{self.TOPIC_MODEL}`: `Max`",
+            text,
+        )
+        self.assertEqual(text.count("Effort for "), 6)
+        self.assertNotIn("Not set", text)
+        self.assertNotIn("custom/other-topic-only", text)
+
+    def test_get_model_here_keeps_effort_only_layers_without_an_unset_model_row(self):
+        model = self.PERSONAL_MODEL
+        self.chats.set_thinking(USER_ID, model=model, level="low")
+        self.topics.set_thinking(self.key(), model=model, level="high")
+        event = self.command(plugin.get_model_here_handler, "/getModelHere")
+        text = event.reply.await_args.args[0]
+        self.assertIn(
+            f"**Saved whole-chat settings**\n\nEffort for `{model}`: `Low`", text
+        )
+        self.assertIn(
+            f"**Saved settings in this topic**\n\nEffort for `{model}`: `High`", text
+        )
+        self.assertEqual(text.count("Model: "), 1)
+        self.assertNotIn("Not set", text)
+
+    def test_get_model_here_splits_long_settings_without_dropping_values(self):
+        self.prefs.thinking_by_model = {
+            f"custom/saved-model-{index:03d}": "low" for index in range(120)
+        }
+        event = self.event()
+        message = SimpleNamespace(id=MENU_ID)
+        message.reply = AsyncMock(return_value=message)
+        event.reply = AsyncMock(return_value=message)
+        asyncio.run(plugin.get_model_here_handler(event))
+        chunks = [event.reply.await_args.args[0]] + [
+            call.args[0] for call in message.reply.await_args_list
+        ]
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            self.assertTrue(chunk.startswith(plugin.BOT_META_INFO_PREFIX))
+            self.assertLessEqual(len(chunk.encode("utf-16-le")) // 2, 4000)
+        text = "\n".join(chunks)
+        for model in self.prefs.thinking_by_model:
+            self.assertIn(f"Effort for `{model}`: `Low`", text)
 
     def test_last_n_here_in_a_topic_explains_the_outside_topic_scope(self):
         for argument in (None, "20", "reset"):

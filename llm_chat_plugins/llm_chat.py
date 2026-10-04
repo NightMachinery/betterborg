@@ -1371,7 +1371,7 @@ BOT_COMMANDS = [
     },
     {
         "command": "getmodelhere",
-        "description": "View topic/chat model and effort with their sources",
+        "description": "View effective and saved model/effort settings here",
     },
     {
         "command": "helpmagics",
@@ -7529,7 +7529,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setthink: Adjust the current model's reasoning effort (per model, personal).
 - /setThinkHere: Same, but for this chat only. Overrides your personal setting.
 
-**In private topics**, /setModelHere, /setThinkHere, /setSystemPromptHere and /contextModeHere set this topic's model, effort, prompt and context mode. Their menus have an **Apply to** row to set the whole chat instead (for context mode, the default for every topic of the chat). Topic overrides take precedence over whole-chat defaults. /getModelHere shows the effective model and reasoning effort with each setting's source alongside the saved model defaults; /getContextModeHere shows the topic's effective mode and its source.
+**In private topics**, /setModelHere, /setThinkHere, /setSystemPromptHere and /contextModeHere set this topic's model, effort, prompt and context mode. Their menus have an **Apply to** row to set the whole chat instead (for context mode, the default for every topic of the chat). Topic overrides take precedence over whole-chat defaults. /getModelHere shows the effective model and reasoning effort with each setting's source, then lists every saved model and per-model effort in separate personal, whole-chat and topic blocks, hiding unset values; /getContextModeHere shows the topic's effective mode and its source.
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
 - /stream: Stream answers as live drafts or as edits, for private chats and for groups.
@@ -9981,9 +9981,11 @@ async def get_model_here_handler(event):
     effective_model, _ = _get_effective_model_and_service(
         chat_id, user_id, topic_id=topic_id
     )
-    topic_model = _topic_setting(chat_id, topic_id, topic_manager.get_model)
-    chat_model = chat_manager.get_model(chat_id)
-    personal_model = user_manager.get_prefs(user_id).model
+    topic_prefs = _topic_setting(chat_id, topic_id, topic_manager.get_prefs)
+    chat_prefs = chat_manager.get_prefs(chat_id)
+    personal_prefs = user_manager.get_prefs(user_id)
+    topic_model = topic_prefs.model if topic_prefs is not None else None
+    chat_model = chat_prefs.model
     source_names = {
         "topic": "this topic's saved override",
         "chat": "the whole-chat default",
@@ -10011,27 +10013,29 @@ async def get_model_here_handler(event):
     else:
         effort = _reasoning_level_display(reasoning.level)
     where = "in this topic" if topic_id is not None else "for the whole chat"
-    lines = [
-        f"{BOT_META_INFO_PREFIX}**Effective model {where}:** `{effective_model}`",
-        f"Source: {source}.",
-        f"**Effective reasoning effort:** `{effort}`",
-        f"Effort source: {source_names[reasoning.source]}.",
+    sections = [
+        f"**Effective settings {where}**",
+        f"**Model:** {_md_code(effective_model)}\nSource: {source}.",
+        f"**Reasoning effort:** {_md_code(effort)}\nSource: {source_names[reasoning.source]}.",
     ]
-    if topic_id is not None:
-        lines.append(
-            f"Topic override: {_md_code(topic_model) if topic_model else 'Not set (inherit)'}."
+    for title, prefs in (
+        ("Saved personal defaults", personal_prefs),
+        ("Saved whole-chat settings", chat_prefs),
+        ("Saved settings in this topic", topic_prefs),
+    ):
+        if prefs is None:
+            continue
+        lines = [f"Model: {_md_code(prefs.model)}"] if prefs.model else []
+        lines.extend(
+            f"Effort for {_md_code(model)}: {_md_code(_reasoning_level_display(level))}"
+            for model, level in sorted(prefs.thinking_by_model.items())
+            if level
         )
-    lines.extend(
-        [
-            f"Whole-chat default: {_md_code(chat_model) if chat_model else 'Not set (inherit)'}.",
-            f"Personal default: {_md_code(personal_model)}.",
-        ]
+        if lines:
+            sections.append(f"**{title}**\n\n" + "\n".join(lines))
+    await util.reply_in_chunks(
+        event, "\n\n".join(sections), prefix=BOT_META_INFO_PREFIX, parse_mode="md"
     )
-    if topic_id is not None:
-        lines.append(
-            "Here means this topic. Other topics use their own overrides or the whole-chat default."
-        )
-    await event.reply("\n".join(lines), parse_mode="md")
 
 
 async def context_mode_here_handler(event):

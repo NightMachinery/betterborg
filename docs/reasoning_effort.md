@@ -106,6 +106,9 @@ from, plus any level stored for the current chat.
 `/getModelHere` also shows the effective model's reasoning effort and its
 source: this topic's override, whole-chat default, personal default or model
 default. It says when the displayed model does not support reasoning effort.
+Its saved-settings blocks list every per-model effort at the personal,
+whole-chat and current-topic layers, even for models that are not selected.
+Unset values and empty blocks are hidden.
 
 ## Codex Luna Reserve
 
