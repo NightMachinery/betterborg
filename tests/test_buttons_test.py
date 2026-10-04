@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, patch
 
 from telethon import events
 
-from uniborg import util
+from uniborg import tg_compat, util
 from uniborg.storage import UserStorage
 
 from test_advanced_get_guest import _FakeBorg
@@ -87,11 +87,12 @@ class CustomDataTests(unittest.IsolatedAsyncioTestCase):
                 button = self.plugin.inline_button(
                     "Press", payload, callback_store=self.store
                 )
-                self.assertLessEqual(len(button.data), 64)
-                self.assertTrue(self.plugin.is_own_data(button.data))
+                data = tg_compat.button_data(button)
+                self.assertLessEqual(len(data), 64)
+                self.assertTrue(self.plugin.is_own_data(data))
                 reloaded = UserStorage(purpose="buttons", root=self.tmp.name)
                 event = SimpleNamespace(
-                    data=button.data, reply=AsyncMock(), answer=AsyncMock()
+                    data=data, reply=AsyncMock(), answer=AsyncMock()
                 )
                 with patch.object(self.plugin, "z") as shell:
                     await self.plugin.callback(event, callback_store=reloaded)
@@ -111,7 +112,9 @@ class CustomDataTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args, (7, "Hi"))
         for button, expected in zip(kwargs["buttons"][0], ("One", "custom")):
             event = SimpleNamespace(
-                data=button.data, reply=AsyncMock(), answer=AsyncMock()
+                data=tg_compat.button_data(button),
+                reply=AsyncMock(),
+                answer=AsyncMock(),
             )
             await self.plugin.callback(event, callback_store=self.store)
             event.reply.assert_awaited_once_with(expected, parse_mode=None)
@@ -119,7 +122,7 @@ class CustomDataTests(unittest.IsolatedAsyncioTestCase):
     def test_inline_shell_data_keeps_its_existing_command_path(self):
         for data in (".z printf sentinel", "zsh_0123"):
             button = self.plugin.inline_button("Run", data, callback_store=self.store)
-            self.assertEqual(button.data, data.encode())
+            self.assertEqual(tg_compat.button_data(button), data.encode())
 
     def test_payload_limit_is_preserved(self):
         with self.assertRaises(ValueError):

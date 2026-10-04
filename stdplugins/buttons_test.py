@@ -3,6 +3,7 @@ from telethon import events, TelegramClient
 from telethon.tl.custom import Button
 from uniborg.util import embed2, admin_cmd, discreet_send
 from uniborg.storage import UserStorage
+from uniborg import tg_compat
 from brish import z, zp, bsh, zq, CmdResult
 from typing import Dict, Iterable
 import json
@@ -32,7 +33,7 @@ def inline_button(label, data=None, *, callback_store=None):
     fits Telegram's limit and buttons continue working after a restart.
     """
     button = Button.inline(label, data)
-    payload = button.data.decode("utf-8")
+    payload = tg_compat.button_data(button).decode("utf-8")
     if payload.startswith("zsh_") or p_zsh.match(payload):
         return button
     token = uuid4()
