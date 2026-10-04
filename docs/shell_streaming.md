@@ -720,6 +720,10 @@ itself may lose its final. A command that is no job (live output off, or
   still runs.
 - **`.restart` and `.shutdown`** (`stdplugins/power_tools.py`) reply
   ("Restarted.", "Turning off ..."), run it, then re-execute the bot or exit.
+  Each must be the whole message (any letter case, blanks around it
+  allowed): Telethon matches a pattern from the start only, so a bare
+  `.restart` also took "/restart", "#restart" or ".restarted", which on a
+  userbot can be any of the owner's own messages.
   Both reply rather than edit the command, since a bot cannot edit a message
   it did not write. They run it in a task of their own: Telethon's
   `disconnect` cancels every running event handler, the one that calls it

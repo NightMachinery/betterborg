@@ -6,12 +6,23 @@ Available Commands:
 from telethon import events
 import asyncio
 import os
+import re
 import sys
 from uniborg import shell_stream
 from uniborg.util import admin_cmd
 
 #: The tasks that outlive their handler, kept so they are not collected.
 _TASKS = set()
+
+
+def _alone(command):
+    """A pattern for COMMAND as the whole message, in any letter case.
+
+    Telethon matches from the start only (`re.match`), so `.restart` alone
+    would also take "/restart", "#restart" or ".restarted"; on a userbot,
+    any of the owner's own messages.
+    """
+    return rf"(?i)\s*{re.escape(command)}\s*\Z"
 
 
 def _restart():
@@ -40,13 +51,13 @@ def _after_the_handler(then):
     task.add_done_callback(_TASKS.discard)
 
 
-@borg.on(admin_cmd(pattern=".restart"))
+@borg.on(admin_cmd(pattern=_alone(".restart")))
 async def restart_handler(event):
     await event.reply("Restarted.")
     _after_the_handler(_restart)
 
 
-@borg.on(admin_cmd(pattern=".shutdown"))
+@borg.on(admin_cmd(pattern=_alone(".shutdown")))
 async def shutdown_handler(event):
     #: A reply, not an edit: a bot cannot edit the admin's message.
     await event.reply("Turning off ...")

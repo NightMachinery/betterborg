@@ -102,6 +102,31 @@ class PowerToolsTests(unittest.TestCase):
         asyncio.run(main())
         return event
 
+    def matches(self, name, text):
+        (builder,) = [b for b, fn in self.borg.handlers if fn.__name__ == name]
+        return bool(builder.pattern(text))
+
+    def test_each_command_must_be_the_whole_message(self):
+        for name, command in (
+            ("restart_handler", ".restart"),
+            ("shutdown_handler", ".shutdown"),
+        ):
+            word = command[1:]
+            for text in (command, command.upper(), f"  {command}\n"):
+                with self.subTest(text=text):
+                    self.assertTrue(self.matches(name, text))
+            for text in (
+                f"/{word}",
+                f"#{word}",
+                f"x{word}",
+                f"{command}ed",
+                f"{command} now",
+                f"see {command}",
+                f"{command}\n.a ls",
+            ):
+                with self.subTest(text=text):
+                    self.assertFalse(self.matches(name, text))
+
     def test_restart_replies_then_restarts_after_the_disconnect(self):
         event = self.run_handler("restart_handler")
 
