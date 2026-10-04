@@ -10,9 +10,12 @@ are long; what is timed starts at the stop.
 
 import asyncio
 import contextlib
+import gc
 import os
 from pathlib import Path
+import shlex
 import signal
+import sys
 import tempfile
 import time
 import unittest
@@ -270,6 +273,40 @@ class ZshStreamTests(unittest.TestCase):
         self.assertTrue(_wait_gone(pid, timeout=2))
         self.assertEqual(job.stop_reason, StopReason.SHUTDOWN)
         self.assertEqual(job.state, JobState.ENDED)
+
+    def test_a_cancelled_await_leaves_no_transport_open(self):
+        #: A process that left the command's group (a daemon, here a sleep in
+        #: a group of its own) holds the output open past the SIGKILL, so the
+        #: transport is still open when `asyncio.run` closes the loop. Left
+        #: to its `__del__`, it would close there, and raise "Event loop is
+        #: closed".
+        unraisable = []
+        leave_the_group = shlex.quote(
+            "import os, time; os.setpgid(0, 0); print('left', flush=True); "
+            "time.sleep(2)"
+        )
+
+        async def main():
+            job = _job()
+            task = asyncio.create_task(
+                self.capture(
+                    f"{shlex.quote(sys.executable)} -c {leave_the_group} &"
+                    " print $!; sleep 30",
+                    job=job,
+                )
+            )
+            text = await _wait_for_output(job, lambda text: "left" in text)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            return int(text.split()[0])
+
+        with patch.object(sys, "unraisablehook", unraisable.append):
+            pid = asyncio.run(main())
+            self.assertTrue(_wait_gone(pid, timeout=10))
+            gc.collect()
+
+        self.assertEqual(unraisable, [])
 
 
 if __name__ == "__main__":

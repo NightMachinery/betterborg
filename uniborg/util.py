@@ -901,7 +901,8 @@ async def _stream_zsh(*, cwd, command, job) -> typing.Optional[CommandResult]:
     executor thread: it still works when every thread is busy. The command
     gets a session of its own, so a stop reaches its whole process group,
     background jobs included (`_ProcessGroupKiller`). A cancelled await
-    kills the group at once and re-raises.
+    kills the group at once and re-raises. The subprocess transport is
+    closed on every way out.
 
     The result's output is `job.output.final_text(render=False)`: UTF-8 with
     `\\r\\n` and `\\r` turned into `\\n`, as `text=True` gives for valid output;
@@ -935,6 +936,10 @@ async def _stream_zsh(*, cwd, command, job) -> typing.Optional[CommandResult]:
     finally:
         job.detach()
         killer.command_ended()
+        #: Left open (after a cancel, the command not yet reaped), the
+        #: transport would be closed by its `__del__`, which needs the loop,
+        #: by then often closed: "Event loop is closed", unraisable.
+        proc._transport.close()
     return CommandResult(output=job.output.final_text(render=False), retcode=retcode)
 
 

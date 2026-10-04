@@ -305,7 +305,11 @@ another streamed `.aa`. A background job left in the group keeps the id
 reserved and gets the later steps.
 
 A cancelled await (the client disconnecting) cancels the job with
-StopReason.SHUTDOWN, sends the group SIGKILL at once and re-raises.
+StopReason.SHUTDOWN, sends the group SIGKILL at once and re-raises. Every way
+out closes the subprocess transport: a process that left the group (a
+daemon) can hold the output open past the SIGKILL, and a transport left open
+would be closed by its `__del__` after the loop had closed ("Event loop is
+closed").
 
 A side effect of the own session: a streamed `.aa` command has no controlling
 terminal, like a brish command, and a terminal Ctrl-C on the bot no longer
