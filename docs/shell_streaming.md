@@ -558,7 +558,9 @@ On a brish without `popen`, `.a` renders its captured output the same way.
 - **The handler's task is cancelled** (the client disconnecting, or a
   standalone bot's loop shutting down; see "Shutdown and restarts"): the
   job is stopped with StopReason.SHUTDOWN, the producer is cancelled, and
-  the cancel propagates.
+  the cancel propagates. A cancel while the files are sent propagates too
+  (`util.upload_output_files` and `send_files` re-raise it), rather than
+  being reported as a failed upload through a closing client.
 - `util.forget_edit_chain(preview)` drops `util.edit_message`'s record of the
   preview once the pump is done, so it does not outlive the command.
 - **`borg_shell_streaming=0`**: `.a`, `.af` and `.aa` run exactly as before:

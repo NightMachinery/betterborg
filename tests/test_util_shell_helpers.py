@@ -73,6 +73,9 @@ class _UploadingBorg:
     def __init__(self):
         self.sends = []
         self.fail_names = set()
+        #: Set when the next send has started; that one send hangs until
+        #: cancelled.
+        self.hang = None
 
     def action(self, chat, kind):
         return _Action()
@@ -82,6 +85,10 @@ class _UploadingBorg:
             [Path(f).name for f in file] if isinstance(file, list) else Path(file).name
         )
         self.sends.append((chat, names, kwargs))
+        if self.hang is not None:
+            hang, self.hang = self.hang, None
+            hang.set()
+            await asyncio.Event().wait()
         if isinstance(names, str) and names in self.fail_names:
             raise RuntimeError("upload failed")
         if isinstance(file, list):
@@ -131,6 +138,36 @@ class UploadOutputFilesTests(_BorgTestCase):
         self.assertEqual(kwargs["voicenote-x.ogg"]["reply_to"], 9)
         self.assertEqual([m.name for m in sent], ["voicenote-x.ogg"])
         self.assertEqual(errors, ["failed"])
+
+    def test_a_cancel_mid_upload_propagates_and_is_not_reported(self):
+        #: The client disconnecting cancels the handler during a send.
+        reports = []
+
+        async def on_error():
+            reports.append("on_error")
+
+        async def handle_exc_chat(chat, reply_exc=True):
+            reports.append("handle_exc_chat")
+
+        async def main(album_mode):
+            self.borg.hang = asyncio.Event()
+            task = asyncio.create_task(
+                util.upload_output_files(
+                    42, files, album_mode=album_mode, on_error=on_error
+                )
+            )
+            await self.borg.hang.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 5)
+
+        files = self._files("a.txt", "b.png")
+        for album_mode in (False, True):
+            with self.subTest(album_mode=album_mode), patch.object(
+                util, "handle_exc_chat", handle_exc_chat
+            ):
+                asyncio.run(main(album_mode))
+                self.assertEqual(reports, [])
 
 
 class CaptureTests(unittest.TestCase):

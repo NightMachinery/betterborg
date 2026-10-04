@@ -659,6 +659,8 @@ async def send_files(chat, files, **kwargs):
             sent += _sent_messages(
                 await borg.send_file(chat, files, allow_cache=False, **kwargs)
             )
+        except asyncio.CancelledError:
+            raise
         except:
             await handle_exc_chat(chat)
         return sent
@@ -692,6 +694,8 @@ async def send_files(chat, files, **kwargs):
                         sent += _sent_messages(
                             await borg.send_file(chat, f, allow_cache=False, **kwargs)
                         )
+            except asyncio.CancelledError:
+                raise
             except:
                 await handle_exc_chat(chat)
     return sent
@@ -704,7 +708,8 @@ async def upload_output_files(chat, files, *, album_mode, reply_to=None, on_erro
     in one album per extension (`send_files`). Otherwise they go one at a time
     as replies to `reply_to`, and a name prefix picks how: `voicenote-`,
     `videonote-`, `fdoc-` (as a document) or `streaming-`. Directories are
-    skipped. `on_error()` is awaited, inside the `except`, for each failed send.
+    skipped. `on_error()` is awaited, inside the `except`, for each failed send;
+    a cancel propagates, unreported, in both modes.
     """
     files = list(files)
     if album_mode and len(files) != 1:
@@ -738,6 +743,10 @@ async def upload_output_files(chat, files, *, album_mode, reply_to=None, on_erro
                 )
                 #                            progress_callback=action.progress)
                 # caption=base_name)
+            except asyncio.CancelledError:
+                #: A cancel (the client disconnecting, say) is not a failed
+                #: upload, as in `run_and_upload`.
+                raise
             except:
                 await on_error()
     return sent
