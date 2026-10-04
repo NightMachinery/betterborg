@@ -49,7 +49,10 @@ stopped command that needed SIGKILL, or `exit N` in a non-fork `.af`), and
 that restart waits for the lock of every worker of the pool, so for every
 command still running there, an endless one included. On one shared pool, a
 stubborn `.a tail -f` would block `.tex` until it ended. With two pools, a
-restart of either never stalls the other.
+restart of either never stalls the other. Brish 0.4.1 (released) replaces
+only the dead worker, and its `restart()` never waits for a worker in use,
+so there the two pools only keep the shell's commands and the plugins'
+apart; the bot runs on either version.
 
 `.x`, `.sbb` and `.xf` call `util.init_brishes`, which starts a new shell pool
 and retires both old pools on `util.executor`. The plugin pool is not started
@@ -74,9 +77,9 @@ jobs (`@bot .k` sees only its caller's own) and their jobs in a private chat
 job in a group counts on the second line, since any admin there can stop it.
 A guest job records its pool as a chat job does.
 
-Nothing here depends on whole-pool restarts. Brish 0.4.1 is announced to
-restart only the dead worker; the separate plugin pool is still worth keeping
-until the bot runs it.
+Nothing here depends on whole-pool restarts, so the pools work the same on
+brish 0.4.0 and 0.4.1. The bot does not use 0.4.1's `cancelled=` argument
+yet (see "Stopping a queued job" under Limits).
 
 ## The terminal renderer
 
@@ -244,7 +247,8 @@ returns the trap's status; a fork command that ignores INT (`trap '' INT`)
 gets SIGTERM at step 2, about 2.1 s later, and returns 143 (non-fork: its
 `sleep` gets the SIGTERM, and the command goes on). Under a stubborn command
 brish reaches step 4 (SIGKILL of the worker, 9001) after about 5 to 13 s;
-with brish 0.4.0 the pool then restarts, waiting for its other commands.
+with brish 0.4.0 the pool then restarts, waiting for its other commands,
+while 0.4.1 replaces only that worker.
 
 **Old brish fallback.** A brish without `popen` (before 0.4.0) runs the
 command through `send_cmd`, still asking `try_start` first, and writes its
@@ -741,4 +745,5 @@ a `tail -f` no longer keeps the process from exiting.
 - **Stopping a queued job.** A job that waits for a worker (every worker
   busy, or worker 0 for `.af`) is dropped at once by `.k`, and its final
   goes out, but its executor thread still waits until it gets a worker, then
-  runs nothing.
+  runs nothing. Brish 0.4.1's `cancelled=` argument would free that thread
+  at once; the bot does not pass it yet.
