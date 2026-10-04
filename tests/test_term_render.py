@@ -2,6 +2,7 @@
 
 import time
 import unittest
+from unittest.mock import patch
 
 from uniborg import term_render
 from uniborg.term_render import TerminalRenderer, line_aligned, render
@@ -114,6 +115,38 @@ class CostTests(unittest.TestCase):
         #: The same frames after a prefix 8 times as long: about the same
         #: time, not about 6 times as much.
         self.assertLess(long / short, 2)
+
+    def test_a_redraw_under_a_long_line_does_not_copy_it(self):
+        """Counted in code points converted, so a busy machine cannot fail it."""
+        converted = []
+
+        def counting(convert):
+            def wrapper(value):
+                converted.append(len(value))
+                return convert(value)
+
+            return wrapper
+
+        long = "x" * 100_000
+        with patch.object(
+            term_render, "_code_points", counting(term_render._code_points)
+        ), patch.object(term_render, "_text_of", counting(term_render._text_of)):
+            text = render(long + f"{ESC}[1Ay\n" * 1000)
+
+        self.assertEqual(text, "y" + long[1:] + "y\n")
+        #: The long line once each way, not twice per redraw (2e8).
+        self.assertLess(sum(converted), 3 * len(long))
+
+    def test_lines_rewritten_in_turn_keep_their_text(self):
+        """More lines than keep their arrays, so some are given up and
+        taken again."""
+        rows = term_render.ACTIVE_LINES + 4
+        text = "".join(f"{row}:0\n" for row in range(rows)) + "".join(
+            f"{ESC}[{rows}A" + "".join(f"\r{row}:{step}\n" for row in range(rows))
+            for step in (1, 2)
+        )
+
+        self.assertEqual(render(text), "".join(f"{row}:2\n" for row in range(rows)))
 
 
 class IncrementalTests(unittest.TestCase):

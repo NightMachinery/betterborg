@@ -29,11 +29,13 @@ or a cursor-up would act on text that is not there. `line_aligned` cuts such
 a tail to its first whole line, so rendering it stays inside the tail; a tail
 that holds only the end of one line is kept whole.
 
-Rendering takes time linear in the text: the line under the cursor is kept
-as an array of code points, so writing, overwriting and erasing in it cost
-what they change, not the length of the line. Moving to another line (a
-newline or a cursor-up) costs the length of the line left and of the line
-written next.
+Rendering takes time linear in the text: a line written to is kept as an
+array of code points, so writing, overwriting and erasing in it cost what
+they change, not the length of the line. The arrays of the last
+`ACTIVE_LINES` lines written to are kept, so moving between them (a newline
+or a cursor-up) costs nothing, however long they are, and a redraw under a
+long line does not copy it each time. Only a program that keeps rewriting
+more lines than that in turn pays the length of each line it comes back to.
 
 This module imports only the standard library.
 """
@@ -48,6 +50,10 @@ _ESCAPE = r"\x1b[ -/]*(?P<esc_final>[0-~])?"
 #: Within one line: `feed` splits its text at newlines first.
 _TOKEN = re.compile(f"{_CSI}|{_OSC}|{_ESCAPE}|[\r\b]")
 _NEEDS_RENDERING = re.compile(r"[\r\b\x1b]")
+
+#: How many lines keep their arrays; a multi-bar progress display redraws
+#: a few lines in turn.
+ACTIVE_LINES = 16
 
 #: An array type of 4-byte items: one code point each.
 _CODE_POINT_TYPE = next(code for code in "IL" if array(code).itemsize == 4)
@@ -78,9 +84,9 @@ class TerminalRenderer:
         self._row = 0
         self._col = 0
         self._pending = ""
-        #: The cursor's line as code points, once written to; while it is
-        #: set, `_lines[_row]` is out of date.
-        self._active = None
+        #: Rows written to lately, as code points, the latest last; a row's
+        #: entry in `_lines` is out of date while it is here.
+        self._active = {}
 
     def feed(self, text: str) -> "TerminalRenderer":
         text = self._pending + text
@@ -97,24 +103,29 @@ class TerminalRenderer:
         return self
 
     def text(self) -> str:
-        self._store_active()
+        for row, points in self._active.items():
+            self._lines[row] = _text_of(points)
+        self._active.clear()
         return "\n".join(self._lines)
 
     def _line(self) -> array:
         """The cursor's line, as code points to change in place."""
-        if self._active is None:
-            self._active = _code_points(self._lines[self._row])
-        return self._active
-
-    def _store_active(self) -> None:
-        if self._active is not None:
-            self._lines[self._row] = _text_of(self._active)
-            self._active = None
+        row = self._row
+        points = self._active.get(row)
+        if points is None:
+            if len(self._active) >= ACTIVE_LINES:
+                oldest = next(iter(self._active))
+                self._lines[oldest] = _text_of(self._active.pop(oldest))
+            points = self._active[row] = _code_points(self._lines[row])
+        elif next(reversed(self._active)) != row:
+            #: The latest last: the oldest is the one to give up.
+            self._active[row] = self._active.pop(row)
+        return points
 
     def _write(self, run: str) -> None:
         col = self._col
         self._col = col + len(run)
-        if self._active is None and col == 0 and not self._lines[self._row]:
+        if col == 0 and self._row not in self._active and not self._lines[self._row]:
             #: A fresh line, the common case, needs no array.
             self._lines[self._row] = run
             return
@@ -138,7 +149,6 @@ class TerminalRenderer:
             self._write(segment[pos:])
 
     def _newline(self) -> None:
-        self._store_active()
         self._row += 1
         self._col = 0
         if self._row == len(self._lines):
@@ -161,7 +171,6 @@ class TerminalRenderer:
             return
         n = int(params or 0)
         if final == "A":
-            self._store_active()
             self._row = max(0, self._row - max(n, 1))
             return
         line = self._line()

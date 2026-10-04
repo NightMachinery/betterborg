@@ -113,10 +113,14 @@ beyond the above, and every character is one column wide (tabs and wide
 characters are not expanded). Commands still run without a terminal; nothing
 fakes one (no `script`, `unbuffer` or pseudo-terminal).
 
-Cost: linear in the text. The line under the cursor is kept as an array of
-code points, so a write, an overwrite after `\r` or `\b`, and an erase cost
-what they change, not the length of the line; only moving to another line
-(a newline or a cursor-up) costs the length of the lines involved. On the
+Cost: linear in the text. A line written to is kept as an array of code
+points, so a write, an overwrite after `\r` or `\b`, and an erase cost what
+they change, not the length of the line. The last `ACTIVE_LINES` (16) lines
+written to keep their arrays, so moving between them (a newline or a
+cursor-up) costs nothing, and a progress display redrawn under a long line
+does not copy that line at each redraw (a line of 1 MiB with 2000 redraws
+under it renders in about 0.06 s). Only a program that keeps rewriting more
+than 16 lines in turn pays the length of each line it comes back to. On the
 development machine, per MiB: about 0.02 s for ordinary lines, 0.06 s for
 dense `\r` frames (tqdm), 0.09 s for coloured lines, 0.2 s for one long
 coloured line (`jq -C -c`) and 0.35 s for one long line of
