@@ -153,10 +153,10 @@ send is logged too.
 
 ### Switching them off
 
-`borg_tg_safety_nets` controls all of them. It is on when unset. `0`, `false`,
-`no` or `off` turns every net off, and `1`, `true`, `yes` or `on` keeps them
-on. Any other value stops startup with a `ValueError`, so a typo cannot
-silently disable them.
+`borg_tg_safety_nets` controls all of them. It is on when unset or empty. `0`,
+`false`, `no` or `off` turns every net off, and `1`, `true`, `yes` or `on`
+keeps them on. Any other value stops startup with a `ValueError`, so a typo
+cannot silently disable them.
 
 ### Version guard
 

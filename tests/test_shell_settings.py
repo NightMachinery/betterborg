@@ -3,17 +3,25 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
 
-from uniborg import guest_util, shell_settings, stream_driver
+from uniborg import env_switch, guest_util, shell_settings, stream_driver
 from uniborg.shell_settings import FinalMode, ShellPrefs, ShellSettings
 from uniborg.storage import UserStorage
 from uniborg.stream_driver import StreamMode
 
 USER = 195391705
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _paragraph(path, *, start):
+    """The paragraph of the file PATH that begins with START."""
+    text = path.read_text()
+    return text[text.index(start) :].split("\n\n", 1)[0]
 
 
 class ShellSettingsTests(unittest.TestCase):
@@ -145,6 +153,33 @@ class StreamingSwitchTests(unittest.TestCase):
                         environ={guest_util.TRIGGER_GUARD_ENV: value}
                     )
 
+    def test_the_docs_name_every_word(self):
+        #: Each place that lists the words lists all of them, empty included.
+        page = (ROOT / "pages" / "telegram_remote_shell" / "index.html").read_text()
+        page_entry = re.search(
+            r"<dt><code>borg_shell_streaming</code></dt>\s*<dd>(.*?)</dd>",
+            page,
+            re.S,
+        ).group(1)
+        places = {
+            "shell_settings docstring": shell_settings.__doc__,
+            "env_switch docstring": env_switch.env_switch.__doc__,
+            "remote shell page": page_entry,
+            "docs/shell_streaming.md": _paragraph(
+                ROOT / "docs" / "shell_streaming.md",
+                start="The **kill switch**",
+            ),
+            "docs/telethon_upgrade.md": _paragraph(
+                ROOT / "docs" / "telethon_upgrade.md",
+                start="`borg_tg_safety_nets` controls all of them.",
+            ),
+        }
+        for place, text in places.items():
+            for word in env_switch.ON_VALUES | env_switch.OFF_VALUES:
+                named = "empty" if word == "" else word
+                with self.subTest(place=place, word=named):
+                    self.assertRegex(text, rf"\b{named}\b")
+
     def test_a_bad_value_stops_the_bot_at_startup(self):
         #: The plugin loader skips a plugin that fails to load, which would
         #: leave `.a` silent; so importing uniborg itself, as stdborg does
@@ -152,7 +187,7 @@ class StreamingSwitchTests(unittest.TestCase):
         env = {**os.environ, shell_settings.STREAMING_ENV: "maybe"}
         result = subprocess.run(
             [sys.executable, "-c", "import uniborg"],
-            cwd=Path(__file__).resolve().parent.parent,
+            cwd=ROOT,
             env=env,
             capture_output=True,
             text=True,

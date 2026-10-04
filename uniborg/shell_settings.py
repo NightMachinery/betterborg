@@ -11,8 +11,8 @@ The settings are kept per user in `UserStorage(purpose="shell")`:
 
 `SHELL_STREAMING`, read once from the environment variable
 `borg_shell_streaming`, turns live output off altogether. It takes the words
-of every switch (`env_switch`): unset, 1, true, yes or on is on; 0, false, no
-or off is off; anything else is refused at startup.
+of every switch (`env_switch`): unset, empty, 1, true, yes or on is on; 0,
+false, no or off is off; anything else is refused at startup.
 
 This is a core module, so a plugin reload never re-executes it. More is in
 docs/shell_streaming.md.
