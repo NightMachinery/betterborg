@@ -13,7 +13,6 @@ import contextlib
 import gc
 import os
 from pathlib import Path
-import shlex
 import signal
 import sys
 import tempfile
@@ -275,37 +274,39 @@ class ZshStreamTests(unittest.TestCase):
         self.assertEqual(job.state, JobState.ENDED)
 
     def test_a_cancelled_await_leaves_no_transport_open(self):
-        #: A process that left the command's group (a daemon, here a sleep in
-        #: a group of its own) holds the output open past the SIGKILL, so the
-        #: transport is still open when `asyncio.run` closes the loop. Left
-        #: to its `__del__`, it would close there, and raise "Event loop is
-        #: closed".
+        #: A process that left the command's group (a daemon) holds the
+        #: output open past the SIGKILL, so the transport is still open when
+        #: `asyncio.run` closes the loop. Left to its `__del__`, it would
+        #: close there, and raise "Event loop is closed". Here no group
+        #: signal is delivered, so the command itself stands in for that
+        #: process.
         unraisable = []
-        leave_the_group = shlex.quote(
-            "import os, time; os.setpgid(0, 0); print('left', flush=True); "
-            "time.sleep(2)"
-        )
+        withheld = []
+        signal_group = util._signal_group
+
+        def unreachable(pgid, sig):
+            if sig == 0:
+                return signal_group(pgid, sig)
+            withheld.append(sig)
+            return True
 
         async def main():
             job = _job()
-            task = asyncio.create_task(
-                self.capture(
-                    f"{shlex.quote(sys.executable)} -c {leave_the_group} &"
-                    " print $!; sleep 30",
-                    job=job,
-                )
-            )
-            text = await _wait_for_output(job, lambda text: "left" in text)
+            task = asyncio.create_task(self.capture("print $$; sleep 2", job=job))
+            text = await _wait_for_output(job, lambda text: text.strip().isdigit())
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
-            return int(text.split()[0])
+            return int(text)
 
-        with patch.object(sys, "unraisablehook", unraisable.append):
+        with patch.object(sys, "unraisablehook", unraisable.append), patch.object(
+            util, "_signal_group", unreachable
+        ):
             pid = asyncio.run(main())
             self.assertTrue(_wait_gone(pid, timeout=10))
             gc.collect()
 
+        self.assertIn(signal.SIGKILL, withheld)
         self.assertEqual(unraisable, [])
 
 
