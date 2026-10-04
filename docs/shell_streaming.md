@@ -389,15 +389,14 @@ cannot show drafts, so its previews are edited messages).
 
 The **kill switch** is the environment variable `borg_shell_streaming`, read
 once when the module is first imported. It takes the words of the bot's other
-switches (`borg_guest_trigger_guard`, `borg_tg_safety_nets`), through their
-one parser, `uniborg/env_switch.py`: unset, empty, "1", "true", "yes" or "on"
-is on, "0", "false", "no" or "off" is off, in any letter case and with blanks
-around them, and any other value raises rather than guess. `uniborg/uniborg.py` imports the
-module, so that error stops the bot at startup. Were the shell plugin the
+switches (`borg_guest_trigger_guard`, `borg_tg_safety_nets`), through their one
+parser, `uniborg/env_switch.py`: unset, empty, "1", "true", "yes" or "on" is on,
+"0", "false", "no" or "off" is off, in any letter case and with blanks around
+them, and any other value raises rather than guess. `uniborg/uniborg.py` imports
+the module, so that error stops the bot at startup. Were the shell plugin the
 first to import it, the plugin loader would only log the error and skip the
 plugin, and the bot would run on with `.a` answering nothing. Off, `.a`, `.af`
-and `.aa` run exactly as before live output: no job, no preview and no
-renderer.
+and `.aa` run exactly as before live output: no job, no preview and no renderer.
 
 ## Live output in chats
 
@@ -712,17 +711,17 @@ and its answer shows the output live. The code is `_run_guest_shell` and
 ## Shutdown and restarts
 
 A shutdown stops every job first, while the bot is still connected, so each
-stopped command's final goes out: "⏹ Stopped: the bot is going offline
-(exit N)." in a chat, "⏹ Stopped: the bot is going offline" under the exit
-code of a guest answer. `shell_stream.stop_all_and_disconnect(client)` cancels every
-job with StopReason.SHUTDOWN, waits up to `SHUTDOWN_TIMEOUT` (15 s) for them
-to finish (their finals and files delivered), logs how many had not, and
-then disconnects. The bot still takes commands while it waits, so until the
+stopped command's final goes out: "⏹ Stopped: the bot is going offline (exit
+N)." in a chat, "⏹ Stopped: the bot is going offline" under the exit code of a
+guest answer. `shell_stream.stop_all_and_disconnect(client)` cancels every job
+with StopReason.SHUTDOWN, waits up to `SHUTDOWN_TIMEOUT` (15 s) for them to
+finish (their finals and files delivered), logs how many had not, and then
+disconnects. The bot still takes commands while it waits, so until the
 disconnect is done, `shell_stream.register` stops each new job at once: its
 command never runs, and `stop_all` waits for its final ("⏹ Stopped before it
-ran: the bot is going offline.") as for the others; only a job that arrives during the disconnect
-itself may lose its final. A command that is no job (live output off, or
-`.a` on an old brish) is not stopped. Three paths call it:
+ran: the bot is going offline.") as for the others; only a job that arrives
+during the disconnect itself may lose its final. A command that is no job (live
+output off, or `.a` on an old brish) is not stopped. Three paths call it:
 
 - **Under uvicorn** (`start_server.py`), the server's shutdown event
   (`stdborg.shutdown_event`) runs on SIGINT or SIGTERM, while the event loop
