@@ -300,6 +300,18 @@ class _ScriptedWorkerBrish:
         self.calls.append("cd")
 
 
+class _CancellableWorkerBrish(_ScriptedWorkerBrish):
+    """A `_ScriptedWorkerBrish` whose wait for the worker can be called off,
+    as with brish 0.4.1: it frees the lock and raises."""
+
+    def acquire_lock(self, server_index=None, lock_sleep=1, cancelled=None):
+        lock, index = super().acquire_lock(server_index, lock_sleep)
+        if cancelled is not None and cancelled():
+            lock.release()
+            raise util.BrishCancelledException("cancelled")
+        return lock, index
+
+
 @unittest.skipUnless(
     isinstance(util.BrishWorkerDiedException, type), "brish before 0.4"
 )
@@ -351,4 +363,43 @@ class OnBrishWorkerTests(unittest.TestCase):
         brish = _ScriptedWorkerBrish(die_on=[1, 2])
         with self.assertRaises(util.BrishWorkerDiedException):
             self.run_on(brish)
+        self.assertEqual(brish.locks, 0)
+
+    def test_a_brish_without_cancelled_still_asks_may_start(self):
+        #: Its `acquire_lock` takes no `cancelled=`, as before brish 0.4.1.
+        brish = _ScriptedWorkerBrish()
+        asked = []
+
+        def may_start():
+            asked.append(True)
+            return False
+
+        res, runs = self.run_on(brish, may_start=may_start, cancelled=lambda: True)
+
+        self.assertEqual((res, runs, brish.calls, asked), (None, [], [], [True]))
+        self.assertEqual(brish.locks, 0)
+
+    @unittest.skipUnless(
+        isinstance(util.BrishCancelledException, type), "brish before 0.4.1"
+    )
+    def test_a_cancelled_wait_runs_nothing_and_retries_nothing(self):
+        brish = _CancellableWorkerBrish()
+        asked = []
+
+        res, runs = self.run_on(
+            brish, may_start=lambda: asked.append(True), cancelled=lambda: True
+        )
+
+        self.assertEqual((res, runs, brish.calls, asked), (None, [], [], []))
+        self.assertEqual(brish.locks, 0)
+
+    @unittest.skipUnless(
+        isinstance(util.BrishCancelledException, type), "brish before 0.4.1"
+    )
+    def test_a_wait_that_is_not_called_off_runs(self):
+        brish = _CancellableWorkerBrish()
+
+        res, runs = self.run_on(brish, cancelled=lambda: False)
+
+        self.assertEqual((res, runs), ("result", [0]))
         self.assertEqual(brish.locks, 0)

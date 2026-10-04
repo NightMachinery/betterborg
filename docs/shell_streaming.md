@@ -78,8 +78,10 @@ job in a group counts on the second line, since any admin there can stop it.
 A guest job records its pool as a chat job does.
 
 Nothing here depends on whole-pool restarts, so the pools work the same on
-brish 0.4.0 and 0.4.1. The bot does not use 0.4.1's `cancelled=` argument
-yet (see "Stopping a queued job" under Limits).
+brish 0.4.0 and 0.4.1. On 0.4.1 a stopped job also gives up its wait for a
+worker at once, through brish's `cancelled=` argument; on 0.4.0 it waits
+until a worker is free, then runs nothing (see "Stopping a queued job" under
+Limits).
 
 ## The terminal renderer
 
@@ -178,6 +180,9 @@ SHUTDOWN) and `CancelOutcome` names each member and raises on anything else.
   that retries. `ran` records that the command was let run, and a job
   stopped before that is **dropped** (`dropped`): its command never runs, so
   the consumer delivers its final at once instead of waiting for a shell.
+- `stop_requested()` says whether the job was asked to stop (`stopped`, as
+  a callable). Brish 0.4.1 calls it every 0.05 s from the executor thread
+  while the job waits for a worker; it takes no lock.
 - `attach(kill)` stores the kill hook and calls it at once when the job is
   already stopped. `cancel(*, reason)` marks the job stopped and then calls
   the hook it finds. Both take the job's lock, so whichever runs second sees
@@ -219,7 +224,15 @@ says whether the installed one does):
    even when other workers are free.
 2. Right after taking the lock it asks `job.try_start()`. False (the job was
    stopped while it waited for a free worker) frees the lock, runs nothing,
-   and the result is None.
+   and the result is None. With brish 0.4.1 the wait itself can be called
+   off: `acquire_lock` gets `cancelled=job.stop_requested`, which brish
+   calls every 0.05 s while the thread waits, and once more when it has the
+   worker. Once the job is stopped, brish frees the worker and raises
+   BrishCancelledException: nothing ran, so the result is None, as for a
+   refused `try_start`, with no retry. `util.BRISH_CANCELLED` says whether
+   the installed brish takes the argument; `_on_brish_worker` asks each
+   pool's class (`_lock_takes_cancelled`, once per class), so a pool whose
+   `acquire_lock` does not take it (0.4.0) gets only `try_start`.
 3. The command runs as `popen('{ eval "$(< /dev/stdin)"; } 2>&1', fork=...,
    cmd_stdin=cmd)`. The popen's `kill` is attached as the job's kill hook,
    and every chunk goes to `job.output.write(chunk, stream=...)`.
@@ -744,6 +757,9 @@ a `tail -f` no longer keeps the process from exiting.
   full speed until it is stopped; memory stays within the caps above.
 - **Stopping a queued job.** A job that waits for a worker (every worker
   busy, or worker 0 for `.af`) is dropped at once by `.k`, and its final
-  goes out, but its executor thread still waits until it gets a worker, then
-  runs nothing. Brish 0.4.1's `cancelled=` argument would free that thread
-  at once; the bot does not pass it yet.
+  goes out. With brish 0.4.1 its executor thread gives up the wait too,
+  within about 0.05 s (brish's poll of `cancelled=`; in the tests, an `.af`
+  queued behind a busy worker 0 returns in under 0.1 s while worker 0 stays
+  busy). With 0.4.0 that thread still waits until it gets a worker, then
+  runs nothing, so a job queued behind an endless command holds one thread
+  of the event loop's default executor until that command is stopped.

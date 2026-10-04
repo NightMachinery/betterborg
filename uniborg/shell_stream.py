@@ -375,6 +375,15 @@ class ShellJob:
         """
         return self.stopped and not self.ran
 
+    def stop_requested(self) -> bool:
+        """Whether the job was asked to stop: `stopped`, as a callable.
+
+        For brish's `cancelled=`, which calls it every 0.05 s from the
+        executor thread while the job waits for a worker. It reads one
+        attribute and takes no lock, so any thread may call it that often.
+        """
+        return self.stopped
+
     def try_start(self) -> bool:
         """Called by the producer once it has a shell: False if stopped meanwhile.
 

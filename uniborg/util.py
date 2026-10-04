@@ -19,6 +19,11 @@ try:
 except ImportError:
     #: brish 0.3.5 (PyPI) has no such exception; an empty tuple catches nothing.
     BrishWorkerDiedException = ()
+try:
+    from brish import BrishCancelledException
+except ImportError:
+    #: brish before 0.4.1 takes no `cancelled=`, so nothing raises it.
+    BrishCancelledException = ()
 #: Whether the installed brish can stream a command's output (0.4.0 and later).
 BRISH_POPEN = hasattr(Brish, "popen")
 from pynight.common_icecream import ic
@@ -28,6 +33,7 @@ from IPython.terminal.ipapp import load_default_config
 from aioify import aioify
 import functools
 from functools import partial
+import inspect
 import uuid
 import asyncio
 import subprocess
@@ -246,11 +252,13 @@ _plugin_brish_lock = threading.Lock()
 def plugin_brish():
     """The Brish pool of plugins other than the shell, started on first use.
 
-    A pool restarts after one of its workers dies (a stopped command that
-    needed SIGKILL, or `exit N` in a non-fork command), and that restart
-    waits for every command still running on it, an endless one included.
-    With a pool of their own, a restart of the shell's pool never stalls the
-    plugins, and theirs never stalls the shell.
+    With brish 0.4.0, a pool restarts after one of its workers dies (a
+    stopped command that needed SIGKILL, or `exit N` in a non-fork command),
+    and that restart waits for every command still running on it, an
+    endless one included. With a pool of their own, a restart of the shell's
+    pool never stalls the plugins, and theirs never stalls the shell. Brish
+    0.4.1 replaces only the dead worker, so there the two pools only keep
+    the shell's commands and the plugins' apart.
     """
     global _plugin_brish
     with _plugin_brish_lock:
@@ -1993,7 +2001,24 @@ async def aget_brishz(event, cmd, fork=True, album_mode=True):
 BRISH_EVAL_STDIN = '{ eval "$(< /dev/stdin)"; } 2>&1'
 
 
-def _on_brish_worker(my_brish, *, cwd, server_index, run, may_start=None, **kwargs):
+@functools.cache
+def _lock_takes_cancelled(brish_class) -> bool:
+    """Whether `brish_class.acquire_lock` takes `cancelled=` (brish 0.4.1)."""
+    try:
+        parameters = inspect.signature(brish_class.acquire_lock).parameters
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return "cancelled" in parameters
+
+
+#: Whether the installed brish lets a wait for a worker be called off (0.4.1
+#: and later); a pool of another class is asked on its own.
+BRISH_CANCELLED = _lock_takes_cancelled(Brish)
+
+
+def _on_brish_worker(
+    my_brish, *, cwd, server_index, run, may_start=None, cancelled=None, **kwargs
+):
     """Runs `run(index)` on one worker of `my_brish`, holding its lock.
 
     In `cwd`, when given, the worker sets `$jd` to it, changes into it and
@@ -2002,14 +2027,30 @@ def _on_brish_worker(my_brish, *, cwd, server_index, run, may_start=None, **kwar
     lock is released and nothing runs. Returns what `run` returned, or None
     when nothing ran.
 
+    `cancelled`, a callable without arguments, calls off the wait for a
+    worker once it returns true, on a brish whose `acquire_lock` takes it
+    (0.4.1): brish polls it every 0.05 s from this thread, frees the worker
+    and raises BrishCancelledException, and the result is None, as for a
+    refused `may_start`. An older brish only has `may_start`, asked once
+    the worker is free.
+
     A worker that is gone (after `exit N` in a non-fork command) fails every
-    later call under the same lock with BrishWorkerDiedException, and the
-    pool restarts at the next call once the lock is released. So the result
-    stands if the command ran, and a command that never ran is tried once
-    more.
+    later call under the same lock with BrishWorkerDiedException; the next
+    call after the release gets a working one (brish 0.4.0 restarts the
+    pool, 0.4.1 replaces that worker). So the result stands if the command
+    ran, and a command that never ran is tried once more.
     """
+    lock_kwargs = {}
+    if cancelled is not None and _lock_takes_cancelled(type(my_brish)):
+        lock_kwargs["cancelled"] = cancelled
     for attempt in range(2):
-        lock, index = my_brish.acquire_lock(server_index=server_index, lock_sleep=1)
+        try:
+            lock, index = my_brish.acquire_lock(
+                server_index=server_index, lock_sleep=1, **lock_kwargs
+            )
+        except BrishCancelledException:
+            #: Nothing ran, and brish has released the lock.
+            return None
         res = None
         try:
             if may_start is not None and not may_start():
@@ -2039,7 +2080,9 @@ def _on_brish_worker(my_brish, *, cwd, server_index, run, may_start=None, **kwar
             lock.release()
 
 
-def _send_on_worker(cwd, cmd, *, brish, fork, server_index, may_start, **kwargs):
+def _send_on_worker(
+    cwd, cmd, *, brish, fork, server_index, may_start, cancelled=None, **kwargs
+):
     """`brishz_helper`'s body, in the calling thread; see there."""
     my_brish = plugin_brish() if brish is None else brish
 
@@ -2058,6 +2101,7 @@ def _send_on_worker(cwd, cmd, *, brish, fork, server_index, may_start, **kwargs)
         server_index=server_index,
         run=run,
         may_start=may_start,
+        cancelled=cancelled,
         **kwargs,
     )
 
@@ -2113,6 +2157,7 @@ def _brishz_job(cwd, cmd, *, brish, fork, server_index, job):
             fork=fork,
             server_index=server_index,
             may_start=job.try_start,
+            cancelled=job.stop_requested,
         )
         return None if res is None else _write_brish_result(job, res)
 
@@ -2138,6 +2183,7 @@ def _brishz_job(cwd, cmd, *, brish, fork, server_index, job):
         server_index=server_index,
         run=run,
         may_start=job.try_start,
+        cancelled=job.stop_requested,
     )
 
 

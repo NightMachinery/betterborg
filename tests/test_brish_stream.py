@@ -234,6 +234,78 @@ class WorkerZeroTests(_BrishTestCase):
                 self.assertEqual(result, util.CommandResult(output="zero\n", retcode=0))
 
 
+class _BrishWithoutCancelled(Brish):
+    """A brish whose waits for a worker cannot be called off, as before 0.4.1."""
+
+    def acquire_lock(self, server_index=None, lock_sleep=1):
+        return super().acquire_lock(server_index=server_index, lock_sleep=lock_sleep)
+
+
+class _QueuedStopTests(_BrishTestCase):
+    """An `.af` job queued behind a busy worker 0, and stopped while it waits."""
+
+    server_count = 2
+
+    def stop_while_queued(self):
+        """Returns how long the queued job's producer took to return after the
+        stop, whether the busy command still ran then, and both results."""
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        self.ran = Path(other.name, "ran")
+
+        async def main():
+            busy, queued = _job(), _job()
+            first = asyncio.create_task(
+                self.capture("sleep 3; print done", job=busy, fork=False)
+            )
+            await _wait_until(lambda: busy.state is JobState.RUNNING, job=busy)
+            second = asyncio.create_task(
+                self.capture(
+                    "printf x > ran", job=queued, fork=False, cwd=other.name + "/"
+                )
+            )
+            await asyncio.sleep(0.3)
+            stopped_at = time.monotonic()
+            outcome = queued.cancel(reason=StopReason.USER)
+            second_result = await asyncio.wait_for(second, 20)
+            took = time.monotonic() - stopped_at
+            busy_running = not first.done()
+            first_result = await asyncio.wait_for(first, 20)
+            return outcome, took, busy_running, first_result, second_result
+
+        return asyncio.run(main())
+
+
+@unittest.skipUnless(
+    util.BRISH_POPEN and util.BRISH_CANCELLED, "brish before cancelled="
+)
+class QueuedStopTests(_QueuedStopTests):
+    def test_a_stop_frees_the_queued_jobs_thread_at_once(self):
+        outcome, took, busy_running, first, second = self.stop_while_queued()
+
+        self.assertEqual(outcome, CancelOutcome.NOT_STARTED)
+        self.assertIsNone(second)
+        #: Brish polls `cancelled` every 0.05 s; worker 0 is busy for 3 s.
+        self.assertTrue(busy_running)
+        self.assertLess(took, 1)
+        self.assertFalse(self.ran.exists())
+        self.assertEqual(first, util.CommandResult(output="done\n", retcode=0))
+
+
+@unittest.skipUnless(util.BRISH_POPEN, "brish before popen")
+class QueuedStopWithoutCancelledTests(_QueuedStopTests):
+    brish_class = _BrishWithoutCancelled
+
+    def test_the_queued_job_waits_for_the_worker_then_runs_nothing(self):
+        outcome, took, busy_running, first, second = self.stop_while_queued()
+
+        self.assertEqual(outcome, CancelOutcome.NOT_STARTED)
+        self.assertIsNone(second)
+        self.assertFalse(busy_running)
+        self.assertFalse(self.ran.exists())
+        self.assertEqual(first, util.CommandResult(output="done\n", retcode=0))
+
+
 class PluginPoolTests(_BrishTestCase):
     def test_the_plugin_pool_is_looked_up_off_the_event_loop(self):
         #: Its first use boots a pool of zsh workers, which takes seconds.
