@@ -112,7 +112,9 @@ streams by edits.
    failed edit per interval. `stream_driver.follow`, the pump for producers
    that go quiet, needs to see failures instead: it takes only an editor
    built with `report_failures`, whose failed edits `util.edit_message`
-   raises (`raise_on_head_failure`), and waits `retry_after` after one.
+   raises (`raise_on_head_failure`). After one it waits `retry_after` or
+   the pace's interval, whichever is longer, and each further failure in a
+   row doubles the wait, up to `FOLLOW_MAX_RETRY_AFTER` (60 s).
 4. `end_stream` cancels the worker and waits for it, so no draft can arrive
    after the answer and show as a ghost draft.
 5. After `end_stream`, the final delivery edits the stand-in as it would a

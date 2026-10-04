@@ -56,6 +56,8 @@ PaceFunction = Callable[..., draft_stream.StreamingPace]
 #: `follow` waits this much past an edit's due time, since an edit is due
 #: only strictly after the interval.
 FOLLOW_SLACK = 0.05
+#: The longest `follow` waits after failed edits in a row.
+FOLLOW_MAX_RETRY_AFTER = 60.0
 
 
 class StreamMode(str, Enum):
@@ -391,6 +393,10 @@ class PacedEditor:
         now = self._clock()
         return max(0.0, self.last_edit_at + self._pace_at(now).interval - now)
 
+    def interval(self) -> float:
+        """The pace's interval now: the least time between two edits."""
+        return self._pace_at(self._clock()).interval
+
     async def show(self, text: str) -> ShowResult:
         """Edits the message to TEXT when an edit is due."""
         if self.message is None:
@@ -416,6 +422,13 @@ class PacedEditor:
         return ShowResult.SHOWN
 
 
+def retry_wait(failures: int, *, first: float, longest: float) -> float:
+    """How long to wait after a failed edit that follows FAILURES failed
+    edits in a row: FIRST, doubled per earlier failure, at most LONGEST (or
+    FIRST, when that is longer)."""
+    return min(first * 2 ** min(failures, 32), max(first, longest))
+
+
 async def _wait_first(*futures, timeout: Optional[float] = None) -> None:
     await asyncio.wait(futures, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
 
@@ -427,22 +440,29 @@ async def follow(
     changed: asyncio.Event,
     done: asyncio.Future,
     retry_after: float = 1.0,
+    max_retry_after: float = FOLLOW_MAX_RETRY_AFTER,
 ) -> None:
     """Shows `render()` through EDITOR whenever CHANGED is set, until DONE.
 
     A change that arrives before an edit is due is shown once it is due, so
     the last text shows even when nothing follows it; a burst of changes
     makes one edit. After a failed edit, the next waits RETRY_AFTER seconds,
-    so a broken message cannot make this spin; EDITOR must be built with
-    `report_failures`, since otherwise it never sees a failed edit. A message
-    that Telegram says already shows the text counts as shown. The final
-    text is the caller's to deliver: this returns as soon as DONE completes,
-    without showing what changed since the last edit.
+    or the pace's interval when that is longer, and each further failure in
+    a row doubles the wait, up to MAX_RETRY_AFTER: a message that is gone
+    (deleted, or the bot left the chat) cannot make this spin, nor cost an
+    edit a second for as long as the command runs. A shown edit starts the
+    count again. EDITOR must be built with `report_failures`, since
+    otherwise it never sees a failed edit. A message that Telegram says
+    already shows the text counts as shown. The final text is the caller's
+    to deliver: this returns as soon as DONE completes, without showing what
+    changed since the last edit.
     """
     if not editor.report_failures:
         raise ValueError("follow needs an editor built with report_failures=True")
     #: A change not yet shown.
     behind = False
+    #: Failed edits in a row.
+    failures = 0
     while not done.done():
         waiter = asyncio.ensure_future(changed.wait())
         try:
@@ -463,10 +483,17 @@ async def follow(
         result = await editor.show(render())
         if result in (ShowResult.SHOWN, ShowResult.UNCHANGED):
             behind = False
+            failures = 0
         elif result == ShowResult.NOT_DUE:
             pass
         elif result == ShowResult.FAILED:
-            await _wait_first(done, timeout=retry_after)
+            wait = retry_wait(
+                failures,
+                first=max(retry_after, editor.interval()),
+                longest=max_retry_after,
+            )
+            failures += 1
+            await _wait_first(done, timeout=wait)
         elif result == ShowResult.NO_TARGET:
             await _wait_first(done)
         else:

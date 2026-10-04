@@ -566,7 +566,13 @@ On a brish without `popen`, `.a` renders its captured output the same way.
   traceback, as before.
 - **The preview cannot be sent**: logged; the command runs on, and its final
   is sent as if there had been no preview.
-- **A preview edit fails**: `follow` waits a second before the next one.
+- **A preview edit fails**: `follow` waits a second, or the preview's pace
+  when that is longer (4 s in a group), before the next try, and doubles the
+  wait after each further failure in a row, up to a minute
+  (`stream_driver.retry_wait`). A preview that someone deleted, or one in a
+  group the bot was removed from, so costs a few edits in its first minute
+  and then one a minute, not one a second for as long as the command runs.
+  An edit that works starts the count again.
 - **The handler's task is cancelled** (the client disconnecting, or a
   standalone bot's loop shutting down; see "Shutdown and restarts"): the
   job is stopped with StopReason.SHUTDOWN, the producer is cancelled, and

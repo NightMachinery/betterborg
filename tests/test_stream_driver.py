@@ -267,11 +267,19 @@ class FollowTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.text = ""
 
-    def run_follow(self, producer, *, retry_after=1.0, message="message"):
+    def run_follow(
+        self,
+        producer,
+        *,
+        retry_after=1.0,
+        message="message",
+        edit_interval=_INTERVAL,
+        **kwargs,
+    ):
         async def main():
             editor = PacedEditor(
                 message,
-                edit_interval=_INTERVAL,
+                edit_interval=edit_interval,
                 report_failures=True,
                 logger=logging.getLogger("test.stream_driver"),
             )
@@ -284,6 +292,7 @@ class FollowTests(unittest.TestCase):
                     changed=changed,
                     done=done,
                     retry_after=retry_after,
+                    **kwargs,
                 )
             )
             await producer(changed)
@@ -360,6 +369,78 @@ class FollowTests(unittest.TestCase):
         #: About 0.2 s of changes every 0.02 s, but retries 0.1 s apart.
         self.assertGreaterEqual(len(attempts), 1)
         self.assertLessEqual(len(attempts), 3)
+
+    def attempt_times(self, *, fail, quiet, **kwargs):
+        """When each edit was tried: one change, then QUIET seconds of
+        silence; FAIL(n) says whether the n-th attempt fails."""
+        times = []
+
+        async def edit_message(message, text, **_kwargs):
+            times.append(asyncio.get_running_loop().time())
+            if fail(len(times)):
+                raise errors.MessageIdInvalidError(request=None)
+
+        async def producer(changed):
+            self.text = "a"
+            changed.set()
+            await asyncio.sleep(quiet)
+
+        with patch.object(util, "edit_message", edit_message), self.assertLogs(
+            "test.stream_driver", level="WARNING"
+        ):
+            self.run_follow(producer, **kwargs)
+        return [later - earlier for earlier, later in zip(times, times[1:])]
+
+    def test_failures_in_a_row_wait_longer_each_time(self):
+        gaps = self.attempt_times(
+            fail=lambda n: True, quiet=1.0, retry_after=0.05, max_retry_after=0.4
+        )
+
+        #: 0.05, 0.1, 0.2, then 0.4 s apart, not 0.05 s for the whole second.
+        self.assertLessEqual(len(gaps), 5)
+        self.assertGreater(gaps[2], 0.15)
+
+    def test_the_wait_doubles_up_to_the_longest(self):
+        self.assertEqual(
+            [
+                stream_driver.retry_wait(failures, first=1, longest=60)
+                for failures in (0, 1, 2, 5, 6, 10**6)
+            ],
+            [1, 2, 4, 32, 60, 60],
+        )
+        self.assertEqual(stream_driver.retry_wait(3, first=90, longest=60), 90)
+
+    def test_the_retry_waits_at_least_the_pace_interval(self):
+        gaps = self.attempt_times(
+            fail=lambda n: True, quiet=0.7, retry_after=0.01, edit_interval=0.2
+        )
+
+        self.assertGreater(min(gaps), 0.18)
+        self.assertLessEqual(len(gaps), 2)
+
+    def test_a_shown_edit_starts_the_count_again(self):
+        async def producer(changed):
+            for text in ("a", "b"):
+                self.text = text
+                changed.set()
+                await asyncio.sleep(0.8)
+
+        times = []
+
+        async def edit_message(message, text, **_kwargs):
+            times.append(asyncio.get_running_loop().time())
+            if len(times) in (1, 2, 4):
+                raise errors.MessageIdInvalidError(request=None)
+
+        with patch.object(util, "edit_message", edit_message), self.assertLogs(
+            "test.stream_driver", level="WARNING"
+        ):
+            self.run_follow(producer, retry_after=0.1)
+
+        #: Fails, waits 0.1, fails, waits 0.2, shows; then "b" fails and
+        #: waits 0.1 again, not 0.4.
+        self.assertEqual(len(times), 5)
+        self.assertLess(times[4] - times[3], 0.3)
 
     def test_an_unchanged_message_is_not_edited_again(self):
         async def producer(changed):
