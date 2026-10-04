@@ -438,7 +438,7 @@ class EditedPreviewTests(_ShellTestCase):
 
         self.assertEqual(event.log[-1][2], "started\n\n⏹ Stopped (exit 130).")
 
-    def test_a_shutdown_stop_says_the_bot_is_restarting(self):
+    def test_a_shutdown_stop_says_the_bot_is_going_offline(self):
         async def stop(event):
             await _until(lambda: event.log)
             (job,) = shell_stream.JOBS.values()
@@ -448,7 +448,7 @@ class EditedPreviewTests(_ShellTestCase):
 
         self.assertEqual(
             event.log[-1][2],
-            "The process exited 130.\n\n⏹ Stopped: julia is restarting (exit 130).",
+            "The process exited 130.\n\n⏹ Stopped: the bot is going offline (exit 130).",
         )
 
     def test_the_header_says_stopping_once_stopped(self):
@@ -1300,7 +1300,7 @@ class ShutdownTests(_ShellTestCase):
         self.assertEqual(took["disconnected"], 1)
         self.assertRegex(
             event.log[-1][2],
-            r"^The process exited -?\d+\.\n\n⏹ Stopped: julia is restarting"
+            r"^The process exited -?\d+\.\n\n⏹ Stopped: the bot is going offline"
             r" \(exit -?\d+\)\.$",
         )
         self.assertEqual(shell_stream.JOBS, {})
@@ -1324,7 +1324,9 @@ class ShutdownTests(_ShellTestCase):
 
         self.run_command(".aa sleep 100", during=shut_down)
 
-        self.assertEqual(late.log[-1][1], self.plugin.STOPPED_BEFORE_IT_RAN)
+        self.assertEqual(
+            late.log[-1][1], "⏹ Stopped before it ran: the bot is going offline."
+        )
         self.assertEqual(order, ["late final", "disconnect"])
 
     def test_the_loops_teardown_kills_a_command_still_running(self):
@@ -1470,7 +1472,7 @@ class GuestLiveTests(_GuestTestCase):
         self.assertRegex(kills[0], r"^⏹ Stopping #\d+…$")
         self.assertEqual(texts[-1], "started\n\nexit 130\n⏹ Stopped")
 
-    def test_a_shutdown_says_the_bot_is_restarting(self):
+    def test_a_shutdown_says_the_bot_is_going_offline(self):
         async def stop():
             await _until(lambda: self.edits)
             (job,) = shell_stream.JOBS.values()
@@ -1480,10 +1482,22 @@ class GuestLiveTests(_GuestTestCase):
 
         self.assertEqual(
             texts[-1],
-            "The process exited 130.\n\nexit 130\n⏹ Stopped: julia is restarting",
+            "The process exited 130.\n\nexit 130\n⏹ Stopped: the bot is going offline",
         )
 
     def test_a_command_stopped_while_queued_never_runs(self):
+        for reason, final in (
+            (shell_stream.StopReason.USER, self.plugin.STOPPED_BEFORE_IT_RAN),
+            (
+                shell_stream.StopReason.SHUTDOWN,
+                "⏹ Stopped before it ran: the bot is going offline.",
+            ),
+        ):
+            with self.subTest(reason=reason):
+                self.edits.clear()
+                self.stop_while_queued(reason=reason, final=final)
+
+    def stop_while_queued(self, *, reason, final):
         ran = []
         gate = {}
 
@@ -1502,7 +1516,7 @@ class GuestLiveTests(_GuestTestCase):
             await _until(lambda: self.edits)
             self.assertIn("waiting for a free shell", self.edits[0]["text"])
             (job,) = shell_stream.JOBS.values()
-            job.cancel(reason=shell_stream.StopReason.USER)
+            job.cancel(reason=reason)
             await asyncio.wait_for(task, 30)
             gate["free"].set()
             await asyncio.sleep(0.05)
@@ -1510,7 +1524,7 @@ class GuestLiveTests(_GuestTestCase):
         with patch.object(util, "brishz_capture", capture):
             asyncio.run(main())
 
-        self.assertEqual(self.edits[-1]["text"], self.plugin.STOPPED_BEFORE_IT_RAN)
+        self.assertEqual(self.edits[-1]["text"], final)
         self.assertEqual(ran, [])
 
     def test_a_producer_error_with_a_preview_becomes_the_traceback(self):

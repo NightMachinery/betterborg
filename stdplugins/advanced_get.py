@@ -143,6 +143,9 @@ STOP_BUTTON_TEXT = "⏹ Stop"
 LONG_OUTPUT_LINE = "✂️ The full output is in the file below."
 FINISHED_TEXT = "Finished; output below."
 STOPPED_BEFORE_IT_RAN = "⏹ Stopped before it ran."
+#: Why a shutdown stopped a command: `.restart`, `.shutdown` and a server
+#: stop all take the bot offline, for a while or for good.
+GOING_OFFLINE = "the bot is going offline"
 
 
 @dataclass
@@ -365,7 +368,18 @@ def _stop_words(job) -> Optional[str]:
         case StopReason.USER:
             return "⏹ Stopped"
         case StopReason.SHUTDOWN:
-            return "⏹ Stopped: julia is restarting"
+            return f"⏹ Stopped: {GOING_OFFLINE}"
+        case _:
+            raise ValueError(f"Unknown stop reason: {job.stop_reason!r}")
+
+
+def _dropped_text(job) -> str:
+    """The final of JOB, stopped before its command ran."""
+    match job.stop_reason:
+        case StopReason.USER:
+            return STOPPED_BEFORE_IT_RAN
+        case StopReason.SHUTDOWN:
+            return f"⏹ Stopped before it ran: {GOING_OFFLINE}."
         case _:
             raise ValueError(f"Unknown stop reason: {job.stop_reason!r}")
 
@@ -401,7 +415,7 @@ async def _final_text(job, result, *, render) -> str:
     without, it is RESULT's own, as before.
     """
     if result is None:
-        return STOPPED_BEFORE_IT_RAN
+        return _dropped_text(job)
     output = await _shown_output(result, job=job, render=render)
     text = util.shell_output_text(output, retcode=result.retcode)
     note = _stop_note(job, retcode=result.retcode)
@@ -1352,7 +1366,7 @@ async def _run_guest_shell(query, request, answer):
         await util.run_and_get(None, to_await, cwd, messages=query.messages)
         (result,) = results
         if result is None:
-            output = STOPPED_BEFORE_IT_RAN
+            output = _dropped_text(job)
         else:
             output = await _shown_output(result, job=job, render=render)
             output = output.strip() or f"The process exited {result.retcode}."

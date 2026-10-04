@@ -433,8 +433,9 @@ a running command's output while it runs. The code is in
 
 The pump is the only reader of `job.output.changed`; it passes each change on
 to `follow`. That way it also sees a job **dropped** while it waited for a
-shell, and delivers "⏹ Stopped before it ran." at once, while the producer
-frees its shell whenever it gets one and runs nothing.
+shell, and delivers its final ("⏹ Stopped before it ran.", see the stop
+notes below) at once, while the producer frees its shell whenever it gets
+one and runs nothing.
 
 ### The preview
 
@@ -523,10 +524,14 @@ while the chat is open. So under New reply, a final sent only as a `.txt`
 file has no text to adopt the draft, which can stay up to 30 s, as after the
 chat bot's image-only answers.
 
-Stop notes: "⏹ Stopped (exit 130)." after a stop by the user (the draft's
-Stop button), "⏹ Stopped: julia is restarting (exit N)." after a shutdown,
-and "⏹ Stopped before it ran." alone for a dropped job. The job records why
-it was stopped, not who stopped it, so the note does not name anyone.
+Stop notes: "⏹ Stopped (exit 130)." after a stop by the user (`.k` or a
+Stop button), and "⏹ Stopped: the bot is going offline (exit N)." after a
+shutdown. A dropped job's final is the note alone: "⏹ Stopped before it
+ran." after a stop by the user, "⏹ Stopped before it ran: the bot is going
+offline." after a shutdown. A shutdown note says "going offline" because
+`.restart`, `.shutdown` and a server stop all take the bot offline, for a
+while or for good, and it names no bot. The job records why it was
+stopped, not who stopped it, so the note does not name anyone either.
 
 ### The renderer in chats
 
@@ -689,9 +694,10 @@ and its answer shows the output live. The code is `_run_guest_shell` and
 - **The final** is the answer's last edit (`finalize`), built as before:
   the output as plain text, cut to fit, with the lines under it. A command
   that ends within the preview delay still makes exactly one edit. After a
-  stop, a line "⏹ Stopped" (or "⏹ Stopped: julia is restarting" on a
+  stop, a line "⏹ Stopped" (or "⏹ Stopped: the bot is going offline" on a
   shutdown) follows "exit N". A job stopped while it waited for a shell
-  says "⏹ Stopped before it ran." alone.
+  says "⏹ Stopped before it ran." alone (on a shutdown, "⏹ Stopped before
+  it ran: the bot is going offline.").
 - **The renderer** follows the caller's `render` setting (the default, on,
   when they never chose), for the preview, the final and the `output.txt`
   of long output. Off, and with live output off, the output is raw as
@@ -703,15 +709,15 @@ and its answer shows the output live. The code is `_run_guest_shell` and
 ## Shutdown and restarts
 
 A shutdown stops every job first, while the bot is still connected, so each
-stopped command's final goes out: "⏹ Stopped: julia is restarting (exit
-N)." in a chat, "⏹ Stopped: julia is restarting" under the exit code of a
-guest answer. `shell_stream.stop_all_and_disconnect(client)` cancels every
+stopped command's final goes out: "⏹ Stopped: the bot is going offline
+(exit N)." in a chat, "⏹ Stopped: the bot is going offline" under the exit
+code of a guest answer. `shell_stream.stop_all_and_disconnect(client)` cancels every
 job with StopReason.SHUTDOWN, waits up to `SHUTDOWN_TIMEOUT` (15 s) for them
 to finish (their finals and files delivered), logs how many had not, and
 then disconnects. The bot still takes commands while it waits, so until the
 disconnect is done, `shell_stream.register` stops each new job at once: its
 command never runs, and `stop_all` waits for its final ("⏹ Stopped before it
-ran.") as for the others; only a job that arrives during the disconnect
+ran: the bot is going offline.") as for the others; only a job that arrives during the disconnect
 itself may lose its final. A command that is no job (live output off, or
 `.a` on an old brish) is not stopped. Three paths call it:
 
