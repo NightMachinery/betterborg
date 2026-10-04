@@ -14,7 +14,7 @@ Traceback (most recent call last):
 File "/home/bot/code/betterborg/llm_chat_plugins/llm_chat.py", line 3634, in
 chat_handler
     response_text, has_image = await _handle_native_gemini_image_generation(
-File "/home/bot/code/betterborg/llm_chat_plugins/llm_chat.py", line 758, in 
+File "/home/bot/code/betterborg/llm_chat_plugins/llm_chat.py", line 758, in
 _handle_native_gemini_image_generation
     for chunk in client.models.generate_content_stream(
 File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/google/gen
@@ -43,11 +43,11 @@ File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/tenacity/_
 _init__.py", line 187, in reraise
     raise self.last_attempt.result()
 File 
-"/home/bot/micromamba/envs/p310/lib/python3.10/concurrent/futures/_base.py", 
+"/home/bot/micromamba/envs/p310/lib/python3.10/concurrent/futures/_base.py",
 line 451, in result
     return self.__get_result()
 File 
-"/home/bot/micromamba/envs/p310/lib/python3.10/concurrent/futures/_base.py", 
+"/home/bot/micromamba/envs/p310/lib/python3.10/concurrent/futures/_base.py",
 line 403, in __get_result
     raise self._exception
 File "/home/bot/micromamba/envs/p310/lib/python3.10/site-packages/tenacity/_
