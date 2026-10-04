@@ -565,7 +565,10 @@ On a brish without `popen`, `.a` renders its captured output the same way.
 
 Tests: `tests/test_advanced_get_shell.py` drives the handler with a fake chat
 and a fake producer that follows a script, with the timings injected
-(`LIVE_TIMING`); a few tests run inert commands in a real zsh.
+(`LIVE_TIMING`); a few tests run inert commands in a real zsh. The test run
+(`tests/conftest.py`) points ZDOTDIR at an empty directory, so no zsh it
+starts, `.aa`'s or a brish worker's, reads the user's startup files, whose
+output would otherwise land in a command's. The bot leaves ZDOTDIR alone.
 
 ## Stopping a command: `.k`
 

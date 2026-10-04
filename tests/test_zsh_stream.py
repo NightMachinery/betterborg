@@ -2,9 +2,10 @@
 
 Commands run in a real zsh, in a temporary directory, and are inert (printf,
 print, sleep, trap, cat on an empty input). Background `sleep`s are short, so
-a failed test leaves nothing running for long. `zsh -c` reads the user's
-startup files, which can take seconds on a loaded machine, so the waits for a
-command to start are long; what is timed starts at the stop.
+a failed test leaves nothing running for long. conftest.py points ZDOTDIR at
+an empty directory, so `zsh -c` reads no user startup file. Starting zsh can
+still take seconds on a loaded machine, so the waits for a command to start
+are long; what is timed starts at the stop.
 """
 
 import asyncio
@@ -81,6 +82,13 @@ class ZshStreamTests(unittest.TestCase):
             return await asyncio.wait_for(self.capture(command, job=_job()), 30)
 
         return asyncio.run(main())
+
+    def test_zsh_reads_no_user_startup_file(self):
+        #: A startup file's output (a rebuild notice, say) would land in the
+        #: command's; without any, zsh defines no function.
+        result = self.run_job("print -r -- ${#functions}")
+
+        self.assertEqual(result, util.CommandResult(output="0\n", retcode=0))
 
     def test_invalid_bytes_become_escapes(self):
         result = self.run_job(r"printf 'a\xffb'")
