@@ -1725,7 +1725,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
         )
 
         ((text,), kwargs) = event.reply.await_args
-        self.assertIn("Set Chat Model", text)
+        self.assertIn("Set Model for the Whole Chat", text)
         self.assertNotIn("applyto:", str(_button_rows(kwargs["buttons"])))
         self.assertEqual(
             self.pending[USER_ID],
@@ -1742,7 +1742,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
         press = self.press("applyto:model:chat")
 
         ((text,), kwargs) = press.edit.await_args
-        self.assertIn("Set Chat Model", text)
+        self.assertIn("Set Model for the Whole Chat", text)
         self.assert_apply_to_row(
             kwargs["buttons"], "model", scope=plugin.REASONING_SCOPE_CHAT
         )
@@ -1812,11 +1812,131 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
             return event.reply.await_args.args[0]
 
         self.chats.set_model(USER_ID, self.CHAT_MODEL)
-        self.assertIn(
-            f"no model of its own. Using the chat's model: `{self.CHAT_MODEL}`", said()
-        )
+        self.assertIn(f"Effective model in this topic:** `{self.CHAT_MODEL}`", said())
+        self.assertIn("Source: the whole-chat default.", said())
+        self.assertIn("Topic override: Not set (inherit).", said())
         self.topics.set_model(self.key(), self.TOPIC_MODEL)
-        self.assertIn(f"Current topic model:** `{self.TOPIC_MODEL}`", said())
+        self.assertIn(f"Effective model in this topic:** `{self.TOPIC_MODEL}`", said())
+        self.assertIn("Source: this topic's saved override.", said())
+        self.assertIn(f"Whole-chat default: `{self.CHAT_MODEL}`", said())
+
+    def test_model_and_effort_checkmarks_are_distinct_settings(self):
+        model = plugin.OPENAI_CODEX_SOL
+        self.chats.set_model(USER_ID, model)
+        menu = plugin._build_model_menu(
+            USER_ID,
+            USER_ID,
+            scope=plugin.REASONING_SCOPE_CHAT,
+            admin_p=False,
+            codex_p=True,
+        )
+        rows = plugin._model_menu_rows(menu, scope=plugin.REASONING_SCOPE_CHAT)
+        selected = [
+            (
+                label,
+                "chatmodel_"
+                + plugin.bot_util.unsanitize_callback_data(data[len("chatmodel_") :]),
+            )
+            for row in _button_rows(rows)
+            for label, data in row
+            if label.startswith("✅ ")
+        ]
+        self.assertEqual(len(selected), 2)
+        self.assertIn(
+            (f"✅ {plugin._model_display_name(model)}", f"chatmodel_{model}"), selected
+        )
+        self.assertIn(
+            ("✅ 🧠 Effort: Use Personal Default", "chatmodel_think:clear"), selected
+        )
+        effort_labels = [
+            label
+            for row in _button_rows(rows)
+            for label, data in row
+            if data.startswith("chatmodel_")
+            and plugin.bot_util.unsanitize_callback_data(
+                data[len("chatmodel_") :]
+            ).startswith("think:")
+        ]
+        self.assertGreater(len(effort_labels), 1)
+        self.assertTrue(all("Effort:" in label for label in effort_labels))
+        text = plugin._model_menu_text(scope=plugin.REASONING_SCOPE_CHAT)
+        self.assertIn("each has its own checkmark", text)
+        self.assertIn("whole-chat default", text)
+
+    def test_unset_model_is_distinct_from_unset_effort(self):
+        self.prefs.model = plugin.OPENAI_CODEX_SOL
+        for scope, topic_id, inherited in (
+            (plugin.REASONING_SCOPE_CHAT, None, "Personal Default"),
+            (plugin.REASONING_SCOPE_TOPIC, TOPIC_ID, "Chat/Personal Default"),
+        ):
+            with self.subTest(scope=scope):
+                menu = plugin._build_model_menu(
+                    USER_ID,
+                    USER_ID,
+                    scope=scope,
+                    topic_id=topic_id,
+                    admin_p=False,
+                    codex_p=True,
+                )
+                selected = [
+                    (label, data)
+                    for row in _button_rows(plugin._model_menu_rows(menu, scope=scope))
+                    for label, data in row
+                    if label.startswith("✅ ")
+                ]
+                self.assertEqual(len(selected), 2)
+                self.assertEqual(
+                    {label for label, _ in selected},
+                    {f"✅ Model: Use {inherited}", f"✅ 🧠 Effort: Use {inherited}"},
+                )
+
+    def test_get_model_here_reports_personal_inheritance_and_whole_chat_scope(self):
+        inside = self.command(plugin.get_model_here_handler, "/getModelHere")
+        self.assertIn("Source: your personal default.", inside.reply.await_args.args[0])
+        self.chats.set_model(USER_ID, self.CHAT_MODEL)
+        self.topics.set_model(self.key(), self.TOPIC_MODEL)
+        outside = self.command(
+            plugin.get_model_here_handler, "/getModelHere", top_id=None
+        )
+        text = outside.reply.await_args.args[0]
+        self.assertIn(
+            f"Effective model for the whole chat:** `{self.CHAT_MODEL}`", text
+        )
+        self.assertIn("Source: the whole-chat default.", text)
+        self.assertNotIn("Topic override:", text)
+
+    def test_get_model_here_keeps_saved_layers_visible_when_access_is_unavailable(self):
+        self.topics.set_model(self.key(), self.TOPIC_MODEL)
+        with patch.object(
+            plugin, "_can_user_access_model", new=AsyncMock(return_value=False)
+        ):
+            event = self.command(plugin.get_model_here_handler, "/getModelHere")
+        text = event.reply.await_args.args[0]
+        self.assertIn(
+            f"Effective model in this topic:** `{plugin.DEFAULT_MODEL}`", text
+        )
+        self.assertIn("access to the saved model is unavailable", text)
+        self.assertIn(f"Topic override: `{self.TOPIC_MODEL}`", text)
+        self.assertEqual(self.topics.get_model(self.key()), self.TOPIC_MODEL)
+
+    def test_last_n_here_in_a_topic_explains_the_outside_topic_scope(self):
+        for argument in (None, "20", "reset"):
+            with self.subTest(argument=argument):
+                event = self.command(
+                    plugin.set_last_n_here_handler, "/setLastNHere", argument=argument
+                )
+                self.assertIn(
+                    "Scope: outside-topic context for the whole chat",
+                    event.reply.await_args.args[0],
+                )
+        for value in (None, 20):
+            self.chats.set_last_n_messages_limit(USER_ID, value)
+            inside = self.command(plugin.get_last_n_here_handler, "/getLastNHere")
+            self.assertIn("/getThreadLastN", inside.reply.await_args.args[0])
+            outside = self.command(
+                plugin.get_last_n_here_handler, "/getLastNHere", top_id=None
+            )
+            self.assertNotIn("/getThreadLastN", outside.reply.await_args.args[0])
 
     # Reasoning effort
 
@@ -1849,7 +1969,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
         press = self.press("applyto:think:chat")
 
         ((text,), kwargs) = press.edit.await_args
-        self.assertIn("(This Chat)", text)
+        self.assertIn("(Whole Chat)", text)
         self.assert_apply_to_row(
             kwargs["buttons"], "think", scope=plugin.REASONING_SCOPE_CHAT
         )
@@ -1955,7 +2075,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
         get = self.command(
             plugin.get_system_prompt_here_handler, "/getSystemPromptHere"
         )
-        self.assertIn("Current topic system prompt", get.reply.await_args.args[0])
+        self.assertIn("System prompt in this topic", get.reply.await_args.args[0])
 
         self.command(plugin.reset_system_prompt_here_handler, "/resetSystemPromptHere")
         self.assertIsNone(self.topics.get_system_prompt(self.key()))
@@ -1965,7 +2085,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
             plugin.get_system_prompt_here_handler, "/getSystemPromptHere"
         )
         self.assertIn(
-            "This topic has no custom system prompt set. Using the chat's prompt",
+            "This topic has no custom system prompt set. Using the whole-chat default prompt",
             get.reply.await_args.args[0],
         )
 

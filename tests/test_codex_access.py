@@ -97,7 +97,7 @@ class CodexAccessIntegrationTests(unittest.TestCase):
             f"✅ {llm_chat._model_display_name(OPENAI_CODEX_SOL)}",
             labels,
         )
-        self.assertEqual(labels.count("✅ 🧠 High"), 1)
+        self.assertEqual(labels.count("✅ 🧠 Effort: High"), 1)
         self.assertTrue(all(data.startswith("model_") for data in callbacks))
         self.assertTrue(all(len(data.encode()) <= 64 for data in callbacks))
 

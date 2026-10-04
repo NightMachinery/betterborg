@@ -197,7 +197,10 @@ The separator does nothing in Topic Thread; Until Separator uses the same
 topic limit. Outside-topic context modes stay separate.
 Inside a topic, =/setModelHere=, =/setThinkHere= and =/setSystemPromptHere=
 set that topic's own model, effort and prompt, which come before the chat's;
-their menus have an "Apply to" row that switches them to the whole chat. See
+their menus have an "Apply to" row that switches them to the whole chat.
+=/getModelHere= shows the effective model, its source and the saved topic,
+whole-chat and personal defaults. Model and =🧠 Effort= choices have separate
+checkmarks in the model picker. See
 [[file:docs/private_topics.md][docs/private_topics.md]].
 In a topic that Telegram named (one opened by typing in "All"), the bot puts
 the model's emoji and a circle that fills with the reasoning effort before the

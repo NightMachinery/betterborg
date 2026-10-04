@@ -61,17 +61,22 @@ parameter is sent at all.
   `not set`, `none`, `clear`, `remove` or `reset` to drop the stored value and
   fall back to the model default. Note that on Codex models `none` is also a
   real level, so the reset keywords resolve to a reset there.
-- Both model pickers (`/setModel`, `/setModelHere`) end with a row of 🧠
+- Both model pickers (`/setModel`, `/setModelHere`) end with a row of 🧠 Effort
   buttons for the selected model's levels, so switching model and effort
   happens in one place. Picking a different model re-renders the row with that
-  model's levels.
+  model's levels. Model and effort choices have separate checkmarks. A
+  checked model and checked "Effort: Use Personal Default" mean the model
+  is selected and the chat inherits its effort, rather than two models
+  being selected. Inside a topic, "Use Chat/Personal Default" inherits the
+  whole-chat or personal effort for that model.
 - On a bot, each picker is one message: the custom-model-ID hint, the
   buttons, and a last `❌ Cancel` row. Cancel drops the custom-ID prompt that
   this menu armed (matched by the menu message, so a newer prompt survives),
   then closes the menu and names the model in effect. A model already picked
   from the menu stays picked. Typing `cancel` closes the menu as well. In a
   group, Cancel on a `/setModelHere` menu needs the same admin rights as its
-  other buttons. On a user account the pickers are unchanged.
+  other buttons. User accounts keep their numbered choices and pending-input
+  flows.
 - In a group, the bot's `/setModelHere` menu asks for no custom ID as the next
   message, and says to send `/setModelHere MODEL_ID` instead. Such a prompt
   could only be answered in private, so the user's next private message,

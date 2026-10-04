@@ -10,4 +10,8 @@ The effective limit is resolved in this order:
 
 Topic Thread and Until Separator inside a private topic share their own limit, 200 by default, set with `/setThreadLastN` (see `docs/private_topics.md`). The Last N limit does not apply there.
 
+`/getLastNHere` and `/setLastNHere` still report or set the whole-chat limit
+for outside-topic context when sent inside a private topic. Their replies
+explain that scope and point to `/getThreadLastN` and `/setThreadLastN`.
+
 Inline context menus expose quick picks for `50`, `100`, `200`, `400`, and `800`. Command input remains the advanced path and can still set any valid value up to the history cache maximum (`LAST_N_MAX`).

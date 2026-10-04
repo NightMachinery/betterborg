@@ -1053,13 +1053,13 @@ def _model_choices_for_access(*, admin_p: bool, codex_p: bool) -> dict:
 
 
 def _chat_model_options_for_access(*, admin_p: bool, codex_p: bool) -> dict:
-    choices = {"": "Not Set (Use Personal Default)"}
+    choices = {"": "Model: Use Personal Default"}
     choices.update(_model_choices_for_access(admin_p=admin_p, codex_p=codex_p))
     return choices
 
 
 def _topic_model_options_for_access(*, admin_p: bool, codex_p: bool) -> dict:
-    choices = {"": "Not Set (Use Chat or Personal Default)"}
+    choices = {"": "Model: Use Chat/Personal Default"}
     choices.update(_model_choices_for_access(admin_p=admin_p, codex_p=codex_p))
     return choices
 
@@ -1323,7 +1323,7 @@ BOT_COMMANDS = [
     },
     {
         "command": "setlastnhere",
-        "description": "Set 'Last N' message limit for this chat",
+        "description": "Set whole-chat Last N limit outside private topics",
     },
     {
         "command": "setthreadlastn",
@@ -1335,7 +1335,7 @@ BOT_COMMANDS = [
     },
     {
         "command": "getlastnhere",
-        "description": "View 'Last N' message limit for this chat",
+        "description": "View whole-chat Last N limit outside private topics",
     },
     {
         "command": "sep",
@@ -1371,7 +1371,7 @@ BOT_COMMANDS = [
     },
     {
         "command": "getmodelhere",
-        "description": "View the effective model here",
+        "description": "View topic/chat model, its source and saved defaults",
     },
     {
         "command": "helpmagics",
@@ -2779,8 +2779,8 @@ REASONING_SCOPE_AWAITING_KEYS = {
     REASONING_SCOPE_TOPIC: "think_topic_selection",
 }
 NOT_SET_LABELS = {
-    REASONING_SCOPE_CHAT: NOT_SET_HERE_DISPLAY_NAME,
-    REASONING_SCOPE_TOPIC: NOT_SET_IN_TOPIC_DISPLAY_NAME,
+    REASONING_SCOPE_CHAT: "Use Personal Default",
+    REASONING_SCOPE_TOPIC: "Use Chat/Personal Default",
 }
 
 TOPIC_CONTEXT_SOURCE_DEFAULT = "default"
@@ -3140,7 +3140,7 @@ def _build_model_menu(
         for key, display in state.options.items():
             #: present_options only ticks `current_value`, so tick these here.
             tick = "✅ " if key == state.current_value else ""
-            options[f"{REASONING_MENU_KEY_PREFIX}{key}"] = f"{tick}🧠 {display}"
+            options[f"{REASONING_MENU_KEY_PREFIX}{key}"] = f"{tick}🧠 Effort: {display}"
 
     return ModelMenu(options=options, current_value=current_value, think_state=state)
 
@@ -3175,8 +3175,8 @@ MODEL_MENU_CALLBACK_PREFIXES = {
 #: Followed by the scope. It must not start like a model callback prefix.
 MODEL_MENU_CANCEL_PREFIX = "mm:cancel:"
 MODEL_MENU_TITLES = {
-    REASONING_SCOPE_PERSONAL: "**Set Chat Model**",
-    REASONING_SCOPE_CHAT: "**Set Chat Model**",
+    REASONING_SCOPE_PERSONAL: "**Set Your Personal Model**",
+    REASONING_SCOPE_CHAT: "**Set Model for the Whole Chat**",
     REASONING_SCOPE_TOPIC: "**Set Model for This Topic**",
     MODEL_MENU_SCOPE_TITLE: (
         "**Set Title Model**\n\nIt writes the titles and summaries of files, "
@@ -3267,6 +3267,27 @@ def _model_menu_text(*, scope: str, prompt_p: bool = True) -> str:
         hint += (
             "\n\nInitial topic name: New Chat or the question text. After the"
             " answer, the title model chooses a short title and topic icon."
+        )
+    elif scope in (
+        REASONING_SCOPE_PERSONAL,
+        REASONING_SCOPE_CHAT,
+        REASONING_SCOPE_TOPIC,
+    ):
+        scope_notes = {
+            REASONING_SCOPE_PERSONAL: "These are your personal defaults.",
+            REASONING_SCOPE_CHAT: (
+                "This sets the whole-chat default. Topics with their own model"
+                " override keep it."
+            ),
+            REASONING_SCOPE_TOPIC: (
+                "Here means this topic. Its model override takes precedence over"
+                " the whole-chat and personal defaults."
+            ),
+        }
+        hint = (
+            f"{scope_notes[scope]}\n\nModel and 🧠 Effort are separate settings;"
+            " each has its own checkmark. Effort buttons apply to the selected model."
+            f"\n\n{hint}"
         )
     return f"{BOT_META_INFO_PREFIX}{MODEL_MENU_TITLES[scope]}\n\n{hint}"
 
@@ -3465,7 +3486,7 @@ async def _apply_reasoning_menu_choice(
 
 THINK_MENU_WHERE = {
     REASONING_SCOPE_PERSONAL: "You",
-    REASONING_SCOPE_CHAT: "This Chat",
+    REASONING_SCOPE_CHAT: "Whole Chat",
     REASONING_SCOPE_TOPIC: "This Topic",
 }
 
@@ -7489,13 +7510,13 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setTitleModel: The model that writes file titles and summaries, and names new topics with a matching topic icon. Its panel also chooses the initial name: New Chat or Question text. Current model: `{prefs.title_model}`.
 - /codexStatus: Codex usage limits and the temporary stand-in model.
 - /setSystemPrompt: Change my core instructions or reset to default.
-- /setModelHere: Set the AI model for the current chat only.
-- /getModelHere: View the effective AI model for the current chat.
-- /setSystemPromptHere: Set a system prompt for the current chat only.
+- /setModelHere: Set this topic's model inside a private topic, or the whole-chat default outside topics. Model and Effort buttons have separate checkmarks.
+- /getModelHere: View the effective model, its source and the saved topic/chat/personal defaults.
+- /setSystemPromptHere: Set this topic's prompt inside a private topic, or the whole-chat default outside topics.
 - /setLastN: Set your default 'Last N' message limit (global default: `{LAST_N_MESSAGES_LIMIT}`).
 - /getLastN: View your default 'Last N' message limit.
-- /setLastNHere: Set 'Last N' message limit for this chat (overrides personal/default).
-- /getLastNHere: View this chat's effective 'Last N' limit.
+- /setLastNHere: Set the whole-chat 'Last N' limit outside private topics (overrides personal/default).
+- /getLastNHere: View that outside-topic limit. Topic Thread and Until Separator use /getThreadLastN instead.
 - /setThreadLastN: Set how many messages of a private topic I read (default: `{THREAD_LAST_N_MESSAGES_LIMIT}`).
 - /getThreadLastN: View your private-topic message limit.
 - /contextMode: Change how **private** chat history is gathered.
@@ -7508,7 +7529,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setthink: Adjust the current model's reasoning effort (per model, personal).
 - /setThinkHere: Same, but for this chat only. Overrides your personal setting.
 
-**In private topics**, /setModelHere, /setThinkHere, /setSystemPromptHere and /contextModeHere set this topic's model, effort, prompt and context mode. Their menus have an **Apply to** row to set the whole chat instead (for context mode, the default for every topic of the chat). /getContextModeHere shows the topic's effective mode and its source.
+**In private topics**, /setModelHere, /setThinkHere, /setSystemPromptHere and /contextModeHere set this topic's model, effort, prompt and context mode. Their menus have an **Apply to** row to set the whole chat instead (for context mode, the default for every topic of the chat). Topic overrides take precedence over whole-chat defaults. /getModelHere shows the effective model and its source alongside the saved defaults; /getContextModeHere shows the topic's effective mode and its source.
 - /tools: Enable/disable tools like Google Search and Code Execution.
 - /json: Toggle JSON-only output mode for structured data needs.
 - /stream: Stream answers as live drafts or as edits, for private chats and for groups.
@@ -9846,9 +9867,9 @@ async def reset_system_prompt_here_handler(event):
 
 #: How /getSystemPromptHere names a prompt the chat or topic inherits.
 SYSTEM_PROMPT_SOURCE_NAMES = {
-    "chat": "the chat's prompt",
-    "user": "user's personal prompt",
-    "default": "default system prompt",
+    "chat": "the whole-chat default prompt",
+    "user": "your personal prompt",
+    "default": "the bot's default system prompt",
 }
 
 
@@ -9859,12 +9880,12 @@ async def get_system_prompt_here_handler(event):
 
     if prompt_info.source == "topic":
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}**Current topic system prompt:**\n\n```\n{prompt_info.topic_prompt}\n```",
+            f"{BOT_META_INFO_PREFIX}**System prompt in this topic**\nSource: this topic's saved override.\n\n```\n{prompt_info.topic_prompt}\n```",
             parse_mode="md",
         )
     elif prompt_info.source == "chat" and not in_topic_p:
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}**Current chat system prompt:**\n\n```\n{prompt_info.chat_prompt}\n```",
+            f"{BOT_META_INFO_PREFIX}**System prompt for the whole chat**\nSource: the whole-chat saved override.\n\n```\n{prompt_info.chat_prompt}\n```",
             parse_mode="md",
         )
     else:
@@ -9877,7 +9898,7 @@ async def get_system_prompt_here_handler(event):
 
 
 async def set_model_here_handler(event):
-    """Sets a model for the current chat only, now with an interactive flow."""
+    """Sets the topic's model inside a private topic, else the whole-chat default."""
     is_bot_admin = await util.isAdmin(event)
     is_group_admin = await util.is_group_admin(event)
     config = llm_chat_config.load_config()
@@ -9962,43 +9983,37 @@ async def get_model_here_handler(event):
     )
     topic_model = _topic_setting(chat_id, topic_id, topic_manager.get_model)
     chat_model = chat_manager.get_model(chat_id)
+    personal_model = user_manager.get_prefs(user_id).model
+    if topic_model:
+        source = "this topic's saved override"
+    elif chat_model:
+        source = "the whole-chat default"
+    else:
+        source = "your personal default"
     config = llm_chat_config.load_config()
     if not await _can_user_access_model(event, effective_model, config=config):
         effective_model = DEFAULT_MODEL
-        topic_model = chat_model = None
-
-    if topic_model:
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}**Current topic model:** `{effective_model}`",
-            parse_mode="md",
+        source = "the bot's default (access to the saved model is unavailable)"
+    where = "in this topic" if topic_id is not None else "for the whole chat"
+    lines = [
+        f"{BOT_META_INFO_PREFIX}**Effective model {where}:** `{effective_model}`",
+        f"Source: {source}.",
+    ]
+    if topic_id is not None:
+        lines.append(
+            f"Topic override: {_md_code(topic_model) if topic_model else 'Not set (inherit)'}."
         )
-    elif topic_id is not None:
-        source_text = (
-            "the chat's model"
-            if chat_model
-            else (
-                "your personal model"
-                if user_manager.get_prefs(user_id).model
-                else "the default model"
-            )
+    lines.extend(
+        [
+            f"Whole-chat default: {_md_code(chat_model) if chat_model else 'Not set (inherit)'}.",
+            f"Personal default: {_md_code(personal_model)}.",
+        ]
+    )
+    if topic_id is not None:
+        lines.append(
+            "Here means this topic. Other topics use their own overrides or the whole-chat default."
         )
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}This topic has no model of its own. Using "
-            f"{source_text}: `{effective_model}`",
-            parse_mode="md",
-        )
-    elif chat_model:
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}**Current chat model:** `{effective_model}`",
-            parse_mode="md",
-        )
-    else:
-        user_prefs = user_manager.get_prefs(user_id)
-        source_text = "your personal model" if user_prefs.model else "the default model"
-        await event.reply(
-            f"{BOT_META_INFO_PREFIX}This chat has no custom model set. Using {source_text}: `{effective_model}`",
-            parse_mode="md",
-        )
+    await event.reply("\n".join(lines), parse_mode="md")
 
 
 async def context_mode_here_handler(event):
@@ -10161,6 +10176,16 @@ async def get_thread_last_n_handler(event):
     await event.reply(f"{BOT_META_INFO_PREFIX}{text}")
 
 
+def _last_n_here_scope_note(event) -> str:
+    if _thread_topic_id(event) is None:
+        return ""
+    return (
+        "\n\nScope: outside-topic context for the whole chat. For Topic Thread"
+        " and Until Separator in private topics, use /getThreadLastN and"
+        " /setThreadLastN instead."
+    )
+
+
 async def set_last_n_here_handler(event):
     """Sets a chat-specific limit for the 'Last N Messages' context mode."""
     is_bot_admin = await util.isAdmin(event)
@@ -10173,9 +10198,10 @@ async def set_last_n_here_handler(event):
         return
 
     limit_match = event.pattern_match.group(1)
+    scope_note = _last_n_here_scope_note(event)
     if not limit_match or not limit_match.strip():
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}**Usage:** `/setLastNHere <number>` or `/setLastNHere reset`"
+            f"{BOT_META_INFO_PREFIX}**Usage:** `/setLastNHere <number>` or `/setLastNHere reset`{scope_note}"
         )
         return
 
@@ -10184,7 +10210,7 @@ async def set_last_n_here_handler(event):
         chat_manager.set_last_n_messages_limit(event.chat_id, None)
         await event.reply(
             f"{BOT_META_INFO_PREFIX}✅ Chat-specific 'Last N' limit has been reset. "
-            f"Your personal or the global default will be used."
+            f"Your personal or the global default will be used.{scope_note}"
         )
         return
 
@@ -10192,7 +10218,7 @@ async def set_last_n_here_handler(event):
         limit = _parse_last_n_limit(limit_str)
         chat_manager.set_last_n_messages_limit(event.chat_id, limit)
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}✅ This chat will now use the last **{limit}** messages for context when in 'Last N' mode."
+            f"{BOT_META_INFO_PREFIX}✅ This chat will now use the last **{limit}** messages for context when in 'Last N' mode.{scope_note}"
         )
     except ValueError:
         await event.reply(
@@ -10202,12 +10228,12 @@ async def set_last_n_here_handler(event):
 
 async def get_last_n_here_handler(event):
     """Gets the chat-specific limit for the 'Last N Messages' context mode."""
-    effective_limit = _get_effective_last_n_limit(event.chat_id, event.sender_id)
     chat_limit = chat_manager.get_last_n_messages_limit(event.chat_id)
+    scope_note = _last_n_here_scope_note(event)
 
     if chat_limit is not None:
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}The 'Last N Messages' limit for this chat is set to **{chat_limit}**."
+            f"{BOT_META_INFO_PREFIX}The 'Last N Messages' limit for this chat is set to **{chat_limit}**.{scope_note}"
         )
     else:
         user_limit = user_manager.get_last_n_messages_limit(event.sender_id)
@@ -10217,7 +10243,7 @@ async def get_last_n_here_handler(event):
             source = f"the global default of **{LAST_N_MESSAGES_LIMIT}**"
 
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}This chat has no specific 'Last N' limit and uses {source}."
+            f"{BOT_META_INFO_PREFIX}This chat has no specific 'Last N' limit and uses {source}.{scope_note}"
         )
 
 

@@ -315,13 +315,28 @@ With an argument (`/setModelHere x/y`, `/setThinkHere high`,
 says how to reach the whole chat. `/resetSystemPromptHere` clears only the
 topic's prompt.
 
-`/getModelHere`, `/getSystemPromptHere`, `/getContextModeHere` and `/status` report the topic
-layer inside a topic: `/status` adds lines named "In This Topic" and says
-"overridden in this topic" when the topic's model wins.
+`/getModelHere`, `/getSystemPromptHere`, `/getContextModeHere` and `/status`
+report the topic layer inside a topic. `/getModelHere` names the effective
+model and its source, then shows the saved topic override, whole-chat default
+and personal default separately. "Not set (inherit)" means that layer has
+no override; it can still use a model from another layer. `/status` adds
+lines named "In This Topic" and says "overridden in this topic" when the
+topic's model wins.
+
+The model picker contains two settings: the model and the selected model's
+**Effort**. Each has its own checkmark. For example, a checked Sol model
+and checked "Effort: Use Personal Default" mean Sol is selected and the
+whole chat has no reasoning-effort override for Sol. They are compatible.
+The Apply-to row has its own checkmark for the target layer.
+
+`/getLastNHere` and `/setLastNHere` always describe outside-topic context for
+the whole chat, even when sent inside a topic. Their replies there point to
+`/getThreadLastN` and `/setThreadLastN`, which control the personal limit for
+Topic Thread and Until Separator inside private topics.
 
 Outside private topics (a chat without threaded mode, a group, a user
-account) the commands and menus are unchanged: no Apply-to row, and the
-same flows as before.
+account) there is no Apply-to row, and the same flows and saved settings
+apply. The model getter labels that scope "whole chat".
 
 ### Why the topic is the default target
 

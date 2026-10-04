@@ -626,11 +626,9 @@ class CodexUsersTests(unittest.TestCase):
         callbacks = [tg_compat.button_data_text(button) for button in flat]
         self.assertIn("🧠 buttons set personal reasoning", send.await_args.args[1])
         self.assertIn(f"✅ {OPENAI_CODEX_SOL}", labels)
-        self.assertEqual(labels.count("✅ 🧠 High"), 1)
+        self.assertEqual(labels.count("✅ 🧠 Effort: High"), 1)
         expected_levels = set(
-            llm_chat.llm_models.spec_for_model(
-                OPENAI_CODEX_SOL
-            ).reasoning_levels
+            llm_chat.llm_models.spec_for_model(OPENAI_CODEX_SOL).reasoning_levels
         ) | {llm_chat.REASONING_CLEAR_KEY}
         shown_levels = {
             data.rsplit(":", 1)[1] for data in callbacks if data.startswith("cu:r:123:")
@@ -663,7 +661,7 @@ class CodexUsersTests(unittest.TestCase):
             for row in send.await_args.kwargs["buttons"]
             for button in row
         ]
-        self.assertEqual(labels.count("✅ 🧠 Default (medium)"), 1)
+        self.assertEqual(labels.count("✅ 🧠 Effort: Default (medium)"), 1)
 
     def test_switching_model_rerenders_that_models_effort_levels(self):
         records = {123: {"model": OPENAI_CODEX_SOL}}
@@ -728,9 +726,7 @@ class CodexUsersTests(unittest.TestCase):
                 asyncio.run(llm_chat.callback_handler(event))
                 self.assertEqual(records[123]["model"], OPENAI_CODEX_SOL)
                 self.assertEqual(
-                    records[123]
-                    .get("thinking_by_model", {})
-                    .get(OPENAI_CODEX_SOL),
+                    records[123].get("thinking_by_model", {}).get(OPENAI_CODEX_SOL),
                     expected,
                 )
 
