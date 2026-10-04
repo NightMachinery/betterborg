@@ -11,10 +11,13 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+import tempfile
+from unittest.mock import AsyncMock, patch
 
 from telethon import events
 
 from uniborg import util
+from uniborg.storage import UserStorage
 
 from test_advanced_get_guest import _FakeBorg
 
@@ -53,6 +56,7 @@ class OwnPressesTests(unittest.TestCase):
         self.assertTrue(self.takes(b"zsh_0b5e"))
         self.assertTrue(self.takes(b".z echo hi"))
         self.assertTrue(self.takes(".Z ls\n-la".encode()))
+        self.assertTrue(self.takes(b"jjson_0123456789abcdef0123456789abcdef"))
 
     def test_every_other_press_is_left_alone(self):
         for data in (
@@ -61,11 +65,75 @@ class OwnPressesTests(unittest.TestCase):
             b"stream:private:drafts",
             b"Click me",
             b".zz",
+            b"jjson_not-a-token",
             b"\xff\xfe",
             None,
         ):
             with self.subTest(data=data):
                 self.assertFalse(self.takes(data))
+
+
+class CustomDataTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.borg = _FakeBorg()
+        self.plugin = _load_plugin(self.borg)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = UserStorage(purpose="buttons", root=self.tmp.name)
+
+    async def test_custom_data_echoes_literally_and_survives_reload(self):
+        for payload in ("custom data", "shk:3", "**literal**", "x" * 64, "💎" * 16):
+            with self.subTest(payload=payload):
+                button = self.plugin.inline_button(
+                    "Press", payload, callback_store=self.store
+                )
+                self.assertLessEqual(len(button.data), 64)
+                self.assertTrue(self.plugin.is_own_data(button.data))
+                reloaded = UserStorage(purpose="buttons", root=self.tmp.name)
+                event = SimpleNamespace(
+                    data=button.data, reply=AsyncMock(), answer=AsyncMock()
+                )
+                with patch.object(self.plugin, "z") as shell:
+                    await self.plugin.callback(event, callback_store=reloaded)
+                    shell.assert_not_called()
+                event.reply.assert_awaited_once_with(payload, parse_mode=None)
+                event.answer.assert_awaited_once_with()
+
+    async def test_json_sends_owned_echo_buttons(self):
+        self.borg.send_message = AsyncMock()
+        await self.plugin.send_json(
+            self.borg,
+            '[{"caption":"Hi", "buttons_inline":[["One"],["Two","custom"]]}]',
+            chat=7,
+            callback_store=self.store,
+        )
+        args, kwargs = self.borg.send_message.await_args
+        self.assertEqual(args, (7, "Hi"))
+        for button, expected in zip(kwargs["buttons"][0], ("One", "custom")):
+            event = SimpleNamespace(
+                data=button.data, reply=AsyncMock(), answer=AsyncMock()
+            )
+            await self.plugin.callback(event, callback_store=self.store)
+            event.reply.assert_awaited_once_with(expected, parse_mode=None)
+
+    def test_inline_shell_data_keeps_its_existing_command_path(self):
+        for data in (".z printf sentinel", "zsh_0123"):
+            button = self.plugin.inline_button("Run", data, callback_store=self.store)
+            self.assertEqual(button.data, data.encode())
+
+    def test_payload_limit_is_preserved(self):
+        with self.assertRaises(ValueError):
+            self.plugin.inline_button("Press", "x" * 65, callback_store=self.store)
+
+    async def test_missing_data_answers_without_echoing(self):
+        event = SimpleNamespace(
+            data=b"jjson_0123456789abcdef0123456789abcdef",
+            reply=AsyncMock(),
+            answer=AsyncMock(),
+        )
+        await self.plugin.callback(event, callback_store=self.store)
+        event.reply.assert_not_awaited()
+        self.assertTrue(event.answer.await_args.kwargs["alert"])
 
 
 if __name__ == "__main__":

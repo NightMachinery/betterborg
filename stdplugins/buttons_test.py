@@ -2,6 +2,7 @@ import traceback
 from telethon import events, TelegramClient
 from telethon.tl.custom import Button
 from uniborg.util import embed2, admin_cmd, discreet_send
+from uniborg.storage import UserStorage
 from brish import z, zp, bsh, zq, CmdResult
 from typing import Dict, Iterable
 import json
@@ -12,6 +13,33 @@ borg: TelegramClient = borg
 
 
 p_zsh = re.compile(r"(?im)^\.z\s+((?:.|\n)*)$")
+CUSTOM_DATA_PREFIX = "jjson_"
+p_custom = re.compile(r"^jjson_([0-9a-f]{32})$")
+_custom_store = None
+
+
+def custom_data_store():
+    global _custom_store
+    if _custom_store is None:
+        _custom_store = UserStorage(purpose="jjson_buttons")
+    return _custom_store
+
+
+def inline_button(label, data=None, *, callback_store=None):
+    """Keep shell buttons as they are; give custom echoes their own namespace.
+
+    Store the original data behind a short token so a 64-byte payload still
+    fits Telegram's limit and buttons continue working after a restart.
+    """
+    button = Button.inline(label, data)
+    payload = button.data.decode("utf-8")
+    if payload.startswith("zsh_") or p_zsh.match(payload):
+        return button
+    token = uuid4()
+    store = callback_store if callback_store is not None else custom_data_store()
+    if not store.set(token.int, {"data": payload}):
+        raise RuntimeError("Could not save custom button data")
+    return Button.inline(label, f"{CUSTOM_DATA_PREFIX}{token.hex}")
 
 
 def create_key(pl):
@@ -19,7 +47,7 @@ def create_key(pl):
 
 
 def is_own_data(data) -> bool:
-    """Whether a press's DATA is this plugin's: a `zsh_` button, or `.z CMD`.
+    """Whether DATA is a shell button or a namespaced `.jjson` custom echo.
 
     Every other press belongs to the plugin that sent its button (the shell's
     Stop button and /settings panel, say). Answering or echoing it here
@@ -32,11 +60,24 @@ def is_own_data(data) -> bool:
         pl = data.decode("utf-8")
     except UnicodeDecodeError:
         return False
-    return pl.startswith("zsh_") or bool(p_zsh.match(pl))
+    return pl.startswith("zsh_") or bool(p_zsh.match(pl) or p_custom.fullmatch(pl))
 
 
 @borg.on(events.CallbackQuery(data=is_own_data))
-async def callback(event: events.callbackquery.CallbackQuery.Event):
+async def callback(
+    event: events.callbackquery.CallbackQuery.Event, *, callback_store=None
+):
+    pl = event.data.decode("utf-8")
+    custom = p_custom.fullmatch(pl)
+    if custom:
+        store = callback_store if callback_store is not None else custom_data_store()
+        payload = store.get(int(custom.group(1), 16)).get("data")
+        if not isinstance(payload, str):
+            await event.answer("This button's data is unavailable.", alert=True)
+            return
+        await event.reply(payload, parse_mode=None)
+        await event.answer()
+        return
     # We can edit the event to edit the clicked message.
     chat = await event.get_chat()
     pl = str(event.data, "utf-8")
@@ -76,7 +117,9 @@ async def _(event: events.newmessage.NewMessage.Event):
     await send_json(borg, jj, chat=chat)
 
 
-async def send_json(borg: TelegramClient, json_pl: str, chat=None):
+async def send_json(
+    borg: TelegramClient, json_pl: str, *, chat=None, callback_store=None
+):
     print(f"JSON: {json_pl}")
     try:
         out_j = json.loads(json_pl)
@@ -91,11 +134,13 @@ async def send_json(borg: TelegramClient, json_pl: str, chat=None):
                     buttons_inline_tl = []
                     buttons_tl = None
                     for btn in buttons_inline:
-                        # Note that the given `data` must be less or equal to 64 bytes. If more than 64 bytes are passed as data, ``ValueError`` is raised.
-                        if len(btn) == 1:
-                            buttons_inline_tl.append(Button.inline(btn[0]))
-                        else:
-                            buttons_inline_tl.append(Button.inline(btn[0], btn[1]))
+                        buttons_inline_tl.append(
+                            inline_button(
+                                btn[0],
+                                btn[1] if len(btn) > 1 else None,
+                                callback_store=callback_store,
+                            )
+                        )
                     for btn in buttons_zsh:
                         btn_json = json.dumps(btn)
                         cmd = btn.get("cmd", "echo Empty command was inlined")

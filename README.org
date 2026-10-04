@@ -170,6 +170,11 @@ send by the guest chat id, one answer sent once, admin checks on the caller
 alone), the chat bot's =guest= config section and the steps to enable it are
 in [[file:docs/guest_mode.md][docs/guest_mode.md]].
 
+** JSON buttons
+The standard =.jjson= plugin echoes custom inline button data as literal
+text, with its own callback tokens so Stop and settings buttons keep working.
+See [[file:docs/json_buttons.md][docs/json_buttons.md]].
+
 ** Telegram layers and safety nets
 =uniborg/telethon_safety.py= stops one object Telethon cannot parse from
 dropping a whole message container or disconnecting the bot during
