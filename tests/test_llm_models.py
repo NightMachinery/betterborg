@@ -12,13 +12,13 @@ from uniborg.constants import (
 
 
 class ReasoningLevelSymbolTests(unittest.TestCase):
-    def test_each_level_has_a_bar_that_rises_with_it(self):
+    def test_each_level_has_a_circle_that_fills_with_it(self):
         symbols = [
             llm_models.reasoning_level_symbol(level)
             for level in ("none", "low", "medium", "high", "xhigh", "max")
         ]
 
-        self.assertEqual(symbols, ["▁", "▂", "▄", "▆", "▇", "█"])
+        self.assertEqual(symbols, ["○", "◔", "◑", "◕", "●", "◉"])
 
     def test_every_codex_level_has_a_symbol(self):
         for level in llm_models.OPENAI_REASONING_LEVELS:
@@ -26,7 +26,7 @@ class ReasoningLevelSymbolTests(unittest.TestCase):
                 self.assertTrue(llm_models.reasoning_level_symbol(level))
 
     def test_gemini_disable_shows_as_none(self):
-        self.assertEqual(llm_models.reasoning_level_symbol("disable"), "▁")
+        self.assertEqual(llm_models.reasoning_level_symbol("disable"), "○")
 
     def test_no_level_has_no_symbol(self):
         self.assertEqual(llm_models.reasoning_level_symbol(None), "")

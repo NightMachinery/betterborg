@@ -83,7 +83,7 @@ def _request(**overrides):
         question="What is a monad?",
         answer="A monad is a monoid in the category of endofunctors.",
         model_emoji="⚡",
-        effort_symbol="▆",
+        effort_symbol="◕",
     )
     fields.update(overrides)
     return topic_titles.TopicTitleRequest(**fields)
@@ -97,13 +97,13 @@ def _memory_marks():
 
 
 class ComposeTopicTitleTests(unittest.TestCase):
-    def compose(self, title, *, model_emoji="⚡", effort_symbol="▆"):
+    def compose(self, title, *, model_emoji="⚡", effort_symbol="◕"):
         return topic_titles.compose_topic_title(
             title, model_emoji=model_emoji, effort_symbol=effort_symbol
         )
 
     def test_emoji_and_symbol_come_first(self):
-        self.assertEqual(self.compose("Monads explained"), "⚡▆ Monads explained")
+        self.assertEqual(self.compose("Monads explained"), "⚡◕ Monads explained")
 
     def test_a_model_without_reasoning_shows_only_its_emoji(self):
         self.assertEqual(
@@ -112,7 +112,7 @@ class ComposeTopicTitleTests(unittest.TestCase):
 
     def test_quotes_periods_and_extra_space_are_dropped(self):
         self.assertEqual(
-            self.compose('  "Monads\n  explained."  '), "⚡▆ Monads explained"
+            self.compose('  "Monads\n  explained."  '), "⚡◕ Monads explained"
         )
 
     def test_a_blank_title_is_none(self):
@@ -124,7 +124,7 @@ class ComposeTopicTitleTests(unittest.TestCase):
         title = self.compose("😀" * 200)
 
         self.assertEqual(tg_format.utf16_len(title), topic_titles.TOPIC_TITLE_MAX_UNITS)
-        self.assertTrue(title.startswith("⚡▆ 😀"))
+        self.assertTrue(title.startswith("⚡◕ 😀"))
         self.assertTrue(title.endswith("…"))
 
 
@@ -219,12 +219,12 @@ class TitleNewTopicTests(unittest.IsolatedAsyncioTestCase):
 
         title = await self.title(client)
 
-        self.assertEqual(title, "⚡▆ Monads explained")
+        self.assertEqual(title, "⚡◕ Monads explained")
         lookup, edit = client.requests
         self.assertEqual((lookup.peer, lookup.topics), (PEER, [TOPIC_ID]))
         self.assertEqual(
             (edit.peer, edit.topic_id, edit.title),
-            (PEER, TOPIC_ID, "⚡▆ Monads explained"),
+            (PEER, TOPIC_ID, "⚡◕ Monads explained"),
         )
         self.assertIn("What is a monad?", self.prompts[0])
         self.assertIn("monoid in the category", self.prompts[0])

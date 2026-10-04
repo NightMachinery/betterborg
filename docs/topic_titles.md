@@ -5,12 +5,12 @@ Telegram open a new topic for it and name the topic after that message. Once
 the chat bot has answered the first message of such a topic, it renames the
 topic once, to something like:
 
-    ⚡▆ Monads explained
+    ⚡◕ Monads explained
 
 The name has three parts:
 
 - the emoji of the model that answered (`⚡` is Gemini Flash);
-- a bar showing the reasoning effort sent with the request (`▆` is high),
+- a circle showing the reasoning effort sent with the request (`◕` is high),
   left out for models without reasoning levels;
 - a title of at most six words, written by the user's title model
   (`/setTitleModel`, `docs/title_model.md`) from the first question and its
@@ -70,20 +70,21 @@ A custom model id gets its provider's emoji (`_synthesized_spec`): 🔷 Codex,
 
 ## Effort symbols
 
-The effort shows as a bar that rises with the level
-(`REASONING_LEVEL_SYMBOLS`). It is not an emoji, because a second emoji next
-to the model's would be hard to tell apart from it: a moon or a sun would
-clash with Sol's ☀️ and Luna's 🌕.
+The effort shows as a circle that fills as the level grows
+(`REASONING_LEVEL_SYMBOLS`). Moon phases would say the same, but as emoji
+they would clash with Sol's ☀️ and Luna's 🌕; plain symbols also leave the
+model's emoji the one colorful mark in the title.
 
-- `▁`: none, and Gemini's `disable`
-- `▂`: low (`.tl`)
-- `▄`: medium (`.tm`)
-- `▆`: high (`.th`)
-- `▇`: xhigh (`.tx`)
-- `█`: max (`.txx`)
+- `○`: none, and Gemini's `disable`
+- `◔`: low (`.tl`)
+- `◑`: medium (`.tm`)
+- `◕`: high (`.th`)
+- `●`: xhigh (`.tx`)
+- `◉`: max (`.txx`)
 
-A level without a symbol shows no bar. Topics named before the bars kept
-their letter aliases (`⚡h`), since a topic is renamed only once.
+A level without a symbol shows none. A topic is renamed only once, so topics
+named earlier keep their old prefix: a letter (`⚡h`), or briefly a bar
+(`⚡▆`).
 
 ## What Telegram does
 

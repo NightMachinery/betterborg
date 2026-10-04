@@ -88,8 +88,8 @@ parameter is sent at all.
   prefix beats the effort baked into a model prefix. Each is `.t` plus the
   level's short alias (`REASONING_LEVEL_ALIASES` in `uniborg/llm_models.py`).
   Gemini's `disable` has no prefix. Automatic topic titles show the effort as
-  a bar instead (`REASONING_LEVEL_SYMBOLS`, `docs/topic_titles.md`), with
-  `disable` shown like `none`.
+  a filling circle instead (`REASONING_LEVEL_SYMBOLS`,
+  `docs/topic_titles.md`), with `disable` shown like `none`.
 
 A prefix only matches when followed by whitespace or the end of the message,
 so another plugin's `.tlg` or `.tex` command is never swallowed. Prefixes are

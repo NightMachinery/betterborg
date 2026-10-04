@@ -1743,7 +1743,7 @@ class TopicTitleHookTests(_BotChatCase):
                 question=self.QUESTION,
                 answer=self.ANSWER,
                 model_emoji="🌙",
-                effort_symbol="▂",
+                effort_symbol="◔",
             ),
         )
         self.assertTrue(callable(self.schedule.call_args.kwargs["generate"]))

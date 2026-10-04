@@ -191,9 +191,9 @@ set that topic's own model, effort and prompt, which come before the chat's;
 their menus have an "Apply to" row that switches them to the whole chat. See
 [[file:docs/private_topics.md][docs/private_topics.md]].
 After the first answer in a topic that Telegram named (one opened by typing in
-"All"), the bot renames it once: the answering model's emoji, a bar for the
-reasoning effort, then a short title, as in =⚡▆ Monads explained=. See
-[[file:docs/topic_titles.md][docs/topic_titles.md]].
+"All"), the bot renames it once: the answering model's emoji, a circle that
+fills with the reasoning effort, then a short title, as in
+=⚡◕ Monads explained=. See [[file:docs/topic_titles.md][docs/topic_titles.md]].
 
 ** timetracker time zones
 The timetracker stores each activity's local times together with its IANA

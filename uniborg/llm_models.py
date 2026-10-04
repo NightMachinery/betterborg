@@ -53,15 +53,15 @@ REASONING_LEVEL_ALIASES = {
 }
 
 #: What automatic topic titles show for each reasoning level
-#: (docs/topic_titles.md): a bar that rises with the effort. Not emoji, which
-#: would clash with the models' own (Sol's ☀️, Luna's 🌕).
+#: (docs/topic_titles.md): a circle that fills as the effort grows. Not moon
+#: emoji, which would clash with the models' own (Sol's ☀️, Luna's 🌕).
 REASONING_LEVEL_SYMBOLS = {
-    "none": "▁",
-    "low": "▂",
-    "medium": "▄",
-    "high": "▆",
-    "xhigh": "▇",
-    "max": "█",
+    "none": "○",
+    "low": "◔",
+    "medium": "◑",
+    "high": "◕",
+    "xhigh": "●",
+    "max": "◉",
 }
 
 
