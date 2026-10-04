@@ -285,9 +285,11 @@ class QueuedStopTests(_QueuedStopTests):
 
         self.assertEqual(outcome, CancelOutcome.NOT_STARTED)
         self.assertIsNone(second)
-        #: Brish polls `cancelled` every 0.05 s; worker 0 is busy for 3 s.
+        #: Brish polls `cancelled` every 0.05 s, and the stop took 0.03 to
+        #: 0.09 s in runs; the bound leaves room for a loaded machine, and
+        #: worker 0 is busy for 3 s.
         self.assertTrue(busy_running)
-        self.assertLess(took, 1)
+        self.assertLess(took, 0.4)
         self.assertFalse(self.ran.exists())
         self.assertEqual(first, util.CommandResult(output="done\n", retcode=0))
 

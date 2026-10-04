@@ -781,8 +781,10 @@ a `tail -f` no longer keeps the process from exiting.
 - **Stopping a queued job.** A job that waits for a worker (every worker
   busy, or worker 0 for `.af`) is dropped at once by `.k`, and its final
   goes out. With brish 0.4.1 its executor thread gives up the wait too,
-  within about 0.05 s (brish's poll of `cancelled=`; in the tests, an `.af`
-  queued behind a busy worker 0 returns in under 0.1 s while worker 0 stays
-  busy). With 0.4.0 that thread still waits until it gets a worker, then
-  runs nothing, so a job queued behind an endless command holds one thread
-  of the event loop's default executor until that command is stopped.
+  within about 0.05 s (brish's poll of `cancelled=`). The tests require an
+  `.af` queued behind a busy worker 0 to return within 0.4 s of the stop,
+  while worker 0 stays busy; it took 0.03 to 0.09 s in runs on the
+  development machine. With 0.4.0 that thread still waits until it gets a
+  worker, then runs nothing, so a job queued behind an endless command holds
+  one thread of the event loop's default executor until that command is
+  stopped.
