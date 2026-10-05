@@ -11,10 +11,14 @@ the message, depending on the client. The chat bot renames such a topic twice:
    **Initial: Question text**: `⚡◕ New Chat` or `⚡◕ what is a monad`.
 2. **The title, after the answer.** Once the answer is delivered, it renames
    the topic to the badge and a short title, sets the title model's chosen
-   topic icon, and deletes the first rename's service message, so the chat
-   shows one rename:
+   topic icon:
 
        ⚡◕ Monads explained
+
+After each rename, the bot immediately deletes that rename's service message
+for both participants. It does not wait for the answer or final title to
+remove the initial badge notice. Telegram may briefly display a notice before
+the deletion update reaches the client. The topic and its creation notice remain.
 
 The name has three parts:
 
@@ -143,6 +147,11 @@ Observed on a canary bot (Telethon 1.45, layer 229):
   (`MessageActionTopicEdit`), which the user sees as the bot changing the
   topic's name. History does not record service messages, and thread context
   drops them, so the rename never reaches a prompt.
+- The [rename API](https://core.telegram.org/method/messages.editForumTopic)
+  has no option to suppress its service message. The bot removes the returned
+  rename message using
+  [deletion for all participants](https://core.telegram.org/method/messages.deleteMessages)
+  (`revoke=True`).
 - `messages.getForumTopicsByID` works for a bot and returns the topic with
   its current title, `title_missing` and `date`, the creation time.
 - Every topic opened by typing in "All" carried `title_missing`, with the
@@ -164,7 +173,7 @@ Observed on a canary bot (Telethon 1.45, layer 229):
 
 - Every request in a private topic: one Redis `SET NX`.
 - Each new topic, once: one `getForumTopicsByID`, and for a qualifying
-  topic, two `editForumTopic`, one `deleteMessages` and one title-model
+  topic, two `editForumTopic`, two `deleteMessages` and one title-model
   request (with its Flash Lite fallback).
 - Each process, once: one `getStickerSet` for the default topic icons.
 
@@ -177,6 +186,9 @@ generated; the title's rename waits for it.
 - A failed rename is not retried: the topic was claimed, and keeps the name
   it had. A failed badge rename still lets the title's rename run. Failures
   are logged.
+- A failed service-message deletion is logged and does not undo the rename.
+  Failed cleanup of the initial badge notice is retried after the final title
+  is set. A notice may remain if deletion fails or Telegram returns no message id.
 - If the user renames a topic before its first answer arrives, the bot may
   still rename it: whether a user's rename clears `title_missing` has not
   been observed.

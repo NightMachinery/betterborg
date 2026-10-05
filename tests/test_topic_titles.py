@@ -73,20 +73,24 @@ def _icon_set():
     )
 
 
-def _rename_updates(title):
+def _rename_updates(title, *, message_id=RENAME_MESSAGE_ID):
     return types.Updates(
-        updates=[
-            types.UpdateNewMessage(
-                message=types.MessageService(
-                    id=RENAME_MESSAGE_ID,
-                    peer_id=types.PeerUser(CHAT_ID),
-                    date=T0,
-                    action=types.MessageActionTopicEdit(title=title),
-                ),
-                pts=1,
-                pts_count=1,
-            )
-        ],
+        updates=(
+            [
+                types.UpdateNewMessage(
+                    message=types.MessageService(
+                        id=message_id,
+                        peer_id=types.PeerUser(CHAT_ID),
+                        date=T0,
+                        action=types.MessageActionTopicEdit(title=title),
+                    ),
+                    pts=1,
+                    pts_count=1,
+                )
+            ]
+            if message_id is not None
+            else []
+        ),
         users=[],
         chats=[],
         date=T0,
@@ -99,10 +103,12 @@ class _Client:
     `ICON_IDS`, and records every request. A request whose type is in FAIL
     raises."""
 
-    def __init__(self, *topics, fail=()):
+    def __init__(self, *topics, fail=(), service_messages=True):
         self.topics = topics
         self.fail = tuple(fail)
         self.requests = []
+        self.service_messages = service_messages
+        self.rename_count = 0
 
     async def __call__(self, request):
         self.requests.append(request)
@@ -111,7 +117,11 @@ class _Client:
         if isinstance(request, functions.messages.GetForumTopicsByIDRequest):
             return _forum_topics(*self.topics)
         if isinstance(request, functions.messages.EditForumTopicRequest):
-            return _rename_updates(request.title)
+            message_id = (
+                RENAME_MESSAGE_ID + self.rename_count if self.service_messages else None
+            )
+            self.rename_count += 1
+            return _rename_updates(request.title, message_id=message_id)
         if isinstance(request, functions.messages.GetStickerSetRequest):
             return _icon_set()
         if isinstance(request, functions.messages.DeleteMessagesRequest):
@@ -296,7 +306,7 @@ class TitleNewTopicTests(unittest.IsolatedAsyncioTestCase):
         title = await self.title(client)
 
         self.assertEqual(title, "⚡◕ Monads explained")
-        lookup, edit = client.requests
+        lookup, edit, delete = client.requests
         self.assertEqual((lookup.peer, lookup.topics), (PEER, [TOPIC_ID]))
         self.assertEqual(
             (edit.peer, edit.topic_id, edit.title),
@@ -304,6 +314,7 @@ class TitleNewTopicTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("What is a monad?", self.prompts[0])
         self.assertIn("monoid in the category", self.prompts[0])
+        self.assertEqual((delete.id, delete.revoke), ([RENAME_MESSAGE_ID], True))
 
     async def test_a_topic_is_renamed_once(self):
         client = _Client(_forum_topic())
@@ -424,12 +435,36 @@ class PrefixNewTopicTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             prefixed,
-            topic_titles.PrefixedTopic(service_message_id=RENAME_MESSAGE_ID),
+            topic_titles.PrefixedTopic(service_message_id=None),
         )
         (edit,) = client.of(functions.messages.EditForumTopicRequest)
         self.assertEqual(
             (edit.peer, edit.topic_id, edit.title, edit.icon_emoji_id),
             (PEER, TOPIC_ID, "⚡◕ what is a monad", ICON_IDS["⚡️"]),
+        )
+        (delete,) = client.of(functions.messages.DeleteMessagesRequest)
+        self.assertEqual((delete.id, delete.revoke), ([RENAME_MESSAGE_ID], True))
+        self.assertIs(client.requests[-2], edit)
+        self.assertIs(client.requests[-1], delete)
+
+    async def test_without_a_returned_service_message_nothing_is_deleted(self):
+        client = _Client(_forum_topic(), service_messages=False)
+        prefixed = await self.prefix(client)
+        self.assertEqual(prefixed, topic_titles.PrefixedTopic(service_message_id=None))
+        self.assertEqual(client.of(functions.messages.DeleteMessagesRequest), [])
+
+    async def test_a_failed_delete_keeps_the_prefix_and_pending_cleanup(self):
+        client = _Client(
+            _forum_topic(), fail=[functions.messages.DeleteMessagesRequest]
+        )
+        with self.assertLogs(topic_titles.logger, logging.ERROR):
+            prefixed = await self.prefix(client)
+        self.assertEqual(
+            prefixed, topic_titles.PrefixedTopic(service_message_id=RENAME_MESSAGE_ID)
+        )
+        self.assertEqual(
+            client.of(functions.messages.EditForumTopicRequest)[0].title,
+            "⚡◕ what is a monad",
         )
 
     async def test_telegrams_name_is_kept_as_it_is(self):
@@ -586,11 +621,13 @@ class TitleAfterPrefixTests(unittest.IsolatedAsyncioTestCase):
             icons=topic_titles.TopicIcons(),
         )
 
-    async def test_the_title_replaces_the_prefix_and_its_rename_message(self):
+    async def test_the_title_replaces_the_prefix_and_deletes_its_own_rename_message(
+        self,
+    ):
         client = _Client(_forum_topic())
 
         title = await self.title(
-            client, topic_titles.PrefixedTopic(service_message_id=RENAME_MESSAGE_ID)
+            client, topic_titles.PrefixedTopic(service_message_id=None)
         )
 
         self.assertEqual(title, "⚡◕ Monads explained")
@@ -608,8 +645,8 @@ class TitleAfterPrefixTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.requests, [])
         self.assertEqual(self.prompts, [])
 
-    async def test_without_a_rename_message_nothing_is_deleted(self):
-        client = _Client(_forum_topic())
+    async def test_without_a_returned_rename_message_nothing_is_deleted(self):
+        client = _Client(_forum_topic(), service_messages=False)
 
         await self.title(client, topic_titles.PrefixedTopic(service_message_id=None))
 
@@ -623,10 +660,102 @@ class TitleAfterPrefixTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs(topic_titles.logger, logging.ERROR):
             title = await self.title(
                 client,
-                topic_titles.PrefixedTopic(service_message_id=RENAME_MESSAGE_ID),
+                topic_titles.PrefixedTopic(service_message_id=None),
             )
 
         self.assertEqual(title, "⚡◕ Monads explained")
+
+    async def test_each_rename_message_is_removed_before_the_next_step(self):
+        client = _Client(_forum_topic())
+        icons = topic_titles.TopicIcons()
+        prefixed = await topic_titles.prefix_new_topic(
+            client, _ref(), badge=_badge(icon_emoji="⚡"), marks=self.marks, icons=icons
+        )
+
+        async def generate(prompt):
+            deletes = client.of(functions.messages.DeleteMessagesRequest)
+            self.assertEqual(
+                [(r.id, r.revoke) for r in deletes], [([RENAME_MESSAGE_ID], True)]
+            )
+            return topic_titles.TopicTitle(title="Monads explained")
+
+        async def outcome():
+            return prefixed
+
+        title = await topic_titles.title_new_topic(
+            client,
+            _request(icon_emoji="⚡"),
+            generate=generate,
+            prefixed=outcome(),
+            icons=icons,
+        )
+        self.assertEqual(title, "⚡◕ Monads explained")
+        actions = [
+            request
+            for request in client.requests
+            if isinstance(
+                request,
+                (
+                    functions.messages.EditForumTopicRequest,
+                    functions.messages.DeleteMessagesRequest,
+                ),
+            )
+        ]
+        self.assertEqual(
+            [type(request) for request in actions],
+            [
+                functions.messages.EditForumTopicRequest,
+                functions.messages.DeleteMessagesRequest,
+            ]
+            * 2,
+        )
+        self.assertEqual(
+            [
+                (r.id, r.revoke)
+                for r in client.of(functions.messages.DeleteMessagesRequest)
+            ],
+            [([RENAME_MESSAGE_ID], True), ([RENAME_MESSAGE_ID + 1], True)],
+        )
+
+    async def test_a_failed_prefix_cleanup_is_retried_after_the_final_rename(self):
+        client = _Client(
+            _forum_topic(), fail=[functions.messages.DeleteMessagesRequest]
+        )
+        with self.assertLogs(topic_titles.logger, logging.ERROR):
+            prefixed = await topic_titles.prefix_new_topic(
+                client, _ref(), badge=_badge(), marks=self.marks
+            )
+        client.fail = ()
+        self.assertEqual(await self.title(client, prefixed), "⚡◕ Monads explained")
+        self.assertEqual(
+            [
+                (r.id, r.revoke)
+                for r in client.of(functions.messages.DeleteMessagesRequest)
+            ],
+            [
+                ([RENAME_MESSAGE_ID], True),
+                ([RENAME_MESSAGE_ID + 1], True),
+                ([RENAME_MESSAGE_ID], True),
+            ],
+        )
+
+    async def test_the_prefix_message_stays_deleted_if_title_generation_fails(self):
+        client = _Client(_forum_topic())
+        prefixed = await topic_titles.prefix_new_topic(
+            client, _ref(), badge=_badge(), marks=self.marks
+        )
+        self.generate = mock.AsyncMock(
+            side_effect=RuntimeError("title generation failed")
+        )
+        with self.assertRaises(RuntimeError):
+            await self.title(client, prefixed)
+        self.assertEqual(
+            [
+                (r.id, r.revoke)
+                for r in client.of(functions.messages.DeleteMessagesRequest)
+            ],
+            [([RENAME_MESSAGE_ID], True)],
+        )
 
     async def test_a_scheduled_prefix_failure_is_logged_not_raised(self):
         client = _Client(fail=[functions.messages.GetForumTopicsByIDRequest])

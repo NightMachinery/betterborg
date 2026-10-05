@@ -4,9 +4,11 @@ A message typed in a bot's "All" view makes Telegram open a topic for it,
 named implicitly and flagged `title_missing`. When the bot starts
 answering the first message of such a topic, it renames the topic at once to
 the model's badge (its emoji and reasoning-effort symbol) and Telegram's
-name (New Chat or question text), and sets the model's topic icon. Once the answer is delivered, it
-renames the topic again, to the badge and a short title from the user's title
-model, optionally chooses a matching icon, and deletes the first rename's service message. Each topic is claimed
+name (New Chat or question text), and sets the model's topic icon. Once the
+answer is delivered, it renames the topic again, to the badge and a short
+title from the user's title model, optionally chooses a matching icon, and
+immediately deletes each
+rename's service message for both participants. Each topic is claimed
 at most once. See docs/topic_titles.md.
 
 The topic id here is T, the id Telegram puts in `reply_to_top_id`
@@ -166,8 +168,8 @@ class TopicTitleRequest:
 class PrefixedTopic:
     """A new topic, claimed and renamed to its badge and Telegram's name."""
 
-    #: The service message that rename posted, which the title's rename
-    #: deletes; None when the rename failed or Telegram did not return it.
+    #: A service message whose immediate deletion failed, retried after the
+    #: title's rename. None when no cleanup remains.
     service_message_id: Optional[int]
 
 
@@ -312,8 +314,10 @@ async def _rename(
     badge: TopicBadge,
     icons: TopicIcons,
 ) -> Optional[int]:
-    """Rename TOPIC to TITLE with BADGE's icon, in one request (so one
-    service message); return that service message's id."""
+    """Rename TOPIC with BADGE's icon, then remove its service message.
+
+    Return the service message id only when its deletion failed.
+    """
     updates = await client(
         functions.messages.EditForumTopicRequest(
             peer=topic.peer,
@@ -322,7 +326,10 @@ async def _rename(
             icon_emoji_id=await icons.document_id(client, badge.icon_emoji),
         )
     )
-    return _service_message_id(updates)
+    message_id = _service_message_id(updates)
+    if message_id is not None and not await _delete_service_message(client, message_id):
+        return message_id
+    return None
 
 
 async def _claim_new_topic(
@@ -377,13 +384,15 @@ async def prefix_new_topic(
     return PrefixedTopic(service_message_id=service_message_id)
 
 
-async def _delete_service_message(client, message_id: int) -> None:
+async def _delete_service_message(client, message_id: int) -> bool:
     try:
         await client(
             functions.messages.DeleteMessagesRequest(id=[message_id], revoke=True)
         )
+        return True
     except Exception:
         logger.exception("Could not delete the topic rename message %s", message_id)
+        return False
 
 
 async def title_new_topic(
@@ -400,8 +409,9 @@ async def title_new_topic(
     return the title.
 
     PREFIXED is the outcome of `prefix_new_topic` for this answer, when it ran:
-    the topic was claimed there, and the prefix rename's service message is
-    deleted once the title is set. Without it the topic is claimed here.
+    the topic was claimed there. Any failed cleanup of the prefix rename's
+    service message is retried once the title is set. Without it the topic
+    is claimed here. Each rename's service message is deleted immediately.
     GENERATE turns a prompt into a `TopicTitle`. Returns None when the topic
     is not renamed: it was claimed before, the user named it, it is gone, or
     the answered message is not one of its first.

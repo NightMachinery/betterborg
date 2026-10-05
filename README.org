@@ -210,7 +210,9 @@ initial name as soon as it starts answering, and sets the model's topic icon.
 The =/setTitleModel= panel offers =New Chat= (default) or the question text
 as that initial name. After the answer it renames the topic to that badge and
 a short title, as in =⚡◕ Monads explained=, and sets a topic icon chosen by
-the title model. See [[file:docs/topic_titles.md][docs/topic_titles.md]].
+the title model. The bot deletes each automatic rename's service notice for
+everyone immediately after the rename. See
+[[file:docs/topic_titles.md][docs/topic_titles.md]].
 
 ** timetracker time zones
 The timetracker stores each activity's local times together with its IANA
