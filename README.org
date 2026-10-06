@@ -224,6 +224,10 @@ sent, so messages sent while the bot was down still land where they belong. A
 database recorded without zones can be migrated with
 =python3 uniborg/timetracker_tz.py migrate=. See
 [[file:docs/timetracker.md][docs/timetracker.md]].
+Habit heatmaps also work on Python 3.13+: the async shell helper snapshots
+frame locals to a dictionary before Brish interpolates its command. Restart
+the bots after updating that shared helper; reloading a plugin alone leaves
+the old helper imported.
 
 ** Redis
 The bots keep history and caches in Redis under =borg:*= keys, as their own

@@ -75,6 +75,29 @@ one starts in the new zone at the same instant.
   `received_at` in RFC 2822 form. A date with an offset is converted into the
   current zone. One without an offset is read as the current zone's local time.
 
+## Habit heatmaps on Python 3.13 and later
+
+Habit reports first display their totals, then run `calendarheatmap` through
+`uniborg.util.za` to generate the image. If the totals appear followed by
+`TypeError: globals must be a real dict`, command interpolation failed before
+`calendarheatmap` ran.
+
+Python 3.13 changed a function frame's `f_locals` from a dictionary to a
+`FrameLocalsProxy`. The async helper passed that proxy as Brish's explicit
+namespace, which Brish passes to `eval` as globals. `eval` requires a real
+dictionary there. See the
+[Python porting notes](https://docs.python.org/3.13/whatsnew/3.13.html#changes-in-the-python-api).
+
+`za` now copies the selected namespace to a dictionary before scheduling the
+worker. This preserves Brish's expression evaluation and shell quoting, accepts
+explicit mappings, and avoids `eval` adding builtins to the caller's namespace.
+An explicitly empty namespace remains empty rather than falling back to the
+caller's locals. The copy is shallow: referenced objects retain their identity.
+
+Reloading the timetracker plugin cannot update the already imported helper.
+After deploying this change, restart the bot processes that import
+`uniborg.util`. No activity database migration or Brish upgrade is required.
+
 ## Migrating a database recorded without zones
 
 Before zones were stored, every time was the host clock's naive local time.

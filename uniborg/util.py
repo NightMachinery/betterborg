@@ -227,7 +227,11 @@ def force_async(f):
 async def za(template, *args, bsh=bsh, getframe=1, locals_=None, **kwargs):
     # @todo1 move this to brish itself
     loop = asyncio.get_running_loop()
-    locals_ = locals_ or sys._getframe(getframe).f_locals
+    if locals_ is None:
+        locals_ = sys._getframe(getframe).f_locals
+    # Python 3.13+ returns a FrameLocalsProxy, but Brish uses this namespace
+    # as eval's globals, which must be a dict. Snapshot before the worker runs.
+    locals_ = dict(locals_)
 
     def h_z():
         # can't get the previous frames in here, idk why
