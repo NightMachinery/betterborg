@@ -33,5 +33,11 @@ service used by that host. A successful query directly to a public DNS server
 does not prove the host's configured resolver works. For TLS or proxy errors,
 check the certificate and proxy configuration in the bot's runtime environment.
 
+If `/etc/resolv.conf` points to a file managed by `systemd-resolved`, verify both
+`systemctl is-active systemd-resolved` and `systemctl is-enabled systemd-resolved`.
+Starting the service alone repairs only the current boot. When this is the
+intended resolver, `sudo -kA systemctl enable --now systemd-resolved` starts it
+and enables startup after reboot.
+
 See the [official OpenAI Python SDK error handling documentation](https://developers.openai.com/api/reference/python)
 for `APIConnectionError`, `APITimeoutError` and the underlying `__cause__`.
