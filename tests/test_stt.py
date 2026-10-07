@@ -95,7 +95,7 @@ class LlmSttTests(unittest.TestCase):
                     )
                 )
             calls.request_key = enter(
-                patch.object(stt.llm_db, "request_api_key_message", AsyncMock())
+                patch.object(stt, "_start_key_setup", AsyncMock())
             )
             calls.get_model = enter(
                 patch.object(
@@ -128,7 +128,9 @@ class LlmSttTests(unittest.TestCase):
     def test_a_transcript_replaces_the_status_message(self):
         calls = self.run_stt()
 
-        calls.event.reply.assert_awaited_once_with("Transcribing...")
+        calls.event.reply.assert_awaited_once_with(
+            "Transcribing with Google AI Studio..."
+        )
         (edit,) = calls.edit.await_args_list
         self.assertEqual(edit.args, (calls.status, "hello"))
         self.assertEqual(edit.kwargs["api_keys"], {"gemini": "key"})
@@ -153,7 +155,7 @@ class LlmSttTests(unittest.TestCase):
     def test_a_missing_key_asks_for_one_and_transcribes_nothing(self):
         calls = self.run_stt(api_key=None)
 
-        calls.request_key.assert_awaited_once_with(calls.event, "gemini")
+        calls.request_key.assert_awaited_once_with(calls.event, "gemini", switch=False)
         calls.event.reply.assert_not_awaited()
 
     def test_no_media_and_a_schema_less_model_are_told(self):
@@ -175,9 +177,7 @@ class LlmSttTests(unittest.TestCase):
 
         error = calls.error.await_args.kwargs
         self.assertEqual(error["response_message"], calls.status)
-        self.assertEqual(
-            error["base_error_message"], "An error occurred during the API call."
-        )
+        self.assertIn("Google AI Studio API call", error["base_error_message"])
         calls.edit.assert_not_awaited()
 
 
@@ -240,13 +240,13 @@ class ModelChoiceTests(unittest.TestCase):
         saved = {}
         storage = SimpleNamespace(
             get=lambda user_id: saved.get(user_id, {}),
-            set=lambda user_id, data: saved.__setitem__(user_id, dict(data)),
+            set=lambda user_id, data: saved.__setitem__(user_id, dict(data)) or True,
         )
         with patch.object(stt, "_prefs_storage", storage):
             self.assertEqual(stt.get_model_choice(7), stt_models.AUTO)
             stt.set_model_choice(7, "gemini/gemini-3.5-transcribe")
             self.assertEqual(stt.get_model_choice(7), "gemini/gemini-3.5-transcribe")
-            saved[7]["model"] = "gemini/gemini-1.0-pro"
+            saved[7]["provider_models"]["gemini"] = "gemini/gemini-1.0-pro"
             self.assertEqual(stt.get_model_choice(7), stt_models.AUTO)
 
     def press(self, slug):
@@ -579,6 +579,24 @@ class GuestSttTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_vertex_guest_uses_the_callers_vertex_key_and_models(self):
+        with patch.object(
+            stt, "get_provider_choice", return_value="vertex"
+        ), patch.object(
+            stt.llm_db, "get_api_key", return_value="synthetic-vertex-caller-key"
+        ), patch.object(
+            stt_models, "load_media_model"
+        ) as load:
+            self.run_query(_query(f"@{BOT_USERNAME}", reference_media=_voice()))
+        ((job, user_id),) = self.jobs
+        self.assertEqual(job.provider, "vertex")
+        self.assertEqual(job.api_key, "synthetic-vertex-caller-key")
+        self.assertEqual(
+            tuple(job.models), stt.stt_providers.PROVIDERS["vertex"].auto_models
+        )
+        load.assert_not_called()
+        self.assertEqual(self.edits, [{"text": "hello", "parse_mode": "md"}])
 
     def test_a_long_transcript_ends_as_rich_markdown(self):
         self.transcript = "word " * 2000

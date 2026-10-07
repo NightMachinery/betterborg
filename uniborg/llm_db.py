@@ -39,6 +39,12 @@ API_KEY_ATTEMPTS = {}
 # --- Constants ---
 MAX_KEY_ATTEMPTS = 3
 API_KEY_CONFIG = {
+    "vertex": {
+        "name": "Vertex AI",
+        "url": "https://console.cloud.google.com/vertex-ai/studio/overview",
+        "regex": r"^(?P<vertex_key>(?!sk-or-v1-)(?!sk-)[A-Za-z0-9_.-]{20,200})\Z",
+        "welcome_message": "**To use Vertex AI, I need your Vertex AI Express-mode API key.**",
+    },
     "gemini": {
         "name": "Gemini",
         "url": "https://aistudio.google.com/app/apikey",

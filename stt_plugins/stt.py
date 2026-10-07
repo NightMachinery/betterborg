@@ -10,6 +10,7 @@ from uniborg import tg_raw
 from uniborg import callback_util
 from uniborg import bot_util
 from uniborg import stt_models
+from uniborg import stt_providers
 from uniborg.storage import UserStorage
 from uniborg.constants import (
     GEMINI_FLASH_LATEST,
@@ -27,6 +28,7 @@ from uniborg.constants import (
 import os
 import traceback
 import llm
+import httpx
 import uuid
 import asyncio
 import json
@@ -50,6 +52,11 @@ BOT_COMMANDS = [
     {"command": "start", "description": "Onboard and set API key"},
     {"command": "help", "description": "Show help and instructions"},
     {"command": "setgeminikey", "description": "Set or update your Gemini API key"},
+    {"command": "setvertexkey", "description": "Set or update your Vertex AI API key"},
+    {
+        "command": "provider",
+        "description": "Choose Google AI Studio or Vertex AI; manage keys",
+    },
     {"command": "model", "description": "Choose the transcription model"},
 ]
 KNOWN_STRICT_COMMANDS = {".rot"}  # Undocumented admin-only command; do not add to help.
@@ -151,6 +158,13 @@ def get_effective_gemini_api_key(user_id: int) -> str | None:
     )
 
 
+def get_provider_key(user_id: int, provider: str | None = None) -> str | None:
+    provider = provider or get_provider_choice(user_id)
+    if provider == stt_providers.GEMINI:
+        return get_effective_gemini_api_key(user_id)
+    return llm_db.get_api_key(user_id=user_id, service=provider)
+
+
 # Retry config lives in uniborg/constants.py:
 #   STT_MODELS            — Auto's ordered model list; first is default, rest are fallbacks
 #   STT_RETRIES_PER_MODEL — attempts per model before cycling to the next
@@ -167,6 +181,12 @@ def _is_retriable_stt_error(exception) -> bool:
     # Permanent: never retry (proxy gate and other user-facing permanent failures).
     if isinstance(exception, llm_util.TelegramUserReplyException):
         return False
+
+    if isinstance(
+        exception,
+        (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError),
+    ):
+        return True
 
     text = str(exception).lower()
     retriable_markers = (
@@ -202,13 +222,19 @@ def _is_model_unavailable_error(exception) -> bool:
     return "no longer available" in text or "is not found for api version" in text
 
 
-async def _model_unavailable_p(api_key: str, model_name: str) -> bool:
-    key = redis_util.model_unavailable_key(redis_util.api_key_hash(api_key), model_name)
+async def _model_unavailable_p(
+    api_key: str, model_name: str, provider="gemini"
+) -> bool:
+    scope = api_key if provider == "gemini" else f"{provider}:{api_key}"
+    key = redis_util.model_unavailable_key(redis_util.api_key_hash(scope), model_name)
     return await redis_util.get_and_renew(key, renew=False) is not None
 
 
-async def _mark_model_unavailable(api_key: str, model_name: str) -> None:
-    key = redis_util.model_unavailable_key(redis_util.api_key_hash(api_key), model_name)
+async def _mark_model_unavailable(
+    api_key: str, model_name: str, provider="gemini"
+) -> None:
+    scope = api_key if provider == "gemini" else f"{provider}:{api_key}"
+    key = redis_util.model_unavailable_key(redis_util.api_key_hash(scope), model_name)
     await redis_util.set_with_expiry(
         key, "1", expire_seconds=STT_MODEL_UNAVAILABLE_SECONDS
     )
@@ -243,6 +269,7 @@ async def _transcribe_with_retry(
     api_key,
     status_message,
     italics_marker,
+    provider: str = "gemini",
 ) -> SttAnswer:
     """Transcribes ATTACHMENTS with the first of MODELS that answers.
 
@@ -260,7 +287,9 @@ async def _transcribe_with_retry(
     """
     models_to_try = list(models)
     available = [
-        name for name in models_to_try if not await _model_unavailable_p(api_key, name)
+        name
+        for name in models_to_try
+        if not await _model_unavailable_p(api_key, name, provider)
     ]
     #: When every model refused this key before, try them all again.
     models_to_try = available or models_to_try
@@ -274,7 +303,7 @@ async def _transcribe_with_retry(
         speech_model = None
         if stt_models.is_speech_model(current_model_name):
             speech_model = stt_models.model_for_id(current_model_name)
-        else:
+        elif provider == stt_providers.GEMINI:
             try:
                 current_model = stt_models.load_media_model(current_model_name)
             except Exception as e:
@@ -298,6 +327,15 @@ async def _transcribe_with_retry(
         for model_attempt in range(1, STT_RETRIES_PER_MODEL + 1):
             global_attempt += 1
             try:
+                if provider == stt_providers.VERTEX:
+                    text = await stt_providers.transcribe_vertex(
+                        model=current_model_name,
+                        attachments=attachments,
+                        key=api_key,
+                        prompt=TRANSCRIPTION_PROMPT,
+                        schema=TranscriptionResult,
+                    )
+                    return SttAnswer(model_name=current_model_name, raw=text)
                 if speech_model is not None:
                     text = await stt_models.transcribe(
                         speech_model, audio=sound.audio, api_key=api_key
@@ -320,7 +358,7 @@ async def _transcribe_with_retry(
             except Exception as e:
                 last_exception = e
                 if _is_model_unavailable_error(e):
-                    await _mark_model_unavailable(api_key, current_model_name)
+                    await _mark_model_unavailable(api_key, current_model_name, provider)
                     if next_model_name is None:
                         raise SttModelRefusedError(
                             f"{model_label} is not available for this API key. "
@@ -420,13 +458,42 @@ def _prefs() -> UserStorage:
 def get_model_choice(user_id: int) -> str:
     """USER_ID's model, or Auto when they chose none or one no longer offered."""
     data = _prefs().get(user_id) or {}
-    return stt_models.normalize_choice(data.get("model"))
+    provider = get_provider_choice(user_id)
+    choice = (data.get("provider_models") or {}).get(provider)
+    if choice is None and provider == stt_providers.GEMINI:
+        choice = data.get("model")
+    return stt_providers.normalize_model(provider, choice)
 
 
 def set_model_choice(user_id: int, choice: str) -> None:
     data = _prefs().get(user_id) or {}
-    data["model"] = stt_models.normalize_choice(choice)
-    _prefs().set(user_id, data)
+    provider = get_provider_choice(user_id)
+    choice = stt_providers.normalize_model(provider, choice)
+    models = dict(data.get("provider_models") or {})
+    models[provider] = choice
+    data["provider_models"] = models
+    if provider == stt_providers.GEMINI:
+        data["model"] = choice
+    _save_preferences(user_id, data)
+
+
+def get_provider_choice(user_id: int) -> str:
+    return stt_providers.normalize_provider(
+        (_prefs().get(user_id) or {}).get("provider")
+    )
+
+
+def _save_preferences(user_id: int, data: dict) -> None:
+    if _prefs().set(user_id, data) is not True:
+        raise SttRequestError("Your settings could not be saved. Please try again.")
+
+
+def set_provider_choice(user_id: int, provider: str) -> None:
+    if provider not in stt_providers.PROVIDERS:
+        raise ValueError("Unknown STT provider")
+    data = _prefs().get(user_id) or {}
+    data["provider"] = provider
+    _save_preferences(user_id, data)
 
 
 @dataclass
@@ -437,6 +504,7 @@ class SttJob:
     models: List[str]
     api_key: str
     attachments: list
+    provider: str = stt_providers.GEMINI
 
 
 @dataclass
@@ -457,14 +525,20 @@ def prepare_stt_job(cwd, *, user_id: int, model_choice: Optional[str] = None) ->
     Raises `MissingSttKeyError`, `SttRequestError` (with a message for the
     user) or `SttModelLoadError`.
     """
-    api_key = get_effective_gemini_api_key(user_id)
+    provider = get_provider_choice(user_id)
+    api_key = get_provider_key(user_id, provider)
     if not api_key:
-        raise MissingSttKeyError("No Gemini API key is set.")
+        raise MissingSttKeyError(
+            f"No {stt_providers.PROVIDERS[provider].label} API key is set."
+        )
     if model_choice is None:
         model_choice = get_model_choice(user_id)
-    models = stt_models.models_for_choice(model_choice, auto=STT_MODELS)
+    model_choice = stt_providers.normalize_model(provider, model_choice)
+    models = stt_models.models_for_choice(
+        model_choice, auto=stt_providers.PROVIDERS[provider].auto_models or STT_MODELS
+    )
     first = models[0]
-    if not stt_models.is_speech_model(first):
+    if provider == stt_providers.GEMINI and not stt_models.is_speech_model(first):
         try:
             model = stt_models.load_media_model(first)
         except llm.UnknownModelError:
@@ -484,7 +558,9 @@ def prepare_stt_job(cwd, *, user_id: int, model_choice: Optional[str] = None) ->
         stt_models.has_sound(attachment) for attachment in attachments
     ):
         raise SttRequestError(_no_sound_text(first))
-    return SttJob(models=models, api_key=api_key, attachments=attachments)
+    return SttJob(
+        models=models, api_key=api_key, attachments=attachments, provider=provider
+    )
 
 
 def format_speech_transcript(
@@ -557,6 +633,7 @@ async def run_stt_job(
             api_key=job.api_key,
             status_message=status_message,
             italics_marker=italics_marker,
+            provider=job.provider,
         )
     finally:
         llm_util.reset_llm_gemini_proxy(proxy_token)
@@ -619,7 +696,9 @@ async def llm_stt(*, cwd, event, model_choice=None, log=True):
     try:
         job = prepare_stt_job(cwd, user_id=event.sender_id, model_choice=model_choice)
     except MissingSttKeyError:
-        await llm_db.request_api_key_message(event, "gemini")
+        await _start_key_setup(
+            event, get_provider_choice(event.sender_id), switch=False
+        )
         return
     except SttRequestError as e:
         await event.reply(str(e))
@@ -633,7 +712,9 @@ async def llm_stt(*, cwd, event, model_choice=None, log=True):
         )
         return
 
-    status_message = await event.reply("Transcribing...")
+    status_message = await event.reply(
+        f"Transcribing with {stt_providers.PROVIDERS[job.provider].label}..."
+    )
 
     try:
         transcription = await run_stt_job(
@@ -653,8 +734,9 @@ async def llm_stt(*, cwd, event, model_choice=None, log=True):
             file_length_threshold=STT_FILE_LENGTH_THRESHOLD,
             file_only_threshold=STT_FILE_ONLY_LENGTH_THRESHOLD,
             api_keys={
-                "gemini": job.api_key,
+                job.provider: job.api_key,
             },
+            title_generator=_job_title_generator(job, event.sender_id),
             #: The transcript must survive a status message it can no longer edit.
             send_new_on_head_failure=True,
         )
@@ -671,13 +753,35 @@ async def llm_stt(*, cwd, event, model_choice=None, log=True):
             event=event,
             exception=e,
             response_message=status_message,
-            service="gemini",
-            base_error_message="An error occurred during the API call.",
+            service=job.provider,
+            base_error_message=f"An error occurred during the {stt_providers.PROVIDERS[job.provider].label} API call. Use /provider to check your settings.",
             error_id_p=True,
         )
 
 
 # --- Bot Command Setup ---
+
+
+def _job_title_generator(job: SttJob, user_id: int):
+    if job.provider != stt_providers.VERTEX:
+        return None
+
+    async def generate(text: str):
+        proxy_url, _ = llm_util.get_proxy_config_or_error(user_id)
+        token = llm_util.set_llm_gemini_proxy(proxy_url)
+        try:
+            raw = await stt_providers.transcribe_vertex(
+                model="gemini/gemini-2.5-flash-lite",
+                attachments=[],
+                key=job.api_key,
+                prompt=f"Write a short title, filename and summary for this transcript:\n\n{text}",
+                schema=util.FilenameGeneration,
+            )
+            return util.FilenameGeneration.model_validate_json(raw)
+        finally:
+            llm_util.reset_llm_gemini_proxy(token)
+
+    return generate
 
 
 async def set_bot_menu_commands():
@@ -705,6 +809,313 @@ async def set_bot_menu_commands():
 # --- Telethon Event Handlers ---
 
 PROCESSED_GROUP_IDS = set()
+PROVIDER_CALLBACK_PREFIX = "sttprovider:"
+
+
+@dataclass(frozen=True)
+class KeySetup:
+    provider: str
+    switch: bool
+    token: str
+
+
+_key_setups: dict[int, KeySetup] = {}
+
+
+def _cancel_key_setup(user_id: int) -> None:
+    llm_db.cancel_key_flow(user_id)
+    _key_setups.pop(user_id, None)
+
+
+def _provider_button(user_id: int, text: str, action: str):
+    return tg_compat.callback_button(
+        text, f"{PROVIDER_CALLBACK_PREFIX}{user_id}:{action}".encode()
+    )
+
+
+async def _require_private_setup(event) -> bool:
+    if getattr(event, "is_private", False):
+        return True
+    username = getattr(getattr(borg, "me", None), "username", None)
+    buttons = (
+        [
+            [
+                tg_compat.url_button(
+                    "Open private settings", f"https://t.me/{username}?start=provider"
+                )
+            ]
+        ]
+        if username
+        else None
+    )
+    await llm_util.send_info_message(
+        event,
+        "Manage your provider and keys in a private chat with me.",
+        buttons=buttons,
+    )
+    return False
+
+
+async def _show_provider_panel(event, *, edit=False, welcome=False, keys=False):
+    user_id = event.sender_id
+    provider = get_provider_choice(user_id)
+    title = "**API keys**" if keys else "**Gemini provider**"
+    if welcome:
+        title = "Welcome back! Send media to transcribe.\n\n" + title
+    choice = get_model_choice(user_id)
+    label = (
+        stt_models.AUTO_LABEL
+        if choice == stt_models.AUTO
+        else stt_models.label_for(choice)
+    )
+    text = f"{title}\n\nProvider: {stt_providers.PROVIDERS[provider].label}\nModel: {label}\n\nEach provider uses its own quota and billing."
+    buttons = []
+    for value, spec in stt_providers.PROVIDERS.items():
+        has_key = bool(get_provider_key(user_id, value))
+        status = "Key saved" if has_key else "Add key"
+        prefix = "✓ " if value == provider and not keys else ""
+        action = f"key:{value}" if keys else f"use:{value}"
+        button_label = (
+            f"{'Update ' if has_key else 'Add '}{spec.label} key"
+            if keys
+            else f"{prefix}{spec.label} · {status}"
+        )
+        buttons.append([_provider_button(user_id, button_label, action)])
+    buttons.append(
+        [
+            _provider_button(
+                user_id,
+                "Back to providers" if keys else "Manage API keys",
+                "panel" if keys else "keys",
+            )
+        ]
+    )
+    if edit:
+        try:
+            await event.edit(text, buttons=buttons, parse_mode="md", link_preview=False)
+        except errors.MessageNotModifiedError:
+            pass
+    else:
+        await llm_util.send_info_message(
+            event,
+            text,
+            buttons=buttons,
+            parse_mode="md",
+            link_preview=False,
+            reply_to=False,
+        )
+
+
+async def _start_key_setup(event, provider: str, *, switch: bool) -> None:
+    if not await _require_private_setup(event):
+        return
+    user_id = event.sender_id
+    _cancel_key_setup(user_id)
+    setup = KeySetup(provider, switch, uuid.uuid4().hex[:12])
+    _key_setups[user_id] = setup
+    llm_db.AWAITING_KEY_FROM_USERS[user_id] = provider
+    llm_db.API_KEY_ATTEMPTS[user_id] = 0
+    spec = stt_providers.PROVIDERS[provider]
+    kind = (
+        "Vertex AI Express-mode API key"
+        if provider == stt_providers.VERTEX
+        else "Google AI Studio API key"
+    )
+    text = f"**Set up {spec.label}**\n\nSend your {kind} in the next message. I'll check it before saving and delete your key message.\n\n"
+    if provider == stt_providers.VERTEX:
+        text += "Use the Express-mode key setup in Vertex AI Studio. Quota and billing follow your Google Cloud account.\n\n"
+    text += (
+        "This will select the provider after the key is saved."
+        if switch
+        else "Your selected provider will stay the same."
+    )
+    text += "\nType `cancel` or press Cancel to keep your current settings."
+    buttons = [
+        [tg_compat.url_button("Get API key", spec.key_url)],
+        [_provider_button(user_id, "Cancel", f"cancel:{setup.token}")],
+    ]
+    if provider == stt_providers.GEMINI:
+        buttons.insert(
+            1, [_provider_button(user_id, "Use Vertex AI instead", "use:vertex")]
+        )
+    await llm_util.send_info_message(
+        event,
+        text,
+        buttons=buttons,
+        parse_mode="md",
+        link_preview=False,
+        reply_to=False,
+    )
+
+
+async def _delete_key_message(event) -> bool:
+    try:
+        await event.delete()
+        return True
+    except Exception:
+        return False
+
+
+async def _submit_provider_key(event, provider: str, key: str) -> None:
+    user_id = event.sender_id
+    setup = _key_setups.get(user_id)
+    if key.lower() == "cancel":
+        _cancel_key_setup(user_id)
+        await llm_util.send_info_message(
+            event, "API key setup cancelled. Your selected provider is unchanged."
+        )
+        return
+    if setup is None or setup.provider != provider:
+        _cancel_key_setup(user_id)
+        await llm_util.send_info_message(
+            event, "Open /provider to start key setup again."
+        )
+        return
+    deleted = await _delete_key_message(event)
+    delete_note = (
+        ""
+        if deleted
+        else " I couldn't delete your key message; please delete it yourself."
+    )
+    if not llm_db.validate_api_key_format(provider, key):
+        attempts = llm_db.API_KEY_ATTEMPTS.get(user_id, 0) + 1
+        llm_db.API_KEY_ATTEMPTS[user_id] = attempts
+        if attempts >= llm_db.MAX_KEY_ATTEMPTS:
+            _cancel_key_setup(user_id)
+            message = "Too many invalid attempts. Open /provider to try again."
+        else:
+            message = f"That doesn't look like a {stt_providers.PROVIDERS[provider].label} key. Please try again."
+        await llm_util.send_info_message(event, message + delete_note, reply_to=False)
+        return
+    try:
+        proxy_url, _ = llm_util.get_proxy_config_or_error(user_id)
+        token = llm_util.set_llm_gemini_proxy(proxy_url)
+        try:
+            await stt_providers.validate_key(provider, key)
+        finally:
+            llm_util.reset_llm_gemini_proxy(token)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        detail = (
+            str(exc)
+            if isinstance(exc, stt_providers.ProviderError)
+            else "Couldn't verify the key. Check connectivity and try again."
+        )
+        await llm_util.send_info_message(
+            event,
+            detail + " Your saved key and provider are unchanged." + delete_note,
+            reply_to=False,
+        )
+        return
+    if _key_setups.get(user_id) is not setup:
+        return  # Cancelled or replaced while the network check was in flight.
+    try:
+        llm_db.set_api_key(user_id=user_id, service=provider, key=key)
+    except Exception:
+        await llm_util.send_info_message(
+            event,
+            "The key couldn't be saved. Please try again." + delete_note,
+            reply_to=False,
+        )
+        return
+    _cancel_key_setup(user_id)
+    label = stt_providers.PROVIDERS[provider].label
+    if setup.switch:
+        try:
+            set_provider_choice(user_id, provider)
+        except SttRequestError as exc:
+            await llm_util.send_info_message(
+                event,
+                f"Your {label} key was saved. {exc}" + delete_note,
+                reply_to=False,
+            )
+            return
+    text = f"✅ Your {label} key is saved and checked."
+    text += (
+        f" Now using {label}."
+        if setup.switch
+        else " Your selected provider is unchanged."
+    )
+    text += delete_note
+    buttons = (
+        [[_provider_button(user_id, f"Use {label}", f"use:{provider}")]]
+        if get_provider_choice(user_id) != provider
+        else None
+    )
+    await llm_util.send_info_message(event, text, buttons=buttons, reply_to=False)
+
+
+async def _set_key_command(event, provider: str) -> None:
+    key = event.pattern_match.group(1)
+    if not getattr(event, "is_private", False):
+        if key:
+            if not await _delete_key_message(event):
+                await llm_util.send_info_message(
+                    event,
+                    "I couldn't delete your key message. Please delete it yourself.",
+                )
+        await _require_private_setup(event)
+        return
+    if not key or not key.strip():
+        await _start_key_setup(event, provider, switch=False)
+        return
+    _cancel_key_setup(event.sender_id)
+    _key_setups[event.sender_id] = KeySetup(provider, False, uuid.uuid4().hex[:12])
+    llm_db.AWAITING_KEY_FROM_USERS[event.sender_id] = provider
+    await _submit_provider_key(event, provider, key.strip())
+
+
+@borg.on(events.NewMessage(pattern=r"(?i)^/provider(?:@\w+)?\s*$"))
+async def provider_handler(event):
+    if await _require_private_setup(event):
+        _cancel_key_setup(event.sender_id)
+        await _show_provider_panel(event)
+
+
+@borg.on(events.CallbackQuery(pattern=PROVIDER_CALLBACK_PREFIX.encode()))
+@callback_util.hold_bare_answers
+async def provider_callback_handler(event):
+    parts = event.data.decode().split(":", 2)
+    if len(parts) != 3 or parts[1] != str(event.sender_id):
+        await event.answer("These settings belong to someone else.", alert=True)
+        return
+    action = parts[2]
+    if not getattr(event, "is_private", False):
+        await event.answer("Open /provider in our private chat.", alert=True)
+        return
+    if action.startswith("cancel:"):
+        setup = _key_setups.get(event.sender_id)
+        if setup is None or action.removeprefix("cancel:") != setup.token:
+            await event.answer("This setup has already ended.")
+            return
+        _cancel_key_setup(event.sender_id)
+        await event.answer("Key setup cancelled.")
+        await _show_provider_panel(event, edit=True)
+        return
+    if action in ("panel", "keys"):
+        _cancel_key_setup(event.sender_id)
+        await event.answer()
+        await _show_provider_panel(event, edit=True, keys=action == "keys")
+        return
+    verb, _, provider = action.partition(":")
+    if provider not in stt_providers.PROVIDERS or verb not in ("use", "key"):
+        await event.answer(
+            "This option is no longer available. Open /provider again.", alert=True
+        )
+        return
+    if verb == "key" or not get_provider_key(event.sender_id, provider):
+        await event.answer()
+        await _start_key_setup(event, provider, switch=verb == "use")
+        return
+    _cancel_key_setup(event.sender_id)
+    try:
+        set_provider_choice(event.sender_id, provider)
+    except SttRequestError as exc:
+        await event.answer(str(exc), alert=True)
+        return
+    await event.answer(f"Using {stt_providers.PROVIDERS[provider].label}.")
+    await _show_provider_panel(event, edit=True)
 
 
 @borg.on(events.NewMessage(pattern="/start", func=lambda e: e.is_private))
@@ -712,20 +1123,18 @@ async def start_handler(event):
     """Handles the /start command to onboard new users."""
     user_id = event.sender_id
     if llm_db.is_awaiting_key(user_id):
-        llm_db.cancel_key_flow(user_id)
-    if get_effective_gemini_api_key(user_id):
-        await event.reply(
-            "Welcome back! Your Gemini API key is already configured. You can send me media files to transcribe."
-        )
+        _cancel_key_setup(user_id)
+    if get_provider_key(user_id):
+        await _show_provider_panel(event, welcome=True)
     else:
-        await llm_db.request_api_key_message(event, "gemini")
+        await _start_key_setup(event, get_provider_choice(user_id), switch=True)
 
 
 @borg.on(events.NewMessage(pattern="/help"))
 async def help_handler(event):
     """Provides help information."""
     if llm_db.is_awaiting_key(event.sender_id):
-        llm_db.cancel_key_flow(event.sender_id)
+        _cancel_key_setup(event.sender_id)
         await event.reply("API key setup cancelled.")
 
     help_text = """
@@ -734,23 +1143,25 @@ async def help_handler(event):
 Here's how to use me:
 
 1.  **Get a Gemini API Key:**
-    You need a free API key to use my services. Get one from Google AI Studio:
+    Use a Google AI Studio key or a Vertex AI Express-mode key. Each provider uses its own quota and billing. Get an AI Studio key here:
     ➡️ **https://aistudio.google.com/app/apikey**
 
 2.  **Set Your API Key:**
-    Use the /setGeminiKey command to save your key.
+    Use /provider to choose a provider and manage both keys in a private chat. /setGeminiKey and /setVertexKey are shortcuts for saving a key.
     - Provide the key directly: `/setGeminiKey YOUR_API_KEY`
     - Or, just type /setGeminiKey and I will guide you.
 3.  **Transcribe Media:**
     Simply send any audio file, voice message, or video. If you send multiple files as an album, I will process them in a single request.
 4.  **In Other Chats:**
     Reply to a voice note, audio, video or image in any chat, even one I am not in, with a mention of me, and I post the transcript there. It uses your API key, and everyone in that chat sees it.
-5.  **Choose a Model:**
-    /model picks the Gemini model. Auto (the default) falls back to another model when one is busy or unavailable for your key; any other choice uses that model alone. 3.5 Transcribe is Google's dedicated speech-to-text model: audio only, plain text.
+5.  **Choose a Provider and Model:**
+    /provider switches providers; /model picks a model for that provider. Each provider remembers its own model choice. Auto falls back within the selected provider when a model is busy or unavailable; it never switches accounts. Google AI Studio also offers 3.5 Transcribe: audio only, plain text.
 **Available Commands:**
 - `/start`: Onboard and set up your API key.
 - `/help`: Shows this help message.
 - `/setGeminiKey [API_KEY]`: Sets or updates your Gemini API key.
+- `/setVertexKey [API_KEY]`: Sets or updates your Vertex AI Express-mode key.
+- `/provider`: Chooses Google AI Studio or Vertex AI and manages keys.
 - `/model`: Chooses the transcription model.
 """
     await event.reply(help_text, link_preview=False)
@@ -778,22 +1189,34 @@ async def rotate_keys_handler(event):
 
 @borg.on(events.NewMessage(pattern=llm_db.gemini_api_key_command_pattern()))
 async def set_key_handler(event):
-    """Delegates /setgeminikey command logic to the shared module."""
-    await llm_db.handle_set_key_command(event, "gemini")
+    await _set_key_command(event, stt_providers.GEMINI)
+
+
+@borg.on(events.NewMessage(pattern=llm_db.api_key_command_pattern("vertex")))
+async def set_vertex_key_handler(event):
+    await _set_key_command(event, stt_providers.VERTEX)
 
 
 MODEL_CALLBACK_PREFIX = "sttmodel_"
 MODEL_MENU_COLUMNS = 2
 
 
-def _model_menu_title() -> str:
-    auto = ", then ".join(stt_models.label_for(name) for name in STT_MODELS)
+def _model_menu_title(provider: str = "gemini") -> str:
+    spec = stt_providers.PROVIDERS[provider]
+    auto = ", then ".join(
+        stt_models.label_for(name) for name in spec.auto_models or STT_MODELS
+    )
     return (
         "**Choose the transcription model**\n\n"
+        f"Provider: {spec.label}. Change it with /provider.\n\n"
         f"Auto tries {auto}, and skips a model your API key cannot use. "
         "Any other choice uses that model alone.\n\n"
-        "3.5 Transcribe is Google's speech-to-text model: it hears audio "
-        "only, and writes plain text without speaker labels or emoji."
+        + (
+            "3.5 Transcribe is Google's speech-to-text model: it hears audio "
+            "only, and writes plain text without speaker labels or emoji."
+            if provider == stt_providers.GEMINI
+            else "These are Vertex AI Express-mode models."
+        )
     )
 
 
@@ -801,11 +1224,15 @@ def _model_menu_title() -> str:
 async def model_handler(event):
     """Presents the transcription model menu."""
     choice = get_model_choice(event.sender_id)
+    provider = get_provider_choice(event.sender_id)
     await bot_util.present_options(
         event,
-        title=_model_menu_title(),
-        options=stt_models.menu_options(),
-        current_value=stt_models.slug_for_choice(choice),
+        title=_model_menu_title(provider),
+        options={
+            f"{provider}:{slug}": label
+            for slug, label in stt_providers.model_options(provider).items()
+        },
+        current_value=f"{provider}:{stt_models.slug_for_choice(choice)}",
         callback_prefix=MODEL_CALLBACK_PREFIX,
         awaiting_key="stt_model_selection",
         n_cols=MODEL_MENU_COLUMNS,
@@ -820,6 +1247,24 @@ async def model_callback_handler(event):
     slug = bot_util.unsanitize_callback_data(
         event.data.decode("utf-8").removeprefix(MODEL_CALLBACK_PREFIX)
     )
+    provider = get_provider_choice(event.sender_id)
+    if ":" in slug:
+        menu_provider, slug = slug.split(":", 1)
+        if menu_provider != provider:
+            await event.answer(
+                "Your provider has changed. Send /model again.", alert=True
+            )
+            return
+    elif provider != stt_providers.GEMINI:
+        # Menus from before provider support always belonged to AI Studio.
+        await event.answer("Your provider has changed. Send /model again.", alert=True)
+        return
+    if slug not in stt_providers.model_options(provider):
+        await event.answer(
+            "That model is not offered by your current provider. Send /model again.",
+            alert=True,
+        )
+        return
     if slug == stt_models.AUTO:
         choice, label = stt_models.AUTO, stt_models.AUTO_LABEL
     else:
@@ -830,11 +1275,18 @@ async def model_callback_handler(event):
             )
             return
         choice, label = model.model_id, model.label
-    set_model_choice(event.sender_id, choice)
+    try:
+        set_model_choice(event.sender_id, choice)
+    except SttRequestError as exc:
+        await event.answer(str(exc), alert=True)
+        return
     await event.answer(f"Transcription model: {label}")
     buttons = bot_util.option_buttons(
-        stt_models.menu_options(),
-        current_value=slug,
+        {
+            f"{provider}:{key}": label
+            for key, label in stt_providers.model_options(provider).items()
+        },
+        current_value=f"{provider}:{slug}",
         callback_prefix=MODEL_CALLBACK_PREFIX,
     )
     try:
@@ -851,8 +1303,9 @@ async def model_callback_handler(event):
     )
 )
 async def key_submission_handler(event):
-    """Delegates plain-text key submission logic to the shared module."""
-    await llm_db.handle_key_submission(event)
+    provider = llm_db.get_awaiting_service(event.sender_id)
+    if provider in stt_providers.PROVIDERS:
+        await _submit_provider_key(event, provider, event.text.strip())
 
 
 #: Media with nothing to transcribe. On layer 224 a rich message arrives as
@@ -886,7 +1339,7 @@ async def media_handler(event):
 
     # If user sends media while being prompted for a key, cancel the flow.
     if llm_db.is_awaiting_key(user_id):
-        llm_db.cancel_key_flow(user_id)
+        _cancel_key_setup(user_id)
         await event.reply("API key setup cancelled. Processing your media instead...")
 
     group_id = event.grouped_id
@@ -926,8 +1379,8 @@ GUEST_NO_MEDIA_TEXT = (
     "No voice note, audio, video or image in your message or the one you " "replied to."
 )
 GUEST_INVITE_TEXT = (
-    "To use me here, start me in a private chat and set a Gemini API key "
-    "first (it is free)."
+    "To use me here, start me in a private chat and set an API key for "
+    "Google AI Studio or Vertex AI first."
 )
 
 _guest_claims = guest_util.QueryClaims(
@@ -1006,7 +1459,7 @@ async def guest_stt_handler(query):
             "try again later, or send me the media privately.",
         )
         return
-    if not get_effective_gemini_api_key(caller_id):
+    if not get_provider_key(caller_id):
         await _guest_note(
             query,
             GUEST_INVITE_TEXT,
@@ -1032,10 +1485,13 @@ async def guest_stt_handler(query):
 
     async with tg_raw.InlineEditor(borg, inline_id) as editor:
         answer = guest_util.GuestAnswerMessage(editor, logger=logger)
+        job_provider = get_provider_choice(caller_id)
 
         async def transcribe(*, cwd, event):
+            nonlocal job_provider
             try:
                 job = prepare_stt_job(cwd, user_id=caller_id)
+                job_provider = job.provider
             except SttRequestError as e:
                 await answer.finalize(text=str(e))
                 return
@@ -1062,8 +1518,8 @@ async def guest_stt_handler(query):
                 event=event,
                 exception=e,
                 response_message=answer,
-                service="gemini",
-                base_error_message="An error occurred during the API call.",
+                service=job_provider,
+                base_error_message=f"An error occurred during the {stt_providers.PROVIDERS[job_provider].label} API call. Check /provider in our private chat.",
                 error_id_p=True,
             )
         finally:

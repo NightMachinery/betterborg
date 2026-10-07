@@ -65,10 +65,13 @@ borgdir=~/code/betterborg/
 tmuxnew betterborg_stt "dash -c 'cd $(gq $borgdir) && borg_session=session_stt borg_plugin_path=stt_plugins borg_brish_count=1 $(gq "$(realpath2 python3)") $(gq $borgdir/stdborg.py)'"
 #+end_src
 
-Each user picks a model with =/model=: Auto (the default, which falls back
-when a model is busy or refuses the caller's key), one Gemini Flash model
-alone, or Gemini 3.5 Transcribe (audio only, plain text; videos need =ffmpeg=
-on the host). The models, the fallback and the speech model's quirks are in
+Each user chooses Google AI Studio or Vertex AI Express mode with =/provider=
+in a private chat. The panel manages both API keys and switches only after a
+missing key is checked and saved. =/setGeminiKey= and =/setVertexKey= update
+keys without switching providers. Each provider remembers its own =/model=
+choice: Auto falls back within that provider, and an explicit model runs
+alone. AI Studio also offers Gemini 3.5 Transcribe (audio only, plain text;
+videos need =ffmpeg= on the host). Provider setup, models and retry behavior are in
 [[file:docs/stt_models.md][docs/stt_models.md]].
 
 * reply-chainer

@@ -1,14 +1,63 @@
 # STT Models
 
-Which Gemini model the STT bot (`stt_plugins/stt.py`) transcribes with. Each
-user picks one with `/model`; the menu and the code that calls the models are
-in `uniborg/stt_models.py`.
+Which provider and Gemini model the STT bot (`stt_plugins/stt.py`) transcribes
+with. Each user picks a provider with `/provider` and a model with `/model`.
+Provider metadata and the Vertex transport are in `uniborg/stt_providers.py`;
+the common model menu and AI Studio calls are in `uniborg/stt_models.py`.
 
-The call runs with the caller's own Gemini key (or a rotated shared key), so
+The call runs with the caller's selected provider and API key, so
 whether a model works can depend on the key. A guest mention (in a chat the
-bot is not in) uses the choice of the person who mentioned it.
+bot is not in) uses the settings of the person who mentioned it. Existing
+users keep Google AI Studio and their saved model choice.
 
-## The menu
+## Provider and key setup
+
+In a private chat, `/provider` shows the selected provider, its model, and
+whether each provider has a saved key. Tap a provider with a saved key to
+switch immediately. Tap one without a key to open setup, follow **Get API
+key**, then send the key. The bot checks it with `countTokens`, saves it, and
+only then switches. A failed check or cancellation preserves the old key and
+provider. A saved key can later expire or lose model access; validation does
+not guarantee that every transcription model is available.
+
+**Manage API keys**, `/setGeminiKey [key]`, and `/setVertexKey [key]` update
+keys without changing the selected provider. Setup deletes the submitted
+message before checking the key, warns if deletion fails, and never displays
+key values. Group commands direct users to private setup; an inline key sent
+in a group is deleted on a best-effort basis and is not stored.
+
+Google AI Studio uses its Gemini Developer API key. Vertex AI uses an
+**Express-mode API key**, created through Vertex AI Studio. No project id,
+region, service-account file or OAuth setup is required by the bot. The
+providers use separate quota and billing, so switching is always explicit.
+The bot does not infer a provider from the key's prefix.
+
+Each provider remembers its own model choice. The provider, key and model
+list are captured when a transcription job is prepared; changing settings
+does not reroute an already prepared job. Retries, Auto fallbacks and Vertex
+transcript filename generation stay on that job's provider.
+
+The AI Studio admin key-rotation behavior is preserved. Vertex always uses
+the caller's saved Vertex key.
+
+## Vertex AI models
+
+Vertex offers Auto, 3.5 Flash, 3 Flash Preview, 2.5 Flash and 2.5 Flash Lite.
+Its Auto order is 3.5 Flash, 3 Flash Preview, then 2.5 Flash Lite. AI Studio's
+`latest` aliases and 3.5 Transcribe are not offered for Vertex Express mode.
+An explicit model choice uses that model alone.
+
+Vertex calls the global Express endpoint directly with `x-goog-api-key` in a
+header. Requests contain inline media and the transcription JSON schema.
+HTTP clients are created inside the existing Gemini proxy context, including
+key validation and filename generation. Upstream error bodies are replaced
+with safe status descriptions before reaching error messages or logs.
+
+Official references: [Express-mode setup and endpoints](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/express-mode/overview),
+[Express-mode API methods](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/express-mode/api-reference),
+and [API-key client example](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/samples/googlegenaisdk-vertexai-express-mode).
+
+## Google AI Studio models
 
 - **Auto**, the default: the fallthrough list `STT_MODELS` in
   `uniborg/constants.py`, which is `gemini/gemini-2.5-flash`, then
@@ -26,8 +75,11 @@ that model, but no other model is tried, and its last error is shown. When it
 refuses the key (as 2.5 Flash does for new keys), the user is told to pick
 another model.
 
-The choice is saved per user under `~/.borg/stt_preferences/`, as the model id
-or `auto`. A saved model that the menu no longer offers counts as Auto.
+Preferences are saved per user under `~/.borg/stt_preferences/`: `provider`
+selects the endpoint and `provider_models` maps each provider to a model id
+or `auto`. The legacy `model` field remains readable and is maintained for
+AI Studio. A saved model that its provider's menu no longer offers counts as
+Auto. API keys remain in the existing private API-key database.
 
 Two words used below: a **media model** is a general Gemini model, which gets
 the bot's transcription prompt and a JSON schema, and reads audio, video and
@@ -90,7 +142,8 @@ to the next model at once, and the bot remembers it for that key:
 
 - Redis key `borg:model_unavailable:<key hash>:<model>`, where the hash is the
   first 32 hex digits of the key's SHA-256 (`redis_util.api_key_hash`), never
-  the key itself.
+  the key itself. Vertex hashes a provider-prefixed key to keep its cache
+  separate from AI Studio while preserving existing AI Studio marks.
 - It lasts `STT_MODEL_UNAVAILABLE_SECONDS` (30 days), and while it lasts that
   key skips the model without a call. Other keys still try it.
 - When every model in the list has refused the key, all are tried again, so a
