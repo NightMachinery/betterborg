@@ -39,5 +39,10 @@ Starting the service alone repairs only the current boot. When this is the
 intended resolver, `sudo -kA systemctl enable --now systemd-resolved` starts it
 and enables startup after reboot.
 
+After restoring DNS, dependent services may still have unresolved upstreams.
+For Chrony, check `chronyc activity`; if time sources have unknown addresses,
+run `sudo -kA chronyc refresh` to resolve them again. Verify that the unknown
+address count clears and `chronyc tracking` reports `Leap status: Normal`.
+
 See the [official OpenAI Python SDK error handling documentation](https://developers.openai.com/api/reference/python)
 for `APIConnectionError`, `APITimeoutError` and the underlying `__cause__`.
