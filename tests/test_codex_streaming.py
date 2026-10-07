@@ -1,11 +1,14 @@
 import asyncio
 import base64
 import io
+import socket
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
 from PIL import Image
+import httpx
+import openai
 
 from uniborg import codex_util
 
@@ -410,6 +413,89 @@ class CodexStreamingTests(unittest.IsolatedAsyncioTestCase):
             codex_util.CodexStreamError, "backend reported a streaming error"
         ):
             await self._run([{"type": "error"}])
+
+    async def test_connection_error_reports_dns_failure_and_logs_safe_details(self):
+        request = httpx.Request("POST", "https://example.com/responses")
+        transport = httpx.ConnectError("[Errno -5] No address associated with hostname")
+        error = openai.APIConnectionError(request=request)
+        error.__cause__ = transport
+        with self.assertLogs(codex_util.logger, level="WARNING") as logs:
+            with self.assertRaises(codex_util.CodexStreamError) as raised:
+                await self._run(create_error=error)
+        self.assertIn("DNS lookup failed", str(raised.exception))
+        self.assertIn("APIConnectionError -> ConnectError", str(raised.exception))
+        self.assertIn("server's DNS resolver", str(raised.exception))
+        self.assertIs(raised.exception.__cause__, error)
+        self.assertIsNone(raised.exception.usage_limit)
+        self.assertIn("DNS lookup failed", logs.output[0])
+
+    async def test_network_failure_keeps_partial_text_and_delivered_images(self):
+        error = httpx.ReadTimeout("")
+        events = [
+            {
+                "type": "response.output_text.done",
+                "item_id": "message-a",
+                "text": "partial answer",
+            },
+            {
+                "type": "response.output_item.done",
+                "item": _image_item("a", self.png_b64),
+            },
+        ]
+        callback = mock.AsyncMock()
+        with self.assertRaises(codex_util.CodexStreamError) as raised:
+            await self._run(events, callback=callback, stream_error=error)
+        self.assertEqual(raised.exception.response.text, "partial answer")
+        self.assertEqual(raised.exception.response.images_delivered, 1)
+        callback.assert_awaited_once()
+        self.assertIn("waiting for Codex response data", str(raised.exception))
+        self.assertIn("Already-delivered images have been kept", str(raised.exception))
+
+    def test_network_diagnostics_classify_typed_dns_and_empty_timeout_errors(self):
+        request = httpx.Request("POST", "https://example.com/responses")
+        cases = (
+            (socket.gaierror(socket.EAI_AGAIN, ""), "DNS lookup failed"),
+            (httpx.ConnectTimeout(""), "while connecting"),
+            (httpx.ReadTimeout(""), "waiting for Codex response data"),
+            (httpx.WriteTimeout(""), "while sending"),
+            (httpx.PoolTimeout(""), "available HTTP connection"),
+            (httpx.ProxyError(""), "proxy connection failed"),
+            (ConnectionRefusedError(""), "connection was refused"),
+            (httpx.RemoteProtocolError(""), "interrupted the HTTP connection"),
+            (
+                httpx.ConnectError("CERTIFICATE_VERIFY_FAILED"),
+                "certificate verification failed",
+            ),
+        )
+        for cause, expected in cases:
+            with self.subTest(cause=type(cause).__name__):
+                error = openai.APIConnectionError(request=request)
+                error.__cause__ = cause
+                self.assertIn(expected, codex_util._network_error_message(error))
+        self.assertIn(
+            "request timed out",
+            codex_util._network_error_message(openai.APITimeoutError(request=request)),
+        )
+
+    def test_network_diagnostics_do_not_expose_request_or_exception_secrets(self):
+        secret = "sentinel-secret"
+        request = httpx.Request(
+            "POST",
+            f"https://user:{secret}@example.com/responses?token={secret}",
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+        error = openai.APIConnectionError(request=request)
+        error.__cause__ = httpx.ConnectError(f"Cannot connect to {request.url}")
+        message = codex_util._network_error_message(error)
+        self.assertIn("ConnectError", message)
+        self.assertNotIn(secret, message)
+        self.assertNotIn("example.com", message)
+
+    def test_network_diagnostics_handle_cycles_and_leave_other_errors_unchanged(self):
+        error = httpx.ConnectError("connection failed")
+        error.__cause__ = error
+        self.assertIn("ConnectError", codex_util._network_error_message(error))
+        self.assertIsNone(codex_util._network_error_message(RuntimeError("boom")))
 
     async def test_empty_completed_response_is_rejected(self):
         with self.assertRaisesRegex(codex_util.CodexStreamError, "empty result"):

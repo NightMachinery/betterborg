@@ -4,7 +4,10 @@ import base64
 import binascii
 import hashlib
 import io
+import logging
 import re
+import socket
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Optional
@@ -18,8 +21,8 @@ from PIL import Image
 from uniborg import codex_aliases, stream_driver, util
 from uniborg.constants import OPENAI_CODEX_LUNA_RESERVE
 
-
 CODEX_MODEL_PREFIX = "openai-codex/"
+logger = logging.getLogger(__name__)
 
 #: The `error.type` (bodies) or `error.code` (stream events) that marks a
 #: ChatGPT plan allowance as spent, as opposed to an ordinary rate limit.
@@ -95,6 +98,77 @@ class CodexStreamError(RuntimeError):
                 else ""
             )
         )
+
+
+def _network_error_message(exc: Exception) -> Optional[str]:
+    """Describe transport failures without copying URLs, headers or credentials.
+
+    HTTPX sometimes retains DNS errors only as text on ConnectError. Match known
+    signatures, but never send arbitrary transport exception text to Telegram.
+    """
+    if not isinstance(exc, (openai.APIConnectionError, httpx.TransportError)):
+        return None
+    chain = []
+    seen = set()
+    current = exc
+    while current is not None and id(current) not in seen and len(chain) < 8:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+
+    dns_signatures = (
+        "temporary failure in name resolution",
+        "name or service not known",
+        "no address associated with hostname",
+        "nodename nor servname provided, or not known",
+    )
+    if any(
+        isinstance(error, socket.gaierror)
+        or any(signature in str(error).lower() for signature in dns_signatures)
+        for error in chain
+    ):
+        reason = "DNS lookup failed."
+        advice = (
+            "If this persists, the bot operator should check the server's DNS resolver."
+        )
+    elif any(
+        isinstance(error, ssl.SSLCertVerificationError)
+        or "certificate_verify_failed" in str(error).lower()
+        for error in chain
+    ):
+        reason = "TLS certificate verification failed."
+        advice = "The bot operator should check the server's certificates and proxy settings."
+    elif any(isinstance(error, httpx.ConnectTimeout) for error in chain):
+        reason = "Timed out while connecting to Codex."
+        advice = "Try again shortly."
+    elif any(isinstance(error, httpx.ReadTimeout) for error in chain):
+        reason = "Timed out while waiting for Codex response data."
+        advice = "Try again shortly."
+    elif any(isinstance(error, httpx.PoolTimeout) for error in chain):
+        reason = "Timed out waiting for an available HTTP connection."
+        advice = "Try again shortly."
+    elif any(isinstance(error, httpx.WriteTimeout) for error in chain):
+        reason = "Timed out while sending the request to Codex."
+        advice = "Try again shortly."
+    elif isinstance(exc, openai.APITimeoutError):
+        reason = "The Codex request timed out."
+        advice = "Try again shortly."
+    elif any(isinstance(error, httpx.ProxyError) for error in chain):
+        reason = "The HTTP proxy connection failed."
+        advice = "The bot operator should check the server's proxy settings."
+    elif any(isinstance(error, ConnectionRefusedError) for error in chain):
+        reason = "The network connection was refused."
+        advice = "If this persists, the bot operator should check network and proxy connectivity."
+    elif any(isinstance(error, httpx.RemoteProtocolError) for error in chain):
+        reason = "The server or proxy interrupted the HTTP connection."
+        advice = "Try again shortly."
+    else:
+        reason = "Could not connect to Codex or the connection was interrupted."
+        advice = "Try again shortly. If this persists, the bot operator should check network and proxy connectivity."
+    types = list(dict.fromkeys(type(error).__name__ for error in chain))
+    return f"{reason}\nDetails: {' -> '.join(types)}\n{advice}"
 
 
 def _field(value, name, default=None):
@@ -714,8 +788,17 @@ async def stream_codex_response(
             raise RuntimeError("Codex returned an empty result (no text or images).")
         return result
     except Exception as exc:
+        network_message = _network_error_message(exc)
+        if network_message is not None:
+            logger.warning(
+                "Codex network request failed (%s): %s",
+                codex_model_name(model),
+                network_message,
+            )
         raise CodexStreamError(
-            str(exc), result, usage_limit=usage_limit or parse_usage_limit(exc)
+            network_message or str(exc),
+            result,
+            usage_limit=usage_limit or parse_usage_limit(exc),
         ) from exc
     finally:
         # Cleanup errors must not mask generation failures or cancellation.

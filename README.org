@@ -303,6 +303,8 @@ package and local Codex OAuth credentials. Access is configured in
 Telegram user IDs and the optional =MAGIC_ADMINS= sentinel. See
 [[file:docs/codex_models.md][docs/codex_models.md]] and
 [[file:docs/codex_caching.md][docs/codex_caching.md]].
+Connection failures report a specific network diagnosis and exception types;
+see [[file:docs/codex_errors.md][Codex network errors]] for troubleshooting.
 The =codex_users= roster stores names and separate Codex/image access flags.
 Bot admins can use =.codex-users= to toggle those grants and manage personal
 default models and per-model reasoning effort. Its compact overview omits
