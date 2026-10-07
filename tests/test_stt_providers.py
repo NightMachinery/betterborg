@@ -396,6 +396,23 @@ class ProviderWorkflowTests(unittest.IsolatedAsyncioTestCase):
             stt._is_retriable_stt_error(stt_providers.ProviderError("vertex", 403))
         )
 
+    async def test_runtime_vertex_key_error_shows_safe_actionable_detail(self):
+        stt.set_provider_choice(7, "vertex")
+        event = self.event()
+        error = stt_providers.ProviderError("vertex", 403)
+        job = stt.SttJob(
+            models=[], api_key=self.keys["vertex"], attachments=[], provider="vertex"
+        )
+        with patch.object(stt, "prepare_stt_job", return_value=job), patch.object(
+            stt, "run_stt_job", AsyncMock(side_effect=error)
+        ), patch.object(stt, "_show_stt_status", AsyncMock()) as status, patch.object(
+            stt.llm_util, "handle_llm_error", AsyncMock()
+        ) as generic:
+            await stt.llm_stt(cwd="/tmp/synthetic", event=event, log=False)
+        status.assert_awaited_once_with(event.reply.return_value, str(error))
+        self.assertIn("Check it with /provider", status.await_args.args[1])
+        generic.assert_not_awaited()
+
     async def test_model_refusal_cache_is_isolated_by_provider(self):
         with patch.object(stt.redis_util, "set_with_expiry", AsyncMock()) as cache:
             await stt._mark_model_unavailable("synthetic-key", "model", "gemini")

@@ -746,7 +746,7 @@ async def llm_stt(*, cwd, event, model_choice=None, log=True):
                 event, model_name=transcription.model_name, raw=transcription.raw
             )
 
-    except SttRequestError as e:
+    except (SttRequestError, stt_providers.ProviderError) as e:
         await _show_stt_status(status_message, str(e))
     except Exception as e:
         await llm_util.handle_llm_error(
@@ -1501,7 +1501,7 @@ async def guest_stt_handler(query):
                 transcription = await run_stt_job(
                     job, user_id=caller_id, status_message=answer
                 )
-            except SttRequestError as e:
+            except (SttRequestError, stt_providers.ProviderError) as e:
                 await answer.finalize(text=str(e))
                 return
             text = transcription.text

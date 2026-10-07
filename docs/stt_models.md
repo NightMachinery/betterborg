@@ -52,6 +52,8 @@ header. Requests contain inline media and the transcription JSON schema.
 HTTP clients are created inside the existing Gemini proxy context, including
 key validation and filename generation. Upstream error bodies are replaced
 with safe status descriptions before reaching error messages or logs.
+Direct and guest transcriptions show these descriptions and next steps,
+including for key-access failures.
 
 Official references: [Express-mode setup and endpoints](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/express-mode/overview),
 [Express-mode API methods](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/express-mode/api-reference),

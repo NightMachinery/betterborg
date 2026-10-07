@@ -598,6 +598,15 @@ class GuestSttTests(unittest.TestCase):
         load.assert_not_called()
         self.assertEqual(self.edits, [{"text": "hello", "parse_mode": "md"}])
 
+    def test_vertex_guest_api_errors_show_only_the_safe_status_message(self):
+        error = stt.stt_providers.ProviderError("vertex", 403)
+        with patch.object(
+            stt, "run_stt_job", AsyncMock(side_effect=error)
+        ), patch.object(stt.llm_util, "handle_llm_error", AsyncMock()) as generic:
+            self.run_query(_query(f"@{BOT_USERNAME}", reference_media=_voice()))
+        self.assertEqual(self.edits[-1]["text"], str(error))
+        generic.assert_not_awaited()
+
     def test_a_long_transcript_ends_as_rich_markdown(self):
         self.transcript = "word " * 2000
 
