@@ -80,3 +80,22 @@ Gemini-only despite touching the shared `httpx` module.
 
 Direct `httpx` downloads (e.g. audio-URL fetching, URL mimetype checks) are not Google API
 calls and are not routed through this proxy.
+
+## Troubleshooting: a dead proxy
+
+The bot does not check that the proxy is up. If nothing listens at `GEMINI_SPECIAL_HTTP_PROXY`
+(for example after a reboot that did not restart it), every Gemini call fails with
+`httpx.ConnectError: All connection attempts failed`. In the STT bot this shows up as
+"Couldn't verify the key. Check connectivity and try again." when saving a key, even for a
+valid key.
+
+To tell the two apart, test the proxy and the direct route from the server:
+
+```bash
+curl -sS -x "$GEMINI_SPECIAL_HTTP_PROXY" -o /dev/null -w '%{http_code}\n' https://aiplatform.googleapis.com/
+curl -sS -o /dev/null -w '%{http_code}\n' https://aiplatform.googleapis.com/
+```
+
+Any HTTP code (even 404) means the route works; `000` with "Could not connect" means it
+does not. If the direct route reaches Google without a region error, the simplest fix is to
+unset the variable and restart the bots. As of 2026-10-12 the production bots run without it.
