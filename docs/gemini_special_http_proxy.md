@@ -85,9 +85,15 @@ calls and are not routed through this proxy.
 
 The bot does not check that the proxy is up. If nothing listens at `GEMINI_SPECIAL_HTTP_PROXY`
 (for example after a reboot that did not restart it), every Gemini call fails with
-`httpx.ConnectError: All connection attempts failed`. In the STT bot this shows up as
-"Couldn't verify the key. Check connectivity and try again." when saving a key, even for a
-valid key.
+`httpx.ConnectError: All connection attempts failed`.
+
+The STT bot recognizes a failure to connect anywhere in the exception's cause chain
+(`llm_util.find_connection_error`) and tells users "Couldn't connect to <provider>. This is a
+problem on our server, not with your key." both when saving a key and when transcribing.
+Admins in a private chat also get `llm_util.admin_error_details`: the exception type, the
+underlying connection error and, when one is configured, the proxy address (credentials
+removed) with a reminder to check that it is running. The shared `handle_error` shows admins
+the same details for every bot; only callers that pass `proxy_url=` get the proxy line.
 
 To tell the two apart, test the proxy and the direct route from the server:
 

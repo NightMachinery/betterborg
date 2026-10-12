@@ -157,6 +157,31 @@ class ProviderWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stt.get_provider_choice(7), "gemini")
         self.assertIn("unchanged", self.info.await_args.args[1])
 
+    async def test_an_unreachable_api_blames_the_server_and_shows_admins_the_proxy(
+        self,
+    ):
+        key = "synthetic-new-vertex-key-0000"
+        self.validate.side_effect = httpx.ConnectError(f"refused while sending {key}")
+        proxy = "http://user:synthetic-secret@127.0.0.1:2080"
+        for admin in (False, True):
+            with self.subTest(admin=admin), patch.object(
+                stt.llm_util, "get_proxy_config_or_error", return_value=(proxy, None)
+            ), patch.object(stt.llm_util, "admin_private_chat_p", return_value=admin):
+                event = self.event()
+                await stt._start_key_setup(event, "vertex", switch=True)
+                await stt._submit_provider_key(event, "vertex", key)
+                text = self.info.await_args.args[1]
+                self.assertIn("Couldn't connect to Vertex AI", text)
+                self.assertIn("not with your key", text)
+                self.assertIn("unchanged", text)
+                self.assertNotIn(key, text)
+                self.assertNotIn("synthetic-secret", text)
+                if admin:
+                    self.assertIn("ConnectError", text)
+                    self.assertIn("`http://127.0.0.1:2080`", text)
+                else:
+                    self.assertNotIn("**Error:**", text)
+
     async def test_cancel_during_validation_cannot_save_or_switch_later(self):
         event = self.event()
         await stt._start_key_setup(event, "vertex", switch=True)

@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from telethon import errors, types
 from telethon._updates import EntityCache
 
@@ -179,6 +180,19 @@ class LlmSttTests(unittest.TestCase):
         self.assertEqual(error["response_message"], calls.status)
         self.assertIn("Google AI Studio API call", error["base_error_message"])
         calls.edit.assert_not_awaited()
+
+    def test_an_unreachable_api_blames_the_server_and_names_the_proxy(self):
+        failure = httpx.ConnectError("All connection attempts failed")
+        with patch.object(stt.asyncio, "sleep", AsyncMock()), patch.object(
+            stt.llm_util, "gemini_proxy_url", return_value="http://127.0.0.1:2080"
+        ):
+            calls = self.run_stt(outcome=failure)
+
+        error = calls.error.await_args.kwargs
+        self.assertIn(
+            "Couldn't connect to Google AI Studio", error["base_error_message"]
+        )
+        self.assertEqual(error["proxy_url"], "http://127.0.0.1:2080")
 
 
 def _attachment(data, mime_type):

@@ -15,6 +15,9 @@ from google.genai import types
 import asyncio
 import contextvars
 from enum import Enum
+from urllib.parse import urlsplit, urlunsplit
+import httpcore
+import httpx
 
 
 # --- Info Message Helpers ---
@@ -154,13 +157,28 @@ GEMINI_SPECIAL_HTTP_PROXY_ADMIN_ONLY_P = os.getenv(
 ).lower() in ("true", "y")
 
 
+def gemini_proxy_url() -> str | None:
+    """The configured GEMINI_SPECIAL_HTTP_PROXY, ignoring the admin-only gate."""
+    return os.getenv("GEMINI_SPECIAL_HTTP_PROXY") or None
+
+
+def redact_url_credentials(url: str) -> str:
+    parts = urlsplit(url)
+    if not (parts.username or parts.password):
+        return url
+    netloc = parts.hostname or ""
+    if parts.port:
+        netloc = f"{netloc}:{parts.port}"
+    return urlunsplit(parts._replace(netloc=netloc))
+
+
 def get_proxy_config_or_error(user_id: int) -> tuple[str | None, str | None]:
     """Get proxy configuration or return error message if blocked.
 
     Returns:
         tuple: (proxy_url, error_message) - one will be None
     """
-    proxy_url = os.getenv("GEMINI_SPECIAL_HTTP_PROXY")
+    proxy_url = gemini_proxy_url()
     if not proxy_url:
         return None, None
 
@@ -752,6 +770,63 @@ async def may_show_admin_details(event) -> bool:
     return await util.isAdmin(event)
 
 
+CONNECTION_ERROR_TYPES = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ProxyError,
+    httpcore.ConnectError,
+    httpcore.ConnectTimeout,
+    httpcore.ProxyError,
+)
+
+
+def find_connection_error(exception):
+    """The failure to connect (refused, unreachable, DNS, proxy) in EXCEPTION's chain, or None."""
+    seen = set()
+    while exception is not None and id(exception) not in seen:
+        seen.add(id(exception))
+        if isinstance(exception, CONNECTION_ERROR_TYPES):
+            return exception
+        exception = exception.__cause__ or exception.__context__
+    return None
+
+
+def connection_failure_message(label: str) -> str:
+    return (
+        f"Couldn't connect to {label}. This is a problem on our server, "
+        "not with your key. Please try again later."
+    )
+
+
+def admin_error_details(exception, *, proxy_url: str = None, secrets=()) -> str:
+    """Markdown details of EXCEPTION for admins.
+
+    Names the exception type, and for a failure to connect the underlying cause and the
+    proxy the request went through (PROXY_URL). SECRETS are redacted from the text.
+    """
+    text = f"{type(exception).__name__}: {exception}"
+    connection = find_connection_error(exception)
+    if connection is not None and connection is not exception:
+        text += f" (caused by {type(connection).__name__}: {connection})"
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    details = f"**Error:** {text}"
+    if connection is not None and proxy_url:
+        details += (
+            f"\n**Proxy:** `{redact_url_credentials(proxy_url)}` "
+            "(GEMINI_SPECIAL_HTTP_PROXY). Check that it is running, "
+            "or unset it if the server can reach Google directly."
+        )
+    return details
+
+
+def admin_private_chat_p(event) -> bool:
+    return bool(getattr(event, "is_private", False)) and util.is_admin_by_id(
+        getattr(event, "sender_id", None)
+    )
+
+
 def _should_show_error_details(
     error_message: str, is_admin: bool, is_private: bool
 ) -> bool:
@@ -772,8 +847,13 @@ async def handle_error(
     service: str = None,
     base_error_message: str = None,
     error_id_p: bool = True,
+    proxy_url: str = None,
 ):
-    """A unified error handler for LLM and TTS related operations."""
+    """A unified error handler for LLM and TTS related operations.
+
+    PROXY_URL is the proxy the failed request went through, named to admins when the
+    request could not connect.
+    """
     error_id = uuid.uuid4() if error_id_p else None
     error_message = str(exception)
 
@@ -805,7 +885,9 @@ async def handle_error(
     is_private = event.is_private
 
     if _should_show_error_details(error_message, is_admin, is_private):
-        user_facing_error = f"{user_facing_error}\n\n**Error:** {error_message}"
+        user_facing_error = f"{user_facing_error}\n\n" + admin_error_details(
+            exception, proxy_url=proxy_url
+        )
 
     try:
         if response_message:
@@ -838,6 +920,7 @@ async def handle_llm_error(
     service: str = None,
     base_error_message: str = None,
     error_id_p: bool = True,
+    proxy_url: str = None,
 ):
     """A generic error handler for LLM related operations."""
     await handle_error(
@@ -848,6 +931,7 @@ async def handle_llm_error(
         service=service,
         base_error_message=base_error_message,
         error_id_p=error_id_p,
+        proxy_url=proxy_url,
     )
 
 

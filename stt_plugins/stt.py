@@ -754,9 +754,22 @@ async def llm_stt(*, cwd, event, model_choice=None, log=True):
             exception=e,
             response_message=status_message,
             service=job.provider,
-            base_error_message=f"An error occurred during the {stt_providers.PROVIDERS[job.provider].label} API call. Use /provider to check your settings.",
+            base_error_message=_stt_failure_message(
+                e,
+                job.provider,
+                fallback="Use /provider to check your settings.",
+            ),
             error_id_p=True,
+            proxy_url=llm_util.gemini_proxy_url(),
         )
+
+
+def _stt_failure_message(exception, provider: str, *, fallback: str) -> str:
+    """The user-facing summary of a failed STT API call, ending with FALLBACK advice."""
+    label = stt_providers.PROVIDERS[provider].label
+    if llm_util.find_connection_error(exception) is not None:
+        return llm_util.connection_failure_message(label)
+    return f"An error occurred during the {label} API call. {fallback}"
 
 
 # --- Bot Command Setup ---
@@ -956,6 +969,31 @@ async def _delete_key_message(event) -> bool:
         return False
 
 
+def _key_validation_failure_message(
+    exception,
+    provider: str,
+    *,
+    key: str,
+    proxy_url: str | None,
+    admin_p: bool,
+    delete_note: str,
+) -> str:
+    if isinstance(exception, stt_providers.ProviderError):
+        detail = str(exception)
+    elif llm_util.find_connection_error(exception) is not None:
+        detail = llm_util.connection_failure_message(
+            stt_providers.PROVIDERS[provider].label
+        )
+    else:
+        detail = "Couldn't verify the key. Please try again."
+    text = f"{detail} Your saved key and provider are unchanged.{delete_note}"
+    if admin_p and not isinstance(exception, stt_providers.ProviderError):
+        text += "\n\n" + llm_util.admin_error_details(
+            exception, proxy_url=proxy_url, secrets=(key,)
+        )
+    return text
+
+
 async def _submit_provider_key(event, provider: str, key: str) -> None:
     user_id = event.sender_id
     setup = _key_setups.get(user_id)
@@ -987,6 +1025,7 @@ async def _submit_provider_key(event, provider: str, key: str) -> None:
             message = f"That doesn't look like a {stt_providers.PROVIDERS[provider].label} key. Please try again."
         await llm_util.send_info_message(event, message + delete_note, reply_to=False)
         return
+    proxy_url = None
     try:
         proxy_url, _ = llm_util.get_proxy_config_or_error(user_id)
         token = llm_util.set_llm_gemini_proxy(proxy_url)
@@ -997,15 +1036,18 @@ async def _submit_provider_key(event, provider: str, key: str) -> None:
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        detail = (
-            str(exc)
-            if isinstance(exc, stt_providers.ProviderError)
-            else "Couldn't verify the key. Check connectivity and try again."
-        )
         await llm_util.send_info_message(
             event,
-            detail + " Your saved key and provider are unchanged." + delete_note,
+            _key_validation_failure_message(
+                exc,
+                provider,
+                key=key,
+                proxy_url=proxy_url,
+                admin_p=llm_util.admin_private_chat_p(event),
+                delete_note=delete_note,
+            ),
             reply_to=False,
+            parse_mode="md",
         )
         return
     if _key_setups.get(user_id) is not setup:
@@ -1519,8 +1561,13 @@ async def guest_stt_handler(query):
                 exception=e,
                 response_message=answer,
                 service=job_provider,
-                base_error_message=f"An error occurred during the {stt_providers.PROVIDERS[job_provider].label} API call. Check /provider in our private chat.",
+                base_error_message=_stt_failure_message(
+                    e,
+                    job_provider,
+                    fallback="Check /provider in our private chat.",
+                ),
                 error_id_p=True,
+                proxy_url=llm_util.gemini_proxy_url(),
             )
         finally:
             await util.remove_potential_file(cwd)
