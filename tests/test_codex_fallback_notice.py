@@ -57,7 +57,9 @@ class CodexFallbackNoticeTests(unittest.TestCase):
             )
             stack.enter_context(
                 patch.object(
-                    plugin.user_manager, "get_prefs", return_value=SimpleNamespace()
+                    plugin.user_manager,
+                    "get_prefs",
+                    return_value=SimpleNamespace(gemini_provider="gemini"),
                 )
             )
             save = stack.enter_context(patch.object(plugin.user_manager, "set_model"))

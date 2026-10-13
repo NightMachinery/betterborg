@@ -2602,6 +2602,10 @@ class TopicTitleHookTests(_BotChatCase):
             plugin.user_manager, "get_title_model", return_value="auto"
         ), patch.object(
             plugin, "get_effective_gemini_api_key", return_value="gemini-key"
+        ), patch.object(
+            plugin, "get_effective_api_key", return_value="vertex-key"
+        ), patch.object(
+            plugin.user_manager, "get_gemini_provider", return_value="vertex"
         ):
             generate = plugin._topic_title_generator(USER_ID, codex_p=True)
             title = asyncio.run(generate("prompt"))
@@ -2615,8 +2619,9 @@ class TopicTitleHookTests(_BotChatCase):
             dict(
                 choice="auto",
                 codex_p=True,
-                api_keys={"gemini": "gemini-key"},
+                api_keys={"gemini": "gemini-key", "vertex": "vertex-key"},
                 api_user_id=USER_ID,
+                gemini_provider="vertex",
             ),
         )
 

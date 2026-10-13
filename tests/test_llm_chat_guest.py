@@ -657,7 +657,7 @@ class _MediaTestCase(_GuestTestCase):
     def setUp(self):
         super().setUp()
         for target, name, value in (
-            (plugin, "is_native_gemini_files_mode", lambda model: False),
+            (plugin, "is_native_gemini_files_mode", lambda model, **kwargs: False),
             #: python-magic is not installed everywhere the tests run.
             (plugin, "mime_guess", lambda path: "image/png"),
             (plugin.history_util, "get_cached_file", AsyncMock(return_value=None)),

@@ -105,6 +105,7 @@ class HelpTests(unittest.TestCase):
         prefs = SimpleNamespace(
             group_activation_mode="mention_and_reply",
             model="gemini/gemini-3-flash-preview",
+            gemini_provider="gemini",
             title_model="auto",
         )
         with ExitStack() as stack:

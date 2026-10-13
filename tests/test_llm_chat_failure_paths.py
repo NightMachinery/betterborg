@@ -97,7 +97,9 @@ class PlaceholderFailureTests(unittest.TestCase):
             "is_live_mode_active",
             return_value=False,
         ), patch.object(
-            plugin.user_manager, "get_prefs", return_value=SimpleNamespace()
+            plugin.user_manager,
+            "get_prefs",
+            return_value=SimpleNamespace(gemini_provider="gemini"),
         ), patch.object(
             plugin.util, "isAdmin", new=AsyncMock(return_value=False)
         ), patch.object(

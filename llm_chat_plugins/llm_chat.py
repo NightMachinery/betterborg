@@ -145,6 +145,7 @@ async def _refresh_message_reactions(client, chat_id, messages: List[Message]) -
 from uniborg import util
 from uniborg import llm_db
 from uniborg import llm_util
+from uniborg import gemini_providers
 from uniborg.llm_util import (
     AutoDeleteMode,
     AUTO_DELETE_TIME,
@@ -1235,6 +1236,7 @@ METADATA_MODES = {
 
 
 STREAM_CALLBACK_PREFIX = "stream:"
+GEMINI_PROVIDER_CALLBACK_PREFIX = "geminiprovider:"
 #: The placeholder an answer streams into, when nothing else is shown first.
 RESPONSE_PLACEHOLDER = "..."
 
@@ -1255,6 +1257,11 @@ BOT_COMMANDS = [
         "description": f"Get your last {LOG_COUNT_LIMIT} conversation logs",
     },
     {"command": "setgeminikey", "description": "Set or update your Gemini API key"},
+    {"command": "setvertexkey", "description": "Set or update your Vertex AI API key"},
+    {
+        "command": "geminiprovider",
+        "description": "Run Gemini models on Google AI Studio or Vertex AI",
+    },
     {
         "command": "setopenrouterkey",
         "description": "Set or update your OpenRouter API key",
@@ -1851,6 +1858,8 @@ class UserPrefs(_SavedSettings):
     """Pydantic model for type-safe user preferences."""
 
     model: str = Field(default=DEFAULT_MODEL)
+    #: Where native Gemini chat runs: Google AI Studio or Vertex AI (/geminiProvider).
+    gemini_provider: str = Field(default=gemini_providers.AI_STUDIO)
     system_prompt: Optional[str] = Field(default=None)
     #: Reasoning effort is per-model: {model_id: level}.
     thinking_by_model: Dict[str, str] = Field(default_factory=dict)
@@ -1941,6 +1950,16 @@ class UserManager:
     def set_model(self, user_id: int, model_name: str):
         prefs = self.get_prefs(user_id)
         prefs.model = model_name
+        self._save_prefs(user_id, prefs)
+
+    def get_gemini_provider(self, user_id: int) -> str:
+        return gemini_providers.normalize(self.get_prefs(user_id).gemini_provider)
+
+    def set_gemini_provider(self, user_id: int, provider: str):
+        if provider not in gemini_providers.LABELS:
+            raise ValueError(f"Unknown Gemini provider: {provider!r}")
+        prefs = self.get_prefs(user_id)
+        prefs.gemini_provider = provider
         self._save_prefs(user_id, prefs)
 
     def set_system_prompt(self, user_id: int, prompt: Optional[str]):
@@ -2357,9 +2376,18 @@ async def send_info_message(
 # --- Core Logic & Helpers ---
 
 
-def is_native_gemini_files_mode(model: str) -> bool:
-    """Check if we should use the native Gemini Files API for attachments."""
-    return is_native_gemini(model) and GEMINI_NATIVE_FILE_MODE == "files"
+def is_native_gemini_files_mode(
+    model: str, *, gemini_provider: str = gemini_providers.AI_STUDIO
+) -> bool:
+    """Check if we should use the native Gemini Files API for attachments.
+
+    Vertex AI has no Files API, so its attachments are sent inline.
+    """
+    return (
+        is_native_gemini(model)
+        and GEMINI_NATIVE_FILE_MODE == "files"
+        and gemini_provider == gemini_providers.AI_STUDIO
+    )
 
 
 def _get_effective_last_n_limit(chat_id: int, user_id: int) -> int:
@@ -2985,8 +3013,14 @@ def _title_settings(user_id: int, *, codex_p: bool) -> dict:
     return dict(
         choice=user_manager.get_title_model(user_id),
         codex_p=codex_p,
-        api_keys={"gemini": get_effective_gemini_api_key(user_id)},
+        api_keys={
+            gemini_providers.AI_STUDIO: get_effective_gemini_api_key(user_id),
+            gemini_providers.VERTEX: get_effective_api_key(
+                user_id, gemini_providers.VERTEX
+            ),
+        },
         api_user_id=user_id,
+        gemini_provider=user_manager.get_gemini_provider(user_id),
     )
 
 
@@ -4362,6 +4396,48 @@ def get_effective_api_key(user_id: int, service: str) -> str | None:
     return llm_db.get_api_key(user_id=user_id, service=service)
 
 
+def _gemini_chat_service(
+    user_id: int, model: str, service: str, *, image_generation: bool = False
+) -> str:
+    """SERVICE, or Vertex AI's when USER_ID runs native Gemini chat there.
+
+    Image generation stays on Google AI Studio.
+    """
+    if (
+        service == gemini_providers.AI_STUDIO
+        and is_native_gemini(model)
+        and not image_generation
+        and not is_image_generation_model(model)
+        and not is_native_gemini_image_generation(model)
+        and user_manager.get_gemini_provider(user_id) == gemini_providers.VERTEX
+    ):
+        return gemini_providers.VERTEX
+    return service
+
+
+def _gemini_provider_of(service: str) -> str:
+    if service == gemini_providers.VERTEX:
+        return gemini_providers.VERTEX
+    return gemini_providers.AI_STUDIO
+
+
+def _vertex_model_names() -> str:
+    return ", ".join(
+        _model_display_name(model) for model in gemini_providers.VERTEX_CHAT_MODELS
+    )
+
+
+def _vertex_refusal(model: str, service: str) -> Optional[str]:
+    """Why MODEL cannot answer on SERVICE, or None when it can."""
+    if service != gemini_providers.VERTEX or gemini_providers.vertex_serves_p(model):
+        return None
+    return (
+        f"{_model_display_name(model)} is not available on Vertex AI. "
+        f"Choose one of {_vertex_model_names()} with /setModel, "
+        "or switch back to Google AI Studio with /geminiProvider."
+    )
+
+
 def _create_retry_logger():
     """Create a logger function that saves model call details to a temp file."""
 
@@ -5647,6 +5723,7 @@ async def _process_media(
     is_private: bool,
     check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
     media_key: Optional[str] = None,
+    gemini_provider: str = gemini_providers.AI_STUDIO,
 ) -> ProcessMediaResult:
     """
     Downloads or retrieves media from cache, prepares it for litellm,
@@ -5670,6 +5747,7 @@ async def _process_media(
         model_in_use=model_in_use,
         is_private=is_private,
         check_gemini_cached_files_p=check_gemini_cached_files_p,
+        gemini_provider=gemini_provider,
     )
     part = result.media_part
     if part is not None and part.get("type") != "text" and _is_guest_media_key(file_id):
@@ -5689,11 +5767,12 @@ async def _process_media_file(
     model_in_use: str,
     is_private: bool,
     check_gemini_cached_files_p: bool,
+    gemini_provider: str = gemini_providers.AI_STUDIO,
 ) -> ProcessMediaResult:
     """`_process_media` for the file FILE_ID, of MESSAGE if it is not None."""
     try:
         # --- Branch 1: Gemini Files API Mode ---
-        if is_native_gemini_files_mode(model_in_use):
+        if is_native_gemini_files_mode(model_in_use, gemini_provider=gemini_provider):
             gemini_client = None
 
             cached_info = await history_util.get_cached_gemini_file_info(
@@ -6304,6 +6383,7 @@ async def _process_message_content(
     check_gemini_cached_files_p: bool = DEFAULT_CHECK_GEMINI_CACHED_FILES_P,
     is_private: bool,
     export_mode: bool = False,
+    gemini_provider: str = gemini_providers.AI_STUDIO,
 ) -> ProcessContentResult:
     """Processes a single message's text and media into litellm content parts."""
     text_buffer, media_parts, warnings = [], [], []
@@ -6389,6 +6469,7 @@ async def _process_message_content(
             model_in_use,
             is_private=is_private,
             check_gemini_cached_files_p=check_gemini_cached_files_p,
+            gemini_provider=gemini_provider,
         )
         warnings.extend(media_result.warnings)
         if media_result.media_part:
@@ -6472,6 +6553,7 @@ async def _process_turns_to_history(
     is_private: bool,
     export_mode: bool = False,
     include_system_prompt_p: bool = True,
+    gemini_provider: str = gemini_providers.AI_STUDIO,
 ) -> tuple[List[dict], List[str]]:
     """
     Processes a final, sorted list of messages into litellm history format,
@@ -6530,6 +6612,7 @@ async def _process_turns_to_history(
                     check_gemini_cached_files_p=check_gemini_cached_files_p,
                     is_private=is_private,
                     export_mode=export_mode,
+                    gemini_provider=gemini_provider,
                 )
                 text_buffer.extend(content_result.text_parts)
                 media_parts.extend(content_result.media_parts)
@@ -6578,6 +6661,7 @@ async def _process_turns_to_history(
                 check_gemini_cached_files_p=check_gemini_cached_files_p,
                 is_private=is_private,
                 export_mode=export_mode,
+                gemini_provider=gemini_provider,
             )
             all_warnings.extend(content_result.warnings)
 
@@ -6748,6 +6832,7 @@ async def build_conversation_history(
     is_private: bool,
     export_mode: bool = False,
     include_system_prompt_p: bool = True,
+    gemini_provider: str = gemini_providers.AI_STUDIO,
 ) -> ConversationHistoryResult:
     """
     Orchestrates the construction of a conversation history based on the user's
@@ -6783,6 +6868,7 @@ async def build_conversation_history(
                 is_private=is_private,
                 export_mode=export_mode,
                 include_system_prompt_p=include_system_prompt_p,
+                gemini_provider=gemini_provider,
             )
             if include_system_prompt_p:
                 append_runtime_context_to_latest_user_message(
@@ -6935,6 +7021,7 @@ async def build_conversation_history(
         is_private=is_private,
         export_mode=export_mode,
         include_system_prompt_p=include_system_prompt_p,
+        gemini_provider=gemini_provider,
     )
     if include_system_prompt_p:
         append_runtime_context_to_latest_user_message(
@@ -7081,6 +7168,18 @@ def register_handlers():
             func=lambda e: e.is_private,
         )
     )(set_pioneer_key_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/setvertexkey{bot_username_suffix_re}(?:\s+(.*))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(set_vertex_key_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/geminiprovider{bot_username_suffix_re}(?:\s+(\S+))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(gemini_provider_handler)
     borg.on(
         events.NewMessage(
             pattern=rf"(?i)^/setmodel{bot_username_suffix_re}(?:\s+(.*))?\s*$",
@@ -7383,15 +7482,16 @@ async def start_handler(event):
         llm_db.cancel_key_flow(user_id)
     cancel_input_flow(user_id)
 
-    # Check for Gemini API key specifically
-    if get_effective_gemini_api_key(user_id):
+    # Check for the key of the user's Gemini provider specifically
+    provider = user_manager.get_gemini_provider(user_id)
+    if get_effective_api_key(user_id, provider):
         await event.reply(
-            f"{BOT_META_INFO_PREFIX}Welcome back! Your Gemini API key is configured. You can start chatting with me.\n\n"
+            f"{BOT_META_INFO_PREFIX}Welcome back! Your {gemini_providers.LABELS[provider]} API key is configured. You can start chatting with me.\n\n"
             "Use /help to see all available commands."
         )
     else:
-        # If no Gemini key, start the process for it.
-        await llm_db.request_api_key_message(event, "gemini")
+        # If no key, start the process for it.
+        await llm_db.request_api_key_message(event, provider)
 
 
 async def help_handler(event):
@@ -7506,6 +7606,8 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /log: Get your last {LOG_COUNT_LIMIT} conversation logs as files.
 - /asfile or ..: Export conversation history as markdown file.
 - /setgeminikey: Sets or updates your Gemini API key.
+- /setVertexKey: Sets or updates your Vertex AI (Express mode) API key.
+- /geminiProvider: Run Gemini models on Google AI Studio or Vertex AI. Current: `{gemini_providers.LABELS[user_manager.get_gemini_provider(event.sender_id)]}`.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
 - /setTitleModel: The model that writes file titles and summaries, and names new topics with a matching topic icon. Its panel also chooses the initial name: New Chat or Question text. Current model: `{prefs.title_model}`.
 - /codexStatus: Codex usage limits and the temporary stand-in model.
@@ -7849,6 +7951,7 @@ async def status_handler(event):
     status_message = (
         f"**Your Personal Bot Settings**\n\n"
         f"• **Model:** {model_status}\n"
+        f"• **Gemini Provider:** `{gemini_providers.LABELS[user_manager.get_gemini_provider(user_id)]}`\n"
         f"• **Title Model:** `{prefs.title_model}`\n"
         f"• **Initial Topic Name:** `{topic_titles.INITIAL_NAME_STYLES[user_manager.get_topic_initial_name(user_id)]}`\n"
         f"{codex_quota_line}"
@@ -7967,6 +8070,112 @@ async def set_deepseek_key_handler(event):
 async def set_mistral_key_handler(event):
     """Delegates /setmistralkey command logic to the shared module."""
     await llm_db.handle_set_key_command(event, "mistral")
+
+
+async def set_vertex_key_handler(event):
+    """Delegates /setvertexkey command logic to the shared module."""
+    await llm_db.handle_set_key_command(event, gemini_providers.VERTEX)
+
+
+#: `/geminiProvider ARG` names a provider without the menu.
+GEMINI_PROVIDER_ARGS = {
+    "aistudio": gemini_providers.AI_STUDIO,
+    "studio": gemini_providers.AI_STUDIO,
+    "gemini": gemini_providers.AI_STUDIO,
+    "vertex": gemini_providers.VERTEX,
+}
+GEMINI_PROVIDER_USAGE = (
+    "Usage: `/geminiProvider`, or `/geminiProvider aistudio|vertex`."
+)
+
+
+def _gemini_provider_menu_text(user_id: int) -> str:
+    current = user_manager.get_gemini_provider(user_id)
+
+    def key_status(service: str) -> str:
+        return "key set" if get_effective_api_key(user_id, service) else "no key yet"
+
+    ai_studio = gemini_providers.AI_STUDIO
+    vertex = gemini_providers.VERTEX
+    model = user_manager.get_prefs(user_id).model
+    refusal = (
+        _vertex_refusal(model, _gemini_chat_service(user_id, model, ai_studio))
+        if is_native_gemini(model)
+        else None
+    )
+    return "\n".join(
+        [
+            "**Gemini Provider**",
+            "Where Gemini models run. Each provider needs its own API key.",
+            f"• **{gemini_providers.LABELS[ai_studio]}** ({key_status(ai_studio)}): "
+            "every Gemini model. Key: /setGeminiKey",
+            f"• **{gemini_providers.LABELS[vertex]}** ({key_status(vertex)}): "
+            f"{_vertex_model_names()}. Other Gemini models are refused. "
+            "Key: /setVertexKey",
+            "",
+            "Image generation, voice replies and live mode always use Google AI Studio.",
+            "",
+            f"Current: **{gemini_providers.LABELS[current]}**",
+            *(["", f"⚠️ Your model: {refusal}"] if refusal else []),
+        ]
+    )
+
+
+def _gemini_provider_menu_buttons(user_id: int) -> Optional[list]:
+    if not IS_BOT:
+        return None
+    current = user_manager.get_gemini_provider(user_id)
+    return util.build_menu(
+        [
+            tg_compat.callback_button(
+                f"✅ {label}" if provider == current else label,
+                data=f"{GEMINI_PROVIDER_CALLBACK_PREFIX}{provider}",
+            )
+            for provider, label in gemini_providers.LABELS.items()
+        ],
+        n_cols=2,
+    )
+
+
+async def _apply_gemini_provider(event, provider: str) -> None:
+    """Switch to PROVIDER, asking for its key when there is none yet."""
+    user_manager.set_gemini_provider(event.sender_id, provider)
+    if not get_effective_api_key(event.sender_id, provider):
+        await llm_db.request_api_key_message(event, provider)
+
+
+async def gemini_provider_handler(event):
+    """/geminiProvider: run Gemini models on Google AI Studio or Vertex AI."""
+    user_id = event.sender_id
+    arg = (event.pattern_match.group(1) or "").strip().lower()
+    if arg:
+        provider = GEMINI_PROVIDER_ARGS.get(arg)
+        if provider is None:
+            await send_info_message(event, GEMINI_PROVIDER_USAGE, parse_mode="md")
+            return
+        await _apply_gemini_provider(event, provider)
+    await send_info_message(
+        event,
+        _gemini_provider_menu_text(user_id),
+        parse_mode="md",
+        buttons=_gemini_provider_menu_buttons(user_id),
+    )
+
+
+async def _gemini_provider_press_handler(event, provider: str):
+    if provider not in gemini_providers.LABELS:
+        await event.answer("Unknown provider.", alert=True)
+        return
+    await _apply_gemini_provider(event, provider)
+    try:
+        await event.edit(
+            f"{BOT_META_INFO_PREFIX}{_gemini_provider_menu_text(event.sender_id)}",
+            parse_mode="md",
+            buttons=_gemini_provider_menu_buttons(event.sender_id),
+        )
+    except errors.rpcerrorlist.MessageNotModifiedError:
+        pass
+    await event.answer(f"Gemini provider: {gemini_providers.LABELS[provider]}.")
 
 
 async def set_pioneer_key_handler(event):
@@ -11174,6 +11383,10 @@ async def callback_handler(event):
             )
         )
         await event.answer("Reasoning effort updated.")
+    elif data_str.startswith(GEMINI_PROVIDER_CALLBACK_PREFIX):
+        await _gemini_provider_press_handler(
+            event, data_str[len(GEMINI_PROVIDER_CALLBACK_PREFIX) :]
+        )
     elif data_str.startswith(STREAM_CALLBACK_PREFIX):
         choice = stream_driver.stream_choice(data_str[len(STREAM_CALLBACK_PREFIX) :])
         await _stream_menu_press_handler(event, scope=choice.scope, mode=choice.mode)
@@ -12638,6 +12851,8 @@ class GenerationRequest:
     #: Notes for the user; `_generate_response` appends to it.
     warnings: list
     surface: GenerationSurface = GenerationSurface.CHAT
+    #: Where a native Gemini model runs (`gemini_providers`).
+    gemini_provider: str = gemini_providers.AI_STUDIO
 
 
 @dataclass(frozen=True)
@@ -12724,8 +12939,12 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
     # Free-tier keys have a per-model cached-content storage limit of 0; once we've seen
     # that 429 for this (key, model) we skip caching pre-emptively to avoid recurring errors.
     caching_applied_p = False
+    vertex_p = req.gemini_provider == gemini_providers.VERTEX
     if is_native_gemini(model_in_use):
-        if await history_util.is_gemini_caching_disabled(api_key, model_in_use):
+        #: Vertex AI Express keys cannot create cached contents.
+        if vertex_p or await history_util.is_gemini_caching_disabled(
+            api_key, model_in_use
+        ):
             _strip_cache_control(messages)
         else:
             _apply_cache_control(messages)
@@ -12746,6 +12965,8 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
         "api_key": api_key,
         "stream": use_streaming,
     }
+    if vertex_p:
+        api_kwargs["api_base"] = gemini_providers.VERTEX_API_BASE
 
     #: Reasoning effort is per-model: prefix > this chat > personal > default.
     reasoning = _get_effective_reasoning(
@@ -13164,6 +13385,17 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
         model_in_use = DEFAULT_MODEL
         service_needed = llm_util.get_service_from_model(model_in_use)
     model_capabilities = get_model_capabilities(model_in_use)
+    service_needed = _gemini_chat_service(
+        user_id,
+        model_in_use,
+        service_needed,
+        image_generation=prefix_result.image_generation,
+    )
+    vertex_refusal = _vertex_refusal(model_in_use, service_needed)
+    if vertex_refusal:
+        await send_info_message(event, vertex_refusal, parse_mode=None)
+        return
+    gemini_provider = _gemini_provider_of(service_needed)
     api_key = get_effective_api_key(user_id, service_needed)
 
     if not api_key:
@@ -13225,6 +13457,7 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
             model_in_use,
             is_private=event.is_private,
             include_system_prompt_p=True,
+            gemini_provider=gemini_provider,
         )
         messages = history_result.history
         warnings = history_result.warnings
@@ -13258,6 +13491,7 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
                 prefix_effort=prefix_result.reasoning_effort,
                 image_generation=prefix_result.image_generation,
                 warnings=warnings,
+                gemini_provider=gemini_provider,
             )
         )
         if generation.delivered:
@@ -13387,6 +13621,10 @@ class GuestRequestPlan:
     #: An `.i` request, which the guest answer shows as its photo.
     image_generation: bool = False
 
+    @property
+    def gemini_provider(self) -> str:
+        return _gemini_provider_of(self.service)
+
 
 class GuestRequestRefused(Exception):
     """A guest request the caller may not make; the message says why."""
@@ -13448,7 +13686,15 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
         if prefix.image_generation:
             raise GuestRequestRefused(CODEX_IMAGEGEN_ACCESS_DENIED)
         model = DEFAULT_MODEL
-    service = llm_util.get_service_from_model(model)
+    service = _gemini_chat_service(
+        user_id,
+        model,
+        llm_util.get_service_from_model(model),
+        image_generation=prefix.image_generation,
+    )
+    vertex_refusal = _vertex_refusal(model, service)
+    if vertex_refusal:
+        raise GuestRequestRefused(vertex_refusal)
     return GuestRequestPlan(
         model=model,
         service=service,
@@ -13706,6 +13952,7 @@ async def _run_guest_answer(
             plan.model,
             is_private=False,
             media_key=key,
+            gemini_provider=plan.gemini_provider,
         )
         restore_warnings.extend(result.warnings)
         return result.media_part
@@ -13721,6 +13968,7 @@ async def _run_guest_answer(
             plan.api_key,
             plan.model,
             is_private=False,
+            gemini_provider=plan.gemini_provider,
         )
         if not any(entry["role"] != "system" for entry in history):
             await answer.finalize(
@@ -13749,6 +13997,7 @@ async def _run_guest_answer(
                 image_generation=plan.image_generation,
                 warnings=warnings,
                 surface=GenerationSurface.GUEST,
+                gemini_provider=plan.gemini_provider,
             )
         )
         if generation.delivered:

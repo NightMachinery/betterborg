@@ -54,6 +54,11 @@ function realpath2 {
 tmuxnew betterborg_llm_chat "dash -c 'cd $(gq $borgdir) && borg_session=session_llm_chat borg_plugin_path=llm_chat_plugins borg_brish_count=1 $(gq "$(realpath2 python3)") $(gq $borgdir/stdborg.py)'"
 #+end_src
 
+Gemini models run on Google AI Studio or, per user, on Vertex AI Express mode:
+=/geminiProvider= switches, =/setVertexKey= sets the key. Vertex serves fewer
+models and has no Files API or explicit caching; see
+[[file:docs/gemini_vertex_chat.md][docs/gemini_vertex_chat.md]].
+
 * llm-stt
 #+begin_src zsh :eval never
 borgdir=~/code/betterborg/

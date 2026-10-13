@@ -15,7 +15,7 @@ from typing import Awaitable, Callable, Optional, Type, TypeVar
 import litellm
 from pydantic import BaseModel
 
-from uniborg import codex_util, llm_db, llm_util, util
+from uniborg import codex_util, gemini_providers, llm_db, llm_util, util
 from uniborg.constants import GEMINI_FLASH_LITE_LATEST, OPENAI_CODEX_LUNA_RESERVE
 
 AUTO_TITLE_MODEL = "auto"
@@ -97,6 +97,7 @@ async def complete_structured(
     model: str,
     api_key: Optional[str] = None,
     api_user_id: Optional[int] = None,
+    api_base: Optional[str] = None,
 ) -> SchemaT:
     """One request to `model`, validated against `schema`.
 
@@ -121,6 +122,8 @@ async def complete_structured(
         messages=[{"role": "user", "content": prompt}],
         response_format=schema,
     )
+    if api_base:
+        completion_kwargs["api_base"] = api_base
     #: Native Gemini (Google API) traffic goes through the special proxy.
     if model.startswith("gemini/"):
         proxy_client = llm_util.create_litellm_proxy_client(api_user_id)
@@ -131,9 +134,13 @@ async def complete_structured(
 
 
 def _api_key_for(
-    model: str, *, api_keys: Optional[dict], api_user_id: Optional[int]
+    model: str,
+    *,
+    api_keys: Optional[dict],
+    api_user_id: Optional[int],
+    service: Optional[str] = None,
 ) -> Optional[str]:
-    service = llm_util.get_service_from_model(model)
+    service = service or llm_util.get_service_from_model(model)
     api_key = (api_keys or {}).get(service)
     if not api_key and api_user_id is not None:
         api_key = llm_db.get_api_key(api_user_id, service=service)
@@ -151,29 +158,48 @@ async def generate_title(
     timeout: float = TITLE_TIMEOUT_SECONDS,
     complete: Optional[Callable[..., Awaitable[BaseModel]]] = None,
     codex_pause: Optional[CodexTitlePause] = None,
+    gemini_provider: str = gemini_providers.AI_STUDIO,
 ) -> SchemaT:
     """A title from the model `choice` means, or else from Flash Lite.
 
     `api_keys` maps a service to a key and wins over the user's stored keys.
+    On Vertex AI (`gemini_provider`), a Gemini model it does not serve is
+    replaced by `gemini_providers.VERTEX_TITLE_MODEL`.
     Raises `TitleUnavailableError` when no candidate produced a title.
     """
     complete = complete or complete_structured
     codex_pause = codex_pause or CODEX_PAUSE
+    vertex_p = gemini_provider == gemini_providers.VERTEX
     model = resolve_title_model(choice, codex_p=codex_p)
-    candidates = [model]
-    if model != FALLBACK_TITLE_MODEL:
-        candidates.append(FALLBACK_TITLE_MODEL)
+    candidates = []
+    for candidate in (model, FALLBACK_TITLE_MODEL):
+        if (
+            vertex_p
+            and candidate.startswith("gemini/")
+            and not gemini_providers.vertex_serves_p(candidate)
+        ):
+            candidate = gemini_providers.VERTEX_TITLE_MODEL
+        if candidate not in candidates:
+            candidates.append(candidate)
 
     failures = []
     for candidate in candidates:
         api_key = None
+        extra = {}
         if is_codex_model(candidate):
             if codex_pause.active():
                 failures.append(f"{candidate}: paused until {codex_pause.until}")
                 continue
         else:
+            service = None
+            if vertex_p and candidate.startswith("gemini/"):
+                service = gemini_providers.VERTEX
+                extra["api_base"] = gemini_providers.VERTEX_API_BASE
             api_key = _api_key_for(
-                candidate, api_keys=api_keys, api_user_id=api_user_id
+                candidate,
+                api_keys=api_keys,
+                api_user_id=api_user_id,
+                service=service,
             )
             if not api_key:
                 failures.append(f"{candidate}: no API key")
@@ -186,6 +212,7 @@ async def generate_title(
                     model=candidate,
                     api_key=api_key,
                     api_user_id=api_user_id,
+                    **extra,
                 ),
                 timeout,
             )
@@ -204,6 +231,7 @@ def file_title_generator(
     codex_p: bool,
     api_keys: Optional[dict] = None,
     api_user_id: Optional[int] = None,
+    gemini_provider: str = gemini_providers.AI_STUDIO,
 ) -> Callable[[str], Awaitable[util.FilenameGeneration]]:
     """A `title_generator` for `util.edit_message` and `send_as_file_with_filename`."""
 
@@ -215,6 +243,7 @@ def file_title_generator(
             codex_p=codex_p,
             api_keys=api_keys,
             api_user_id=api_user_id,
+            gemini_provider=gemini_provider,
         )
 
     return generate
