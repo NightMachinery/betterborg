@@ -9,10 +9,10 @@ from dataclasses import dataclass
 
 import httpx
 
-from uniborg import stt_models
+from uniborg import gemini_providers, stt_models
 
-GEMINI = "gemini"
-VERTEX = "vertex"
+GEMINI = gemini_providers.AI_STUDIO
+VERTEX = gemini_providers.VERTEX
 
 
 @dataclass(frozen=True)
@@ -26,14 +26,14 @@ class Provider:
 
 PROVIDERS = {
     GEMINI: Provider(
-        "Google AI Studio",
+        gemini_providers.LABELS[GEMINI],
         "https://aistudio.google.com/app/apikey",
         "https://generativelanguage.googleapis.com/v1beta/models",
     ),
     VERTEX: Provider(
-        "Vertex AI",
+        gemini_providers.LABELS[VERTEX],
         "https://console.cloud.google.com/vertex-ai/studio/overview",
-        "https://aiplatform.googleapis.com/v1/publishers/google/models",
+        f"{gemini_providers.VERTEX_API_BASE}/models",
         (
             "gemini/gemini-3.5-flash",
             "gemini/gemini-3-flash-preview",
