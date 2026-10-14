@@ -15,10 +15,17 @@ the message, depending on the client. The chat bot renames such a topic twice:
 
        ⚡◕ Monads explained
 
-After each rename, the bot immediately deletes that rename's service message
-for both participants. It does not wait for the answer or final title to
-remove the initial badge notice. Telegram may briefly display a notice before
-the deletion update reaches the client. The topic and its creation notice remain.
+After each rename, the bot schedules immediate deletion of its service message
+for both participants. Flood-blocked cleanup retries independently, so it does
+not hold up an answer or the final title. Telegram may display a notice until
+its cooldown ends. The topic and its creation notice remain.
+
+Topic operations use the shared Telegram queue (`docs/telegram_queue.md`).
+Topic edits are paced across the client and explicit flood rejections wait and
+retry. If the final title is ready while the initial badge rename is queued,
+the final title supersedes that initial rename. Before each delayed attempt,
+the bot checks the topic again and preserves an intervening manual rename or
+deletion. Title generation runs once per attempt, not once per flood retry.
 
 The name has three parts:
 
@@ -53,14 +60,17 @@ All of these must hold:
   (`NEW_TOPIC_WINDOW`). A topic typed in "All" opens with its first message,
   so this keeps older topics out. A Reserve re-run from the quota panel
   answers the original message, so it still counts.
-- No earlier answer in the topic claimed it. The first request to reach the
-  check claims the topic whether or not it turns out to qualify, so each
-  topic is checked once. The badge's rename claims it, and the title's rename
-  follows only that claim.
+- No other worker is currently naming it, and no completed title mark exists.
+  The badge and final title share one in-process claim. Lookup, title-generation
+  and terminal rename failures release that owned claim so a later answer can
+  retry. Flood retries keep their claim. Requests that finish without scheduling
+  a title abandon any queued badge operation and release their pending claim.
 
-The claim is a Redis key, `borg:topic_titled:<chat>:<topic>`, kept for the
-long expiry (a month by default), so a restart does not rename a topic twice.
-Without Redis the claims live in memory (the newest 4096).
+Only completed titles and intentional eligibility skips are persisted as
+`borg:topic_titled:<chat>:<topic>`, with the long expiry (a month by default).
+Legacy marks are preserved and treated as completed; historical failed topics
+are not automatically replayed. Pending work and its claims live in memory.
+Without Redis, the newest 4096 completion marks live in memory too.
 
 ## Model emoji
 
@@ -171,27 +181,31 @@ Observed on a canary bot (Telethon 1.45, layer 229):
 
 ## Costs
 
-- Every request in a private topic: one Redis `SET NX`.
-- Each new topic, once: one `getForumTopicsByID`, and for a qualifying
-  topic, two `editForumTopic`, two `deleteMessages` and one title-model
-  request (with its Flash Lite fallback).
+- The first check of a topic in a process: one Redis `GET`. Completion uses
+  `SET NX`; repeated checks are served by the in-process marks.
+- Each new topic: an eligibility lookup, another `getForumTopicsByID` before
+  each attempted rename, and for a qualifying topic up to two `editForumTopic`,
+  two `deleteMessages` and one title-model request (with its Flash Lite fallback).
+  Flood retries recheck eligibility; a superseded badge rename is omitted.
 - Each process, once: one `getStickerSet` for the default topic icons.
 
 Both renames run as background tasks, so a slow title model or a flood wait
 never delays the answer. The badge's rename starts before the answer is
-generated; the title's rename waits for it.
+generated; final-title generation can overlap its cooldown, and the final
+rename follows any in-flight initial rename. Icon loading is shared across
+concurrent workers.
 
 ## Limits
 
-- A failed rename is not retried: the topic was claimed, and keeps the name
-  it had. A failed badge rename still lets the title's rename run. Failures
-  are logged.
-- A failed service-message deletion is logged and does not undo the rename.
-  Failed cleanup of the initial badge notice is retried after the final title
-  is set. A notice may remain if deletion fails or Telegram returns no message id.
-- If the user renames a topic before its first answer arrives, the bot may
-  still rename it: whether a user's rename clears `title_missing` has not
-  been observed.
+- Permanent RPC errors and ambiguous network failures are logged and not
+  retried automatically. Explicit flood rejections retry until accepted,
+  superseded or cancelled. A later answer may retry released title work.
+- Cleanup does not undo a successful rename. A notice can remain after a
+  permanent deletion failure or when Telegram returns no service-message id.
+- The eligibility recheck preserves a title that differs from the last one
+  observed or applied by this worker. A manual edit racing the rename RPC itself
+  cannot be made atomic with Telegram's API.
+- Pending operations do not survive process restarts.
 - Without Redis, a restart within 10 minutes of a topic's creation can rename
   it a second time.
 - The STT bot does not rename topics.

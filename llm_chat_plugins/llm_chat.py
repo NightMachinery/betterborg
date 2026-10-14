@@ -13431,9 +13431,7 @@ async def _chat_handler(event, *, forced_model: Optional[str] = None):
         await llm_db.request_api_key_message(event, service_needed)
         return
 
-    topic_prefixed = await _start_topic_title(
-        event, model=model_in_use, prefix_effort=prefix_result.reasoning_effort
-    )
+    topic_prefixed = None
 
     if prefix_text and re.match(r"^\.s\b", prefix_text):
         RECENT_WAIT_TIME = 1
@@ -13455,6 +13453,9 @@ async def _chat_handler(event, *, forced_model: Optional[str] = None):
     temp_dir = Path(tempfile.gettempdir()) / f"temp_llm_chat_{event.id}"
     response_message = None
     try:
+        topic_prefixed = await _start_topic_title(
+            event, model=model_in_use, prefix_effort=prefix_result.reasoning_effort
+        )
         #: Inside `try`, so a chat the bot cannot post in reaches the error
         #: reply below instead of escaping the handler.
         response_message = await _response_placeholder(
@@ -13579,6 +13580,7 @@ async def _chat_handler(event, *, forced_model: Optional[str] = None):
             error_id_p=True,
         )
     finally:
+        topic_titles.abandon_prefix(topic_prefixed)
         #: Whatever the draft last showed and nothing replaced, such as an
         #: error or a cancelled partial answer, is sent for real.
         if asyncio.current_task().cancelling():

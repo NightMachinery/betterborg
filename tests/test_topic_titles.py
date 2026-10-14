@@ -6,10 +6,12 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
+from telethon import errors
 from telethon.tl import functions, types
 from telethon.tl.types import messages as messages_types
 
-from uniborg import tg_format, topic_titles
+from uniborg import tg_format, topic_titles, telegram_queue
+from test_telegram_queue import Clock, settle
 
 T0 = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
 CHAT_ID = 5
@@ -121,6 +123,9 @@ class _Client:
                 RENAME_MESSAGE_ID + self.rename_count if self.service_messages else None
             )
             self.rename_count += 1
+            for topic in self.topics:
+                if isinstance(topic, types.ForumTopic) and topic.id == request.topic_id:
+                    topic.title = request.title
             return _rename_updates(request.title, message_id=message_id)
         if isinstance(request, functions.messages.GetStickerSetRequest):
             return _icon_set()
@@ -145,6 +150,9 @@ class _Redis:
             return None
         self.values[key] = value
         return True
+
+    async def get(self, key):
+        return self.values.get(key)
 
 
 def _ref(*, message_date=T0 + timedelta(seconds=1)):
@@ -306,8 +314,9 @@ class TitleNewTopicTests(unittest.IsolatedAsyncioTestCase):
         title = await self.title(client)
 
         self.assertEqual(title, "⚡◕ Monads explained")
-        lookup, edit, delete = client.requests
+        lookup, recheck, edit, delete = client.requests
         self.assertEqual((lookup.peer, lookup.topics), (PEER, [TOPIC_ID]))
+        self.assertEqual((recheck.peer, recheck.topics), (PEER, [TOPIC_ID]))
         self.assertEqual(
             (edit.peer, edit.topic_id, edit.title),
             (PEER, TOPIC_ID, "⚡◕ Monads explained"),
@@ -767,6 +776,204 @@ class TitleAfterPrefixTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(await task)
 
         self.assertIn(str(TOPIC_ID), logs.output[0])
+
+
+class _QueuedTransport(_Client):
+    def __init__(self, *topics):
+        super().__init__(*topics)
+        self.floods = {}
+        self.attempts = []
+
+    async def get_input_entity(self, peer):
+        return peer
+
+    async def __call__(self, request, **kwargs):
+        self.attempts.append(request)
+        waits = self.floods.get(type(request), [])
+        if waits:
+            raise errors.FloodWaitError(request, waits.pop(0))
+        return await super().__call__(request)
+
+
+class _QueuedClient(telegram_queue.TelegramQueueMixin, _QueuedTransport):
+    pass
+
+
+class TopicRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.clock = Clock()
+        self.topic = _forum_topic()
+        self.client = _QueuedClient(self.topic)
+        self.client.telegram_queue = telegram_queue.TelegramQueue(
+            clock=lambda: self.clock.now, wait=self.clock.wait
+        )
+        self.marks = _memory_marks()
+        self.generate = mock.AsyncMock(
+            return_value=topic_titles.TopicTitle(title="Final subject")
+        )
+
+    async def advance(self, seconds):
+        self.clock.advance(seconds)
+        await settle()
+
+    def prefix(self):
+        return topic_titles.schedule_prefix_new_topic(
+            self.client, _ref(), badge=_badge(), marks=self.marks
+        )
+
+    def title(self, prefix):
+        return topic_titles.schedule_title_new_topic(
+            self.client,
+            _request(),
+            generate=self.generate,
+            prefixed=prefix,
+            marks=self.marks,
+        )
+
+    async def test_final_title_supersedes_flooded_initial_rename(self):
+        self.client.floods[functions.messages.EditForumTopicRequest] = [186]
+        prefix = self.prefix()
+        await settle()
+        title = self.title(prefix)
+        await settle()
+        self.assertEqual(self.generate.await_count, 1)
+        self.assertFalse(title.done())
+        await self.advance(186)
+        self.assertEqual(await title, "⚡◕ Final subject")
+        self.assertEqual(
+            [r.title for r in self.client.of(functions.messages.EditForumTopicRequest)],
+            ["⚡◕ Final subject"],
+        )
+        self.assertEqual(self.marks._pending, {})
+        await settle()
+
+    async def test_delayed_title_preserves_manual_rename(self):
+        self.client.floods[functions.messages.EditForumTopicRequest] = [150]
+        prefix = self.prefix()
+        await settle()
+        title = self.title(prefix)
+        await settle()
+        self.topic.title = "My chosen name"
+        await self.advance(150)
+        self.assertIsNone(await title)
+        self.assertEqual(self.topic.title, "My chosen name")
+        self.assertEqual(self.client.of(functions.messages.EditForumTopicRequest), [])
+
+    async def test_final_rename_flood_does_not_repeat_title_generation(self):
+        prefix = self.prefix()
+        await prefix
+        self.client.floods[functions.messages.EditForumTopicRequest] = [100]
+        title = self.title(prefix)
+        await self.advance(1)
+        self.assertFalse(title.done())
+        await self.advance(100)
+        self.assertEqual(await title, "⚡◕ Final subject")
+        self.assertEqual(self.generate.await_count, 1)
+        self.assertEqual(self.marks._pending, {})
+        await settle()
+
+    async def test_manual_rename_stays_protected_after_an_abandoned_answer(self):
+        self.client.floods[functions.messages.EditForumTopicRequest] = [100]
+        prefix = self.prefix()
+        await settle()
+        self.topic.title = "My manual title"
+        await self.advance(100)
+        await prefix
+        topic_titles.abandon_prefix(prefix)
+        self.assertIsNone(await self.prefix())
+        self.assertEqual(self.topic.title, "My manual title")
+
+    async def test_icon_lookup_flood_is_retried_and_shared(self):
+        self.client.floods[functions.messages.GetStickerSetRequest] = [131]
+        icons = topic_titles.TopicIcons()
+        first = asyncio.create_task(icons.emojis(self.client))
+        second = asyncio.create_task(icons.emojis(self.client))
+        await settle()
+        await self.advance(131)
+        self.assertEqual(await first, await second)
+        self.assertEqual(
+            len(self.client.of(functions.messages.GetStickerSetRequest)), 1
+        )
+
+    async def test_failed_lookup_releases_claim(self):
+        self.client.fail = (functions.messages.GetForumTopicsByIDRequest,)
+        with self.assertLogs(topic_titles.logger, logging.ERROR):
+            self.assertIsNone(await self.prefix())
+        self.assertEqual(self.marks._pending, {})
+        self.client.fail = ()
+        prefix = self.prefix()
+        self.assertIsNotNone(await prefix)
+        topic_titles.abandon_prefix(prefix)
+        await settle()
+
+    async def test_cleanup_flood_does_not_hold_up_title_completion(self):
+        self.client.floods[functions.messages.DeleteMessagesRequest] = [163]
+        prefix = self.prefix()
+        await settle()
+        title = self.title(prefix)
+        await self.advance(1)
+        self.assertEqual(await title, "⚡◕ Final subject")
+        self.assertTrue(topic_titles._cleanup_tasks)
+        await self.advance(163)
+        deletes = self.client.of(functions.messages.DeleteMessagesRequest)
+        self.assertEqual(len(deletes), 2)
+        self.assertTrue(all(req.revoke for req in deletes))
+
+    async def test_topic_lookup_flood_resumes_without_losing_claim(self):
+        self.client.floods[functions.messages.GetForumTopicsByIDRequest] = [112]
+        prefix = self.prefix()
+        await settle()
+        duplicate = self.prefix()
+        self.assertIsNone(await duplicate)
+        topic_titles.abandon_prefix(duplicate)
+        self.assertIn((CHAT_ID, TOPIC_ID), self.marks._pending)
+        await self.advance(112)
+        self.assertIsNotNone(await prefix)
+        await settle()
+        topic_titles.abandon_prefix(prefix)
+        self.assertEqual(self.marks._pending, {})
+
+    async def test_failed_generation_releases_claim_for_later_answer(self):
+        prefix = self.prefix()
+        await prefix
+        self.generate.side_effect = RuntimeError("title backend unavailable")
+        with self.assertLogs(topic_titles.logger, logging.ERROR):
+            self.assertIsNone(await self.title(prefix))
+        self.assertEqual(self.marks._pending, {})
+        self.assertTrue(await self.marks.begin(CHAT_ID, TOPIC_ID))
+        await settle()
+
+    async def test_abandoned_prefix_cannot_rename_after_cooldown(self):
+        self.client.floods[functions.messages.EditForumTopicRequest] = [100]
+        prefix = self.prefix()
+        await settle()
+        topic_titles.abandon_prefix(prefix)
+        await self.advance(100)
+        await prefix
+        self.assertEqual(self.client.of(functions.messages.EditForumTopicRequest), [])
+        self.assertEqual(self.marks._pending, {})
+
+    async def test_old_owner_cannot_release_or_complete_new_claim(self):
+        old = await self.marks.begin(CHAT_ID, TOPIC_ID)
+        self.marks.release(CHAT_ID, TOPIC_ID, token=old)
+        new = await self.marks.begin(CHAT_ID, TOPIC_ID)
+        self.marks.release(CHAT_ID, TOPIC_ID, token=old)
+        await self.marks.complete(CHAT_ID, TOPIC_ID, token=old)
+        self.assertIs(self.marks._pending[(CHAT_ID, TOPIC_ID)], new)
+        self.assertFalse(await self.marks.begin(CHAT_ID, TOPIC_ID))
+
+    async def test_only_completed_claim_is_persisted_and_legacy_marks_are_kept(self):
+        redis = _Redis()
+        marks = topic_titles.TopicTitleMarks(
+            get_redis=mock.AsyncMock(return_value=redis)
+        )
+        token = await marks.begin(CHAT_ID, TOPIC_ID)
+        self.assertEqual(redis.values, {})
+        await marks.complete(CHAT_ID, TOPIC_ID, token=token)
+        fresh = topic_titles.TopicTitleMarks(
+            get_redis=mock.AsyncMock(return_value=redis)
+        )
+        self.assertFalse(await fresh.begin(CHAT_ID, TOPIC_ID))
 
 
 if __name__ == "__main__":

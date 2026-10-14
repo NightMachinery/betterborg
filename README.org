@@ -227,7 +227,10 @@ The =/setTitleModel= panel offers =New Chat= (default) or the question text
 as that initial name. After the answer it renames the topic to that badge and
 a short title, as in =⚡◕ Monads explained=, and sets a topic icon chosen by
 the title model. The bot deletes each automatic rename's service notice for
-everyone immediately after the rename. See
+everyone immediately after the rename. Flood-blocked renames and notice
+cleanup wait and retry in the background. A ready final title replaces a
+queued initial badge rename, and delayed renames preserve manual name changes.
+Only completed title work is marked permanently. See
 [[file:docs/topic_titles.md][docs/topic_titles.md]].
 
 ** timetracker time zones

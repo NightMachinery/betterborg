@@ -8,8 +8,8 @@ name (New Chat or question text), and sets the model's topic icon. Once the
 answer is delivered, it renames the topic again, to the badge and a short
 title from the user's title model, optionally chooses a matching icon, and
 immediately deletes each
-rename's service message for both participants. Each topic is claimed
-at most once. See docs/topic_titles.md.
+rename's service message for both participants. Completed title work is marked
+so later answers do not rename the topic again. See docs/topic_titles.md.
 
 The topic id here is T, the id Telegram puts in `reply_to_top_id`
 (docs/private_topics.md); `messages.editForumTopic` refuses the root's id.
@@ -17,14 +17,14 @@ The topic id here is T, the id Telegram puts in `reply_to_top_id`
 
 import asyncio
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from pydantic import BaseModel, Field
 from telethon.tl import functions, types
 
-from uniborg import redis_util, tg_format
+from uniborg import redis_util, tg_format, telegram_queue
 
 #: Telegram's limit for a topic title (the Bot API says 1 to 128 characters).
 TOPIC_TITLE_MAX_UNITS = 128
@@ -72,9 +72,8 @@ TopicTitleGenerator = Callable[[str], Awaitable[TopicTitle]]
 class TopicTitleMarks:
     """Claims each (chat, topic) for its automatic title, once.
 
-    Claims live in Redis when it is reachable, so a restart does not title a
-    topic twice, and in this process otherwise (the newest
-    `MEMORY_MARKS_MAX`).
+    Pending workers own in-process tokens. Completed marks live in Redis
+    across restarts, and in memory otherwise (the newest `MEMORY_MARKS_MAX`).
     """
 
     def __init__(
@@ -87,6 +86,60 @@ class TopicTitleMarks:
         self._get_redis = get_redis or redis_util.get_redis
         #: Insertion-ordered, oldest first.
         self._memory: dict = {}
+        self._pending: dict = {}
+
+    async def begin(self, chat_id: int, topic_id: int):
+        """Claim in-process work, without persisting a premature success mark.
+
+        Only one bot process may own a Telegram session. The local token map
+        arbitrates its workers; Redis stores completed work across restarts.
+        Legacy nonempty marks are treated as completed.
+        """
+        key = (chat_id, topic_id)
+        if key in self._pending or key in self._memory:
+            return False
+        token = object()
+        self._pending[key] = token
+        try:
+            redis_client = await self._get_redis()
+            if redis_client is not None and await redis_client.get(self.key(*key)):
+                self.release(*key, token=token)
+                self._claim_in_memory(key)
+                return False
+        except asyncio.CancelledError:
+            self.release(*key, token=token)
+            raise
+        except Exception as exc:
+            redis_util.note_error(exc)
+            logger.warning(
+                "Topic title marks: Redis lookup failed (%s)", type(exc).__name__
+            )
+        return token
+
+    def release(self, chat_id: int, topic_id: int, *, token) -> None:
+        key = (chat_id, topic_id)
+        if token is not None and self._pending.get(key) is token:
+            self._pending.pop(key, None)
+
+    async def complete(self, chat_id: int, topic_id: int, *, token) -> None:
+        key = (chat_id, topic_id)
+        if token is None or self._pending.get(key) is not token:
+            return
+        # Remember locally before the await, so a store failure cannot cause
+        # another worker to repeat a successful rename.
+        self._claim_in_memory(key)
+        self._pending.pop(key, None)
+        try:
+            redis_client = await self._get_redis()
+            if redis_client is not None:
+                await redis_client.set(
+                    self.key(*key), "1", nx=True, ex=self.ttl_seconds
+                )
+        except Exception as exc:
+            redis_util.note_error(exc)
+            logger.warning(
+                "Could not persist completed topic title (%s)", type(exc).__name__
+            )
 
     @property
     def ttl_seconds(self) -> int:
@@ -166,11 +219,25 @@ class TopicTitleRequest:
 
 @dataclass(frozen=True)
 class PrefixedTopic:
-    """A new topic, claimed and renamed to its badge and Telegram's name."""
+    """A claimed new topic, whose initial rename ran or was superseded."""
 
     #: A service message whose immediate deletion failed, retried after the
     #: title's rename. None when no cleanup remains.
     service_message_id: Optional[int]
+    work: Optional["TopicWork"] = field(default=None, compare=False)
+
+
+@dataclass
+class TopicWork:
+    marks: TopicTitleMarks
+    ready: asyncio.Event = field(default_factory=asyncio.Event)
+    claimed: bool = False
+    claim_token: object = None
+    current_title: Optional[str] = None
+    final_ready: bool = False
+    final_scheduled: bool = False
+    abandoned: bool = False
+    ineligible: bool = False
 
 
 class TopicIcons:
@@ -183,12 +250,17 @@ class TopicIcons:
 
     def __init__(self):
         self._by_emoji: Optional[Dict[str, int]] = None
+        self._load_lock = asyncio.Lock()
 
     @staticmethod
     def _plain(emoji: str) -> str:
         return emoji.replace("\ufe0f", "")
 
     async def _load(self, client) -> None:
+        async with self._load_lock:
+            await self._load_once(client)
+
+    async def _load_once(self, client) -> None:
         if self._by_emoji is None:
             try:
                 icons = await client(
@@ -313,36 +385,74 @@ async def _rename(
     title: str,
     badge: TopicBadge,
     icons: TopicIcons,
+    work: Optional[TopicWork] = None,
+    initial: bool = False,
 ) -> Optional[int]:
     """Rename TOPIC with BADGE's icon, then remove its service message.
 
     Return the service message id only when its deletion failed.
     """
-    updates = await client(
-        functions.messages.EditForumTopicRequest(
-            peer=topic.peer,
-            topic_id=topic.topic_id,
-            title=title,
-            icon_emoji_id=await icons.document_id(client, badge.icon_emoji),
-        )
+    request = functions.messages.EditForumTopicRequest(
+        peer=topic.peer,
+        topic_id=topic.topic_id,
+        title=title,
+        icon_emoji_id=await icons.document_id(client, badge.icon_emoji),
     )
+
+    async def eligible():
+        if work is None:
+            return True
+        if work.abandoned or work.ineligible or (initial and work.final_ready):
+            return False
+        current = await fetch_forum_topic(client, topic.peer, topic.topic_id)
+        eligible_topic = bool(
+            current is not None
+            and is_first_message_of_untitled_topic(
+                current, message_date=topic.message_date
+            )
+            and current.title == work.current_title
+        )
+        if not eligible_topic:
+            work.ineligible = True
+        return (
+            eligible_topic and not work.abandoned and not (initial and work.final_ready)
+        )
+
+    with telegram_queue.operation(
+        telegram_queue.Priority.METADATA, before_send=eligible
+    ):
+        if getattr(client, "telegram_queue", None) is None and not await eligible():
+            raise telegram_queue.OperationSuperseded()
+        updates = await client(request)
+    if work is not None:
+        work.current_title = title
     message_id = _service_message_id(updates)
+    if message_id is not None and getattr(client, "telegram_queue", None) is not None:
+        _schedule_cleanup(client, message_id)
+        return None
     if message_id is not None and not await _delete_service_message(client, message_id):
         return message_id
     return None
 
 
 async def _claim_new_topic(
-    client, topic: TopicRef, *, marks: TopicTitleMarks
+    client, topic: TopicRef, *, marks: TopicTitleMarks, work: TopicWork
 ) -> Optional[types.ForumTopic]:
     """TOPIC, if this is its first claim and the answered message is one of
     the first of a topic Telegram named; None otherwise."""
-    if not await marks.claim(topic.chat_id, topic.topic_id):
+    token = await marks.begin(topic.chat_id, topic.topic_id)
+    if not token:
         return None
-    forum_topic = await fetch_forum_topic(client, topic.peer, topic.topic_id)
+    work.claim_token = token
+    try:
+        forum_topic = await fetch_forum_topic(client, topic.peer, topic.topic_id)
+    except BaseException:
+        marks.release(topic.chat_id, topic.topic_id, token=token)
+        raise
     if forum_topic is None or not is_first_message_of_untitled_topic(
         forum_topic, message_date=topic.message_date
     ):
+        await marks.complete(topic.chat_id, topic.topic_id, token=token)
         return None
     return forum_topic
 
@@ -355,6 +465,7 @@ async def prefix_new_topic(
     marks: Optional[TopicTitleMarks] = None,
     icons: Optional[TopicIcons] = None,
     initial_title: Optional[str] = None,
+    _work: Optional[TopicWork] = None,
 ) -> Optional[PrefixedTopic]:
     """Claim TOPIC if it is new, and rename it at once to BADGE's prefix and
     the name Telegram gave it, with BADGE's icon.
@@ -362,7 +473,16 @@ async def prefix_new_topic(
     Returns None when the topic is not new (see `title_new_topic`). A failed
     rename is logged, and the topic stays claimed for its title.
     """
-    forum_topic = await _claim_new_topic(client, topic, marks=marks or MARKS)
+    work = _work or TopicWork(marks=marks or MARKS)
+    try:
+        if work.abandoned:
+            return None
+        forum_topic = await _claim_new_topic(client, topic, marks=work.marks, work=work)
+        if forum_topic is not None:
+            work.claimed = True
+            work.current_title = forum_topic.title
+    finally:
+        work.ready.set()
     if forum_topic is None:
         return None
     try:
@@ -375,13 +495,28 @@ async def prefix_new_topic(
             ),
             badge=badge,
             icons=icons or ICONS,
+            work=work,
+            initial=True,
         )
+    except telegram_queue.OperationSuperseded:
+        service_message_id = None
+        if work.ineligible:
+            await work.marks.complete(
+                topic.chat_id, topic.topic_id, token=work.claim_token
+            )
+            work.claimed = False
+    except asyncio.CancelledError:
+        work.abandoned = True
+        raise
     except Exception:
         logger.exception(
             "Could not prefix topic %s of chat %s", topic.topic_id, topic.chat_id
         )
         service_message_id = None
-    return PrefixedTopic(service_message_id=service_message_id)
+    finally:
+        if work.abandoned:
+            work.marks.release(topic.chat_id, topic.topic_id, token=work.claim_token)
+    return PrefixedTopic(service_message_id=service_message_id, work=work)
 
 
 async def _delete_service_message(client, message_id: int) -> bool:
@@ -416,30 +551,79 @@ async def title_new_topic(
     is not renamed: it was claimed before, the user named it, it is gone, or
     the answered message is not one of its first.
     """
-    if prefixed is None:
-        if await _claim_new_topic(client, request.topic, marks=marks or MARKS) is None:
+    work = getattr(prefixed, "topic_work", None)
+    prefix_message_id = None
+    claimed = None
+    if work is not None:
+        # Eligibility is known before the initial rename waits for its turn.
+        # Generate the final title while that rename may still be queued.
+        await work.ready.wait()
+        if not work.claimed or work.abandoned:
             return None
-        prefix_message_id = None
+    elif prefixed is None:
+        work = TopicWork(marks=marks or MARKS)
+        forum_topic = await _claim_new_topic(
+            client, request.topic, marks=work.marks, work=work
+        )
+        if forum_topic is None:
+            return None
+        work.claimed = True
+        work.current_title = forum_topic.title
     else:
         claimed = await prefixed
         if claimed is None:
             return None
+        work = claimed.work
         prefix_message_id = claimed.service_message_id
-    icons = icons or ICONS
-    icon_emojis = await icons.emojis(client) if choose_icon else []
-    generated = await generate(
-        topic_title_prompt(request.question, request.answer, icon_emojis=icon_emojis)
-    )
-    title = compose_topic_title(generated.title, badge=request.badge)
-    if title is None:
-        return None
-    badge = request.badge
-    if choose_icon and TopicIcons._plain(generated.icon_emoji) in icon_emojis:
-        badge = replace(badge, icon_emoji=generated.icon_emoji)
-    await _rename(client, request.topic, title=title, badge=badge, icons=icons)
-    if prefix_message_id is not None:
-        await _delete_service_message(client, prefix_message_id)
-    return title
+
+    try:
+        icons = icons or ICONS
+        icon_emojis = await icons.emojis(client) if choose_icon else []
+        generated = await generate(
+            topic_title_prompt(
+                request.question, request.answer, icon_emojis=icon_emojis
+            )
+        )
+        title = compose_topic_title(generated.title, badge=request.badge)
+        if title is None:
+            if work is not None:
+                work.abandoned = True
+                work.marks.release(
+                    request.topic.chat_id,
+                    request.topic.topic_id,
+                    token=work.claim_token,
+                )
+            return None
+        if work is not None:
+            work.final_ready = True
+        if prefixed is not None and claimed is None:
+            claimed = await prefixed
+            if claimed is None:
+                return None
+            prefix_message_id = claimed.service_message_id
+        badge = request.badge
+        if choose_icon and TopicIcons._plain(generated.icon_emoji) in icon_emojis:
+            badge = replace(badge, icon_emoji=generated.icon_emoji)
+        try:
+            await _rename(
+                client, request.topic, title=title, badge=badge, icons=icons, work=work
+            )
+        except telegram_queue.OperationSuperseded:
+            title = None
+        if work is not None:
+            await work.marks.complete(
+                request.topic.chat_id, request.topic.topic_id, token=work.claim_token
+            )
+        if prefix_message_id is not None:
+            await _delete_service_message(client, prefix_message_id)
+        return title
+    except BaseException:
+        if work is not None:
+            work.marks.release(
+                request.topic.chat_id, request.topic.topic_id, token=work.claim_token
+            )
+            work.abandoned = True
+        raise
 
 
 _background_tasks: set = set()
@@ -448,13 +632,14 @@ _background_tasks: set = set()
 def _in_background(make, *, what: str, topic: TopicRef) -> asyncio.Task:
     """Run the coroutine MAKE returns in the background, logging failures.
 
-    A rename must not hold up the answer: Telethon sleeps through a flood
-    wait on the caller's time, and the title model may be slow.
+    A rename must not hold up the answer: Telegram cooldowns can take
+    minutes, and the title model may be slow.
     """
 
     async def run():
         try:
-            return await make()
+            with telegram_queue.operation(telegram_queue.Priority.METADATA):
+                return await make()
         except Exception:
             logger.exception(
                 "Could not %s topic %s of chat %s",
@@ -480,7 +665,8 @@ def schedule_prefix_new_topic(
     initial_title: Optional[str] = None,
 ) -> asyncio.Task:
     """Run `prefix_new_topic` in the background; the task gives its result."""
-    return _in_background(
+    work = TopicWork(marks=marks or MARKS)
+    task = _in_background(
         lambda: prefix_new_topic(
             client,
             topic,
@@ -488,10 +674,48 @@ def schedule_prefix_new_topic(
             marks=marks,
             icons=icons,
             initial_title=initial_title,
+            _work=work,
         ),
         what="prefix",
         topic=topic,
     )
+    task.topic_work = work
+    task.topic_ref = topic
+    return task
+
+
+def abandon_prefix(task, topic: Optional[TopicRef] = None) -> None:
+    """An answer that did not schedule a title must not strand its claim."""
+    work = getattr(task, "topic_work", None)
+    if work is None or work.final_scheduled:
+        return
+    work.abandoned = True
+    ref = topic or getattr(task, "topic_ref", None)
+    if ref is not None:
+        work.marks.release(ref.chat_id, ref.topic_id, token=work.claim_token)
+
+
+_cleanup_tasks = {}
+
+
+def _schedule_cleanup(client, message_id):
+    key = (id(client), message_id)
+    if key in _cleanup_tasks:
+        return
+
+    async def cleanup():
+        with telegram_queue.operation(telegram_queue.Priority.METADATA):
+            await _delete_service_message(client, message_id)
+
+    task = asyncio.create_task(cleanup())
+    _cleanup_tasks[key] = task
+    _background_tasks.add(task)
+
+    def finished(task):
+        _cleanup_tasks.pop(key, None)
+        _background_tasks.discard(task)
+
+    task.add_done_callback(finished)
 
 
 def schedule_title_new_topic(
@@ -505,6 +729,9 @@ def schedule_title_new_topic(
     choose_icon: bool = False,
 ) -> asyncio.Task:
     """Run `title_new_topic` in the background."""
+    work = getattr(prefixed, "topic_work", None)
+    if work is not None:
+        work.final_scheduled = True
     return _in_background(
         lambda: title_new_topic(
             client,
