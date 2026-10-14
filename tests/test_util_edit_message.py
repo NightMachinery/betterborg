@@ -209,6 +209,45 @@ class _EditChainCase(unittest.IsolatedAsyncioTestCase):
         return util.EDIT_CHAINS.get(util._edit_chain_key(self.head))
 
 
+class StrictDeliveryTests(_EditChainCase):
+    async def test_rejected_replacement_is_reported(self):
+        self.head.edit_errors.append(errors.MessageIdInvalidError(None))
+        self.head.respond_errors.append(errors.FloodWaitError(None, 177))
+        with self.assertRaises(errors.FloodWaitError):
+            await self.edit(
+                "answer", strict_delivery=True, send_new_on_head_failure=True
+            )
+
+    async def test_failed_child_send_is_reported(self):
+        self.head.reply_errors.append(errors.FloodWaitError(None, 100))
+        with self.assertRaises(errors.FloodWaitError):
+            await self.edit(_blocks("a", "b"), strict_delivery=True)
+
+    async def test_failed_child_edit_is_reported(self):
+        await self.edit(_blocks("a", "b"))
+        self.state().children[0].edit_errors.append(RuntimeError("forbidden"))
+        with self.assertRaises(RuntimeError):
+            await self.edit(_blocks("a", "c"), strict_delivery=True)
+
+    async def test_failed_file_is_reported(self):
+        self.send_file.side_effect = RuntimeError("file rejected")
+        with self.assertRaises(RuntimeError):
+            await self.edit(
+                "answer",
+                strict_delivery=True,
+                send_file_mode=util.SendFileMode.ONLY,
+                file_length_threshold=True,
+            )
+
+    async def test_optional_child_edit_deferral_is_propagated(self):
+        from uniborg.telegram_queue import StreamingDeferred
+
+        await self.edit(_blocks("a", "b"))
+        self.state().children[0].edit_errors.append(StreamingDeferred())
+        with self.assertRaises(StreamingDeferred):
+            await self.edit(_blocks("a", "c"))
+
+
 class EditMessageTests(_EditChainCase):
     async def test_short_text_edits_only_the_head(self):
         await util.edit_message(self.head, "  hello  ", parse_mode="md")

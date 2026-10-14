@@ -45,7 +45,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TypeVar
 from telethon import errors, events
 from telethon.tl.types import UpdateUserTyping
 
-from uniborg import draft_stream, tg_compat, util
+from uniborg import draft_stream, tg_compat, util, telegram_queue
 
 _log = logging.getLogger(__name__)
 
@@ -406,12 +406,19 @@ class PacedEditor:
         if not now - self.last_edit_at > pace.interval:
             return ShowResult.NOT_DUE
         edit_kwargs = {"parse_mode": self.parse_mode}
-        if self.report_failures:
+        scheduled = (
+            getattr(getattr(self.message, "_client", None), "telegram_queue", None)
+            is not None
+        )
+        if self.report_failures or scheduled:
             edit_kwargs["raise_on_head_failure"] = True
         try:
-            await util.edit_message(
-                self.message, self._render(text, pace), **edit_kwargs
-            )
+            with telegram_queue.operation(telegram_queue.Priority.STREAM):
+                await util.edit_message(
+                    self.message, self._render(text, pace), **edit_kwargs
+                )
+        except telegram_queue.StreamingDeferred:
+            return ShowResult.NOT_DUE
         except errors.rpcerrorlist.MessageNotModifiedError:
             return ShowResult.UNCHANGED
         except Exception as e:

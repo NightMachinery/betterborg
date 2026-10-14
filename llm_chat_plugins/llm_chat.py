@@ -1,4 +1,5 @@
 import asyncio
+from contextvars import ContextVar
 from pynight.common_icecream import (
     ic,
 )  #: used for debugging, DO NOT REMOVE even if currently unused
@@ -143,6 +144,7 @@ async def _refresh_message_reactions(client, chat_id, messages: List[Message]) -
 
 # Import uniborg utilities and storage
 from uniborg import util
+from uniborg import telegram_queue
 from uniborg import llm_db
 from uniborg import llm_util
 from uniborg import gemini_providers
@@ -1423,6 +1425,7 @@ SMART_CONTEXT_STATE = {}
 
 # Track active LLM tasks by user_id for cancellation support
 ACTIVE_LLM_TASKS = {}
+_CHAT_REQUEST_TASK = ContextVar("chat_request_task", default=None)
 
 
 @dataclass
@@ -1768,6 +1771,9 @@ def pending_input_flow(
 
 def add_active_llm_task(user_id: int, task: asyncio.Task):
     """Add an active LLM task for tracking and cancellation."""
+    root = _CHAT_REQUEST_TASK.get()
+    if root is not None and task is not root:
+        return
     if user_id not in ACTIVE_LLM_TASKS:
         ACTIVE_LLM_TASKS[user_id] = set()
     ACTIVE_LLM_TASKS[user_id].add(task)
@@ -13276,6 +13282,17 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
 
 
 async def chat_handler(event, *, forced_model: Optional[str] = None):
+    task = asyncio.current_task()
+    token = _CHAT_REQUEST_TASK.set(task)
+    add_active_llm_task(event.sender_id, task)
+    try:
+        return await _chat_handler(event, forced_model=forced_model)
+    finally:
+        remove_active_llm_task(event.sender_id, task)
+        _CHAT_REQUEST_TASK.reset(token)
+
+
+async def _chat_handler(event, *, forced_model: Optional[str] = None):
     """Main handler for all non-command messages in a private chat.
 
     `forced_model` re-runs an existing message on a model the user picked after
@@ -13508,22 +13525,24 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
                 #: We should avoid spamming groups.
                 file_only_threshold = 8000
 
-            await util.edit_message(
-                response_message,
-                final_text,
-                parse_mode="md",
-                link_preview=False,
-                send_file_mode=util.SendFileMode.ALSO_IF_LESS_THAN,
-                file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
-                file_only_threshold=file_only_threshold,
-                file_name_mode="llm",
-                title_generator=_file_title_generator(
-                    user_id, codex_p=user_has_codex_access
-                ),
-                reply_to=event.message,
-                #: The final answer must survive a head it can no longer edit.
-                send_new_on_head_failure=True,
-            )
+            with telegram_queue.operation(telegram_queue.Priority.FINAL):
+                await util.edit_message(
+                    response_message,
+                    final_text,
+                    parse_mode="md",
+                    link_preview=False,
+                    send_file_mode=util.SendFileMode.ALSO_IF_LESS_THAN,
+                    file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
+                    file_only_threshold=file_only_threshold,
+                    file_name_mode="llm",
+                    title_generator=_file_title_generator(
+                        user_id, codex_p=user_has_codex_access
+                    ),
+                    reply_to=event.message,
+                    #: The final answer must survive a head it can no longer edit.
+                    send_new_on_head_failure=True,
+                    strict_delivery=True,
+                )
         else:
             # If we sent an image but have no text, delete the "..." message
             try:
@@ -13562,7 +13581,12 @@ async def chat_handler(event, *, forced_model: Optional[str] = None):
     finally:
         #: Whatever the draft last showed and nothing replaced, such as an
         #: error or a cancelled partial answer, is sent for real.
-        await stream_driver.flush_draft(response_message)
+        if asyncio.current_task().cancelling():
+            if isinstance(response_message, draft_stream.DraftAnswerMessage):
+                await response_message.end_stream()
+        else:
+            with telegram_queue.operation(telegram_queue.Priority.FINAL):
+                await stream_driver.flush_draft(response_message)
         if group_id:
             bot_util.PROCESSED_GROUP_IDS.discard(group_id)
         if temp_dir.exists():

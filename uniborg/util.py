@@ -1537,7 +1537,7 @@ async def _collapse_chain(edit_state, *, chain_key, head, placeholder):
     EDIT_CHAINS[chain_key] = edit_state
 
 
-async def _reply_chain(parent, chunks, *, edit_state, parse_mode):
+async def _reply_chain(parent, chunks, *, edit_state, parse_mode, strict=False):
     """Send each chunk as a reply to the previous message, stopping at the first failure.
 
     Returns the messages sent, and records each in `edit_state.sent`.
@@ -1546,7 +1546,11 @@ async def _reply_chain(parent, chunks, *, edit_state, parse_mode):
     for chunk in chunks:
         try:
             parent = await parent.reply(chunk, parse_mode=parse_mode)
-        except Exception:
+        except Exception as exc:
+            from uniborg.telegram_queue import StreamingDeferred
+
+            if strict or isinstance(exc, StreamingDeferred):
+                raise
             break
         edit_state.sent[parent.id] = SentChunk(chunk, parse_mode=parse_mode)
         sent_messages.append(parent)
@@ -1574,6 +1578,7 @@ async def _resend_chain(
     parse_mode,
     link_preview,
     delete_stale_head=True,
+    strict=False,
 ) -> bool:
     """Send `chunks` as a new chain, then delete the stale one, best-effort.
 
@@ -1593,6 +1598,8 @@ async def _resend_chain(
             link_preview=link_preview,
         )
     except Exception as e:
+        if strict:
+            raise
         print(f"Error sending a replacement for message {stale_head.id}: {e}")
         return False
 
@@ -1602,7 +1609,11 @@ async def _resend_chain(
     edit_state.head = new_head
     edit_state.sent = {new_head.id: SentChunk(chunks[0], parse_mode=parse_mode)}
     edit_state.children = await _reply_chain(
-        new_head, chunks[1:], edit_state=edit_state, parse_mode=parse_mode
+        new_head,
+        chunks[1:],
+        edit_state=edit_state,
+        parse_mode=parse_mode,
+        strict=strict,
     )
     for message in stale_messages:
         await _safe_delete_message(message)
@@ -1656,6 +1667,7 @@ async def edit_message(
     title_generator: "TitleGenerator | None" = None,
     send_new_on_head_failure: bool = False,
     raise_on_head_failure: bool = False,
+    strict_delivery: bool = False,
     twin_file_marker: str = TWIN_FILE_MARKER,
 ):
     """
@@ -1727,6 +1739,8 @@ async def edit_message(
             twin. It is added only when every chunk of the text was delivered:
             otherwise the file may be the only full copy. Pass "" to never mark.
             A file sent instead of the text is never marked.
+        strict_delivery (bool): Propagate failed text, chunk and file sends.
+            Required final answers use this instead of accepting partial delivery.
     """
     global EDIT_CHAINS
     message_id = message_obj.id
@@ -1784,6 +1798,8 @@ async def edit_message(
                 title_generator=title_generator,
             )
         except Exception:
+            if strict_delivery:
+                raise
             _log_file_sending_error("edit_message (ONLY mode)")
         return
 
@@ -1821,8 +1837,12 @@ async def edit_message(
                 link_preview=link_preview,
             )
         except Exception as e:
+            from uniborg.telegram_queue import StreamingDeferred
+
+            if isinstance(e, StreamingDeferred):
+                raise
             send_new = send_new_on_head_failure and isinstance(e, HEAD_LOST_ERRORS)
-            if raise_on_head_failure and not send_new:
+            if (raise_on_head_failure or strict_delivery) and not send_new:
                 raise
             print(f"Error editing original message {message_id}: {e}")
             if send_new:
@@ -1838,6 +1858,7 @@ async def edit_message(
                     delete_stale_head=not isinstance(
                         e, telethon.errors.rpcerrorlist.MessageAuthorRequiredError
                     ),
+                    strict=strict_delivery,
                 ):
                     edit_state.last_text = new_text
                     EDIT_CHAINS[chain_key] = edit_state
@@ -1856,6 +1877,10 @@ async def edit_message(
                     link_preview=link_preview,
                 )
             except Exception as e:
+                from uniborg.telegram_queue import StreamingDeferred
+
+                if isinstance(e, StreamingDeferred):
+                    raise
                 if send_new_on_head_failure and isinstance(e, HEAD_LOST_ERRORS):
                     #: The head of a long answer usually already shows its
                     #: chunk, so a final edit's FloodWait lands here instead.
@@ -1865,6 +1890,8 @@ async def edit_message(
                     )
                 else:
                     # If editing a child fails, stop processing the chain to avoid errors.
+                    if strict_delivery:
+                        raise
                     chain_intact = False
                 break
             new_children.append(child_to_edit)
@@ -1877,6 +1904,7 @@ async def edit_message(
                 chunks[1 + kept_count :],
                 edit_state=edit_state,
                 parse_mode=parse_mode,
+                strict=strict_delivery,
             )
 
             # --- Delete the children not kept: surplus, or replaced above ---
@@ -1898,7 +1926,11 @@ async def edit_message(
 
     finally:
         # Send file after message editing (success or failure)
-        if decision.send_file and decision.send_text:
+        if (
+            decision.send_file
+            and decision.send_text
+            and not asyncio.current_task().cancelling()
+        ):
             try:
                 await send_as_file_with_filename(
                     text=new_text,
@@ -1912,6 +1944,8 @@ async def edit_message(
                     caption_prefix=twin_file_marker if text_delivered else "",
                 )
             except Exception:
+                if strict_delivery:
+                    raise
                 _log_file_sending_error("edit_message")
 
 

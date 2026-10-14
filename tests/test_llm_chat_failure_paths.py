@@ -134,6 +134,32 @@ class PlaceholderFailureTests(unittest.TestCase):
         build_history.assert_not_awaited()
 
 
+class WholeRequestCancellationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_waiting_request_is_counted_once_and_cancelled(self):
+        started = asyncio.Event()
+        nested = None
+
+        async def handler(event, **kwargs):
+            nonlocal nested
+            nested = asyncio.create_task(asyncio.Event().wait())
+            plugin.add_active_llm_task(event.sender_id, nested)
+            started.set()
+            await nested
+
+        with patch.dict(plugin.ACTIVE_LLM_TASKS, {}, clear=True), patch.object(
+            plugin, "_chat_handler", handler
+        ):
+            task = asyncio.create_task(
+                plugin.chat_handler(SimpleNamespace(sender_id=42))
+            )
+            await started.wait()
+            self.assertEqual(plugin.cancel_all_llm_tasks(42), 1)
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertTrue(nested.cancelled())
+            self.assertNotIn(42, plugin.ACTIVE_LLM_TASKS)
+
+
 class _Action:
     async def __aenter__(self):
         return self

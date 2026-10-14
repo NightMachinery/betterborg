@@ -30,6 +30,7 @@ from uniborg import (
     telethon_compat,
     telethon_safety,
     topics,
+    telegram_queue,
 )
 from .storage import Storage
 from . import hacks
@@ -52,6 +53,7 @@ def _get_env(name, default=None, cast=None):
 class Uniborg(
     guest_util.OutgoingTriggerGuardMixin,
     topics.TopicPlacementMixin,
+    telegram_queue.TelegramQueueMixin,
     telethon_safety.DifferenceFallbackMixin,
     TelegramClient,
 ):
@@ -85,7 +87,13 @@ class Uniborg(
             ),
             **kwargs,
         }
+        chat_queue = Path(plugin_path).name == "llm_chat_plugins"
+        if chat_queue:
+            # The scheduler, rather than Telethon's private sleeping loop,
+            # owns flood waits. Bounded draft/guest transports stay separate.
+            kwargs["flood_sleep_threshold"] = 0
         self = Uniborg(session, **kwargs)
+        self.telegram_queue = telegram_queue.TelegramQueue() if chat_queue else None
         # TODO: handle non-string session
         #
         # storage should be a callable accepting plugin name -> Storage object.

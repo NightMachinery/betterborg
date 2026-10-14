@@ -220,6 +220,7 @@ def final_edit(
             "title_generator": f"title_generator(user={_USER_ID}, codex=True)",
             "reply_to": "event.message",
             "send_new_on_head_failure": True,
+            "strict_delivery": True,
         },
     )
 
