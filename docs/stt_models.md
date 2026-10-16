@@ -45,8 +45,13 @@ the caller's saved Vertex key.
 Vertex offers Auto and every model but AI Studio's `latest` aliases, which
 Vertex does not serve: 3.8, 3.7, 3.6 and 3.5 Flash, 3.5 and 3.1 Flash Lite,
 3 Flash Preview, 2.5 Flash, 2.5 Flash Lite and 3.5 Transcribe (checked
-2026-10-16). Its Auto order is 3.5 Flash, 3 Flash Preview, then 2.5 Flash Lite.
-An explicit model choice uses that model alone.
+2026-10-16). Its Auto order is the newest Flash and Flash Lite, then the speech
+model: 3.8 Flash, 3.5 Flash Lite, then 3.5 Transcribe. Transcribe is a fallback
+for files with sound only: when no file is audio or video, Auto stops at Flash
+Lite and reports its error. When Transcribe answers for a mix of audio and
+images, the images are not sent to Flash Lite a second time (it has just
+failed on them); the warning gives its error instead. An explicit model choice
+uses that model alone.
 
 Vertex calls the global Express endpoint directly with `x-goog-api-key` in a
 header. Requests contain inline media and the transcription JSON schema.

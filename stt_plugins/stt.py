@@ -262,6 +262,8 @@ class SttAnswer:
     silent: list = field(default_factory=list)
     #: Whether a speech model had any file with sound to transcribe.
     heard: bool = True
+    #: The models that failed before this one answered, with their last error.
+    failed: dict = field(default_factory=dict)
 
 
 async def _transcribe_with_retry(
@@ -279,7 +281,8 @@ async def _transcribe_with_retry(
     the next one is tried. Sleeps STT_RETRY_SLEEP seconds between every attempt
     (capped at STT_RETRY_MAX_DELAY). Edits ``status_message`` to show retry
     progress. A user's explicit choice is a list of one, so nothing else is
-    tried.
+    tried. A speech model after the first only transcribes files with sound;
+    with none, it is not tried.
 
     A model that refuses the API key is skipped at once, and for that key it
     stays skipped for STT_MODEL_UNAVAILABLE_SECONDS. When it was the last
@@ -295,6 +298,13 @@ async def _transcribe_with_retry(
     ]
     #: When every model refused this key before, try them all again.
     models_to_try = available or models_to_try
+    if not any(stt_models.has_sound(attachment) for attachment in attachments):
+        models_to_try = [
+            name
+            for index, name in enumerate(models_to_try)
+            if index == 0 or not stt_models.is_speech_model(name)
+        ]
+    failed = {}
 
     total_attempts = len(models_to_try) * STT_RETRIES_PER_MODEL
     global_attempt = 0
@@ -310,13 +320,17 @@ async def _transcribe_with_retry(
                 current_model = stt_models.load_media_model(current_model_name)
             except Exception as e:
                 print(f"STT: could not load model {current_model_name!r}: {e}")
-                last_exception = e
+                last_exception = failed[current_model_name] = e
                 global_attempt += STT_RETRIES_PER_MODEL
                 continue
         if speech_model is not None and sound is None:
             try:
                 sound = await stt_models.audio_inputs(attachments)
             except stt_models.NoSoundError:
+                if current_idx > 0:
+                    #: A fallback with nothing to hear; the last error stands.
+                    global_attempt += STT_RETRIES_PER_MODEL
+                    continue
                 return SttAnswer(
                     model_name=current_model_name,
                     raw="",
@@ -342,7 +356,10 @@ async def _transcribe_with_retry(
                         models_url=stt_providers.PROVIDERS[provider].api_base,
                     )
                     return SttAnswer(
-                        model_name=current_model_name, raw=text, silent=sound.silent
+                        model_name=current_model_name,
+                        raw=text,
+                        silent=sound.silent,
+                        failed=failed,
                     )
                 if provider == stt_providers.VERTEX:
                     text = await stt_providers.transcribe_vertex(
@@ -352,7 +369,9 @@ async def _transcribe_with_retry(
                         prompt=TRANSCRIPTION_PROMPT,
                         schema=TranscriptionResult,
                     )
-                    return SttAnswer(model_name=current_model_name, raw=text)
+                    return SttAnswer(
+                        model_name=current_model_name, raw=text, failed=failed
+                    )
                 response = await current_model.prompt(
                     prompt=TRANSCRIPTION_PROMPT,
                     attachments=attachments,
@@ -361,12 +380,14 @@ async def _transcribe_with_retry(
                     temperature=0,
                 )
                 return SttAnswer(
-                    model_name=current_model_name, raw=await response.text()
+                    model_name=current_model_name,
+                    raw=await response.text(),
+                    failed=failed,
                 )
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                last_exception = e
+                last_exception = failed[current_model_name] = e
                 if _is_model_unavailable_error(e):
                     await _mark_model_unavailable(api_key, current_model_name, provider)
                     if next_model_name is None:
@@ -655,6 +676,9 @@ async def run_stt_job(
         )
         if answer.silent:
             try:
+                if reader in answer.failed:
+                    #: Auto already tried it on these files.
+                    raise answer.failed[reader]
                 soundless = await _transcribe_with_retry(
                     models=[reader], attachments=answer.silent, **retry
                 )

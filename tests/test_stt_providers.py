@@ -597,5 +597,77 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("flash-lite-latest", options)
 
 
+REFUSED_ON_VERTEX = stt_providers.ProviderError("vertex", 404)
+
+
+class VertexAutoTests(unittest.IsolatedAsyncioTestCase):
+    """Vertex Auto: the newest models, then 3.5 Transcribe for files with sound."""
+
+    def setUp(self):
+        for target, name, value in (
+            (stt.redis_util, "get_and_renew", AsyncMock(return_value=None)),
+            (stt.redis_util, "set_with_expiry", AsyncMock()),
+            (stt.llm_util, "get_proxy_config_or_error", lambda uid: (None, None)),
+        ):
+            item = patch.object(target, name, value)
+            item.start()
+            self.addCleanup(item.stop)
+        self.image = stt.llm.Attachment(content=b"\x89PNG", type="image/png")
+        self.voice = stt.llm.Attachment(content=b"OggS", type="audio/ogg")
+
+    def test_auto_is_the_newest_flash_and_flash_lite_then_transcribe(self):
+        self.assertEqual(
+            stt_providers.PROVIDERS["vertex"].auto_models,
+            (
+                "gemini/gemini-3.8-flash",
+                "gemini/gemini-3.5-flash-lite",
+                "gemini/gemini-3.5-transcribe",
+            ),
+        )
+
+    async def test_images_never_reach_transcribe(self):
+        with patch.object(
+            stt_providers,
+            "transcribe_vertex",
+            AsyncMock(side_effect=[REFUSED_ON_VERTEX, REFUSED_ON_VERTEX]),
+        ) as media, patch.object(stt_models, "transcribe", AsyncMock()) as speech:
+            with self.assertRaises(stt.SttModelRefusedError):
+                await stt._transcribe_with_retry(
+                    models=list(stt_providers.PROVIDERS["vertex"].auto_models),
+                    attachments=[self.image],
+                    api_key="synthetic-vertex-key-000000",
+                    status_message=None,
+                    italics_marker="__",
+                    provider="vertex",
+                )
+        self.assertEqual(media.await_count, 2)
+        speech.assert_not_awaited()
+
+    async def test_transcribe_answers_and_the_failed_flash_lite_is_not_retried(self):
+        job = stt.SttJob(
+            models=list(stt_providers.PROVIDERS["vertex"].auto_models),
+            api_key="synthetic-vertex-key-000000",
+            attachments=[self.voice, self.image],
+            provider="vertex",
+        )
+        sound = stt_models.AudioInputs(
+            audio=[stt_models.AudioInput("audio/ogg", b"OggS")], silent=[self.image]
+        )
+        with patch.object(
+            stt_providers,
+            "transcribe_vertex",
+            AsyncMock(side_effect=[REFUSED_ON_VERTEX, REFUSED_ON_VERTEX]),
+        ) as media, patch.object(
+            stt_models, "audio_inputs", AsyncMock(return_value=sound)
+        ), patch.object(
+            stt_models, "transcribe", AsyncMock(return_value="hello")
+        ):
+            answer = await stt.run_stt_job(job, user_id=7, status_message=None)
+        self.assertEqual(media.await_count, 2)
+        self.assertTrue(answer.text.startswith("hello\n\n⚠️ __3.5 Transcribe"))
+        self.assertIn("3.5 Flash Lite could not read the file", answer.text)
+        self.assertIn("Vertex AI API error 404", answer.text)
+
+
 if __name__ == "__main__":
     unittest.main()
