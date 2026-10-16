@@ -456,8 +456,6 @@ class ModelFallbackTests(unittest.TestCase):
                 models=list(models),
                 attachments=[],
                 api_key=api_key,
-                status_message=object(),
-                italics_marker="_",
             )
         )
         self.answered_by = answer.model_name

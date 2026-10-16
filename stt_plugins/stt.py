@@ -31,7 +31,9 @@ import llm
 import httpx
 import uuid
 import asyncio
+import contextlib
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from telethon import errors, events
@@ -252,6 +254,73 @@ async def _show_stt_status(status_message, text: str) -> None:
         pass  # Progress edit is best-effort.
 
 
+#: Seconds between re-showing the status with the time elapsed.
+STT_PROGRESS_INTERVAL = 10.0
+
+
+def _format_elapsed(seconds: float) -> str:
+    minutes, seconds = divmod(int(seconds), 60)
+    return f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s"
+
+
+class SttProgress:
+    """The status message: the current step, re-shown with the time elapsed.
+
+    `show` never waits for Telegram, so a flood wait on the status message
+    cannot hold up the transcription. Edits happen only inside `async with`;
+    without a status message, steps are only remembered.
+    """
+
+    def __init__(
+        self,
+        status_message=None,
+        *,
+        italics_marker: str = "__",
+        interval: float = STT_PROGRESS_INTERVAL,
+        clock=time.monotonic,
+        show_status=None,
+    ):
+        self.status_message = status_message
+        self.italics_marker = italics_marker
+        self.interval = interval
+        self.clock = clock
+        self.show_status = show_status or _show_stt_status
+        self.step = None
+        self.started = clock()
+        self._changed = asyncio.Event()
+        self._task = None
+
+    def show(self, step: str) -> None:
+        self.step = step
+        self._changed.set()
+
+    def render(self) -> str:
+        elapsed = self.clock() - self.started
+        suffix = f" {_format_elapsed(elapsed)}" if elapsed >= 1 else ""
+        marker = self.italics_marker
+        return f"{marker}{self.step}…{suffix}{marker}"
+
+    async def _run(self) -> None:
+        while True:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._changed.wait(), self.interval)
+            self._changed.clear()
+            if self.step is not None:
+                await self.show_status(self.status_message, self.render())
+
+    async def __aenter__(self):
+        if self.status_message is not None:
+            self._task = asyncio.create_task(self._run())
+        return self
+
+    async def __aexit__(self, *exc_info):
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+        return False
+
+
 @dataclass
 class SttAnswer:
     #: The model that answered.
@@ -271,15 +340,14 @@ async def _transcribe_with_retry(
     models: List[str],
     attachments,
     api_key,
-    status_message,
-    italics_marker,
+    progress: Optional[SttProgress] = None,
     provider: str = "gemini",
 ) -> SttAnswer:
     """Transcribes ATTACHMENTS with the first of MODELS that answers.
 
     Each model gets STT_RETRIES_PER_MODEL attempts on transient errors before
     the next one is tried. Sleeps STT_RETRY_SLEEP seconds between every attempt
-    (capped at STT_RETRY_MAX_DELAY). Edits ``status_message`` to show retry
+    (capped at STT_RETRY_MAX_DELAY). Shows each attempt and retry on PROGRESS.
     progress. A user's explicit choice is a list of one, so nothing else is
     tried. A speech model after the first only transcribes files with sound;
     with none, it is not tried.
@@ -304,6 +372,7 @@ async def _transcribe_with_retry(
             for index, name in enumerate(models_to_try)
             if index == 0 or not stt_models.is_speech_model(name)
         ]
+    progress = progress or SttProgress()
     failed = {}
 
     total_attempts = len(models_to_try) * STT_RETRIES_PER_MODEL
@@ -323,7 +392,9 @@ async def _transcribe_with_retry(
                 last_exception = failed[current_model_name] = e
                 global_attempt += STT_RETRIES_PER_MODEL
                 continue
+        model_label = stt_models.label_for(current_model_name)
         if speech_model is not None and sound is None:
+            progress.show(f"🎙 Converting audio for {model_label}")
             try:
                 sound = await stt_models.audio_inputs(attachments)
             except stt_models.NoSoundError:
@@ -342,11 +413,16 @@ async def _transcribe_with_retry(
             if current_idx + 1 < len(models_to_try)
             else None
         )
-        model_label = stt_models.label_for(current_model_name)
         next_label = stt_models.label_for(next_model_name) if next_model_name else None
 
         for model_attempt in range(1, STT_RETRIES_PER_MODEL + 1):
             global_attempt += 1
+            attempt = (
+                f" (attempt {global_attempt}/{total_attempts})"
+                if global_attempt > 1
+                else ""
+            )
+            progress.show(f"🎙 Transcribing with {model_label}{attempt}")
             try:
                 if speech_model is not None:
                     text = await stt_models.transcribe(
@@ -401,10 +477,9 @@ async def _transcribe_with_retry(
                         f"STT: {current_model_name} refused this API key "
                         f"({type(e).__name__}: {e}); switching to {next_model_name}."
                     )
-                    await _show_stt_status(
-                        status_message,
-                        f"{italics_marker}{model_label} is not available for this "
-                        f"API key; switching to {next_label}…{italics_marker}",
+                    progress.show(
+                        f"{model_label} is not available for this API key; "
+                        f"switching to {next_label}"
                     )
                     break
                 if not _is_retriable_stt_error(e):
@@ -428,19 +503,15 @@ async def _transcribe_with_retry(
                     )
                 )
                 if switching:
-                    status = (
-                        f"{italics_marker}High demand on {model_label} — "
-                        f"switching to {next_label} "
-                        f"({global_attempt}/{total_attempts}), "
-                        f"waiting {delay:.0f}s…{italics_marker}"
+                    progress.show(
+                        f"High demand on {model_label} — switching to {next_label} "
+                        f"({global_attempt}/{total_attempts}), waiting {delay:.0f}s"
                     )
                 else:
-                    status = (
-                        f"{italics_marker}High demand — retrying with {model_label} "
-                        f"({global_attempt}/{total_attempts}), "
-                        f"waiting {delay:.0f}s…{italics_marker}"
+                    progress.show(
+                        f"High demand — retrying with {model_label} "
+                        f"({global_attempt}/{total_attempts}), waiting {delay:.0f}s"
                     )
-                await _show_stt_status(status_message, status)
                 await asyncio.sleep(delay)
 
     if last_exception is not None:
@@ -661,35 +732,35 @@ async def run_stt_job(
     # Honors the admin-only gate (may raise ProxyRestrictedException for blocked users).
     proxy_url, _ = llm_util.get_proxy_config_or_error(user_id)
     proxy_token = llm_util.set_llm_gemini_proxy(proxy_url)
-    retry = dict(
-        api_key=job.api_key,
-        status_message=status_message,
-        italics_marker=italics_marker,
-        provider=job.provider,
-    )
     reader = stt_providers.PROVIDERS[job.provider].soundless_model
     soundless = soundless_error = None
     try:
-        # Transcribe, cycling through fallback models on transient upstream errors.
-        answer = await _transcribe_with_retry(
-            models=job.models, attachments=job.attachments, **retry
-        )
-        if answer.silent:
-            try:
-                if reader in answer.failed:
-                    #: Auto already tried it on these files.
-                    raise answer.failed[reader]
-                soundless = await _transcribe_with_retry(
-                    models=[reader], attachments=answer.silent, **retry
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                #: With nothing heard, there is no transcript to deliver instead.
-                if not answer.heard:
+        async with SttProgress(
+            status_message, italics_marker=italics_marker
+        ) as progress:
+            retry = dict(api_key=job.api_key, progress=progress, provider=job.provider)
+            # Transcribe, cycling through fallback models on transient upstream errors.
+            answer = await _transcribe_with_retry(
+                models=job.models, attachments=job.attachments, **retry
+            )
+            if answer.silent:
+                try:
+                    if reader in answer.failed:
+                        #: Auto already tried it on these files.
+                        raise answer.failed[reader]
+                    soundless = await _transcribe_with_retry(
+                        models=[reader], attachments=answer.silent, **retry
+                    )
+                except asyncio.CancelledError:
                     raise
-                print(f"STT: {reader} could not read the files without sound: {e!r}")
-                soundless_error = _soundless_failure_reason(e, job.provider)
+                except Exception as e:
+                    #: With nothing heard, there is no transcript to deliver instead.
+                    if not answer.heard:
+                        raise
+                    print(
+                        f"STT: {reader} could not read the files without sound: {e!r}"
+                    )
+                    soundless_error = _soundless_failure_reason(e, job.provider)
     finally:
         llm_util.reset_llm_gemini_proxy(proxy_token)
     if not stt_models.is_speech_model(answer.model_name):

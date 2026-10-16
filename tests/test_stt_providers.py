@@ -398,8 +398,6 @@ class ProviderWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 models=models,
                 attachments=[],
                 api_key=self.keys["vertex"],
-                status_message=None,
-                italics_marker="__",
                 provider="vertex",
             )
         self.assertEqual(answer.model_name, models[1])
@@ -430,8 +428,6 @@ class ProviderWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 models=["gemini/gemini-3.5-transcribe"],
                 attachments=[],
                 api_key=self.keys["vertex"],
-                status_message=None,
-                italics_marker="__",
                 provider="vertex",
             )
         self.assertEqual(answer.raw, "hello")
@@ -636,8 +632,6 @@ class VertexAutoTests(unittest.IsolatedAsyncioTestCase):
                     models=list(stt_providers.PROVIDERS["vertex"].auto_models),
                     attachments=[self.image],
                     api_key="synthetic-vertex-key-000000",
-                    status_message=None,
-                    italics_marker="__",
                     provider="vertex",
                 )
         self.assertEqual(media.await_count, 2)
@@ -667,6 +661,47 @@ class VertexAutoTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(answer.text.startswith("hello\n\n⚠️ __3.5 Transcribe"))
         self.assertIn("3.5 Flash Lite could not read the file", answer.text)
         self.assertIn("Vertex AI API error 404", answer.text)
+
+
+class ProgressTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_status_shows_the_step_and_then_the_time_elapsed(self):
+        now = [100.0]
+        shown = []
+
+        async def show_status(message, text):
+            shown.append(text)
+
+        progress = stt.SttProgress(
+            "status",
+            interval=0.01,
+            clock=lambda: now[0],
+            show_status=show_status,
+        )
+        async with progress:
+            progress.show("🎙 Transcribing with 3.8 Flash")
+            await asyncio.sleep(0.005)
+            now[0] += 65
+            await asyncio.sleep(0.03)
+        self.assertEqual(shown[0], "__🎙 Transcribing with 3.8 Flash…__")
+        self.assertEqual(shown[-1], "__🎙 Transcribing with 3.8 Flash… 1m 05s__")
+
+    async def test_a_stuck_status_edit_never_holds_up_the_transcription(self):
+        async def stuck(message, text):
+            await asyncio.Event().wait()
+
+        progress = stt.SttProgress("status", interval=0.01, show_status=stuck)
+        async with progress:
+            progress.show("first")
+            await asyncio.sleep(0.01)
+            progress.show("second")
+        self.assertEqual(progress.step, "second")
+
+    async def test_without_a_status_message_nothing_is_edited(self):
+        show_status = AsyncMock()
+        async with stt.SttProgress(None, show_status=show_status) as progress:
+            progress.show("step")
+            await asyncio.sleep(0)
+        show_status.assert_not_awaited()
 
 
 if __name__ == "__main__":

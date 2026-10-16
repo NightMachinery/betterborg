@@ -153,6 +153,21 @@ A rate limit, overload or timeout (`_is_retriable_stt_error`) is retried up to
 `STT_RETRIES_PER_MODEL` times on each model, `STT_RETRY_SLEEP` seconds apart,
 before the next model in the list. The status message says so as it happens.
 
+### Progress
+
+A single request can take a minute or more on long media, and Google's
+generateContent call reports nothing until it is done. So the status message
+(`SttProgress`) shows the current step, such as "🎙 Transcribing with 3.8
+Flash" or a retry, and re-shows it every `STT_PROGRESS_INTERVAL` (10) seconds
+with the time since the job started. Steps are recorded without waiting for
+Telegram, and a background task makes the edits, so a flood wait on the status
+message never delays the transcription. Guest answers use the same status.
+
+A live check on Vertex (2026-10-16, a 6-second spoken clip): 3.8 Flash took
+12.5 s with the bot's prompt and schema, and 4.7 s with a one-line prompt and
+no schema. Its thinking was 77 tokens; `thinkingLevel: low` saved under a
+second, and 3.8 Flash rejects `minimal`.
+
 ### A model that refuses the key
 
 Google closed Gemini 2.5 Flash to new API keys: for those it answers 404
