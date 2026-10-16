@@ -327,6 +327,16 @@ async def _transcribe_with_retry(
         for model_attempt in range(1, STT_RETRIES_PER_MODEL + 1):
             global_attempt += 1
             try:
+                if speech_model is not None:
+                    text = await stt_models.transcribe(
+                        speech_model,
+                        audio=sound.audio,
+                        api_key=api_key,
+                        models_url=stt_providers.PROVIDERS[provider].api_base,
+                    )
+                    return SttAnswer(
+                        model_name=current_model_name, raw=text, skipped=sound.skipped
+                    )
                 if provider == stt_providers.VERTEX:
                     text = await stt_providers.transcribe_vertex(
                         model=current_model_name,
@@ -336,13 +346,6 @@ async def _transcribe_with_retry(
                         schema=TranscriptionResult,
                     )
                     return SttAnswer(model_name=current_model_name, raw=text)
-                if speech_model is not None:
-                    text = await stt_models.transcribe(
-                        speech_model, audio=sound.audio, api_key=api_key
-                    )
-                    return SttAnswer(
-                        model_name=current_model_name, raw=text, skipped=sound.skipped
-                    )
                 response = await current_model.prompt(
                     prompt=TRANSCRIPTION_PROMPT,
                     attachments=attachments,

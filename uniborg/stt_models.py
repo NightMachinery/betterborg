@@ -272,8 +272,16 @@ def transcript_text(payload: dict) -> str:
     return "\n\n".join(texts)
 
 
-async def transcribe(model: SttModel, *, audio: List[AudioInput], api_key: str) -> str:
+async def transcribe(
+    model: SttModel,
+    *,
+    audio: List[AudioInput],
+    api_key: str,
+    models_url: str = f"{GEMINI_API_BASE}/models",
+) -> str:
     """The transcript of AUDIO by the speech model MODEL, in one request.
+
+    MODELS_URL is the provider's models endpoint; AI Studio's by default.
 
     The client is made here, so a proxy set for this request applies
     (`llm_util.set_llm_gemini_proxy`).
@@ -294,7 +302,7 @@ async def transcribe(model: SttModel, *, audio: List[AudioInput], api_key: str) 
             }
         ]
     }
-    url = f"{GEMINI_API_BASE}/models/{model.gemini_model_id}:generateContent"
+    url = f"{models_url}/{model.gemini_model_id}:generateContent"
     async with httpx.AsyncClient(timeout=TRANSCRIBE_TIMEOUT_SECONDS) as client:
         response = await client.post(
             url, headers={"x-goog-api-key": api_key}, json=body

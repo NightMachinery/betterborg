@@ -42,9 +42,10 @@ the caller's saved Vertex key.
 
 ## Vertex AI models
 
-Vertex offers Auto, 3.5 Flash, 3 Flash Preview, 2.5 Flash and 2.5 Flash Lite.
-Its Auto order is 3.5 Flash, 3 Flash Preview, then 2.5 Flash Lite. AI Studio's
-`latest` aliases and 3.5 Transcribe are not offered for Vertex Express mode.
+Vertex offers Auto and every model but AI Studio's `latest` aliases, which
+Vertex does not serve: 3.8, 3.7, 3.6 and 3.5 Flash, 3.5 and 3.1 Flash Lite,
+3 Flash Preview, 2.5 Flash, 2.5 Flash Lite and 3.5 Transcribe (checked
+2026-10-16). Its Auto order is 3.5 Flash, 3 Flash Preview, then 2.5 Flash Lite.
 An explicit model choice uses that model alone.
 
 Vertex calls the global Express endpoint directly with `x-goog-api-key` in a
@@ -104,7 +105,9 @@ free AI Studio keys the bot already uses. On the free tier Google may use the
 data to improve its products, and on 2026-10-01 the free tier allowed only 3
 requests a minute for this model. It differs from the media models:
 
-- It takes audio and nothing else. Voice notes (Ogg Opus) are sent as they
+- It takes audio and nothing else: an image, even with text, gets "Image input
+  modality is not enabled for this model" (checked on Vertex, 2026-10-16).
+  Voice notes (Ogg Opus) are sent as they
   are; other audio and the sound of videos are converted to mono Ogg Opus with
   ffmpeg. Images and silent videos are skipped, and the reply says how many.
   Only images or silent videos is an error before any call.
@@ -116,7 +119,8 @@ requests a minute for this model. It differs from the media models:
 - It answers generateContent with an `audioTranscription` part instead of a
   `text` part. llm-gemini reads only `text`, so through it the answer is empty.
   `stt_models.transcribe` therefore calls the REST API itself, with the key in
-  the `x-goog-api-key` header. Its HTTP client is made during the request, so
+  the `x-goog-api-key` header, at the endpoint of the user's provider: Vertex
+  takes the same request and answers the same way. Its HTTP client is made during the request, so
   `GEMINI_SPECIAL_HTTP_PROXY` applies to it as it does to llm-gemini.
 - Several files go in one request and come back as one text, with no
   separator. One request per file would separate them, but would spend one

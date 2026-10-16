@@ -34,11 +34,19 @@ PROVIDERS = {
         gemini_providers.LABELS[VERTEX],
         "https://console.cloud.google.com/vertex-ai/studio/overview",
         f"{gemini_providers.VERTEX_API_BASE}/models",
+        #: Every STT model but the AI Studio-only `-latest` aliases (checked
+        #: 2026-10-16).
         (
+            "gemini/gemini-3.8-flash",
+            "gemini/gemini-3.7-flash",
+            "gemini/gemini-3.6-flash",
             "gemini/gemini-3.5-flash",
+            "gemini/gemini-3.5-flash-lite",
+            "gemini/gemini-3.1-flash-lite",
             "gemini/gemini-3-flash-preview",
             "gemini/gemini-2.5-flash",
             "gemini/gemini-2.5-flash-lite",
+            "gemini/gemini-3.5-transcribe",
         ),
         (
             "gemini/gemini-3.5-flash",

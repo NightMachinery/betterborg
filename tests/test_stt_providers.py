@@ -415,6 +415,33 @@ class ProviderWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         load.assert_not_called()
 
+    async def test_vertex_speech_model_transcribes_on_the_vertex_endpoint(self):
+        audio = stt_models.AudioInputs(
+            audio=[stt_models.AudioInput("audio/ogg", b"OggS")], skipped=0
+        )
+        with patch.object(
+            stt_models, "audio_inputs", AsyncMock(return_value=audio)
+        ), patch.object(
+            stt_models, "transcribe", AsyncMock(return_value="hello")
+        ) as speech, patch.object(
+            stt_providers, "transcribe_vertex", AsyncMock()
+        ) as media:
+            answer = await stt._transcribe_with_retry(
+                models=["gemini/gemini-3.5-transcribe"],
+                attachments=[],
+                api_key=self.keys["vertex"],
+                status_message=None,
+                italics_marker="__",
+                provider="vertex",
+            )
+        self.assertEqual(answer.raw, "hello")
+        self.assertEqual(
+            speech.await_args.kwargs["models_url"],
+            stt_providers.PROVIDERS["vertex"].api_base,
+        )
+        self.assertEqual(speech.await_args.kwargs["api_key"], self.keys["vertex"])
+        media.assert_not_awaited()
+
     async def test_httpx_timeout_with_no_message_is_retried(self):
         self.assertTrue(stt._is_retriable_stt_error(httpx.ReadTimeout("")))
         self.assertFalse(
@@ -561,12 +588,13 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         finally:
             stt.llm_util.reset_llm_gemini_proxy(token)
 
-    async def test_vertex_menu_omits_developer_only_aliases_and_speech_model(self):
+    async def test_vertex_menu_omits_only_developer_only_aliases(self):
         options = stt_providers.model_options("vertex")
         self.assertIn("auto", options)
         self.assertIn("3.5-flash", options)
+        self.assertIn("3.5-transcribe", options)
         self.assertNotIn("flash-latest", options)
-        self.assertNotIn("3.5-transcribe", options)
+        self.assertNotIn("flash-lite-latest", options)
 
 
 if __name__ == "__main__":
