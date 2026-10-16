@@ -13,7 +13,7 @@ There are two kinds of model:
 
 import asyncio
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import tempfile
 from typing import Dict, List, Optional, Sequence
@@ -172,7 +172,7 @@ class AudioInput:
 class AudioInputs:
     audio: List[AudioInput]
     #: Files without sound: images, and videos without an audio track.
-    skipped: int
+    silent: list = field(default_factory=list)
 
 
 def _mime_type(attachment) -> str:
@@ -228,12 +228,12 @@ async def audio_inputs(attachments) -> AudioInputs:
     converted to Ogg Opus. Raises `NoSoundError` when nothing has sound.
     """
     audio = []
-    skipped = 0
+    silent = []
     with tempfile.TemporaryDirectory(prefix="stt_audio_") as workdir:
         for index, attachment in enumerate(attachments):
             mime_type = _mime_type(attachment)
             if not mime_type.startswith(("audio/", "video/")):
-                skipped += 1
+                silent.append(attachment)
                 continue
             if mime_type in PASSTHROUGH_AUDIO_TYPES:
                 audio.append(AudioInput(mime_type, attachment.content_bytes()))
@@ -245,12 +245,12 @@ async def audio_inputs(attachments) -> AudioInputs:
                 source.write_bytes(attachment.content_bytes())
             target = Path(workdir) / f"{index}.ogg"
             if not await _to_ogg_opus(source, target):
-                skipped += 1
+                silent.append(attachment)
                 continue
             audio.append(AudioInput("audio/ogg", target.read_bytes()))
     if not audio:
         raise NoSoundError()
-    return AudioInputs(audio=audio, skipped=skipped)
+    return AudioInputs(audio=audio, silent=silent)
 
 
 def transcript_text(payload: dict) -> str:

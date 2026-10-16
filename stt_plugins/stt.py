@@ -45,7 +45,7 @@ from telethon.tl.types import (
 )
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # --- Bot Commands Registration ---
 BOT_COMMANDS = [
@@ -259,7 +259,9 @@ class SttAnswer:
     #: Its answer: JSON from a media model, plain text from a speech model.
     raw: str
     #: Files a speech model could not hear (images, silent videos).
-    skipped: int = 0
+    silent: list = field(default_factory=list)
+    #: Whether a speech model had any file with sound to transcribe.
+    heard: bool = True
 
 
 async def _transcribe_with_retry(
@@ -315,7 +317,12 @@ async def _transcribe_with_retry(
             try:
                 sound = await stt_models.audio_inputs(attachments)
             except stt_models.NoSoundError:
-                raise SttRequestError(_no_sound_text(current_model_name)) from None
+                return SttAnswer(
+                    model_name=current_model_name,
+                    raw="",
+                    silent=list(attachments),
+                    heard=False,
+                )
         next_model_name = (
             models_to_try[current_idx + 1]
             if current_idx + 1 < len(models_to_try)
@@ -335,7 +342,7 @@ async def _transcribe_with_retry(
                         models_url=stt_providers.PROVIDERS[provider].api_base,
                     )
                     return SttAnswer(
-                        model_name=current_model_name, raw=text, skipped=sound.skipped
+                        model_name=current_model_name, raw=text, silent=sound.silent
                     )
                 if provider == stt_providers.VERTEX:
                     text = await stt_providers.transcribe_vertex(
@@ -434,13 +441,6 @@ class SttModelRefusedError(SttRequestError):
 
 class SttModelLoadError(Exception):
     """Loading the model failed unexpectedly; the cause is chained."""
-
-
-def _no_sound_text(model_name: str) -> str:
-    return (
-        f"{stt_models.label_for(model_name)} transcribes speech only, and none of "
-        "these files has sound. Choose a Flash model with /model to read images."
-    )
 
 
 # --- Model choice ---
@@ -557,29 +557,41 @@ def prepare_stt_job(cwd, *, user_id: int, model_choice: Optional[str] = None) ->
     attachments = llm_util.create_attachments_from_dir(Path(cwd))
     if not attachments:
         raise SttRequestError("No valid media files found to transcribe.")
-    if stt_models.is_speech_model(first) and not any(
-        stt_models.has_sound(attachment) for attachment in attachments
-    ):
-        raise SttRequestError(_no_sound_text(first))
     return SttJob(
         models=models, api_key=api_key, attachments=attachments, provider=provider
     )
 
 
-def format_speech_transcript(
-    text: str, *, model_name: str, skipped: int, italics_marker: str
-) -> str:
+def format_speech_transcript(text: str, *, italics_marker: str) -> str:
     """A speech model's plain transcript as the message the user gets."""
-    parts = [text.strip() or f"{italics_marker}[No speech detected]{italics_marker}"]
-    if skipped:
-        files = f"{skipped} files without sound were"
-        if skipped == 1:
-            files = "1 file without sound was"
-        parts.append(
-            f"{italics_marker}({stt_models.label_for(model_name)} hears speech "
-            f"only, so {files} skipped.){italics_marker}"
-        )
-    return "\n\n".join(parts)
+    return text.strip() or f"{italics_marker}[No speech detected]{italics_marker}"
+
+
+def format_soundless_warning(
+    *,
+    model_name: str,
+    reader_name: str,
+    count: int,
+    italics_marker: str,
+    error: Optional[str] = None,
+) -> str:
+    """The warning before what READER_NAME read of the COUNT files MODEL_NAME could not hear."""
+    files = "the file" if count == 1 else f"the {count} files"
+    speech_label = stt_models.label_for(model_name)
+    reader_label = stt_models.label_for(reader_name)
+    if error is None:
+        tail = f"so {reader_label} read {files} without sound:"
+    else:
+        tail = f"and {reader_label} could not read {files} without sound. {error}"
+    return f"⚠️ {italics_marker}{speech_label} hears speech only, {tail}{italics_marker}"
+
+
+def _soundless_failure_reason(exception, provider: str) -> str:
+    if isinstance(exception, (stt_providers.ProviderError, SttRequestError)):
+        return str(exception)
+    return _stt_failure_message(
+        exception, provider, fallback="Choose a Flash model with /model to read them."
+    )
 
 
 def format_transcription(json_response_text: str, *, italics_marker: str) -> str:
@@ -628,28 +640,63 @@ async def run_stt_job(
     # Honors the admin-only gate (may raise ProxyRestrictedException for blocked users).
     proxy_url, _ = llm_util.get_proxy_config_or_error(user_id)
     proxy_token = llm_util.set_llm_gemini_proxy(proxy_url)
+    retry = dict(
+        api_key=job.api_key,
+        status_message=status_message,
+        italics_marker=italics_marker,
+        provider=job.provider,
+    )
+    reader = stt_providers.PROVIDERS[job.provider].soundless_model
+    soundless = soundless_error = None
     try:
         # Transcribe, cycling through fallback models on transient upstream errors.
         answer = await _transcribe_with_retry(
-            models=job.models,
-            attachments=job.attachments,
-            api_key=job.api_key,
-            status_message=status_message,
-            italics_marker=italics_marker,
-            provider=job.provider,
+            models=job.models, attachments=job.attachments, **retry
         )
+        if answer.silent:
+            try:
+                soundless = await _transcribe_with_retry(
+                    models=[reader], attachments=answer.silent, **retry
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                #: With nothing heard, there is no transcript to deliver instead.
+                if not answer.heard:
+                    raise
+                print(f"STT: {reader} could not read the files without sound: {e!r}")
+                soundless_error = _soundless_failure_reason(e, job.provider)
     finally:
         llm_util.reset_llm_gemini_proxy(proxy_token)
-    if stt_models.is_speech_model(answer.model_name):
-        text = format_speech_transcript(
-            answer.raw,
-            model_name=answer.model_name,
-            skipped=answer.skipped,
-            italics_marker=italics_marker,
-        )
-    else:
+    if not stt_models.is_speech_model(answer.model_name):
         text = format_transcription(answer.raw, italics_marker=italics_marker)
-    return Transcription(text=text, raw=answer.raw, model_name=answer.model_name)
+        return Transcription(text=text, raw=answer.raw, model_name=answer.model_name)
+    parts = []
+    if answer.heard:
+        parts.append(
+            format_speech_transcript(answer.raw, italics_marker=italics_marker)
+        )
+    raws = [answer.raw] if answer.heard else []
+    model_names = [answer.model_name]
+    if answer.silent:
+        parts.append(
+            format_soundless_warning(
+                model_name=answer.model_name,
+                reader_name=reader,
+                count=len(answer.silent),
+                italics_marker=italics_marker,
+                error=soundless_error,
+            )
+        )
+    if soundless is not None:
+        parts.append(format_transcription(soundless.raw, italics_marker=italics_marker))
+        raws.append(soundless.raw)
+        model_names.append(soundless.model_name)
+    return Transcription(
+        text="\n\n".join(parts),
+        raw="\n\n".join(raws),
+        model_name=" + ".join(model_names),
+    )
 
 
 def _log_transcription(event, *, model_name: str, raw: str) -> None:
@@ -1200,7 +1247,7 @@ Here's how to use me:
 4.  **In Other Chats:**
     Reply to a voice note, audio, video or image in any chat, even one I am not in, with a mention of me, and I post the transcript there. It uses your API key, and everyone in that chat sees it.
 5.  **Choose a Provider and Model:**
-    /provider switches providers; /model picks a model for that provider. Each provider remembers its own model choice. Auto falls back within the selected provider when a model is busy or unavailable; it never switches accounts. Google AI Studio also offers 3.5 Transcribe: audio only, plain text.
+    /provider switches providers; /model picks a model for that provider. Each provider remembers its own model choice. Auto falls back within the selected provider when a model is busy or unavailable; it never switches accounts. Both providers also offer 3.5 Transcribe: speech only, plain text; the newest Flash Lite reads the files it cannot hear, such as images.
 **Available Commands:**
 - `/start`: Onboard and set up your API key.
 - `/help`: Shows this help message.

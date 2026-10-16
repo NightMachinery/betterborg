@@ -222,7 +222,7 @@ class AudioInputsTests(unittest.TestCase):
 
         inputs = asyncio.run(stt_models.audio_inputs(attachments))
 
-        self.assertEqual(inputs.skipped, 0)
+        self.assertEqual(inputs.silent, [])
         self.assertEqual([a.mime_type for a in inputs.audio], ["audio/ogg"] * 3)
         self.assertEqual(inputs.audio[0].data, voice.read_bytes())
         for item in inputs.audio[1:]:
@@ -244,7 +244,8 @@ class AudioInputsTests(unittest.TestCase):
                 attachments + [llm.Attachment(path=str(voice), type="audio/ogg")]
             )
         )
-        self.assertEqual((len(inputs.audio), inputs.skipped), (1, 2))
+        self.assertEqual(len(inputs.audio), 1)
+        self.assertEqual(inputs.silent, attachments)
 
 
 if __name__ == "__main__":

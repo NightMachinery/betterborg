@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import httpx
 
 from uniborg import gemini_providers, stt_models
+from uniborg.constants import GEMINI_FLASH_LITE_LATEST
 
 GEMINI = gemini_providers.AI_STUDIO
 VERTEX = gemini_providers.VERTEX
@@ -22,6 +23,8 @@ class Provider:
     api_base: str
     model_ids: tuple[str, ...] = ()
     auto_models: tuple[str, ...] = ()
+    #: The newest Flash Lite: it reads the files a speech model cannot hear.
+    soundless_model: str = GEMINI_FLASH_LITE_LATEST
 
 
 PROVIDERS = {
@@ -53,6 +56,8 @@ PROVIDERS = {
             "gemini/gemini-3-flash-preview",
             "gemini/gemini-2.5-flash-lite",
         ),
+        #: Vertex does not serve the `-latest` aliases.
+        soundless_model="gemini/gemini-3.5-flash-lite",
     ),
 }
 

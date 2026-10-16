@@ -109,8 +109,17 @@ requests a minute for this model. It differs from the media models:
   modality is not enabled for this model" (checked on Vertex, 2026-10-16).
   Voice notes (Ogg Opus) are sent as they
   are; other audio and the sound of videos are converted to mono Ogg Opus with
-  ffmpeg. Images and silent videos are skipped, and the reply says how many.
-  Only images or silent videos is an error before any call.
+  ffmpeg.
+- Files without sound (images, silent videos, audio ffmpeg cannot convert) go
+  to the newest Flash Lite in a second call: `soundless_model` in
+  `stt_providers.PROVIDERS`, Flash Lite Latest on AI Studio and 3.5 Flash Lite
+  on Vertex, which lacks the `-latest` aliases. The reply puts a warning line
+  between the speech transcript and Flash Lite's reading, which names both
+  models and the number of files. When no file has sound, Transcribe is not
+  called, and the reply is the warning and Flash Lite's reading alone. When the
+  Flash Lite call fails, the speech transcript is still delivered and the
+  warning says why the rest was not read; when nothing was heard, the failure
+  is reported as any other STT error.
 - It returns plain text: no speaker labels, emoji, translations or visual
   descriptions, which the media models' prompt asks for.
 - It rejects a system instruction ("Developer instruction is not enabled for

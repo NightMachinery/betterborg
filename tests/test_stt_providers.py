@@ -417,7 +417,7 @@ class ProviderWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_vertex_speech_model_transcribes_on_the_vertex_endpoint(self):
         audio = stt_models.AudioInputs(
-            audio=[stt_models.AudioInput("audio/ogg", b"OggS")], skipped=0
+            audio=[stt_models.AudioInput("audio/ogg", b"OggS")]
         )
         with patch.object(
             stt_models, "audio_inputs", AsyncMock(return_value=audio)

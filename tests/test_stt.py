@@ -56,8 +56,10 @@ class _Model:
 
     def __init__(self, outcome):
         self.outcome = outcome
+        self.prompts = []
 
     async def prompt(self, **kwargs):
+        self.prompts.append(kwargs)
         if isinstance(self.outcome, Exception):
             raise self.outcome
         return SimpleNamespace(text=AsyncMock(return_value=self.outcome))
@@ -220,35 +222,61 @@ class ModelChoiceTests(unittest.TestCase):
         self.assertIn("2.5 Flash is not available for this API key", text)
         calls.error.assert_not_awaited()
 
-    def test_the_speech_model_sends_its_plain_text_and_counts_what_it_skipped(self):
-        attachments = (
-            _attachment(b"OggS", "audio/ogg"),
-            _attachment(b"\x89PNG", "image/png"),
-        )
+    def test_flash_lite_reads_what_the_speech_model_cannot_hear(self):
+        image = _attachment(b"\x89PNG", "image/png")
+        model = _Model(json.dumps({"transcription": "", "visual_description": "a cat"}))
         calls = self.run_stt(
             choice="gemini/gemini-3.5-transcribe",
-            attachments=attachments,
+            attachments=(_attachment(b"OggS", "audio/ogg"), image),
             speech="Hello there.",
+            model=model,
         )
 
         self.assertEqual(
             calls.edit.await_args.args[1],
-            "Hello there.\n\n__(3.5 Transcribe hears speech only, so 1 file "
-            "without sound was skipped.)__",
+            "Hello there.\n\n⚠️ __3.5 Transcribe hears speech only, so Flash Lite "
+            "Latest read the file without sound:__\n\n\n**Visuals:**\na cat",
         )
         (audio,) = calls.speech.await_args.kwargs["audio"]
         self.assertEqual(audio.data, b"OggS")
-        calls.get_model.assert_not_called()
+        calls.get_model.assert_called_once_with(
+            stt.stt_providers.PROVIDERS["gemini"].soundless_model
+        )
+        self.assertEqual(model.prompts[0]["attachments"], [image])
 
-    def test_the_speech_model_on_images_alone_is_told_before_any_call(self):
+    def test_images_alone_go_straight_to_flash_lite(self):
         calls = self.run_stt(
             choice="gemini/gemini-3.5-transcribe",
-            attachments=(_attachment(b"\x89PNG", "image/png"),),
+            attachments=(
+                _attachment(b"\x89PNG", "image/png"),
+                _attachment(b"\x89PNG", "image/png"),
+            ),
             speech="unused",
         )
 
-        self.assertIn("speech only", calls.event.reply.await_args.args[0])
+        self.assertEqual(
+            calls.edit.await_args.args[1],
+            "⚠️ __3.5 Transcribe hears speech only, so Flash Lite Latest read the "
+            "2 files without sound:__\n\nhello",
+        )
         calls.speech.assert_not_awaited()
+
+    def test_the_transcript_survives_a_flash_lite_failure(self):
+        calls = self.run_stt(
+            choice="gemini/gemini-3.5-transcribe",
+            attachments=(
+                _attachment(b"OggS", "audio/ogg"),
+                _attachment(b"\x89PNG", "image/png"),
+            ),
+            speech="Hello there.",
+            outcome=ValueError("bad request"),
+        )
+
+        text = calls.edit.await_args.args[1]
+        self.assertTrue(text.startswith("Hello there.\n\n⚠️ __3.5 Transcribe"))
+        self.assertIn("Flash Lite Latest could not read the file without sound", text)
+        self.assertNotIn("bad request", text)
+        calls.error.assert_not_awaited()
 
     def test_a_saved_choice_survives_and_one_no_longer_offered_is_auto(self):
         saved = {}
