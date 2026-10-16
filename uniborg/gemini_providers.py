@@ -32,10 +32,26 @@ VERTEX_CHAT_MODELS = (
 #: Titles default to an AI Studio-only alias; this is their Vertex stand-in.
 VERTEX_TITLE_MODEL = "gemini/gemini-2.5-flash-lite"
 
+#: AI Studio model ids that Vertex AI serves under another id (checked
+#: 2026-10-16): the same TTS and image models, out of preview.
+VERTEX_MODEL_IDS = {
+    "gemini-2.5-flash-preview-tts": "gemini-2.5-flash-tts",
+    "gemini-2.5-pro-preview-tts": "gemini-2.5-pro-tts",
+    "gemini-2.5-flash-image-preview": "gemini-2.5-flash-image",
+}
+
 
 def normalize(provider) -> str:
     return provider if provider in LABELS else AI_STUDIO
 
 
+def vertex_model_id(model: str) -> str:
+    """MODEL as Vertex AI names it, keeping any `gemini/` prefix."""
+    bare = model.removeprefix("gemini/")
+    return model[: len(model) - len(bare)] + VERTEX_MODEL_IDS.get(bare, bare)
+
+
 def vertex_serves_p(model: str) -> bool:
-    return model in VERTEX_CHAT_MODELS
+    return (
+        model in VERTEX_CHAT_MODELS or model.removeprefix("gemini/") in VERTEX_MODEL_IDS
+    )

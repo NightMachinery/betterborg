@@ -4402,19 +4402,11 @@ def get_effective_api_key(user_id: int, service: str) -> str | None:
     return llm_db.get_api_key(user_id=user_id, service=service)
 
 
-def _gemini_chat_service(
-    user_id: int, model: str, service: str, *, image_generation: bool = False
-) -> str:
-    """SERVICE, or Vertex AI's when USER_ID runs native Gemini chat there.
-
-    Image generation stays on Google AI Studio.
-    """
+def _gemini_chat_service(user_id: int, model: str, service: str) -> str:
+    """SERVICE, or Vertex AI's when USER_ID runs native Gemini models there."""
     if (
         service == gemini_providers.AI_STUDIO
         and is_native_gemini(model)
-        and not image_generation
-        and not is_image_generation_model(model)
-        and not is_native_gemini_image_generation(model)
         and user_manager.get_gemini_provider(user_id) == gemini_providers.VERTEX
     ):
         return gemini_providers.VERTEX
@@ -5005,6 +4997,7 @@ async def _handle_native_gemini_image_generation(
     model_capabilities: Dict[str, bool] = None,
     *,
     max_retries: int = MAX_RETRIES,
+    gemini_provider: str = gemini_providers.AI_STUDIO,
 ) -> tuple[str, bool]:
     """Handle native Gemini image generation with streaming support.
 
@@ -5017,6 +5010,12 @@ async def _handle_native_gemini_image_generation(
             user_id=event.sender_id,
             read_bufsize=2 * 2**20,
             proxy_p=True,
+            gemini_provider=gemini_provider,
+        )
+        api_model = (
+            gemini_providers.vertex_model_id(model)
+            if gemini_provider == gemini_providers.VERTEX
+            else model
         )
 
         # Initialize model capabilities and warnings tracking if not provided
@@ -5115,7 +5114,9 @@ async def _handle_native_gemini_image_generation(
         # Stream the response
         try:
             async for chunk in await client.aio.models.generate_content_stream(
-                model=re.sub(r"^gemini/", "", model),  # Remove prefix for native API
+                model=re.sub(
+                    r"^gemini/", "", api_model
+                ),  # Remove prefix for native API
                 contents=contents,
                 config=generate_content_config,
             ):
@@ -5190,6 +5191,7 @@ async def _handle_native_gemini_image_generation(
                     response_message,
                     model_capabilities,
                     max_retries=max_retries - 1,
+                    gemini_provider=gemini_provider,
                 )
             elif is_500_error:
                 traceback.print_exc()
@@ -8119,7 +8121,7 @@ def _gemini_provider_menu_text(user_id: int) -> str:
             f"{_vertex_model_names()}. Other Gemini models are refused. "
             "Key: /setVertexKey",
             "",
-            "Image generation, voice replies and live mode always use Google AI Studio.",
+            "Live mode always uses Google AI Studio.",
             "",
             f"Current: **{gemini_providers.LABELS[current]}**",
             *(["", f"⚠️ Your model: {refusal}"] if refusal else []),
@@ -12528,8 +12530,9 @@ async def _handle_tts_response(event, response_text: str):
         if tts_model == "Disabled":
             return
 
-        # Get user's Gemini API key
-        api_key = get_effective_gemini_api_key(sender_id)
+        # Get the key of the user's Gemini provider
+        gemini_provider = user_manager.get_gemini_provider(sender_id)
+        api_key = get_effective_api_key(sender_id, gemini_provider)
         if not api_key:
             return  # No API key, silently skip TTS
 
@@ -12550,6 +12553,7 @@ async def _handle_tts_response(event, response_text: str):
             model=tts_model,
             api_key=api_key,
             user_id=sender_id,
+            gemini_provider=gemini_provider,
         )
 
         try:
@@ -13060,6 +13064,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
             model_in_use,
             response_message,
             model_capabilities,
+            gemini_provider=req.gemini_provider,
         )
         finish_reason = (
             None  # Native Gemini image generation doesn't provide finish_reason
@@ -13402,12 +13407,7 @@ async def _chat_handler(event, *, forced_model: Optional[str] = None):
         model_in_use = DEFAULT_MODEL
         service_needed = llm_util.get_service_from_model(model_in_use)
     model_capabilities = get_model_capabilities(model_in_use)
-    service_needed = _gemini_chat_service(
-        user_id,
-        model_in_use,
-        service_needed,
-        image_generation=prefix_result.image_generation,
-    )
+    service_needed = _gemini_chat_service(user_id, model_in_use, service_needed)
     vertex_refusal = _vertex_refusal(model_in_use, service_needed)
     if vertex_refusal:
         await send_info_message(event, vertex_refusal, parse_mode=None)
@@ -13713,10 +13713,7 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
             raise GuestRequestRefused(CODEX_IMAGEGEN_ACCESS_DENIED)
         model = DEFAULT_MODEL
     service = _gemini_chat_service(
-        user_id,
-        model,
-        llm_util.get_service_from_model(model),
-        image_generation=prefix.image_generation,
+        user_id, model, llm_util.get_service_from_model(model)
     )
     vertex_refusal = _vertex_refusal(model, service)
     if vertex_refusal:

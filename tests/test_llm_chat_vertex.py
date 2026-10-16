@@ -61,13 +61,13 @@ class RoutingTests(unittest.TestCase):
                 plugin._gemini_chat_service(USER_ID, FLASH, AI_STUDIO), AI_STUDIO
             )
 
-    def test_image_generation_and_other_services_stay_where_they_are(self):
+    def test_image_models_follow_the_provider_and_other_services_stay(self):
         with _on(VERTEX):
             self.assertEqual(
                 plugin._gemini_chat_service(
-                    USER_ID, FLASH, AI_STUDIO, image_generation=True
+                    USER_ID, "gemini/gemini-2.5-flash-image-preview", AI_STUDIO
                 ),
-                AI_STUDIO,
+                VERTEX,
             )
             self.assertEqual(
                 plugin._gemini_chat_service(
@@ -75,6 +75,25 @@ class RoutingTests(unittest.TestCase):
                 ),
                 "openrouter",
             )
+
+    def test_vertex_names_preview_tts_and_image_models_by_their_ga_ids(self):
+        self.assertEqual(
+            gemini_providers.vertex_model_id("gemini-2.5-flash-preview-tts"),
+            "gemini-2.5-flash-tts",
+        )
+        self.assertEqual(
+            gemini_providers.vertex_model_id("gemini/gemini-2.5-flash-image-preview"),
+            "gemini/gemini-2.5-flash-image",
+        )
+        self.assertEqual(gemini_providers.vertex_model_id(FLASH), FLASH)
+        self.assertTrue(
+            gemini_providers.vertex_serves_p("gemini/gemini-2.5-flash-image-preview")
+        )
+        self.assertFalse(
+            gemini_providers.vertex_serves_p(
+                "gemini/gemini-2.0-flash-preview-image-generation"
+            )
+        )
 
     def test_a_model_vertex_lacks_is_refused_with_the_way_out(self):
         refusal = plugin._vertex_refusal(plugin.GEMINI_FLASH_LATEST, VERTEX)
@@ -256,3 +275,80 @@ class TitleTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _Stop(Exception):
+    pass
+
+
+def _fake_genai(calls):
+    """A genai client that records each request's model, then stops it."""
+
+    async def generate(*, model, config=None, **kwargs):
+        calls.append((model, getattr(config, "temperature", None)))
+        raise _Stop()
+
+    models = SimpleNamespace(
+        generate_content=generate, generate_content_stream=generate
+    )
+    return SimpleNamespace(aio=SimpleNamespace(models=models))
+
+
+class GenaiOnVertexTests(unittest.TestCase):
+    def test_the_client_targets_vertex_express(self):
+        client = plugin.llm_util.create_genai_client(
+            "synthetic-key-0000000000", gemini_provider=VERTEX
+        )
+        self.assertTrue(client._api_client.vertexai)
+        with self.assertRaises(ValueError):
+            plugin.llm_util.create_genai_client("k", gemini_provider="azure")
+
+    def test_tts_uses_the_vertex_client_and_model_id(self):
+        calls = []
+        with patch.object(
+            plugin.llm_util, "create_genai_client", return_value=_fake_genai(calls)
+        ) as create, self.assertRaises(_Stop):
+            asyncio.run(
+                plugin.tts_util.generate_tts_audio(
+                    "hi",
+                    voice="Zephyr",
+                    model="gemini-2.5-flash-preview-tts",
+                    api_key="vertex-key",
+                    user_id=USER_ID,
+                    gemini_provider=VERTEX,
+                )
+            )
+        self.assertEqual(create.call_args.kwargs["gemini_provider"], VERTEX)
+        self.assertEqual(
+            calls, [("gemini-2.5-flash-tts", plugin.tts_util.VERTEX_TTS_TEMPERATURE)]
+        )
+
+    def test_image_generation_uses_the_vertex_client_and_model_id(self):
+        calls = []
+        event = SimpleNamespace(sender_id=USER_ID, chat_id=USER_ID)
+        with ExitStack() as stack:
+            create = stack.enter_context(
+                patch.object(
+                    plugin.llm_util,
+                    "create_genai_client",
+                    return_value=_fake_genai(calls),
+                )
+            )
+            stack.enter_context(
+                patch.object(plugin, "_thread_topic_id", return_value=None)
+            )
+            with self.assertRaises(Exception):
+                asyncio.run(
+                    plugin._handle_native_gemini_image_generation(
+                        event,
+                        [{"role": "user", "content": "a red square"}],
+                        "vertex-key",
+                        "gemini/gemini-2.5-flash-image-preview",
+                        AsyncMock(),
+                        {},
+                        max_retries=0,
+                        gemini_provider=VERTEX,
+                    )
+                )
+        self.assertEqual(create.call_args.kwargs["gemini_provider"], VERTEX)
+        self.assertEqual([model for model, _ in calls], ["gemini-2.5-flash-image"])

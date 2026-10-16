@@ -3,6 +3,7 @@ import traceback
 from uniborg import util
 from uniborg import llm_db
 from uniborg import guest_util
+from uniborg import gemini_providers
 from uniborg.constants import BOT_META_INFO_PREFIX
 import llm
 from pathlib import Path
@@ -203,6 +204,7 @@ def create_genai_client(
     user_id: int = None,
     read_bufsize: int = None,
     proxy_p: bool = False,
+    gemini_provider: str = gemini_providers.AI_STUDIO,
 ) -> "genai.Client":
     """
     Creates and configures a genai.Client with optional proxy support and buffer size.
@@ -212,6 +214,7 @@ def create_genai_client(
         user_id: Optional. The ID of the user making the request, for proxy access checks.
         read_bufsize: Optional. The read buffer size in bytes for the async client.
         proxy_p: Whether to use proxy configuration. Defaults to False.
+        gemini_provider: `gemini_providers.VERTEX` for a Vertex AI Express key.
 
     Returns:
         A configured google.genai.Client instance.
@@ -235,7 +238,11 @@ def create_genai_client(
         async_client_args=async_client_args or None,
     )
 
-    return genai.Client(api_key=api_key, http_options=http_options)
+    if gemini_provider == gemini_providers.VERTEX:
+        return genai.Client(vertexai=True, api_key=api_key, http_options=http_options)
+    if gemini_provider == gemini_providers.AI_STUDIO:
+        return genai.Client(api_key=api_key, http_options=http_options)
+    raise ValueError(f"Unknown Gemini provider: {gemini_provider!r}")
 
 
 def create_litellm_proxy_client(user_id: int):

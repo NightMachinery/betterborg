@@ -46,9 +46,26 @@ and `GenerationRequest`.
 - **Titles** of files and topics: a Gemini title model that Vertex lacks (the
   default is Flash Lite Latest) is replaced by
   `gemini_providers.VERTEX_TITLE_MODEL`, with the Vertex key.
+- **Voice replies (TTS)** use the Vertex key and client
+  (`genai.Client(vertexai=True, api_key=...)`). Vertex names the TTS models
+  without "preview": `gemini_providers.VERTEX_MODEL_IDS` maps
+  `gemini-2.5-flash-preview-tts` and `gemini-2.5-pro-preview-tts` to
+  `gemini-2.5-flash-tts` and `gemini-2.5-pro-tts`. They run at temperature 0.3
+  (`tts_util.VERTEX_TTS_TEMPERATURE`): at the bot's usual 1, the styled prompt
+  made Vertex's Flash TTS read three words for 30 seconds to 9 minutes in 3 of 8
+  tries, and at 0.3 none of 8 did (2026-10-16). Whether AI Studio's preview
+  models do the same was not checked.
+- **Native image generation** (a Gemini image model chosen as the chat model;
+  `.i` always uses Codex) runs on Vertex the same way, with
+  `gemini-2.5-flash-image-preview` mapped to `gemini-2.5-flash-image`. The
+  Gemini 2.0 image models are not on Vertex and are refused.
 
-## Still on Google AI Studio
+## Still on Google AI Studio: live mode
 
-Image generation (`.i` and the image models), voice replies (TTS), live mode
-and the Gemini key rotation all keep using the AI Studio key whatever the user's
-provider is.
+Live mode (`/live`) keeps using the AI Studio key. Vertex's Live API rejects the
+model name the `genai` SDK sends with an Express key
+(`publishers/google/models/...`: "Invalid resource field value"). It accepts a
+full `projects/<number>/locations/<region>/...` name, and then only for
+`gemini-live-2.5-flash` (the native-audio models were not available), but an
+Express key does not reveal its project number: the only way to learn it is from
+the text of an unrelated error. That is too fragile to build on.

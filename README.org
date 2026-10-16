@@ -56,7 +56,7 @@ tmuxnew betterborg_llm_chat "dash -c 'cd $(gq $borgdir) && borg_session=session_
 
 Gemini models run on Google AI Studio or, per user, on Vertex AI Express mode:
 =/geminiProvider= switches, =/setVertexKey= sets the key. Vertex serves fewer
-models and has no Files API or explicit caching; see
+models, has no Files API or explicit caching, and live mode stays on AI Studio; see
 [[file:docs/gemini_vertex_chat.md][docs/gemini_vertex_chat.md]].
 
 * llm-stt
