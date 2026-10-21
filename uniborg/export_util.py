@@ -70,7 +70,7 @@ def export_root(env_name: str, default_root: str) -> Path:
 
 
 def sanitize_path_part(value: str) -> str:
-    cleaned = "".join(c if c not in '/\0' else "_" for c in value).strip()
+    cleaned = "".join(c if c not in "/\0" else "_" for c in value).strip()
     return cleaned or "Telegram Chat"
 
 
@@ -117,7 +117,9 @@ def chat_type(entity) -> str:
     if isinstance(entity, types.User):
         return "personal_chat"
     if isinstance(entity, types.Channel):
-        return "public_channel" if getattr(entity, "broadcast", False) else "private_group"
+        return (
+            "public_channel" if getattr(entity, "broadcast", False) else "private_group"
+        )
     if isinstance(entity, types.Chat):
         return "private_group"
     return "chat"
@@ -125,7 +127,12 @@ def chat_type(entity) -> str:
 
 def entity_display_name(entity) -> str:
     name = utils.get_display_name(entity)
-    return name or getattr(entity, "title", None) or getattr(entity, "username", None) or "Telegram Chat"
+    return (
+        name
+        or getattr(entity, "title", None)
+        or getattr(entity, "username", None)
+        or "Telegram Chat"
+    )
 
 
 def _entity_extra(entity, entity_type) -> dict:
@@ -256,7 +263,9 @@ def media_fields(message) -> dict:
             elif mime_type.startswith("video/"):
                 out["media_type"] = "video_file"
             elif mime_type.startswith("image/"):
-                out["media_type"] = "sticker" if "sticker" in mime_type else "image_file"
+                out["media_type"] = (
+                    "sticker" if "sticker" in mime_type else "image_file"
+                )
             else:
                 out["media_type"] = "file"
         out["file"] = TEXT_ONLY_PLACEHOLDER
@@ -399,7 +408,9 @@ async def sender_fields(message, sender_cache: dict) -> dict:
     return {"from_id": from_id} if from_id else {}
 
 
-async def message_to_export(message, input_chat, sender_cache: dict, peer_cache: dict) -> dict:
+async def message_to_export(
+    message, input_chat, sender_cache: dict, peer_cache: dict
+) -> dict:
     text, text_entities = text_and_entities(message.message or "", message.entities)
     row = {
         "id": message.id,
