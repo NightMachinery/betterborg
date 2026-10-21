@@ -8,6 +8,23 @@ the live output of `.a`, `.af` and `.aa` in chats and in guest answers, and
 how a running command is stopped: `.k`, `@bot .k` and the previews' Stop
 buttons.
 
+## Addressing a shell bot
+
+In the bot's own chat, or a group it belongs to, shell commands accept either
+their bare form or a leading mention: `@bot .a CMD`, `@bot .aa CMD`,
+`@bot .af CMD`, `@bot .k`, `@bot .x`, `@bot .xf` and `@bot .sbb`. The primary
+username and every active alias work, case-insensitively. At least one
+whitespace character must separate the name and the command; commas and colons
+are not separators. Existing command flags, arguments and admin checks apply.
+User accounts keep the bare-command behavior.
+
+`/help@alias` and `/settings@alias` also accept active aliases. Help text uses
+the primary name, or the first active alias when there is no primary name.
+Names are read from Telegram's profile at startup; restart the bot after
+changing aliases. In guest chats, only the existing strict `.a` and `.k`
+triggers are supported, with the same active aliases and authorization checks
+([guest mode](guest_mode.md)).
+
 ## Terms
 
 - **Job**: one `.a`, `.af` or `.aa` command, in a chat or from a guest

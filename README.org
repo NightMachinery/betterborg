@@ -164,6 +164,8 @@ whether the renderer runs in a =/settings= panel. A shutdown or =.restart=
 stops the running commands first and sends their output before it
 disconnects. =borg_shell_streaming=0= turns live output and stopping off.
 See [[file:docs/shell_streaming.md][docs/shell_streaming.md]].
+In a shell bot's own chat, dot commands also accept a leading mention, such as
+=@bot .a CMD= or =@alias .k=. Active additional usernames work there too.
 
 ** Guest mode
 The bots answer where they are mentioned, even in chats they are not in.

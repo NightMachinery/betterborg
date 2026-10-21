@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from telethon import events
+from telethon import events, types
 
 from uniborg import draft_stream, shell_settings, tg_compat, util
 from uniborg.shell_settings import FinalMode, ShellPrefs
@@ -83,6 +83,32 @@ class _SettingsTestCase(_ShellTestCase):
 
 
 class RegistrationTests(_SettingsTestCase):
+    def test_slash_commands_accept_active_aliases_and_alias_only_profiles(self):
+        for primary in (BOT_USERNAME, None):
+            with self.subTest(primary=primary):
+                self.borg.me.username = primary
+                self.borg.me.usernames = [
+                    types.Username("ShellTestAI", active=True),
+                    types.Username("RetiredAI", active=False),
+                ]
+                self.borg.handlers.clear()
+                self.plugin.register_bot_handlers()
+                for handler in ("settings_handler", "help_handler"):
+                    builder, _ = self.find_handler(handler)
+                    command = "settings" if handler == "settings_handler" else "help"
+                    self.assertTrue(builder.pattern(f"/{command}@shelltestai"))
+                    self.assertTrue(builder.pattern(f"/{command}"))
+                    self.assertFalse(builder.pattern(f"/{command}@RetiredAI"))
+                    self.assertFalse(builder.pattern(f"/{command}@OtherAI"))
+                    self.assertFalse(builder.pattern(f"/{command}@ShellTestAIx"))
+
+    def test_alias_only_help_shows_a_valid_shell_mention(self):
+        self.borg.me.username = None
+        self.borg.me.usernames = [types.Username("ShellTestAI", active=True)]
+        replies = self.command("/help", handler="help_handler")
+        self.assertIn("@ShellTestAI .a", replies[0][0])
+        self.assertNotIn("@None", replies[0][0])
+
     def test_a_bot_registers_its_commands_and_handlers(self):
         self.assertEqual(
             [c["command"] for c in self.plugin.BOT_COMMANDS], ["settings", "help"]

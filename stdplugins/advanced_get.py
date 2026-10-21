@@ -42,6 +42,34 @@ pattern_a = re.compile(
 )
 
 
+def _shell_event(pattern, *, admin_only=False):
+    """A shell command, optionally addressed to one of this bot's names.
+
+    Match against the command after the mention without changing the message,
+    so command captures and reply/media handling keep their existing meaning.
+    User accounts continue to accept only the original bare command patterns.
+    """
+    builder = (
+        util.admin_cmd(pattern=pattern)
+        if admin_only
+        else events.NewMessage(pattern=pattern)
+    )
+    match_command = builder.pattern
+
+    def match_addressed(text):
+        if borg.me.bot:
+            names = username_util.username_pattern(
+                username_util.active_usernames(borg.me)
+            )
+            mention = re.match(rf"^\s*@{names}(?!\w)\s+", text, re.IGNORECASE)
+            if mention is not None:
+                text = text[mention.end() :]
+        return match_command(text)
+
+    builder.pattern = match_addressed
+    return builder
+
+
 @dataclass
 class ShellRequest:
     command: str
@@ -575,7 +603,7 @@ async def _is_admin_command(event) -> bool:
     return bool(await util.isAdmin(event) and event.message.forward is None)
 
 
-@borg.on(events.NewMessage(pattern=pattern_a))
+@borg.on(_shell_event(pattern_a))
 async def _(event):
     if not await _is_admin_command(event):
         return
@@ -761,7 +789,7 @@ async def kill_reply(event, *, clock=time.monotonic) -> str:
     return kill_text(arg, jobs=jobs, now=clock())
 
 
-@borg.on(events.NewMessage(pattern=pattern_k))
+@borg.on(_shell_event(pattern_k))
 async def kill_handler(event):
     if not await _is_admin_command(event):
         return
@@ -880,7 +908,7 @@ def old_pool_note(*, chat_id, caller_id) -> str:
     return "".join(f"\n{line}" for line in lines)
 
 
-@borg.on(util.admin_cmd(pattern=r"^\.xf$"))
+@borg.on(_shell_event(r"^\.xf$", admin_only=True))
 async def reinit_brishes_handler(event):
     util.init_brishes()
     await event.reply(
@@ -889,7 +917,7 @@ async def reinit_brishes_handler(event):
     )
 
 
-@borg.on(util.admin_cmd(pattern=r"^\.(x|sbb)$"))
+@borg.on(_shell_event(r"^\.(x|sbb)$", admin_only=True))
 async def restart_brishes_handler(event):
     util.restart_brishes()
     await event.reply(
@@ -939,6 +967,7 @@ A command still running after 2 s shows its output live.
 `.k` stops a running command: as a reply to it or its preview, or alone. `.k N` stops #N, `.k all` stops every one here, `.k ls` lists them.
 `.x` (or `.sbb`, `.xf`) restarts the shell pool.
 /settings: how live output shows, what it becomes when the command ends, and the renderer.
+In this chat, shell commands also accept a leading `@{username}` or any active alias, separated by whitespace.
 `@{username} .a CMD` runs CMD from any chat, where guest mode is on; `@{username} .k` there stops it, with the forms of `.k`."""
 
 
@@ -1124,7 +1153,7 @@ async def help_handler(event):
     if not await _is_admin_command(event):
         return
     await event.reply(
-        HELP_TEXT.format(username=borg.me.username),
+        HELP_TEXT.format(username=_guest_username()),
         parse_mode="md",
         link_preview=False,
     )
@@ -1133,7 +1162,8 @@ async def help_handler(event):
 def _bot_command_pattern(command) -> str:
     """`/COMMAND`, also as `/COMMAND@thisbot`, with optional arguments,
     which may span lines."""
-    mention = f"(?:@{re.escape(borg.me.username)})?" if borg.me.username else ""
+    names = username_util.username_pattern(username_util.active_usernames(borg.me))
+    mention = rf"(?:@{names})?"
     return rf"(?is)^/{command}{mention}(?:\s+(?P<args>.*))?\s*$"
 
 

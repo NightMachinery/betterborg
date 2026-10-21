@@ -94,7 +94,7 @@ class _Event:
             reply_to_msg_id=None,
             grouped_id=None,
         )
-        self.pattern_match = plugin.pattern_a.match(text)
+        self.pattern_match = plugin.borg.handlers[0][0].pattern(text)
 
     def _sent(self, kind, text, kwargs):
         message = _Message(self, text, chat_id=self.chat_id, **kwargs)
@@ -290,6 +290,79 @@ def _stop_button(preview_text):
 SLOW = ["a\n", 0.8, "b"]
 PLAIN_TEXT = {"parse_mode": None, "link_preview": False}
 FINAL_EDIT = {"parse_mode": None, "link_preview": False, "buttons": None}
+
+
+class AddressedCommandTests(_ShellTestCase):
+    def setUp(self):
+        super().setUp()
+        self.borg.me.usernames = [
+            types.Username("ShellTestAI", active=True),
+            types.Username("RetiredAI", active=False),
+        ]
+
+    def test_an_alias_prefix_runs_a_real_command_in_the_bot_chat(self):
+        event = self.run_command("@shelltestai .aa printf 'alias works'", private=True)
+        self.assertEqual([entry[:2] for entry in event.log], [("respond", "alias works")])
+
+    def test_primary_and_alias_prefixes_preserve_all_command_flags_and_body(self):
+        builder = self.borg.handlers[0][0]
+        command = "printf '@OtherAI body'\nprintf second"
+        for name in (BOT_USERNAME, "sHeLlTeStAi"):
+            for flags in ("a", "aa", "af", "aafdn"):
+                text = f"  @{name}\n.{flags} {command}"
+                with self.subTest(text=text):
+                    match = builder.pattern(text)
+                    self.assertIsNotNone(match)
+                    request = asyncio.run(self.plugin.parse_shell_request(match))
+                    expected = "noglob " + command if flags.endswith("n") else command
+                    self.assertEqual(request.command, expected)
+                    self.assertEqual(request.brish_mode, not flags.startswith("aa"))
+                    self.assertEqual(request.album_mode, "d" not in flags)
+                    self.assertEqual(request.fork, "f" not in flags)
+
+    def test_prefixes_require_an_active_complete_name_and_whitespace(self):
+        builder = self.borg.handlers[0][0]
+        for text in (
+            "@OtherAI .a printf ignored", "@RetiredAI .a printf ignored",
+            "@ShellTestAIx .a printf ignored", "mail@ShellTestAI .a printf ignored",
+            "@@ShellTestAI .a printf ignored", "@ShellTestAI.a printf ignored",
+            "@ShellTestAI, .a printf ignored", "@ShellTestAI: .a printf ignored",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(builder.pattern(text))
+
+    def test_a_userbot_keeps_bare_commands_and_rejects_addressed_commands(self):
+        self.borg.me.bot = False
+        for builder, fn in self.borg.handlers:
+            if fn.__name__ not in ("_", "kill_handler", "restart_brishes_handler", "reinit_brishes_handler"):
+                continue
+            for text in (".a printf ok", ".k", ".x", ".xf", ".sbb"):
+                with self.subTest(handler=fn.__name__, text=text):
+                    self.assertFalse(builder.pattern(f"@{BOT_USERNAME} {text}"))
+        self.assertIsNotNone(self.borg.handlers[0][0].pattern(".a printf ok"))
+
+    def test_a_prefixed_command_still_requires_an_admin(self):
+        with patch.object(util, "isAdmin", AsyncMock(return_value=False)), patch.object(
+            util, "simple_run_capture", AsyncMock()
+        ) as capture:
+            event = self.run_command("@ShellTestAI .aa printf ignored", private=True)
+        self.assertEqual(event.log, [])
+        capture.assert_not_awaited()
+
+    def test_a_prefixed_forward_or_guest_echo_does_not_run(self):
+        for echo in (False, True):
+            event = _Event(self.plugin, "@ShellTestAI .aa printf ignored", private=True)
+            if echo:
+                event.message.out = True
+                event.message.guestchat_via_from = types.PeerUser(ADMIN)
+            else:
+                event.message.forward = object()
+            with self.subTest(echo=echo), patch.object(
+                util, "simple_run_capture", AsyncMock()
+            ) as capture:
+                asyncio.run(self.handler(event))
+                self.assertEqual(event.log, [])
+                capture.assert_not_awaited()
 
 
 class FastCommandTests(_ShellTestCase):
@@ -750,11 +823,18 @@ class _KillEvent(_Event):
     def __init__(self, plugin, text, *, private=False, reply_to=None):
         super().__init__(plugin, ".a x", private=private)
         self.message.reply_to_msg_id = reply_to
-        self.pattern_match = plugin.pattern_k.match(text)
+        builder = next(b for b, fn in plugin.borg.handlers if fn.__name__ == "kill_handler")
+        self.pattern_match = builder.pattern(text)
         assert self.pattern_match, text
 
 
 class KillTests(_ShellTestCase):
+    def test_an_alias_prefix_stops_a_job_in_the_bot_chat(self):
+        self.borg.me.usernames = [types.Username("ShellTestAI", active=True)]
+        jobs, killed = self.jobs("printf waiting", chat_id=DM)
+        self.assertIn("Stopping", self.kill("@ShellTestAI .k all", private=True)[0])
+        self.assertEqual(killed, [jobs[0].id])
+
     def setUp(self):
         super().setUp()
         (self.kill_handler,) = [
@@ -1131,6 +1211,21 @@ class StopButtonTests(_ShellTestCase):
 
 class OldPoolTests(_ShellTestCase):
     """`.x`, `.sbb` and `.xf` say how many jobs are queued or running on old pools."""
+
+    def test_restart_commands_accept_aliases_and_retain_the_admin_event_filters(self):
+        self.borg.me.usernames = [types.Username("ShellTestAI", active=True)]
+        for command in (".x", ".sbb", ".xf"):
+            with self.subTest(command=command):
+                reply = self.restart(f"@shelltestai {command}", pools=["old", "new"])
+                self.assertIn("brishes.", reply)
+                builder = next(
+                    b for b, fn in self.borg.handlers
+                    if fn.__name__.endswith("brishes_handler")
+                    and b.pattern(f"@ShellTestAI {command}")
+                )
+                self.assertIn(self.borg.me, builder.from_users)
+                self.assertFalse(builder.forwards)
+                self.assertIs(builder.func, util._is_not_guest_answer)
 
     def restart(self, text, *, pools):
         """Runs TEXT's handler; `init_brishes` swaps in the next of POOLS."""
