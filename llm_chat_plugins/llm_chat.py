@@ -5498,10 +5498,16 @@ def get_system_prompt_info(
     elif source not in ("topic", "chat") and not event.is_private:
         additional_sections.append(GROUP_CHAT_ETIQUETTE_PROMPT)
 
-    if include_username_p and BOT_USERNAME:
-        additional_sections.append(
-            f"Your username on Telegram is {BOT_USERNAME}. The user might mention you using this username."
-        )
+    if include_username_p:
+        usernames = username_util.active_usernames(getattr(borg, "me", None))
+        if not usernames:
+            usernames = username_util.normalize_usernames(BOT_USERNAME)
+        if usernames:
+            mentions = ", ".join(f"@{name}" for name in usernames)
+            additional_sections.append(
+                f"Your usernames on Telegram are {mentions}. "
+                "They all refer to you. The user might mention you using any of these usernames."
+            )
 
     if include_telegram_markdown_p:
         additional_sections.append(

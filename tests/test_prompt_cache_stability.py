@@ -2,8 +2,10 @@ import asyncio
 import builtins
 import importlib
 import re
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from telethon import types
 
 from uniborg import codex_util, tg_compat
 from uniborg.constants import (
@@ -54,6 +56,33 @@ class RuntimeContextPlacementTests(unittest.TestCase):
         info = self.llm_chat.get_system_prompt_info(Event())
 
         self.assertNotIn("Current date and time", info.effective_prompt)
+
+    def test_system_prompt_names_all_active_bot_usernames_in_every_chat(self):
+        bot = SimpleNamespace(me=types.User(
+            id=1, username="ChatTestBot", usernames=[
+                types.Username("ChatTestAI", active=True),
+                types.Username("chattestbot", active=True),
+                types.Username("RetiredAI", active=False),
+            ],
+        ))
+        for private, guest in ((True, False), (False, False), (False, True)):
+            with self.subTest(private=private, guest=guest), patch.object(builtins, "borg", bot):
+                event = SimpleNamespace(sender_id=1, chat_id=2, is_private=private, is_guest=guest)
+                info = self.llm_chat.get_system_prompt_info(event)
+                self.assertIn("@ChatTestBot, @ChatTestAI", info.effective_prompt)
+                self.assertEqual(info.effective_prompt.count("@ChatTestBot"), 1)
+                self.assertNotIn("@RetiredAI", info.effective_prompt)
+                excluded = self.llm_chat.get_system_prompt_info(event, include_username_p=False)
+                self.assertNotIn("@ChatTestAI", excluded.effective_prompt)
+
+    def test_system_prompt_supports_an_alias_only_bot(self):
+        bot = SimpleNamespace(me=types.User(
+            id=1, usernames=[types.Username("ChatTestAI", active=True)]
+        ))
+        event = SimpleNamespace(sender_id=1, chat_id=2, is_private=True)
+        with patch.object(builtins, "borg", bot), patch.object(self.llm_chat, "BOT_USERNAME", None):
+            info = self.llm_chat.get_system_prompt_info(event)
+        self.assertIn("@ChatTestAI", info.effective_prompt)
 
     def test_system_prompt_includes_metadata_context_instruction(self):
         class Event:
