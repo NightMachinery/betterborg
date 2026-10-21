@@ -4745,19 +4745,22 @@ async def _retry_on_no_response_with_reasons(
     return final_response
 
 
+def _bot_usernames() -> tuple[str, ...]:
+    """The bot's primary name and active aliases, without @ prefixes."""
+    return username_util.active_usernames(
+        getattr(borg, "me", None)
+    ) or username_util.normalize_usernames(BOT_USERNAME)
+
+
 def strip_leading_bot_username(text: str) -> str:
     """Strip a leading bot @username mention from text, preserving other mentions."""
     stripped = (text or "").strip()
-    if not stripped or not BOT_USERNAME:
+    if not stripped:
         return stripped
-
-    return re.sub(
-        rf"^{re.escape(BOT_USERNAME)}(?:\s+|$)",
-        "",
-        stripped,
-        count=1,
-        flags=re.IGNORECASE,
-    ).strip()
+    remaining = guest_util.text_after_leading_mention(
+        stripped, username=_bot_usernames()
+    )
+    return remaining.strip() if remaining is not None else stripped
 
 
 def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
@@ -4779,10 +4782,10 @@ def _is_known_command(text: str, *, strip_bot_username: bool = True) -> bool:
     # Extract first word/command
     command = text.split(None, 1)[0].lower()
 
-    codex_users_commands = {CODEX_USERS_COMMAND}
-    if BOT_USERNAME:
-        codex_users_commands.add(f"{CODEX_USERS_COMMAND}{BOT_USERNAME.lower()}")
-    return command in KNOWN_COMMAND_SET or command in codex_users_commands
+    base, separator, name = command.rpartition("@")
+    if separator and name in {n.lower() for n in _bot_usernames()}:
+        command = base
+    return command in KNOWN_COMMAND_SET or command == CODEX_USERS_COMMAND
 
 
 def _is_pending_input_message(event, *, awaiting: bool) -> bool:
@@ -5499,9 +5502,7 @@ def get_system_prompt_info(
         additional_sections.append(GROUP_CHAT_ETIQUETTE_PROMPT)
 
     if include_username_p:
-        usernames = username_util.active_usernames(getattr(borg, "me", None))
-        if not usernames:
-            usernames = username_util.normalize_usernames(BOT_USERNAME)
+        usernames = _bot_usernames()
         if usernames:
             mentions = ", ".join(f"@{name}" for name in usernames)
             additional_sections.append(
@@ -7100,7 +7101,8 @@ async def observe_incoming_user_profile(event):
 
 def register_handlers():
     """Dynamically registers all event handlers after initialization."""
-    bot_username_suffix_re = f"(?:{re.escape(BOT_USERNAME)})?" if BOT_USERNAME else ""
+    usernames = _bot_usernames()
+    bot_username_suffix_re = rf"(?:@{username_util.username_pattern(usernames)})?"
 
     # Command Handlers
     borg.on(
@@ -7154,7 +7156,7 @@ def register_handlers():
     )(log_handler)
     borg.on(
         events.NewMessage(
-            pattern=llm_db.gemini_api_key_command_pattern(BOT_USERNAME),
+            pattern=llm_db.gemini_api_key_command_pattern(usernames),
             func=lambda e: e.is_private,
         )
     )(set_key_handler)
@@ -7429,8 +7431,9 @@ async def initialize_llm_chat():
 
         BOT_ID = me.id
 
-        if me.username:
-            BOT_USERNAME = f"@{me.username}"
+        usernames = username_util.active_usernames(me)
+        if usernames:
+            BOT_USERNAME = f"@{usernames[0]}"
         else:
             if not IS_BOT:
                 print(
@@ -7528,8 +7531,12 @@ async def help_handler(event):
 
     # Dynamically build the group trigger instructions based on user settings
     activation_instructions = []
-    if BOT_USERNAME:
-        activation_instructions.append(f"start your message with `{BOT_USERNAME}`")
+    usernames = _bot_usernames()
+    preferred_mention = f"@{usernames[0]}" if usernames else None
+    if preferred_mention:
+        activation_instructions.append(
+            f"mention `{preferred_mention}` or any of my active usernames"
+        )
     if prefs.group_activation_mode == "mention_and_reply":
         activation_instructions.append("**reply** to one of my messages")
 
@@ -7541,10 +7548,10 @@ async def help_handler(event):
     group_trigger_text = " or ".join(activation_instructions)
     guest_help_text = (
         "\n**▶️ In Chats I Am Not In**\n"
-        f"Mention me (`{BOT_USERNAME}`) in any chat, even one I am not a member of, "
+        f"Mention me (`{preferred_mention}`, or any active alias) in any chat, even one I am not a member of, "
         "and I answer right there with your settings and API key. Mention me in a "
         "reply to make me read that message too. Everyone in the chat sees my answer.\n"
-        if BOT_USERNAME
+        if preferred_mention
         else ""
     )
 
@@ -12500,18 +12507,8 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     # Group chats: must be a mention or a reply to self
     if not event.is_private:
         prefs = user_manager.get_prefs(event.sender_id)
-        mention_re = r"(?<!\w)" + re.escape(BOT_USERNAME) + r"\b"
-        if (
-            event.text
-            and BOT_USERNAME
-            and re.search(mention_re, event.text, re.IGNORECASE)
-        ):
+        if guest_util.mentions(event.text, username=_bot_usernames()):
             return True
-
-        elif event.text and BOT_USERNAME in event.text:
-            print(
-                f"Unmatched mention in group chat: mention_re={mention_re}, text:\n{event.text}\n---"
-            )
 
         if prefs.group_activation_mode == "mention_and_reply" and (
             await is_real_reply(event)

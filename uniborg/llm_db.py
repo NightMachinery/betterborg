@@ -21,6 +21,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from telethon import events
 
 from uniborg.constants import BOT_META_INFO_PREFIX, GEMINI_API_KEYS
+from uniborg.username_util import Usernames, username_pattern
 from uniborg.llm_util import (
     send_info_message,
     AutoDeleteMode,
@@ -82,23 +83,21 @@ def _service_command_name(service: str) -> str:
     return f"set{service}key"
 
 
-def api_key_command_pattern(service: str, bot_username: str | None = None) -> str:
+def api_key_command_pattern(service: str, bot_username: Usernames | None = None) -> str:
     """Return the canonical /set<service>key command pattern.
 
     The returned regex is anchored, case-insensitive, captures an optional inline
-    key as group 1, and can accept a concrete @bot username suffix when supplied.
+    key as group 1, and accepts a supplied username or iterable of aliases as
+    optional @bot suffixes.
     """
     command = re.escape(_service_command_name(service))
     username_suffix = ""
     if bot_username:
-        normalized_username = (
-            bot_username if bot_username.startswith("@") else f"@{bot_username}"
-        )
-        username_suffix = f"(?:{re.escape(normalized_username)})?"
+        username_suffix = rf"(?:@{username_pattern(bot_username)})?"
     return rf"(?i)^/{command}{username_suffix}(?:\s+(.*))?\s*$"
 
 
-def gemini_api_key_command_pattern(bot_username: str | None = None) -> str:
+def gemini_api_key_command_pattern(bot_username: Usernames | None = None) -> str:
     """Return the canonical /setgeminikey command pattern."""
     return api_key_command_pattern("gemini", bot_username=bot_username)
 

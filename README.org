@@ -140,6 +140,11 @@ MTProto and Telethon versions are summarized in
 [[file:docs/telegram_ai_apis.md][docs/telegram_ai_apis.md]], along with the
 workarounds considered and why this repo upgrades Telethon instead.
 
+** Chat bot mentions
+Mention any active bot username anywhere in a group message to ask the chat
+bot. Aliases also work in model shortcuts (=@alias .f question=) and command
+suffixes (=/status@alias=). See [[file:docs/llm_chat_prompting.md][chat bot addressing]].
+
 ** Draft streaming
 In private chats, the chat bot shows its answer as a live Telegram draft that
 grows about once a second and then becomes the real message, instead of

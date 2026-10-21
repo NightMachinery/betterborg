@@ -39,6 +39,20 @@ class GeminiApiKeyValidationTests(unittest.TestCase):
 
 
 class ApiKeyCommandPatternTests(unittest.TestCase):
+    def test_multiple_bot_usernames_preserve_the_optional_key_capture(self):
+        pattern = llm_db.gemini_api_key_command_pattern(("PrimaryBot", "@AliasAI"))
+        for text, key in (
+            ("/setgeminikey", None),
+            ("/setgeminikey@primarybot synthetic-key", "synthetic-key"),
+            ("/setgeminikey@ALIASAI", None),
+        ):
+            with self.subTest(text=text):
+                match = re.match(pattern, text)
+                self.assertIsNotNone(match)
+                self.assertEqual(match.group(1), key)
+        self.assertIsNone(re.match(pattern, "/setgeminikey@OtherAI"))
+        self.assertIsNone(re.match(pattern, "/setgeminikey@AliasAIExtra"))
+
     def setUp(self):
         self.valid_key = "AQ." + "AbCdEf0123456789_-" * 3
         self.pattern = llm_db.gemini_api_key_command_pattern(bot_username="@SomeBot")
