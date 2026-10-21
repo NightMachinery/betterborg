@@ -8,7 +8,7 @@ from unittest import mock
 from telethon import errors, types
 from telethon._updates import EntityCache
 
-from uniborg import guest_util, util
+from uniborg import guest_util, username_util, util
 from uniborg.uniborg import Uniborg
 
 GuestContextError = guest_util.GuestContextError
@@ -159,7 +159,69 @@ class GuestQueryTests(unittest.TestCase):
         self.assertIs(guest_util.download_target(plain), plain)
 
 
+class UsernameTests(unittest.TestCase):
+    def test_primary_and_active_aliases_are_deduplicated_in_order(self):
+        user = types.User(
+            id=BOT_ID,
+            username="SugarBot",
+            usernames=[
+                types.Username("sugarbot", active=True),
+                types.Username("SugarAI", active=True),
+                types.Username("RetiredAI", active=False),
+                types.Username("UnspecifiedAI"),
+                types.Username("SUGARAI", active=True),
+            ],
+        )
+        self.assertEqual(username_util.active_usernames(user), ("SugarBot", "SugarAI"))
+
+    def test_alias_only_and_missing_profile_fields(self):
+        self.assertEqual(username_util.active_usernames(None), ())
+        self.assertEqual(username_util.active_usernames(SimpleNamespace()), ())
+        self.assertEqual(
+            username_util.active_usernames(
+                types.User(id=BOT_ID, usernames=[types.Username("SugarAI", active=True)])
+            ),
+            ("SugarAI",),
+        )
+        self.assertEqual(username_util.normalize_usernames("@SugarAI"), ("SugarAI",))
+
+
 class MentionTests(unittest.TestCase):
+    def test_multiple_names_work_in_every_mention_helper(self):
+        names = ("SugarBot", "@SugarAI")
+        self.assertTrue(guest_util.mentions("ask @sugarai now", username=names))
+        self.assertEqual(
+            guest_util.text_after_leading_mention("@SUGARAI, hi", username=names), "hi"
+        )
+        self.assertEqual(
+            guest_util.shell_command_after_mention("@SugarAI .aa printf ok", username=names),
+            ".aa printf ok",
+        )
+        for text, expected in (("@sugarai: hi", "hi"), ("hi @SugarAI", "hi")):
+            with self.subTest(text=text):
+                message = _message(text)
+                self.assertTrue(guest_util.strip_mention(message, username=names))
+                self.assertEqual(message.message, expected)
+
+    def test_alias_boundaries_and_empty_names_do_not_match(self):
+        for text in ("@SugarAIx hi", "mail@SugarAI", "@@SugarAI", "@OtherAI"):
+            with self.subTest(text=text):
+                self.assertFalse(guest_util.mentions(text, username=("SugarBot", "SugarAI")))
+        for names in ((), "", ("", "@")):
+            with self.subTest(names=names):
+                self.assertFalse(guest_util.mentions("@ hi", username=names))
+                self.assertIsNone(guest_util.text_after_leading_mention("@ hi", username=names))
+                self.assertIsNone(guest_util.shell_command_after_mention("@ .a printf ok", username=names))
+                self.assertFalse(guest_util.strip_mention(_message("@ hi"), username=names))
+
+    def test_alias_strip_moves_entities_past_emoji_in_utf16(self):
+        message = _message("@SugarAI 😀 x", entities=[
+            types.MessageEntityMention(0, 8), types.MessageEntityBold(12, 1)
+        ])
+        self.assertTrue(guest_util.strip_mention(message, username=("SugarBot", "SugarAI")))
+        self.assertEqual(message.message, "😀 x")
+        self.assertEqual([(e.offset, e.length) for e in message.entities], [(3, 1)])
+
     def _strip(self, text, entities=None):
         message = _message(text, entities=entities)
         mentioned = guest_util.strip_mention(message, username="SugarBot")

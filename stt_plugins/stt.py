@@ -2,7 +2,7 @@ from icecream import ic
 from uniborg import util
 from uniborg import llm_util
 from uniborg import llm_db
-from uniborg import guest_util
+from uniborg import guest_util, username_util
 from uniborg import redis_util
 from uniborg import tg_compat
 from uniborg import tg_format
@@ -1625,8 +1625,8 @@ async def guest_stt_handler(query):
     Only an explicit mention is a request; a reply to our transcript is not.
     Transcripts of guest chats are not logged.
     """
-    username = borg.me.username
-    if not (username and guest_util.mentions(query.text, username=username)):
+    usernames = username_util.active_usernames(borg.me)
+    if not guest_util.mentions(query.text, username=usernames):
         return
     caller_id = query.caller_id
     if caller_id is None:
@@ -1654,7 +1654,7 @@ async def guest_stt_handler(query):
                 [
                     tg_compat.url_button(
                         "Start a private chat",
-                        f"https://t.me/{username}?start=guest",
+                        f"https://t.me/{usernames[0]}?start=guest",
                     )
                 ]
             ],

@@ -167,6 +167,8 @@ See [[file:docs/shell_streaming.md][docs/shell_streaming.md]].
 
 ** Guest mode
 The bots answer where they are mentioned, even in chats they are not in.
+The primary username and all active additional usernames (including =AI= names)
+work interchangeably; restart the bots after changing their usernames.
 =@bot .a CMD= runs a shell command for an admin, shows its output live in the
 answer, and =@bot .k= stops it, with any files sent to the caller's DM (see the
 [[https://nightmachinery.github.io/betterborg/telegram_remote_shell/#guest][shell guide]]); =@vlm_chat_bot question= answers with the caller's own model and

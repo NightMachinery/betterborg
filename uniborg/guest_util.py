@@ -38,7 +38,8 @@ from typing import Any, Awaitable, Callable, Optional
 
 from telethon import errors, events, functions, types, utils
 
-from uniborg import env_switch, tg_format, tg_raw
+from uniborg import env_switch, tg_format, tg_raw, username_util
+from uniborg.username_util import Usernames
 
 _log = logging.getLogger(__name__)
 
@@ -411,8 +412,8 @@ def guest_query_from_update(
 MENTION_SEPARATORS = r"[\s,:]*"
 
 
-def _mention_patterns(username: str) -> tuple:
-    name = re.escape(username.lstrip("@"))
+def _mention_patterns(username: Usernames) -> tuple:
+    name = username_util.username_pattern(username)
     return (
         re.compile(rf"(?<![\w@])@{name}(?!\w)", re.IGNORECASE),
         re.compile(rf"^\s*@{name}(?!\w){MENTION_SEPARATORS}", re.IGNORECASE),
@@ -420,13 +421,15 @@ def _mention_patterns(username: str) -> tuple:
     )
 
 
-def mentions(text: Optional[str], *, username: str) -> bool:
-    """Whether `text` mentions `@username` anywhere (case-insensitive)."""
+def mentions(text: Optional[str], *, username: Usernames) -> bool:
+    """Whether `text` mentions any supplied username (case-insensitive)."""
     anywhere, _leading, _trailing = _mention_patterns(username)
     return bool(text) and anywhere.search(text) is not None
 
 
-def text_after_leading_mention(text: Optional[str], *, username: str) -> Optional[str]:
+def text_after_leading_mention(
+    text: Optional[str], *, username: Usernames
+) -> Optional[str]:
     """What follows a leading `@username`, or None when the text does not start
     with it. Only whitespace may come before the mention."""
     _anywhere, leading, _trailing = _mention_patterns(username)
@@ -436,7 +439,9 @@ def text_after_leading_mention(text: Optional[str], *, username: str) -> Optiona
     return text[match.end() :]
 
 
-def shell_command_after_mention(text: Optional[str], *, username: str) -> Optional[str]:
+def shell_command_after_mention(
+    text: Optional[str], *, username: Usernames
+) -> Optional[str]:
     """The `.a…` (run) or `.k…` (stop) command after a leading `@username`, or None.
 
     This is the guest shell's strict trigger: only whitespace, at least one
@@ -445,7 +450,7 @@ def shell_command_after_mention(text: Optional[str], *, username: str) -> Option
     `MENTION_SEPARATORS` or none, so text the shell would act on never leaves
     a user account intact.
     """
-    name = re.escape(username.lstrip("@"))
+    name = username_util.username_pattern(username)
     match = re.match(rf"^\s*@{name}(?!\w)\s+(?=\.[ak])", text or "", re.IGNORECASE)
     if match is None:
         return None
@@ -470,7 +475,7 @@ def _cut_entities(entities: Optional[list], *, start: int, end: int) -> list:
     return kept
 
 
-def strip_mention(message: Any, *, username: str) -> bool:
+def strip_mention(message: Any, *, username: Usernames) -> bool:
     """Removes one leading or one trailing `@username` from `message` in place.
 
     Entities are shifted (in UTF-16 units) or dropped to match. Returns

@@ -213,7 +213,7 @@ from uniborg.stream_driver import (
     STREAM_SCOPE_PRIVATE,
     StreamMode,
 )
-from uniborg import guest_util
+from uniborg import guest_util, username_util
 from uniborg import media_store
 from uniborg import tg_format
 from uniborg import tg_raw
@@ -13677,11 +13677,15 @@ async def _guest_invite(query, *, explicit: bool, policy) -> None:
         f"invite:{BOT_ID}:{query.caller_id}", ttl_seconds=GUEST_INVITE_TTL_SECONDS
     ):
         return
-    url = f"https://t.me/{BOT_USERNAME.lstrip('@')}?start=guest"
+    usernames = username_util.active_usernames(borg.me)
+    buttons = None
+    if usernames:
+        url = f"https://t.me/{usernames[0]}?start=guest"
+        buttons = [[tg_compat.url_button("Start a private chat", url)]]
     await _guest_note(
         query,
         GUEST_INVITE_TEXT,
-        buttons=[[tg_compat.url_button("Start a private chat", url)]],
+        buttons=buttons,
     )
 
 
@@ -14068,7 +14072,9 @@ async def _run_guest_answer(
 
 
 def _mentions_bot(query) -> bool:
-    return bool(BOT_USERNAME) and guest_util.mentions(query.text, username=BOT_USERNAME)
+    return guest_util.mentions(
+        query.text, username=username_util.active_usernames(borg.me)
+    )
 
 
 async def guest_chat_handler(query) -> None:
@@ -14088,8 +14094,9 @@ async def guest_chat_handler(query) -> None:
         return
     config = llm_chat_config.load_config()
     policy = config.guest
-    if BOT_USERNAME:
-        guest_util.strip_mention(query.trigger, username=BOT_USERNAME)
+    guest_util.strip_mention(
+        query.trigger, username=username_util.active_usernames(borg.me)
+    )
     event = guest_util.GuestEvent(query)
     is_admin = await util.isAdmin(event)
 

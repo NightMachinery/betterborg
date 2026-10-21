@@ -199,6 +199,26 @@ class _GuestTestCase(unittest.TestCase):
 
 
 class GuestShellTests(_GuestTestCase):
+    def test_an_alias_only_admin_command_runs(self):
+        self.borg.me.username = None
+        self.borg.me.usernames = [types.Username("ShellTestAI", active=True)]
+        self._run(_query("@shelltestai .aa printf 'alias works'"))
+        self.assertEqual(self.edits[0]["text"], "alias works")
+        self.assertEqual(self.plugin._guest_kill_command(), "@ShellTestAI .k")
+
+    def test_an_alias_does_not_bypass_admin_or_strict_trigger_checks(self):
+        self.borg.me.usernames = [types.Username("ShellTestAI", active=True)]
+        self._run(_query("@ShellTestAI .aa printf ignored", caller=STRANGER))
+        self.assertEqual(self.answers, ["Not available here."])
+        for text in ("@ShellTestAI,.a printf ignored", "@ShellTestAI.a printf ignored"):
+            with self.subTest(text=text):
+                self.assertIsNone(self.plugin._guest_shell_command(_query(text)))
+
+    def test_inactive_alias_is_not_a_guest_call(self):
+        self.borg.me.usernames = [types.Username("RetiredAI", active=False)]
+        self._run(_query("@RetiredAI .aa printf ignored"))
+        self.assertEqual(self.answers, [])
+
     def test_registers_a_guest_handler_on_a_bot(self):
         if not hasattr(types, "UpdateBotGuestChatQuery"):
             self.skipTest("no guest types in this Telethon")

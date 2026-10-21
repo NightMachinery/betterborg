@@ -546,6 +546,34 @@ class GuestSttTests(unittest.TestCase):
     api_key = "caller-key"
     transcript = "hello"
 
+    def test_an_active_ai_alias_transcribes_without_a_primary_username(self):
+        self.borg.me = types.User(
+            id=BOT_ID, bot=True,
+            usernames=[types.Username("TranscribeTestAI", active=True)],
+        )
+        self.run_query(_query("@transcribetestai", reference_media=_voice()))
+        self.assertEqual(self.downloaded, [[19]])
+        self.assertEqual(self.edits, [{"text": "hello", "parse_mode": "md"}])
+
+    def test_an_alias_only_invite_has_a_working_private_link(self):
+        self.borg.me = types.User(
+            id=BOT_ID, bot=True,
+            usernames=[types.Username("TranscribeTestAI", active=True)],
+        )
+        self.api_key = None
+        self.run_query(_query("@TranscribeTestAI", reference_media=_voice()))
+        ((button,),) = self.answers[0].buttons
+        self.assertEqual(tg_compat.button_url(button), "https://t.me/TranscribeTestAI?start=guest")
+        self.assertEqual(self.jobs, [])
+
+    def test_inactive_aliases_are_ignored(self):
+        self.borg.me = types.User(
+            id=BOT_ID, bot=True, username=BOT_USERNAME,
+            usernames=[types.Username("RetiredAI", active=False)],
+        )
+        self.run_query(_query("@RetiredAI", reference_media=_voice()))
+        self.assertEqual((self.answers, self.jobs), ([], []))
+
     def setUp(self):
         self.answers = []
         self.edits = []

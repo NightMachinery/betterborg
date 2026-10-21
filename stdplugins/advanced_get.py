@@ -25,6 +25,7 @@ from uniborg import (
     tg_raw,
     topics,
     util,
+    username_util,
 )
 from uniborg.shell_settings import FinalMode, ShellPrefs
 from uniborg.shell_stream import CancelOutcome, JobState, ShellJob, StopReason
@@ -1170,7 +1171,8 @@ _guest_claims = guest_util.QueryClaims(
 
 
 def _guest_username() -> str:
-    return borg.me.username
+    usernames = username_util.active_usernames(borg.me)
+    return usernames[0] if usernames else ""
 
 
 def _guest_shell_command(query) -> Optional[str]:
@@ -1181,7 +1183,9 @@ def _guest_shell_command(query) -> Optional[str]:
     output, an LLM answer) is what a looser rule would let through.
     """
     text = query.text
-    after = guest_util.shell_command_after_mention(text, username=_guest_username())
+    after = guest_util.shell_command_after_mention(
+        text, username=username_util.active_usernames(borg.me)
+    )
     if after is None:
         return None
     mention_at = tg_format.utf16_len(text[: len(text) - len(text.lstrip())])
@@ -1438,7 +1442,9 @@ async def _run_guest_shell(query, request, answer):
 
 
 async def guest_shell(query):
-    if not guest_util.mentions(query.text, username=_guest_username()):
+    if not guest_util.mentions(
+        query.text, username=username_util.active_usernames(borg.me)
+    ):
         #: A reply to one of our answers, without a mention: not a call.
         return
     if not util.is_admin_by_id(query.caller_id):

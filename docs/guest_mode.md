@@ -23,6 +23,15 @@ is in [telegram_ai_apis.md](telegram_ai_apis.md), section 2.3.
 - **Explicit call**: a trigger that mentions the bot. A reply to a guest answer
   also summons the bot, without a mention: an **implicit call**.
 
+The STT, LLM and shell bots recognize the primary username and every active
+additional username Telegram reports, including collectible names ending in
+`AI`. Matching is case-insensitive and requires a complete mention. Inactive
+aliases are ignored; there is no manual alias list or required suffix. Private
+onboarding links use the primary name, or the first active alias when there is
+no primary name. Restart affected bots after upgrading, or after changing their
+usernames, to refresh the profile loaded at startup. Shared-module changes need
+a process restart, rather than only a plugin reload.
+
 ## The flow
 
 1. Telethon delivers the update to a `events.Raw(UpdateBotGuestChatQuery)`
@@ -130,6 +139,9 @@ Each rule is enforced in code; this is why.
 - Mentions: `mentions(text, username=…)`, `text_after_leading_mention(text,
   username=…)`, and `strip_mention(message, username=…)`, which removes one
   leading or trailing mention in place, moving entities in UTF-16 units.
+  `username` accepts a string or an iterable of names. Use
+  `username_util.active_usernames(borg.me)` to obtain the primary name and active
+  aliases, deduplicated in order.
 - `is_guest_message`, `is_guest_answer`, `is_guest_event`, `caller_id_of`.
 - `QueryClaims(backend=redis_claim_backend(redis_util.get_redis))`: claim a
   key once per TTL, across restarts with Redis (keys under
