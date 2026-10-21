@@ -339,8 +339,16 @@ A mention of the bot in a reply to a voice note, audio, video or image, in a
 chat the bot is not in, posts the transcript there, made with the caller's
 own Gemini key. Media in the trigger itself counts too.
 
-- **Only an explicit mention is a request.** A reply to a transcript without
-  a mention gets nothing.
+- **Only an explicit mention starts transcription.** A reply to a transcript
+  without a mention starts no new job.
+- **Reply `.stop` or `/stop` to cancel your running job**, without needing
+  another mention. Reply to its progress message (identified by `STT #…`) or
+  its original trigger. The caller and guest thread must match; an ambiguous,
+  unknown or finished reply cancels nothing. Bare `/stop` or `.stop` in the
+  bot's private chat cancels all the caller's normal and guest jobs. Progress
+  changes to "Transcription stopped." and temporary files are removed; an
+  API request already submitted may still run upstream. See
+  [STT controls](stt_models.md#stopping-a-transcription).
 - **Every explicit call is answered**: "No voice note, audio, video or image
   in your message or the one you replied to." when there is nothing to
   transcribe; an invite with a start button when the caller has no Gemini

@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -18,6 +19,35 @@ import llm
 from uniborg import bot_util, stt_models
 
 FFMPEG = shutil.which("ffmpeg")
+
+
+class AudioCancellationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_conversion_terminates_and_reaps_its_process(self):
+        started = asyncio.Event()
+        create_process = asyncio.create_subprocess_exec
+        child = None
+
+        async def launch(*args, **kwargs):
+            nonlocal child
+            child = await create_process(
+                sys.executable, "-c", "import time; time.sleep(60)",
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+            )
+            started.set()
+            return child
+
+        try:
+            with patch.object(stt_models.asyncio, "create_subprocess_exec", launch):
+                task = asyncio.create_task(stt_models._to_ogg_opus(Path("source"), Path("target")))
+                await asyncio.wait_for(started.wait(), 2)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, 5)
+            self.assertIsNotNone(child.returncode)
+        finally:
+            if child is not None and child.returncode is None:
+                child.kill()
+                await child.communicate()
 
 
 class MenuTests(unittest.TestCase):

@@ -783,8 +783,12 @@ async def upload_output_files(chat, files, *, album_mode, reply_to=None, on_erro
     return sent
 
 
-async def run_and_upload(event, to_await, quiet=True, reply_exc=True, album_mode=True):
-    cwd = ""
+async def run_and_upload(
+    event, to_await, quiet=True, reply_exc=True, album_mode=True, *, cwd=None
+):
+    #: A caller that supplies CWD can clean up even if a download is cancelled
+    #: before run_and_get returns the directory it created.
+    cwd = cwd or ""
     # util.interact(locals())
     try:
         chat = await event.get_chat()
@@ -797,7 +801,7 @@ async def run_and_upload(event, to_await, quiet=True, reply_exc=True, album_mode
         trying_to_dl = await util.discreet_send(
             event, "Julia is processing your request ...", event.message, quiet
         )
-        cwd = await run_and_get(event=event, to_await=to_await)
+        cwd = await run_and_get(event=event, to_await=to_await, cwd=cwd or None)
         await upload_output_files(
             chat,
             Path(cwd).glob("*"),

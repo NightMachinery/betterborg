@@ -13,6 +13,7 @@ There are two kinds of model:
 
 import asyncio
 import base64
+import contextlib
 from dataclasses import dataclass, field
 from pathlib import Path
 import tempfile
@@ -212,7 +213,19 @@ async def _to_ogg_opus(source: Path, target: Path) -> bool:
         )
     except FileNotFoundError:
         raise RuntimeError("ffmpeg is not installed, so audio cannot be converted.")
-    _, stderr = await process.communicate()
+    try:
+        _, stderr = await process.communicate()
+    except asyncio.CancelledError:
+        if process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                process.terminate()
+            try:
+                await asyncio.wait_for(process.communicate(), 3)
+            except asyncio.TimeoutError:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+                await process.communicate()
+        raise
     if process.returncode == 0:
         return True
     error = stderr.decode(errors="replace")

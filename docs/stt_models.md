@@ -163,6 +163,24 @@ with the time since the job started. Steps are recorded without waiting for
 Telegram, and a background task makes the edits, so a flood wait on the status
 message never delays the transcription. Guest answers use the same status.
 
+### Stopping a transcription
+
+Reply `.stop` or `/stop` to a transcription request or its progress message to
+cancel that job. In guest mode, replying to the progress message works without
+another mention. Guest progress keeps a short `STT #…` marker so concurrent
+jobs can be distinguished; the marker disappears from the final transcript.
+
+Send `.stop` or `/stop` without a reply in the STT bot's private chat to cancel
+all your running transcriptions, including jobs in guest and group chats. In
+groups and guest chats, use a reply to select the job. Unknown or finished
+replies never fall back to cancelling all jobs. Active username prefixes and
+`/stop@alias` are accepted. Only the request's sender can cancel it.
+
+Cancellation interrupts downloading, conversion, retries and model requests,
+removes temporary files, and changes progress to "Transcription stopped."
+The bot stops awaiting an API call; an upstream request already submitted may
+still run and be billed. External task cancellation still propagates normally.
+
 A live check on Vertex (2026-10-16, a 6-second spoken clip): 3.8 Flash took
 12.5 s with the bot's prompt and schema, and 4.7 s with a one-line prompt and
 no schema. Its thinking was 77 tokens; `thinkingLevel: low` saved under a

@@ -32,7 +32,9 @@ import httpx
 import uuid
 import asyncio
 import contextlib
+from contextvars import ContextVar
 import json
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -46,7 +48,7 @@ from telethon.tl.types import (
     MessageMediaWebPage,
 )
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import Any, List, Optional
 from dataclasses import dataclass, field
 
 # --- Bot Commands Registration ---
@@ -60,8 +62,115 @@ BOT_COMMANDS = [
         "description": "Choose Google AI Studio or Vertex AI; manage keys",
     },
     {"command": "model", "description": "Choose the transcription model"},
+    {"command": "stop", "description": "Stop a transcription, or all yours privately"},
 ]
 KNOWN_STRICT_COMMANDS = {".rot"}  # Undocumented admin-only command; do not add to help.
+
+# A guest answer has no stable message id that the bot can use. Its progress
+# carries a random job marker so a reply can select one concurrent request.
+STT_STOPPED = "⏹ Transcription stopped."
+STT_NO_MATCH = "No matching transcription of yours is running."
+STT_REPLY_TO_STOP = "Reply .stop or /stop to the transcription or its progress message."
+_GUEST_STT_MARKER = re.compile(r"(?m)^STT #([0-9a-f]{12})\s*$")
+
+
+@dataclass
+class ActiveStt:
+    event: Any
+    task: asyncio.Task
+    query: guest_util.GuestQuery | None = None
+    token: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    status_message: Any = None
+    stop_requested: bool = False
+
+    def progress_text(self, text: str) -> str:
+        if self.query is None:
+            return text
+        return f"{text}\n\nSTT #{self.token}\nReply /stop to cancel."
+
+    def cancel(self) -> bool:
+        if self.task.done() or self.stop_requested:
+            return False
+        self.stop_requested = True
+        self.task.cancel()
+        return True
+
+
+_active_stt: dict[str, ActiveStt] = {}
+_current_stt: ContextVar[ActiveStt | None] = ContextVar("current_stt", default=None)
+
+
+@contextlib.asynccontextmanager
+async def _track_stt(request: ActiveStt):
+    _active_stt[request.token] = request
+    context = _current_stt.set(request)
+    try:
+        yield request
+    except asyncio.CancelledError:
+        if not request.stop_requested:
+            raise
+        try:
+            if isinstance(request.status_message, guest_util.GuestAnswerMessage):
+                await request.status_message.finalize(text=STT_STOPPED)
+            elif request.status_message is not None:
+                await _show_stt_status(request.status_message, STT_STOPPED)
+            else:
+                await request.event.reply(STT_STOPPED)
+        except Exception:
+            logger.exception("Could not show stopped STT request %s", request.token)
+    finally:
+        _active_stt.pop(request.token, None)
+        _current_stt.reset(context)
+
+
+def _is_stt_stop_text(text: str | None) -> bool:
+    text = (text or "").strip()
+    names = username_util.active_usernames(getattr(borg, "me", None))
+    addressed = guest_util.text_after_leading_mention(text, username=names)
+    if addressed is not None:
+        text = addressed.strip()
+    suffix = username_util.username_pattern(names)
+    return re.fullmatch(
+        rf"(?:\.stop|/stop(?:@{suffix})?)(?:\s+@{suffix})?", text, re.IGNORECASE
+    ) is not None
+
+
+def _own_stt_requests(caller_id, *, chat_id=None) -> list[ActiveStt]:
+    return [
+        request for request in _active_stt.values()
+        if request.event.sender_id == caller_id
+        and (chat_id is None or request.event.chat_id == chat_id)
+        and not request.task.done() and not request.stop_requested
+    ]
+
+
+def _guest_stt_targets(query) -> list[ActiveStt]:
+    targets = []
+    for request in _own_stt_requests(
+        query.caller_id, chat_id=f"guest:{query.thread_key}"
+    ):
+        if request.query is None:
+            continue
+        trigger = guest_util.fingerprint_of(request.query.trigger)
+        for reference in query.references:
+            marker = request.token in _GUEST_STT_MARKER.findall(reference.message or "")
+            seen = guest_util.find_seen(
+                [{"caller_id": query.caller_id, "seen": [trigger.to_json()]}]
+                if trigger is not None else [],
+                guest_util.fingerprint_of(reference), caller_id=query.caller_id,
+            )
+            if marker or seen is not None:
+                targets.append(request)
+                break
+    return targets
+
+
+def _stop_stt_requests(requests) -> str:
+    count = sum(request.cancel() for request in requests)
+    if not count:
+        return STT_NO_MATCH
+    return f"⏹ Stopping {count} transcription{'s' if count != 1 else ''}."
+
 
 # --- Pydantic Schema and Prompt for Transcription ---
 
@@ -243,6 +352,9 @@ async def _mark_model_unavailable(
 
 
 async def _show_stt_status(status_message, text: str) -> None:
+    request = _current_stt.get()
+    if request is not None:
+        text = request.progress_text(text)
     try:
         await util.edit_message(
             status_message,
@@ -860,6 +972,9 @@ async def llm_stt(*, cwd, event, model_choice=None, log=True):
     status_message = await event.reply(
         f"Transcribing with {stt_providers.PROVIDERS[job.provider].label}..."
     )
+    request = _current_stt.get()
+    if request is not None:
+        request.status_message = status_message
 
     try:
         transcription = await run_stt_job(
@@ -1350,6 +1465,7 @@ Here's how to use me:
 - `/setVertexKey [API_KEY]`: Sets or updates your Vertex AI Express-mode key.
 - `/provider`: Chooses Google AI Studio or Vertex AI and manages keys.
 - `/model`: Chooses the transcription model.
+- `/stop` or `.stop`: Reply to a transcription or its progress message to stop it, including in guest chats. Without a reply in my private chat, stops all your running transcriptions, including guest jobs. Only you can stop your jobs.
 """
     await event.reply(help_text, link_preview=False)
 
@@ -1482,11 +1598,38 @@ async def model_callback_handler(event):
         pass  # The menu is unchanged, or too old to edit.
 
 
+@borg.on(events.NewMessage(func=lambda e: _is_stt_stop_text(e.raw_text)))
+async def stop_stt_handler(event):
+    if (
+        event.sender_id is None
+        or guest_util.is_guest_answer(event.message)
+        or getattr(event.message, "fwd_from", None)
+        or getattr(event.message, "via_bot_id", None)
+    ):
+        return
+    reply_id = getattr(event.message, "reply_to_msg_id", None)
+    if reply_id is not None:
+        targets = [
+            request for request in _own_stt_requests(event.sender_id, chat_id=event.chat_id)
+            if request.query is None and reply_id in (
+                request.event.message.id,
+                getattr(request.status_message, "id", None),
+            )
+        ]
+        text = _stop_stt_requests(targets) if len(targets) <= 1 else STT_REPLY_TO_STOP
+    elif event.is_private:
+        text = _stop_stt_requests(_own_stt_requests(event.sender_id))
+    else:
+        text = STT_REPLY_TO_STOP
+    await event.reply(text)
+
+
 @borg.on(
     events.NewMessage(
         func=lambda e: e.is_private
         and llm_db.is_awaiting_key(e.sender_id)
         and not e.text.startswith("/")
+        and not _is_stt_stop_text(e.text)
     )
 )
 async def key_submission_handler(event):
@@ -1513,6 +1656,7 @@ def is_transcribable_media_event(event) -> bool:
         is_transcribable_media(event)
         and bool(event.sender)
         and not guest_util.is_guest_answer(getattr(event, "message", None))
+        and not _is_stt_stop_text(getattr(event, "raw_text", None))
     )
 
 
@@ -1538,14 +1682,21 @@ async def media_handler(event):
         try:
             # util.run_and_upload is assumed to handle downloading files from the event
             # into a temporary directory `cwd` and passing it to the awaited function.
-            await util.run_and_upload(event=event, to_await=llm_stt)
+            await _run_stoppable_media(event)
         finally:
             await asyncio.sleep(
                 5
             )  # Give some grace time for all messages to be processed
             PROCESSED_GROUP_IDS.remove(group_id)
     else:
-        await util.run_and_upload(event=event, to_await=llm_stt)
+        await _run_stoppable_media(event)
+
+
+async def _run_stoppable_media(event):
+    request = ActiveStt(event=event, task=asyncio.current_task())
+    cwd = f"{util.dl_base}{uuid.uuid4()}/"
+    async with _track_stt(request):
+        await util.run_and_upload(event=event, to_await=llm_stt, cwd=cwd)
 
 
 # --- Guest mode ---
@@ -1622,10 +1773,18 @@ async def _finalize_guest_transcript(answer, text: str) -> None:
 async def guest_stt_handler(query):
     """Transcribes the media of a guest mention and its reference, if any.
 
-    Only an explicit mention is a request; a reply to our transcript is not.
+    Only an explicit mention transcribes; a stop reply can cancel a live job.
     Transcripts of guest chats are not logged.
     """
     usernames = username_util.active_usernames(borg.me)
+    if _is_stt_stop_text(query.text):
+        if query.caller_id is not None:
+            targets = _guest_stt_targets(query)
+            text = (
+                _stop_stt_requests(targets) if len(targets) <= 1 else STT_REPLY_TO_STOP
+            )
+            await _guest_note(query, text if query.references else STT_REPLY_TO_STOP)
+        return
     if not guest_util.mentions(query.text, username=usernames):
         return
     caller_id = query.caller_id
@@ -1661,9 +1820,11 @@ async def guest_stt_handler(query):
         )
         return
 
+    request = ActiveStt(event=event, task=asyncio.current_task(), query=query)
     try:
         inline_id = await tg_raw.answer_guest(
-            borg, query_id=query.query_id, title=_guest_title(), text=GUEST_PLACEHOLDER
+            borg, query_id=query.query_id, title=_guest_title(),
+            text=request.progress_text(GUEST_PLACEHOLDER),
         )
     except Exception:
         #: Not retried: a second answer could post twice.
@@ -1672,6 +1833,7 @@ async def guest_stt_handler(query):
 
     async with tg_raw.InlineEditor(borg, inline_id) as editor:
         answer = guest_util.GuestAnswerMessage(editor, logger=logger)
+        request.status_message = answer
         job_provider = get_provider_choice(caller_id)
 
         async def transcribe(*, cwd, event):
@@ -1698,24 +1860,25 @@ async def guest_stt_handler(query):
             )
 
         cwd = f"{util.dl_base}{uuid.uuid4()}/"
-        try:
-            await util.run_and_get(None, transcribe, cwd, messages=media)
-        except Exception as e:
-            await llm_util.handle_llm_error(
-                event=event,
-                exception=e,
-                response_message=answer,
-                service=job_provider,
-                base_error_message=_stt_failure_message(
-                    e,
-                    job_provider,
-                    fallback="Check /provider in our private chat.",
-                ),
-                error_id_p=True,
-                proxy_url=llm_util.gemini_proxy_url(),
-            )
-        finally:
-            await util.remove_potential_file(cwd)
+        async with _track_stt(request):
+            try:
+                await util.run_and_get(None, transcribe, cwd, messages=media)
+            except Exception as e:
+                await llm_util.handle_llm_error(
+                    event=event,
+                    exception=e,
+                    response_message=answer,
+                    service=job_provider,
+                    base_error_message=_stt_failure_message(
+                        e,
+                        job_provider,
+                        fallback="Check /provider in our private chat.",
+                    ),
+                    error_id_p=True,
+                    proxy_url=llm_util.gemini_proxy_url(),
+                )
+            finally:
+                await util.remove_potential_file(cwd)
 
 
 async def register_guest_mode():

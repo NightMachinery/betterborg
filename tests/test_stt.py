@@ -627,7 +627,9 @@ class GuestSttTests(unittest.TestCase):
     def test_a_mention_on_a_voice_note_is_transcribed_with_the_callers_key(self):
         self.run_query(_query(f"@{BOT_USERNAME}", reference_media=_voice()))
 
-        self.assertEqual([a.text for a in self.answers], [stt.GUEST_PLACEHOLDER])
+        self.assertEqual(len(self.answers), 1)
+        self.assertTrue(self.answers[0].text.startswith(stt.GUEST_PLACEHOLDER))
+        self.assertIn("Reply /stop to cancel.", self.answers[0].text)
         self.assertEqual(self.downloaded, [[19]])
         ((job, user_id),) = self.jobs
         self.assertEqual((job.api_key, user_id), ("caller-key", CALLER))
