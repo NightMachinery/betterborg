@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import httpx
 
 from uniborg import gemini_providers, stt_models
-from uniborg.constants import GEMINI_FLASH_LITE_LATEST
+from uniborg.constants import GEMINI_FLASH_LATEST, GEMINI_FLASH_LITE_LATEST
 
 GEMINI = gemini_providers.AI_STUDIO
 VERTEX = gemini_providers.VERTEX
@@ -37,9 +37,11 @@ PROVIDERS = {
         gemini_providers.LABELS[VERTEX],
         "https://console.cloud.google.com/vertex-ai/studio/overview",
         f"{gemini_providers.VERTEX_API_BASE}/models",
-        #: Every STT model but the AI Studio-only `-latest` aliases (checked
-        #: 2026-10-16).
+        #: Every STT model (checked 2026-10-16). The `-latest` aliases are sent
+        #: as `gemini_providers.VERTEX_LATEST_IDS` says.
         (
+            GEMINI_FLASH_LATEST,
+            GEMINI_FLASH_LITE_LATEST,
             "gemini/gemini-3.8-flash",
             "gemini/gemini-3.7-flash",
             "gemini/gemini-3.6-flash",
@@ -54,18 +56,23 @@ PROVIDERS = {
         #: The newest Flash and Flash Lite, then the speech model for files
         #: with sound.
         (
-            gemini_providers.VERTEX_FLASH_LATEST,
-            gemini_providers.VERTEX_FLASH_LITE_LATEST,
+            GEMINI_FLASH_LATEST,
+            GEMINI_FLASH_LITE_LATEST,
             "gemini/gemini-3.5-transcribe",
         ),
-        #: Vertex does not serve the `-latest` aliases.
-        soundless_model=gemini_providers.VERTEX_FLASH_LITE_LATEST,
     ),
 }
 
 
 def normalize_provider(provider: str | None) -> str:
     return provider if provider in PROVIDERS else GEMINI
+
+
+def resolve_model(provider: str, model: str) -> str:
+    """MODEL as PROVIDER names it: Vertex has no `-latest` aliases."""
+    if provider == VERTEX:
+        return gemini_providers.vertex_model_id(model)
+    return model
 
 
 def model_options(provider: str) -> dict[str, str]:

@@ -4,6 +4,7 @@ from uniborg import llm_util
 from uniborg import llm_db
 from uniborg import guest_util, username_util
 from uniborg import redis_util
+from uniborg import vertex_latest
 from uniborg import tg_compat
 from uniborg import tg_format
 from uniborg import tg_raw
@@ -750,9 +751,13 @@ def prepare_stt_job(cwd, *, user_id: int, model_choice: Optional[str] = None) ->
     if model_choice is None:
         model_choice = get_model_choice(user_id)
     model_choice = stt_providers.normalize_model(provider, model_choice)
-    models = stt_models.models_for_choice(
-        model_choice, auto=stt_providers.PROVIDERS[provider].auto_models or STT_MODELS
-    )
+    models = [
+        stt_providers.resolve_model(provider, model)
+        for model in stt_models.models_for_choice(
+            model_choice,
+            auto=stt_providers.PROVIDERS[provider].auto_models or STT_MODELS,
+        )
+    ]
     first = models[0]
     if provider == stt_providers.GEMINI and not stt_models.is_speech_model(first):
         try:
@@ -853,7 +858,9 @@ async def run_stt_job(
     # Honors the admin-only gate (may raise ProxyRestrictedException for blocked users).
     proxy_url, _ = llm_util.get_proxy_config_or_error(user_id)
     proxy_token = llm_util.set_llm_gemini_proxy(proxy_url)
-    reader = stt_providers.PROVIDERS[job.provider].soundless_model
+    reader = stt_providers.resolve_model(
+        job.provider, stt_providers.PROVIDERS[job.provider].soundless_model
+    )
     soundless = soundless_error = None
     try:
         async with SttProgress(
@@ -1910,3 +1917,4 @@ async def register_guest_mode():
 # Schedule the command menu setup to run on the bot's event loop upon loading.
 borg.loop.create_task(set_bot_menu_commands())
 borg.loop.create_task(register_guest_mode())
+vertex_latest.start(borg.loop)

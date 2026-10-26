@@ -38,19 +38,17 @@ and `GenerationRequest`.
   rather than silently falling back to AI Studio. `gemini-3-pro-preview` exists
   only on AI Studio, so `/geminiProvider` warns when it is the user's model.
 - **The `-latest` aliases** (including the bot's default model) are not served by
-  Vertex either. Instead, the bot sends Flash (Latest) as
-  `gemini_providers.VERTEX_FLASH_LATEST` (3.8 Flash) and Flash Lite (Latest) as
-  `VERTEX_FLASH_LITE_LATEST` (3.5 Flash Lite), through `VERTEX_MODEL_IDS`.
-  These are fixed ids checked on 2026-10-16, so they stay put when Google ships
-  a newer Flash until someone bumps those two constants. The STT bot's Vertex
-  Auto models use the same constants.
+  Vertex either. Instead, the bot sends Flash (Latest) and Flash Lite (Latest)
+  as the newest Flash and Flash Lite that Vertex serves, kept in
+  `gemini_providers.VERTEX_LATEST_IDS`. See "Following new Flash releases"
+  below. The STT bot sends them the same way.
 - **Attachments** are sent inline (base64). Vertex has no Files API, so
   `is_native_gemini_files_mode` is false for Vertex.
 - **Explicit context caching is off.** Creating cached contents fails with
   "API keys are not supported by this API", so `cache_control` is stripped.
   Vertex still applies its own implicit caching.
 - **Titles** of files and topics use the Vertex key and Vertex ids, so the
-  default Flash Lite Latest runs as 3.5 Flash Lite. A Gemini title model that
+  default Flash Lite Latest runs as the newest Vertex Flash Lite. A Gemini title model that
   Vertex lacks is replaced by `gemini_providers.VERTEX_TITLE_MODEL`.
 - **Voice replies (TTS)** use the Vertex key and client
   (`genai.Client(vertexai=True, api_key=...)`). Vertex names the TTS models
@@ -65,6 +63,34 @@ and `GenerationRequest`.
   `.i` always uses Codex) runs on Vertex the same way, with
   `gemini-2.5-flash-image-preview` mapped to `gemini-2.5-flash-image`. The
   Gemini 2.0 image models are not on Vertex and are refused.
+
+## Following new Flash releases
+
+`uniborg/vertex_latest.py` keeps `VERTEX_LATEST_IDS` current, in both the chat
+and the STT bot.
+
+- **Probing.** Whether an Express key may list Vertex's models was not checked,
+  while `countTokens` is known to work with one (the STT key check uses it). So
+  the module asks `countTokens` (free) about each id newer than the known
+  newest one, through
+  the next major version's .9: from 3.8 Flash, `gemini-3.9-flash`,
+  `gemini-4-flash`, `gemini-4.0-flash` and `gemini-4.1-flash` to
+  `gemini-4.9-flash`. A 200 means Vertex serves the model and a 404 means it
+  does not. The newest served id wins. Probing also starts from the
+  hand-checked baselines (`VERTEX_FLASH_BASELINE`, 3.8 Flash, and
+  `VERTEX_FLASH_LITE_BASELINE`, 3.5 Flash Lite, checked 2026-10-16), so a model
+  Vertex withdraws falls back to the newest one it still serves.
+- **Not followed:** ids outside the `gemini-X.Y-flash` and
+  `gemini-X.Y-flash-lite` pattern, such as a `-preview` release. Those wait
+  until Google publishes the plain id.
+- **Cache.** The answer is saved in `~/.borg/vertex_latest_models.json` for 24
+  hours. Each bot process sleeps until the cache expires, re-reads it (another
+  process may have renewed it) and probes again if it is still stale.
+- **Key.** Probes use the first bot admin's saved Vertex key
+  (`/setVertexKey`). Without one, or when any probe fails other than with a
+  404 (rate limit, network), the bot keeps what it has, writes nothing to the
+  cache and tries again in an hour. Models found by an incomplete probe are
+  still used until then.
 
 ## Still on Google AI Studio: live mode
 

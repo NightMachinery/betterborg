@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from uniborg import stt_models, stt_providers, tg_compat
+from uniborg import gemini_providers, stt_models, stt_providers, tg_compat
 
 
 class _Loop:
@@ -584,16 +584,33 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         finally:
             stt.llm_util.reset_llm_gemini_proxy(token)
 
-    async def test_vertex_menu_omits_only_developer_only_aliases(self):
+    async def test_vertex_menu_offers_the_latest_aliases(self):
         options = stt_providers.model_options("vertex")
         self.assertIn("auto", options)
         self.assertIn("3.5-flash", options)
         self.assertIn("3.5-transcribe", options)
-        self.assertNotIn("flash-latest", options)
-        self.assertNotIn("flash-lite-latest", options)
+        self.assertIn("flash-latest", options)
+        self.assertIn("flash-lite-latest", options)
+
+    def test_vertex_sends_the_latest_aliases_as_its_newest_models(self):
+        self.assertEqual(
+            stt_providers.resolve_model("vertex", "gemini/gemini-flash-latest"),
+            gemini_providers.VERTEX_LATEST_IDS["gemini/gemini-flash-latest"],
+        )
+        self.assertEqual(
+            stt_providers.resolve_model("gemini", "gemini/gemini-flash-latest"),
+            "gemini/gemini-flash-latest",
+        )
 
 
 REFUSED_ON_VERTEX = stt_providers.ProviderError("vertex", 404)
+
+
+def _vertex_auto():
+    return [
+        stt_providers.resolve_model("vertex", model)
+        for model in stt_providers.PROVIDERS["vertex"].auto_models
+    ]
 
 
 class VertexAutoTests(unittest.IsolatedAsyncioTestCase):
@@ -615,8 +632,8 @@ class VertexAutoTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             stt_providers.PROVIDERS["vertex"].auto_models,
             (
-                "gemini/gemini-3.8-flash",
-                "gemini/gemini-3.5-flash-lite",
+                "gemini/gemini-flash-latest",
+                "gemini/gemini-flash-lite-latest",
                 "gemini/gemini-3.5-transcribe",
             ),
         )
@@ -629,7 +646,7 @@ class VertexAutoTests(unittest.IsolatedAsyncioTestCase):
         ) as media, patch.object(stt_models, "transcribe", AsyncMock()) as speech:
             with self.assertRaises(stt.SttModelRefusedError):
                 await stt._transcribe_with_retry(
-                    models=list(stt_providers.PROVIDERS["vertex"].auto_models),
+                    models=_vertex_auto(),
                     attachments=[self.image],
                     api_key="synthetic-vertex-key-000000",
                     provider="vertex",
@@ -639,7 +656,7 @@ class VertexAutoTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_transcribe_answers_and_the_failed_flash_lite_is_not_retried(self):
         job = stt.SttJob(
-            models=list(stt_providers.PROVIDERS["vertex"].auto_models),
+            models=_vertex_auto(),
             api_key="synthetic-vertex-key-000000",
             attachments=[self.voice, self.image],
             provider="vertex",

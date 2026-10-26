@@ -669,7 +669,11 @@ class GuestSttTests(unittest.TestCase):
         self.assertEqual(job.provider, "vertex")
         self.assertEqual(job.api_key, "synthetic-vertex-caller-key")
         self.assertEqual(
-            tuple(job.models), stt.stt_providers.PROVIDERS["vertex"].auto_models
+            job.models,
+            [
+                stt.stt_providers.resolve_model("vertex", model)
+                for model in stt.stt_providers.PROVIDERS["vertex"].auto_models
+            ],
         )
         load.assert_not_called()
         self.assertEqual(self.edits, [{"text": "hello", "parse_mode": "md"}])

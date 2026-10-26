@@ -147,7 +147,7 @@ from uniborg import util
 from uniborg import telegram_queue
 from uniborg import llm_db
 from uniborg import llm_util
-from uniborg import gemini_providers
+from uniborg import gemini_providers, vertex_latest
 from uniborg.llm_util import (
     AutoDeleteMode,
     AUTO_DELETE_TIME,
@@ -14197,3 +14197,4 @@ def register_guest_handlers():
 # --- Initialization ---
 # Schedule the command menu setup to run on the bot's event loop upon loading.
 borg.loop.create_task(initialize_llm_chat())
+vertex_latest.start(borg.loop)

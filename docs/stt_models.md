@@ -42,11 +42,14 @@ the caller's saved Vertex key.
 
 ## Vertex AI models
 
-Vertex offers Auto and every model but AI Studio's `latest` aliases, which
-Vertex does not serve: 3.8, 3.7, 3.6 and 3.5 Flash, 3.5 and 3.1 Flash Lite,
-3 Flash Preview, 2.5 Flash, 2.5 Flash Lite and 3.5 Transcribe (checked
-2026-10-16). Its Auto order is the newest Flash and Flash Lite, then the speech
-model: 3.8 Flash, 3.5 Flash Lite, then 3.5 Transcribe. Transcribe is a fallback
+Vertex offers Auto and every model: Flash Latest, Flash Lite Latest, 3.8, 3.7,
+3.6 and 3.5 Flash, 3.5 and 3.1 Flash Lite, 3 Flash Preview, 2.5 Flash, 2.5 Flash
+Lite and 3.5 Transcribe (checked 2026-10-16). Vertex itself lacks the `latest`
+aliases, so the bot sends them as the newest Flash and Flash Lite it serves
+(`stt_providers.resolve_model`; how those are found is in
+[gemini_vertex_chat.md](gemini_vertex_chat.md)). Its Auto order is the newest
+Flash and Flash Lite, then the speech model: 3.8 Flash, 3.5 Flash Lite, then
+3.5 Transcribe, as of 2026-10-26. Transcribe is a fallback
 for files with sound only: when no file is audio or video, Auto stops at Flash
 Lite and reports its error. When Transcribe answers for a mix of audio and
 images, the images are not sent to Flash Lite a second time (it has just
@@ -117,8 +120,8 @@ requests a minute for this model. It differs from the media models:
   ffmpeg.
 - Files without sound (images, silent videos, audio ffmpeg cannot convert) go
   to the newest Flash Lite in a second call: `soundless_model` in
-  `stt_providers.PROVIDERS`, Flash Lite Latest on AI Studio and 3.5 Flash Lite
-  on Vertex, which lacks the `-latest` aliases. The reply puts a warning line
+  `stt_providers.PROVIDERS`, Flash Lite Latest (on Vertex, the newest Flash
+  Lite it serves). The reply puts a warning line
   between the speech transcript and Flash Lite's reading, which names both
   models and the number of files. When no file has sound, Transcribe is not
   called, and the reply is the warning and Flash Lite's reading alone. When the
