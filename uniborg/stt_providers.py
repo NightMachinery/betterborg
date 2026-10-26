@@ -54,12 +54,12 @@ PROVIDERS = {
         #: The newest Flash and Flash Lite, then the speech model for files
         #: with sound.
         (
-            "gemini/gemini-3.8-flash",
-            "gemini/gemini-3.5-flash-lite",
+            gemini_providers.VERTEX_FLASH_LATEST,
+            gemini_providers.VERTEX_FLASH_LITE_LATEST,
             "gemini/gemini-3.5-transcribe",
         ),
         #: Vertex does not serve the `-latest` aliases.
-        soundless_model="gemini/gemini-3.5-flash-lite",
+        soundless_model=gemini_providers.VERTEX_FLASH_LITE_LATEST,
     ),
 }
 

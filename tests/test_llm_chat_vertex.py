@@ -95,12 +95,23 @@ class RoutingTests(unittest.TestCase):
             )
         )
 
+    def test_the_latest_aliases_go_to_the_newest_vertex_models(self):
+        self.assertEqual(
+            gemini_providers.vertex_model_id(plugin.GEMINI_FLASH_LATEST),
+            "gemini/gemini-3.8-flash",
+        )
+        self.assertEqual(
+            gemini_providers.vertex_model_id(plugin.GEMINI_FLASH_LITE_LATEST),
+            "gemini/gemini-3.5-flash-lite",
+        )
+        self.assertIsNone(plugin._vertex_refusal(plugin.GEMINI_FLASH_LATEST, VERTEX))
+
     def test_a_model_vertex_lacks_is_refused_with_the_way_out(self):
-        refusal = plugin._vertex_refusal(plugin.GEMINI_FLASH_LATEST, VERTEX)
+        refusal = plugin._vertex_refusal(plugin.GEMINI_PRO_LATEST, VERTEX)
         self.assertIn("not available on Vertex AI", refusal)
         self.assertIn("/geminiProvider", refusal)
         self.assertIsNone(plugin._vertex_refusal(FLASH, VERTEX))
-        self.assertIsNone(plugin._vertex_refusal(plugin.GEMINI_FLASH_LATEST, AI_STUDIO))
+        self.assertIsNone(plugin._vertex_refusal(plugin.GEMINI_PRO_LATEST, AI_STUDIO))
 
     def test_vertex_attachments_are_sent_inline(self):
         self.assertTrue(plugin.is_native_gemini_files_mode(FLASH))
@@ -110,13 +121,13 @@ class RoutingTests(unittest.TestCase):
 
 
 class RequestShapeTests(unittest.TestCase):
-    def _api_kwargs(self, provider):
+    def _api_kwargs(self, provider, *, model=FLASH):
         event = guest_util.GuestEvent(_query(f"{BOT_USERNAME} hi"))
         request = plugin.GenerationRequest(
             event=event,
             response_message=AsyncMock(),
             messages=[{"role": "user", "content": "hi"}],
-            model=FLASH,
+            model=model,
             model_capabilities={},
             api_key="k",
             prefs=SimpleNamespace(json_mode=False, enabled_tools=[]),
@@ -151,6 +162,12 @@ class RequestShapeTests(unittest.TestCase):
         kwargs = self._api_kwargs(VERTEX)
         self.assertEqual(kwargs["api_base"], gemini_providers.VERTEX_API_BASE)
         self.assertNotIn("cache_control", kwargs["messages"][0])
+
+    def test_vertex_requests_name_the_model_by_its_vertex_id(self):
+        kwargs = self._api_kwargs(VERTEX, model=plugin.GEMINI_FLASH_LATEST)
+        self.assertEqual(kwargs["model"], "gemini/gemini-3.8-flash")
+        kwargs = self._api_kwargs(AI_STUDIO, model=plugin.GEMINI_FLASH_LATEST)
+        self.assertEqual(kwargs["model"], plugin.GEMINI_FLASH_LATEST)
 
     def test_ai_studio_requests_are_unchanged(self):
         kwargs = self._api_kwargs(AI_STUDIO)
@@ -189,7 +206,7 @@ class ProviderPanelTests(unittest.TestCase):
             patch.object(
                 plugin.user_manager,
                 "get_prefs",
-                return_value=SimpleNamespace(model=plugin.GEMINI_FLASH_LATEST),
+                return_value=SimpleNamespace(model=plugin.GEMINI_PRO_LATEST),
             )
         )
         self.request_key = stack.enter_context(
@@ -265,7 +282,7 @@ class TitleTests(unittest.IsolatedAsyncioTestCase):
             calls,
             [
                 (
-                    gemini_providers.VERTEX_TITLE_MODEL,
+                    "gemini/gemini-3.5-flash-lite",
                     "vertex-key",
                     {"api_base": gemini_providers.VERTEX_API_BASE},
                 )

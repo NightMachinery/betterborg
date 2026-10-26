@@ -164,7 +164,8 @@ async def generate_title(
 
     `api_keys` maps a service to a key and wins over the user's stored keys.
     On Vertex AI (`gemini_provider`), a Gemini model it does not serve is
-    replaced by `gemini_providers.VERTEX_TITLE_MODEL`.
+    replaced by `gemini_providers.VERTEX_TITLE_MODEL`, and the rest are sent
+    under their Vertex ids.
     Raises `TitleUnavailableError` when no candidate produced a title.
     """
     complete = complete or complete_structured
@@ -179,6 +180,8 @@ async def generate_title(
             and not gemini_providers.vertex_serves_p(candidate)
         ):
             candidate = gemini_providers.VERTEX_TITLE_MODEL
+        if vertex_p and candidate.startswith("gemini/"):
+            candidate = gemini_providers.vertex_model_id(candidate)
         if candidate not in candidates:
             candidates.append(candidate)
 

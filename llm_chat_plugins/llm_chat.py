@@ -12979,6 +12979,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
         "stream": use_streaming,
     }
     if vertex_p:
+        api_kwargs["model"] = gemini_providers.vertex_model_id(model_in_use)
         api_kwargs["api_base"] = gemini_providers.VERTEX_API_BASE
 
     #: Reasoning effort is per-model: prefix > this chat > personal > default.

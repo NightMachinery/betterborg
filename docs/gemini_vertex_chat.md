@@ -35,17 +35,23 @@ and `GenerationRequest`.
 
 - **Models.** Only the models in `gemini_providers.VERTEX_CHAT_MODELS` answer.
   Any other Gemini model is refused with a message naming the Vertex models,
-  rather than silently falling back to AI Studio. The `-latest` aliases
-  (including the bot's default model) and `gemini-3-pro-preview` exist only on AI
-  Studio, so `/geminiProvider` warns when the user's model is one of them.
+  rather than silently falling back to AI Studio. `gemini-3-pro-preview` exists
+  only on AI Studio, so `/geminiProvider` warns when it is the user's model.
+- **The `-latest` aliases** (including the bot's default model) are not served by
+  Vertex either. Instead, the bot sends Flash (Latest) as
+  `gemini_providers.VERTEX_FLASH_LATEST` (3.8 Flash) and Flash Lite (Latest) as
+  `VERTEX_FLASH_LITE_LATEST` (3.5 Flash Lite), through `VERTEX_MODEL_IDS`.
+  These are fixed ids checked on 2026-10-16, so they stay put when Google ships
+  a newer Flash until someone bumps those two constants. The STT bot's Vertex
+  Auto models use the same constants.
 - **Attachments** are sent inline (base64). Vertex has no Files API, so
   `is_native_gemini_files_mode` is false for Vertex.
 - **Explicit context caching is off.** Creating cached contents fails with
   "API keys are not supported by this API", so `cache_control` is stripped.
   Vertex still applies its own implicit caching.
-- **Titles** of files and topics: a Gemini title model that Vertex lacks (the
-  default is Flash Lite Latest) is replaced by
-  `gemini_providers.VERTEX_TITLE_MODEL`, with the Vertex key.
+- **Titles** of files and topics use the Vertex key and Vertex ids, so the
+  default Flash Lite Latest runs as 3.5 Flash Lite. A Gemini title model that
+  Vertex lacks is replaced by `gemini_providers.VERTEX_TITLE_MODEL`.
 - **Voice replies (TTS)** use the Vertex key and client
   (`genai.Client(vertexai=True, api_key=...)`). Vertex names the TTS models
   without "preview": `gemini_providers.VERTEX_MODEL_IDS` maps
