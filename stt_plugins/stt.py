@@ -130,17 +130,22 @@ def _is_stt_stop_text(text: str | None) -> bool:
     if addressed is not None:
         text = addressed.strip()
     suffix = username_util.username_pattern(names)
-    return re.fullmatch(
-        rf"(?:\.stop|/stop(?:@{suffix})?)(?:\s+@{suffix})?", text, re.IGNORECASE
-    ) is not None
+    return (
+        re.fullmatch(
+            rf"(?:\.stop|/stop(?:@{suffix})?)(?:\s+@{suffix})?", text, re.IGNORECASE
+        )
+        is not None
+    )
 
 
 def _own_stt_requests(caller_id, *, chat_id=None) -> list[ActiveStt]:
     return [
-        request for request in _active_stt.values()
+        request
+        for request in _active_stt.values()
         if request.event.sender_id == caller_id
         and (chat_id is None or request.event.chat_id == chat_id)
-        and not request.task.done() and not request.stop_requested
+        and not request.task.done()
+        and not request.stop_requested
     ]
 
 
@@ -155,9 +160,13 @@ def _guest_stt_targets(query) -> list[ActiveStt]:
         for reference in query.references:
             marker = request.token in _GUEST_STT_MARKER.findall(reference.message or "")
             seen = guest_util.find_seen(
-                [{"caller_id": query.caller_id, "seen": [trigger.to_json()]}]
-                if trigger is not None else [],
-                guest_util.fingerprint_of(reference), caller_id=query.caller_id,
+                (
+                    [{"caller_id": query.caller_id, "seen": [trigger.to_json()]}]
+                    if trigger is not None
+                    else []
+                ),
+                guest_util.fingerprint_of(reference),
+                caller_id=query.caller_id,
             )
             if marker or seen is not None:
                 targets.append(request)
@@ -1610,8 +1619,11 @@ async def stop_stt_handler(event):
     reply_id = getattr(event.message, "reply_to_msg_id", None)
     if reply_id is not None:
         targets = [
-            request for request in _own_stt_requests(event.sender_id, chat_id=event.chat_id)
-            if request.query is None and reply_id in (
+            request
+            for request in _own_stt_requests(event.sender_id, chat_id=event.chat_id)
+            if request.query is None
+            and reply_id
+            in (
                 request.event.message.id,
                 getattr(request.status_message, "id", None),
             )
@@ -1823,7 +1835,9 @@ async def guest_stt_handler(query):
     request = ActiveStt(event=event, task=asyncio.current_task(), query=query)
     try:
         inline_id = await tg_raw.answer_guest(
-            borg, query_id=query.query_id, title=_guest_title(),
+            borg,
+            query_id=query.query_id,
+            title=_guest_title(),
             text=request.progress_text(GUEST_PLACEHOLDER),
         )
     except Exception:
