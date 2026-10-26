@@ -400,6 +400,10 @@ Seen live on a canary bot (Telethon 1.45.0, layer 229, 2026-09-29):
 - A bot that is a member of a group gets no guest query there, and with
   privacy mode on it does not see the mention either. So there are no
   duplicates, but a member bot is deaf to "@bot text" in that group.
+- Mentioning one of our bots in a user's private chat with another bot got no
+  guest answer (2026-10-26), although the guest-mode page's "any non-secret
+  private chat" seems to include it. Not investigated: a bot-to-bot setting
+  (section 2.9) may be what blocks it.
 
 Status: the shell, @vlm_chat_bot and @llm_stt_bot answer guest mentions, on
 Telethon 1.45 with the qts re-dispatch and at-most-once safety nets. The flow,
