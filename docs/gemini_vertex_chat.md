@@ -72,17 +72,16 @@ and the STT bot.
 - **Probing.** Whether an Express key may list Vertex's models was not checked,
   while `countTokens` is known to work with one (the STT key check uses it). So
   the module asks `countTokens` (free) about each id newer than the known
-  newest one, through
-  the next major version's .9: from 3.8 Flash, `gemini-3.9-flash`,
-  `gemini-4-flash`, `gemini-4.0-flash` and `gemini-4.1-flash` to
-  `gemini-4.9-flash`. A 200 means Vertex serves the model and a 404 means it
-  does not. The newest served id wins. Probing also starts from the
-  hand-checked baselines (`VERTEX_FLASH_BASELINE`, 3.8 Flash, and
+  newest one, through the next major version's .9, both as a release and as a
+  `-preview`: from 3.8 Flash, `gemini-3.9-flash`, `gemini-3.9-flash-preview`,
+  `gemini-4-flash`, `gemini-4.0-flash` and so on to `gemini-4.9-flash-preview`.
+  A 200 means Vertex serves the model and a 404 means it does not. The newest
+  served version wins, and its release beats its preview. Probing also starts
+  from the hand-checked baselines (`VERTEX_FLASH_BASELINE`, 3.8 Flash, and
   `VERTEX_FLASH_LITE_BASELINE`, 3.5 Flash Lite, checked 2026-10-16), so a model
   Vertex withdraws falls back to the newest one it still serves.
-- **Not followed:** ids outside the `gemini-X.Y-flash` and
-  `gemini-X.Y-flash-lite` pattern, such as a `-preview` release. Those wait
-  until Google publishes the plain id.
+- **Not followed:** ids outside the `gemini-X.Y-flash[-lite][-preview]`
+  pattern, such as a dated `-preview-09-2025` release.
 - **Cache.** The answer is saved in `~/.borg/vertex_latest_models.json` for 24
   hours. Each bot process sleeps until the cache expires, re-reads it (another
   process may have renewed it) and probes again if it is still stale.

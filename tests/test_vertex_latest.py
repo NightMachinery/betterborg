@@ -56,27 +56,39 @@ class _Restore(unittest.TestCase):
 class CandidateTests(unittest.TestCase):
     def test_versions_are_read_only_from_their_own_family(self):
         self.assertEqual(
-            vertex_latest.version_of(FLASH_BASELINE, suffix="flash"), (3, 8)
+            vertex_latest.version_of(FLASH_BASELINE, suffix="flash"), (3, 8, 1)
         )
         self.assertEqual(
-            vertex_latest.version_of("gemini-4-flash", suffix="flash"), (4, 0)
+            vertex_latest.version_of("gemini-4-flash", suffix="flash"), (4, 0, 1)
+        )
+        self.assertEqual(
+            vertex_latest.version_of("gemini/gemini-3-flash-preview", suffix="flash"),
+            (3, 0, 0),
         )
         self.assertIsNone(vertex_latest.version_of(LITE_BASELINE, suffix="flash"))
         self.assertIsNone(
-            vertex_latest.version_of("gemini/gemini-3-flash-preview", suffix="flash")
+            vertex_latest.version_of("gemini/gemini-3-flash-image", suffix="flash")
         )
 
     def test_candidates_run_through_the_next_major_version(self):
-        ids = vertex_latest.candidates_after((3, 8), suffix="flash")
+        ids = vertex_latest.candidates_after((3, 8, 1), suffix="flash")
         self.assertEqual(
-            ids[:3],
+            ids[:6],
             [
                 "gemini/gemini-3.9-flash",
+                "gemini/gemini-3.9-flash-preview",
                 "gemini/gemini-4-flash",
+                "gemini/gemini-4-flash-preview",
                 "gemini/gemini-4.0-flash",
+                "gemini/gemini-4.0-flash-preview",
             ],
         )
-        self.assertEqual(ids[-1], "gemini/gemini-4.9-flash")
+        self.assertEqual(ids[-1], "gemini/gemini-4.9-flash-preview")
+
+    def test_after_a_preview_comes_its_release(self):
+        ids = vertex_latest.candidates_after((4, 0, 0), suffix="flash")
+        self.assertEqual(ids[:2], ["gemini/gemini-4-flash", "gemini/gemini-4.0-flash"])
+        self.assertNotIn("gemini/gemini-4-flash-preview", ids)
 
 
 class RefreshTests(unittest.TestCase):
@@ -98,6 +110,16 @@ class RefreshTests(unittest.TestCase):
             },
         )
         self.assertNotIn("gemini-3.8-flash", client.seen)
+
+    def test_a_newer_preview_wins_until_its_release_ships(self):
+        result = _refresh(_client({"gemini/gemini-4-flash-preview"}))
+        self.assertEqual(
+            result.ids[GEMINI_FLASH_LATEST], "gemini/gemini-4-flash-preview"
+        )
+        result = _refresh(
+            _client({"gemini/gemini-4-flash-preview", "gemini/gemini-4-flash"})
+        )
+        self.assertEqual(result.ids[GEMINI_FLASH_LATEST], "gemini/gemini-4-flash")
 
     def test_nothing_newer_keeps_the_baselines(self):
         self.assertEqual(_refresh(_client()).ids, BASELINES)

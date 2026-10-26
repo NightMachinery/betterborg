@@ -68,26 +68,37 @@ class RefreshResult:
 
 
 def version_of(model: str, *, suffix: str) -> Optional[tuple]:
-    """(major, minor) of a `gemini-X.Y-SUFFIX` id, or None for any other id."""
+    """(major, minor, released) of a `gemini-X.Y-SUFFIX[-preview]` id, or None.
+
+    `released` is 0 for a preview and 1 otherwise, so a version's release ranks
+    above its preview.
+    """
     match = re.fullmatch(
-        rf"(?:gemini/)?gemini-(\d+)(?:\.(\d+))?-{re.escape(suffix)}", model
+        rf"(?:gemini/)?gemini-(\d+)(?:\.(\d+))?-{re.escape(suffix)}(-preview)?",
+        model,
     )
     if not match:
         return None
-    return int(match.group(1)), int(match.group(2) or 0)
+    return int(match.group(1)), int(match.group(2) or 0), int(not match.group(3))
 
 
 def candidates_after(version: tuple, *, suffix: str) -> list:
-    """Ids newer than VERSION, through the next major version's .9.
+    """Ids ranking above VERSION, through the next major version's .9.
 
-    A new major version is tried both as `gemini-4-flash` and `gemini-4.0-flash`,
-    since Google has used both forms.
+    Each version is tried as a release and as a preview, and a major version's
+    first both as `gemini-4-flash` and `gemini-4.0-flash`, since Google has used
+    both forms.
     """
-    major, minor = version
-    ids = [f"gemini/gemini-{major}.{m}-{suffix}" for m in range(minor + 1, 10)]
-    ids += [f"gemini/gemini-{major + 1}-{suffix}"]
-    ids += [f"gemini/gemini-{major + 1}.{m}-{suffix}" for m in range(10)]
-    return ids
+    major = version[0]
+    names = []
+    for each in (major, major + 1):
+        names += [str(each)] + [f"{each}.{minor}" for minor in range(10)]
+    ids = [
+        f"gemini/gemini-{name}-{suffix}{tail}"
+        for name in names
+        for tail in ("", "-preview")
+    ]
+    return [model for model in ids if version_of(model, suffix=suffix) > version]
 
 
 def _newest(models, *, suffix: str) -> Optional[str]:
