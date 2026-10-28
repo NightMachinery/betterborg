@@ -62,7 +62,7 @@ from telethon.tl.types import (
     UpdateMessageReactions,
 )
 from pydantic import BaseModel, Field, model_validator
-from typing import Any, Callable, Optional, List, Dict, Tuple
+from typing import Any, Callable, Optional, List, Dict, Sequence, Tuple
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -1004,6 +1004,8 @@ AUDIO_URL_MAGIC_P = os.getenv("AUDIO_URL_MAGIC_P", "True").lower() in (
     "1",
     "yes",
 )
+#: Summarizes an audio URL when the model in use cannot hear audio.
+AUDIO_URL_FALLBACK_MODEL = GEMINI_FLASH_LATEST
 
 # Security constants for image processing
 MAX_IMAGE_SIZE = 50 * 1024 * 1024  # 50MB limit
@@ -4198,6 +4200,44 @@ async def _download_audio_from_url(
         return None, err
 
 
+@dataclass(frozen=True)
+class AudioUrlModel:
+    """The model that answers an audio URL, and why it was chosen."""
+
+    #: None keeps the model the request would use anyway.
+    model: Optional[str]
+    notes: List[str] = field(default_factory=list)
+
+
+def _audio_url_model(
+    event,
+    *,
+    prefix_model: Optional[str] = None,
+    fallback_model: str = AUDIO_URL_FALLBACK_MODEL,
+) -> AudioUrlModel:
+    """Swap in FALLBACK_MODEL for this one answer when the model cannot hear.
+
+    Only the audio URL answer switches: summarizing audio is its whole job, and
+    a model without audio input would just answer without it. Saved settings
+    are untouched.
+    """
+    model = _resolve_request_model(
+        event.chat_id,
+        event.sender_id,
+        prefix_model=prefix_model,
+        topic_id=_thread_topic_id(event),
+    ).model
+    if get_model_capabilities(model).get("audio_input", False):
+        return AudioUrlModel(model=prefix_model)
+    return AudioUrlModel(
+        model=fallback_model,
+        notes=[
+            f"Using {_model_display_name(fallback_model)} for this audio, "
+            f"because {_model_display_name(model)} does not support audio input."
+        ],
+    )
+
+
 async def _process_audio_url_magic(
     event,
     url: str,
@@ -4268,8 +4308,12 @@ async def _process_audio_url_magic(
         )
         try:
             #: The uploaded caption carries no prefix, so pass on the URL's own.
+            audio_model = _audio_url_model(event, prefix_model=prefix_model)
             await chat_handler(
-                proxy, forced_model=prefix_model, forced_effort=prefix_effort
+                proxy,
+                forced_model=audio_model.model,
+                forced_effort=prefix_effort,
+                notes=audio_model.notes,
             )
         except Exception:
             #: We don't want this URL processed normally at this stage, even if an error happens.
@@ -13306,13 +13350,17 @@ async def chat_handler(
     *,
     forced_model: Optional[str] = None,
     forced_effort: Optional[str] = None,
+    notes: Sequence[str] = (),
 ):
     task = asyncio.current_task()
     token = _CHAT_REQUEST_TASK.set(task)
     add_active_llm_task(event.sender_id, task)
     try:
         return await _chat_handler(
-            event, forced_model=forced_model, forced_effort=forced_effort
+            event,
+            forced_model=forced_model,
+            forced_effort=forced_effort,
+            notes=notes,
         )
     finally:
         remove_active_llm_task(event.sender_id, task)
@@ -13324,6 +13372,7 @@ async def _chat_handler(
     *,
     forced_model: Optional[str] = None,
     forced_effort: Optional[str] = None,
+    notes: Sequence[str] = (),
 ):
     """Main handler for all non-command messages in a private chat.
 
@@ -13331,6 +13380,7 @@ async def _chat_handler(
     quota panel's Reserve button, or the model prefix of an audio URL whose
     upload is being answered. It enters as a prefix model, so it is treated as
     the deliberate choice it is. `forced_effort` is the matching effort prefix.
+    NOTES join the warnings shown under the answer.
     """
     user_id = event.sender_id
     chat_id = event.chat_id
@@ -13513,7 +13563,7 @@ async def _chat_handler(
             gemini_provider=gemini_provider,
         )
         messages = history_result.history
-        warnings = history_result.warnings
+        warnings = history_result.warnings + list(notes)
         if request_model.quota_fallback_from:
             warnings.append(
                 "Codex is over its shared usage limit; using "

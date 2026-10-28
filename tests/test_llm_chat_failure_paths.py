@@ -171,11 +171,12 @@ class _Action:
 class AudioUrlMagicTests(unittest.TestCase):
     """`_process_audio_url_magic` once the audio is downloaded and uploaded."""
 
-    def _run(self, answer, **kwargs):
+    def _run(self, answer, *, model=plugin.GEMINI_FLASH_LATEST, **kwargs):
         event = SimpleNamespace(
             id=1,
             chat=None,
             chat_id=1,
+            sender_id=1,
             client=SimpleNamespace(
                 send_file=AsyncMock(return_value=SimpleNamespace(id=2))
             ),
@@ -194,6 +195,14 @@ class AudioUrlMagicTests(unittest.TestCase):
                 new=AsyncMock(return_value=downloaded),
             ), patch.object(
                 plugin, "chat_handler", new=answer
+            ), patch.object(
+                plugin, "_thread_topic_id", return_value=None
+            ), patch.object(
+                plugin,
+                "_resolve_request_model",
+                side_effect=lambda *args, prefix_model=None, **kw: (
+                    plugin.RequestModel(model=prefix_model or model, service="gemini")
+                ),
             ):
                 return asyncio.run(
                     plugin._process_audio_url_magic(event, "u", **kwargs)
@@ -207,9 +216,32 @@ class AudioUrlMagicTests(unittest.TestCase):
 
     def test_the_url_prefixes_reach_the_answer(self):
         answer = AsyncMock()
-        self._run(answer, prefix_model="m", prefix_effort="high")
-        self.assertEqual(answer.await_args.kwargs["forced_model"], "m")
+        self._run(answer, prefix_model=plugin.GEMINI_PRO_LATEST, prefix_effort="high")
+        self.assertEqual(
+            answer.await_args.kwargs["forced_model"], plugin.GEMINI_PRO_LATEST
+        )
         self.assertEqual(answer.await_args.kwargs["forced_effort"], "high")
+
+    def test_a_model_that_hears_audio_is_kept(self):
+        answer = AsyncMock()
+        self._run(answer)
+        self.assertIsNone(answer.await_args.kwargs["forced_model"])
+        self.assertEqual(answer.await_args.kwargs["notes"], [])
+
+    def test_a_deaf_model_switches_to_the_fallback(self):
+        answer = AsyncMock()
+        self._run(answer, model="deepseek/deepseek-reasoner")
+        self.assertEqual(
+            answer.await_args.kwargs["forced_model"], plugin.AUDIO_URL_FALLBACK_MODEL
+        )
+        self.assertEqual(len(answer.await_args.kwargs["notes"]), 1)
+
+    def test_a_deaf_prefix_model_also_switches(self):
+        answer = AsyncMock()
+        self._run(answer, prefix_model="deepseek/deepseek-reasoner")
+        self.assertEqual(
+            answer.await_args.kwargs["forced_model"], plugin.AUDIO_URL_FALLBACK_MODEL
+        )
 
     def test_a_cancelled_answer_propagates(self):
         with self.assertRaises(asyncio.CancelledError):
