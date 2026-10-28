@@ -4219,16 +4219,15 @@ def _audio_url_model(
 
     Only the audio URL answer switches: summarizing audio is its whole job, and
     a model without audio input would just answer without it. Saved settings
-    are untouched.
+    are untouched. An explicit PREFIX_MODEL is never overridden.
     """
+    if prefix_model:
+        return AudioUrlModel(model=prefix_model)
     model = _resolve_request_model(
-        event.chat_id,
-        event.sender_id,
-        prefix_model=prefix_model,
-        topic_id=_thread_topic_id(event),
+        event.chat_id, event.sender_id, topic_id=_thread_topic_id(event)
     ).model
     if get_model_capabilities(model).get("audio_input", False):
-        return AudioUrlModel(model=prefix_model)
+        return AudioUrlModel(model=None)
     return AudioUrlModel(
         model=fallback_model,
         notes=[

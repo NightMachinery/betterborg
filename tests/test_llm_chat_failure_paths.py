@@ -236,12 +236,13 @@ class AudioUrlMagicTests(unittest.TestCase):
         )
         self.assertEqual(len(answer.await_args.kwargs["notes"]), 1)
 
-    def test_a_deaf_prefix_model_also_switches(self):
+    def test_a_deaf_prefix_model_is_kept(self):
         answer = AsyncMock()
         self._run(answer, prefix_model="deepseek/deepseek-reasoner")
         self.assertEqual(
-            answer.await_args.kwargs["forced_model"], plugin.AUDIO_URL_FALLBACK_MODEL
+            answer.await_args.kwargs["forced_model"], "deepseek/deepseek-reasoner"
         )
+        self.assertEqual(answer.await_args.kwargs["notes"], [])
 
     def test_a_cancelled_answer_propagates(self):
         with self.assertRaises(asyncio.CancelledError):
