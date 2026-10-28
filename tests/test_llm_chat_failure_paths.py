@@ -171,7 +171,7 @@ class _Action:
 class AudioUrlMagicTests(unittest.TestCase):
     """`_process_audio_url_magic` once the audio is downloaded and uploaded."""
 
-    def _run(self, answer):
+    def _run(self, answer, **kwargs):
         event = SimpleNamespace(
             id=1,
             chat=None,
@@ -195,13 +195,21 @@ class AudioUrlMagicTests(unittest.TestCase):
             ), patch.object(
                 plugin, "chat_handler", new=answer
             ):
-                return asyncio.run(plugin._process_audio_url_magic(event, "u"))
+                return asyncio.run(
+                    plugin._process_audio_url_magic(event, "u", **kwargs)
+                )
 
     def test_an_answered_audio_counts_as_handled(self):
         self.assertTrue(self._run(AsyncMock()))
 
     def test_a_failed_answer_still_counts_as_handled(self):
         self.assertTrue(self._run(AsyncMock(side_effect=RuntimeError("boom"))))
+
+    def test_the_url_prefixes_reach_the_answer(self):
+        answer = AsyncMock()
+        self._run(answer, prefix_model="m", prefix_effort="high")
+        self.assertEqual(answer.await_args.kwargs["forced_model"], "m")
+        self.assertEqual(answer.await_args.kwargs["forced_effort"], "high")
 
     def test_a_cancelled_answer_propagates(self):
         with self.assertRaises(asyncio.CancelledError):

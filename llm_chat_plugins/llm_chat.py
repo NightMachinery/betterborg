@@ -4198,13 +4198,21 @@ async def _download_audio_from_url(
         return None, err
 
 
-async def _process_audio_url_magic(event, url: str) -> bool:
+async def _process_audio_url_magic(
+    event,
+    url: str,
+    *,
+    prefix_model: Optional[str] = None,
+    prefix_effort: Optional[str] = None,
+) -> bool:
     """
     Handles the complete audio URL magic flow: download, upload, and process.
 
     Args:
         event: The original user event containing the URL
         url: The URL to download
+        prefix_model: The model prefix of the URL message, if any
+        prefix_effort: The effort prefix of the URL message, if any
 
     Returns:
         True if processing was initiated, False if failed
@@ -4259,7 +4267,10 @@ async def _process_audio_url_magic(event, url: str) -> bool:
             id=getattr(audio_message, "id", None),
         )
         try:
-            await chat_handler(proxy)
+            #: The uploaded caption carries no prefix, so pass on the URL's own.
+            await chat_handler(
+                proxy, forced_model=prefix_model, forced_effort=prefix_effort
+            )
         except Exception:
             #: We don't want this URL processed normally at this stage, even if an error happens.
             #: A cancellation (/stop, a disconnect) still propagates.
@@ -13290,23 +13301,36 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
     )
 
 
-async def chat_handler(event, *, forced_model: Optional[str] = None):
+async def chat_handler(
+    event,
+    *,
+    forced_model: Optional[str] = None,
+    forced_effort: Optional[str] = None,
+):
     task = asyncio.current_task()
     token = _CHAT_REQUEST_TASK.set(task)
     add_active_llm_task(event.sender_id, task)
     try:
-        return await _chat_handler(event, forced_model=forced_model)
+        return await _chat_handler(
+            event, forced_model=forced_model, forced_effort=forced_effort
+        )
     finally:
         remove_active_llm_task(event.sender_id, task)
         _CHAT_REQUEST_TASK.reset(token)
 
 
-async def _chat_handler(event, *, forced_model: Optional[str] = None):
+async def _chat_handler(
+    event,
+    *,
+    forced_model: Optional[str] = None,
+    forced_effort: Optional[str] = None,
+):
     """Main handler for all non-command messages in a private chat.
 
-    `forced_model` re-runs an existing message on a model the user picked after
-    the fact -- the quota panel's Reserve button is the only caller. It enters
-    as a prefix model, so it is treated as the deliberate choice it is.
+    `forced_model` answers a message on a model chosen outside its text: the
+    quota panel's Reserve button, or the model prefix of an audio URL whose
+    upload is being answered. It enters as a prefix model, so it is treated as
+    the deliberate choice it is. `forced_effort` is the matching effort prefix.
     """
     user_id = event.sender_id
     chat_id = event.chat_id
@@ -13361,6 +13385,8 @@ async def _chat_handler(event, *, forced_model: Optional[str] = None):
         #: Before the image-generation branch, so a re-run of an `.i` request
         #: is resolved against the model the user actually chose.
         prefix_result.model = forced_model
+    if forced_effort is not None:
+        prefix_result.reasoning_effort = forced_effort
 
     if prefix_result.image_generation:
         try:
@@ -13383,7 +13409,12 @@ async def _chat_handler(event, *, forced_model: Optional[str] = None):
             media_info = await common_util.url_audio_p(url)
             if media_info.audio_p:
                 # Process the audio URL and return early if successful
-                if await _process_audio_url_magic(event, url):
+                if await _process_audio_url_magic(
+                    event,
+                    url,
+                    prefix_model=prefix_result.model,
+                    prefix_effort=prefix_result.reasoning_effort,
+                ):
                     return
 
     # Determine effective model and service (with prefix model override)
