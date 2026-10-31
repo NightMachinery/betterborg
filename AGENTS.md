@@ -22,3 +22,7 @@ server worktree, stop affected bots before updating files, fast-forward only,
 restart with their existing launchers, and verify clean startup and one bot
 process per session. Preserve unrelated work and keep global agent
 instructions unchanged when updating this repository's deployment policy.
+
+Use verified launcher arguments when restarting bots. Do not replay tmux's
+displayed `pane_start_command` as raw shell text; its escaping can make the
+whole command an executable name. See [deployment checks](docs/deployment.md).
