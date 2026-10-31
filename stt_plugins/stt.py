@@ -63,6 +63,7 @@ BOT_COMMANDS = [
         "description": "Choose Google AI Studio or Vertex AI; manage keys",
     },
     {"command": "model", "description": "Choose the transcription model"},
+    {"command": "settings", "description": "Configure transcription output"},
     {"command": "stop", "description": "Stop a transcription, or all yours privately"},
 ]
 KNOWN_STRICT_COMMANDS = {".rot"}  # Undocumented admin-only command; do not add to help.
@@ -713,6 +714,16 @@ def set_provider_choice(user_id: int, provider: str) -> None:
     _save_preferences(user_id, data)
 
 
+def get_discard_audio_visuals(user_id: int) -> bool:
+    return (_prefs().get(user_id) or {}).get("discard_audio_visuals", True)
+
+
+def set_discard_audio_visuals(user_id: int, enabled: bool) -> None:
+    data = _prefs().get(user_id) or {}
+    data["discard_audio_visuals"] = enabled
+    _save_preferences(user_id, data)
+
+
 @dataclass
 class SttJob:
     """A transcription that passed its checks: the key, models and files."""
@@ -722,6 +733,7 @@ class SttJob:
     api_key: str
     attachments: list
     provider: str = stt_providers.GEMINI
+    discard_audio_visuals: bool = True
 
 
 @dataclass
@@ -776,7 +788,11 @@ def prepare_stt_job(cwd, *, user_id: int, model_choice: Optional[str] = None) ->
     if not attachments:
         raise SttRequestError("No valid media files found to transcribe.")
     return SttJob(
-        models=models, api_key=api_key, attachments=attachments, provider=provider
+        models=models,
+        api_key=api_key,
+        attachments=attachments,
+        provider=provider,
+        discard_audio_visuals=get_discard_audio_visuals(user_id),
     )
 
 
@@ -801,7 +817,9 @@ def format_soundless_warning(
         tail = f"so {reader_label} read {files} without sound:"
     else:
         tail = f"and {reader_label} could not read {files} without sound. {error}"
-    return f"⚠️ {italics_marker}{speech_label} hears speech only, {tail}{italics_marker}"
+    return (
+        f"⚠️ {italics_marker}{speech_label} hears speech only, {tail}{italics_marker}"
+    )
 
 
 def _soundless_failure_reason(exception, provider: str) -> str:
@@ -812,7 +830,20 @@ def _soundless_failure_reason(exception, provider: str) -> str:
     )
 
 
-def format_transcription(json_response_text: str, *, italics_marker: str) -> str:
+def _audio_only(attachments) -> bool:
+    """Only positively identified audio files qualify for visual suppression."""
+    try:
+        return bool(attachments) and all(
+            (attachment.resolve_type() or "").startswith("audio/")
+            for attachment in attachments
+        )
+    except Exception:
+        return False
+
+
+def format_transcription(
+    json_response_text: str, *, italics_marker: str, discard_visuals: bool = False
+) -> str:
     """The model's JSON answer as the message the user gets."""
     final_output_message = ""
     try:
@@ -831,7 +862,7 @@ def format_transcription(json_response_text: str, *, italics_marker: str) -> str
             # output_parts.append(f"**Transcription:**\n{result.transcription}")
             output_parts.append(f"{result.transcription}")
 
-        if result.visual_description:
+        if result.visual_description and not discard_visuals:
             output_parts.append(f"\n**Visuals:**\n{result.visual_description}")
 
         if not output_parts:
@@ -892,7 +923,11 @@ async def run_stt_job(
     finally:
         llm_util.reset_llm_gemini_proxy(proxy_token)
     if not stt_models.is_speech_model(answer.model_name):
-        text = format_transcription(answer.raw, italics_marker=italics_marker)
+        text = format_transcription(
+            answer.raw,
+            italics_marker=italics_marker,
+            discard_visuals=job.discard_audio_visuals and _audio_only(job.attachments),
+        )
         return Transcription(text=text, raw=answer.raw, model_name=answer.model_name)
     parts = []
     if answer.heard:
@@ -912,7 +947,14 @@ async def run_stt_job(
             )
         )
     if soundless is not None:
-        parts.append(format_transcription(soundless.raw, italics_marker=italics_marker))
+        parts.append(
+            format_transcription(
+                soundless.raw,
+                italics_marker=italics_marker,
+                discard_visuals=job.discard_audio_visuals
+                and _audio_only(answer.silent),
+            )
+        )
         raws.append(soundless.raw)
         model_names.append(soundless.model_name)
     return Transcription(
@@ -1391,6 +1433,48 @@ async def provider_handler(event):
         await _show_provider_panel(event)
 
 
+async def _show_settings_panel(event, *, edit=False):
+    enabled = get_discard_audio_visuals(event.sender_id)
+    text = (
+        "**Transcription settings**\n\n"
+        f"Discard audio-only visuals: **{'On' if enabled else 'Off'}**\n\n"
+        "When on (the default), discard the model's visual description if every "
+        "attachment is audio. This prevents hallucinated visuals in audio-only "
+        "answers. Videos, images and mixed albums keep their existing behavior. "
+        "Applies to both providers and your guest transcriptions."
+    )
+    buttons = [
+        [
+            _provider_button(
+                event.sender_id,
+                "Turn off" if enabled else "Turn on",
+                "audio_visuals:off" if enabled else "audio_visuals:on",
+            )
+        ]
+    ]
+    if edit:
+        try:
+            await event.edit(text, buttons=buttons, parse_mode="md", link_preview=False)
+        except errors.MessageNotModifiedError:
+            pass
+    else:
+        await llm_util.send_info_message(
+            event,
+            text,
+            buttons=buttons,
+            parse_mode="md",
+            link_preview=False,
+            reply_to=False,
+        )
+
+
+@borg.on(events.NewMessage(pattern=r"(?i)^/settings(?:@\w+)?\s*$"))
+async def settings_handler(event):
+    if await _require_private_setup(event):
+        _cancel_key_setup(event.sender_id)
+        await _show_settings_panel(event)
+
+
 @borg.on(events.CallbackQuery(pattern=PROVIDER_CALLBACK_PREFIX.encode()))
 @callback_util.hold_bare_answers
 async def provider_callback_handler(event):
@@ -1401,6 +1485,15 @@ async def provider_callback_handler(event):
     action = parts[2]
     if not getattr(event, "is_private", False):
         await event.answer("Open /provider in our private chat.", alert=True)
+        return
+    if action in ("audio_visuals:on", "audio_visuals:off"):
+        try:
+            set_discard_audio_visuals(event.sender_id, action == "audio_visuals:on")
+        except SttRequestError as exc:
+            await event.answer(str(exc), alert=True)
+            return
+        await event.answer("Transcription setting saved.")
+        await _show_settings_panel(event, edit=True)
         return
     if action.startswith("cancel:"):
         setup = _key_setups.get(event.sender_id)
@@ -1481,6 +1574,7 @@ Here's how to use me:
 - `/setVertexKey [API_KEY]`: Sets or updates your Vertex AI Express-mode key.
 - `/provider`: Chooses Google AI Studio or Vertex AI and manages keys.
 - `/model`: Chooses the transcription model.
+- `/settings`: Discards visual descriptions for audio-only media by default; turn this off to keep them.
 - `/stop` or `.stop`: Reply to a transcription or its progress message to stop it, including in guest chats. Without a reply in my private chat, stops all your running transcriptions, including guest jobs. Only you can stop your jobs.
 """
     await event.reply(help_text, link_preview=False)

@@ -103,6 +103,82 @@ class ProviderWorkflowTests(unittest.IsolatedAsyncioTestCase):
             text="",
         )
 
+    async def test_audio_visual_setting_defaults_on_and_preserves_other_preferences(
+        self,
+    ):
+        self.saved[7] = {"provider": "vertex", "provider_models": {"vertex": "auto"}}
+        self.assertTrue(stt.get_discard_audio_visuals(7))
+        await stt.settings_handler(self.event())
+        self.assertIn("**On**", self.info.await_args.args[1])
+        off = self.event("audio_visuals:off")
+        await stt.provider_callback_handler(off)
+        self.assertFalse(stt.get_discard_audio_visuals(7))
+        self.assertIn("**Off**", off.edit.await_args.args[0])
+        self.assertEqual(self.saved[7]["provider_models"], {"vertex": "auto"})
+        stt.set_provider_choice(7, "gemini")
+        self.assertFalse(stt.get_discard_audio_visuals(7))
+        self.assertTrue(stt.get_discard_audio_visuals(8))
+        await stt.provider_callback_handler(self.event("audio_visuals:on"))
+        self.assertTrue(stt.get_discard_audio_visuals(7))
+
+    async def test_audio_visual_setting_checks_ownership_scope_and_save_failure(self):
+        foreign = self.event("audio_visuals:off")
+        foreign.sender_id = 8
+        group = self.event("audio_visuals:off", private=False)
+        for event in (foreign, group):
+            await stt.provider_callback_handler(event)
+            self.assertTrue(event.answer.await_args.kwargs["alert"])
+            self.assertEqual(self.saved, {})
+        with patch.object(stt._prefs_storage, "set", return_value=False):
+            failed = self.event("audio_visuals:off")
+            await stt.provider_callback_handler(failed)
+        self.assertIn("could not be saved", failed.answer.await_args.args[0])
+        failed.edit.assert_not_awaited()
+        await stt.settings_handler(self.event(private=False))
+        self.assertEqual(self.saved, {})
+
+    async def test_job_snapshots_audio_visual_preference(self):
+        audio = stt.llm.Attachment(content=b"OggS", type="audio/ogg")
+        with patch.object(stt.stt_models, "load_media_model"), patch.object(
+            stt.llm_util, "create_attachments_from_dir", return_value=[audio]
+        ):
+            default = stt.prepare_stt_job("/tmp/synthetic", user_id=7)
+            stt.set_discard_audio_visuals(7, False)
+            opted_out = stt.prepare_stt_job("/tmp/synthetic", user_id=7)
+        self.assertTrue(default.discard_audio_visuals)
+        self.assertFalse(opted_out.discard_audio_visuals)
+
+    async def test_audio_visual_filter_applies_to_vertex_and_speech_reader_fallback(
+        self,
+    ):
+        audio = stt.llm.Attachment(content=b"OggS", type="audio/ogg")
+        raw = json.dumps({"transcription": "hello", "visual_description": "a scene"})
+        job = stt.SttJob(
+            models=["gemini/gemini-3.5-flash"],
+            api_key="synthetic-key",
+            attachments=[audio],
+            provider="vertex",
+        )
+        with patch.object(
+            stt_providers, "transcribe_vertex", AsyncMock(return_value=raw)
+        ), patch.object(stt.redis_util, "get_and_renew", AsyncMock(return_value=None)):
+            result = await stt.run_stt_job(job, user_id=7, status_message=None)
+        self.assertEqual(result.text, "hello")
+        self.assertEqual(result.raw, raw)
+
+        speech = "gemini/gemini-3.5-transcribe"
+        job.models = [speech]
+        answers = [
+            stt.SttAnswer(model_name=speech, raw="", silent=[audio], heard=False),
+            stt.SttAnswer(model_name="gemini/gemini-3.5-flash-lite", raw=raw),
+        ]
+        with patch.object(
+            stt, "_transcribe_with_retry", AsyncMock(side_effect=answers)
+        ):
+            result = await stt.run_stt_job(job, user_id=7, status_message=None)
+        self.assertTrue(result.text.endswith("\n\nhello"))
+        self.assertNotIn("Visuals", result.text)
+
     async def test_legacy_model_is_preserved_and_models_are_remembered_per_provider(
         self,
     ):

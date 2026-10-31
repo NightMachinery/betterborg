@@ -75,7 +75,9 @@ in a private chat. The panel manages both API keys and switches only after a
 missing key is checked and saved. =/setGeminiKey= and =/setVertexKey= update
 keys without switching providers. Each provider remembers its own =/model=
 choice: Auto falls back within that provider, and an explicit model runs
-alone. Both providers also offer Gemini 3.5 Transcribe (speech only, plain
+alone. =/settings= discards hallucinated visual descriptions for audio-only
+media by default; turn it off to keep them. Both providers also offer Gemini
+3.5 Transcribe (speech only, plain
 text; videos need =ffmpeg= on the host). Files it cannot hear, such as images,
 are read by the newest Flash Lite, under a warning. Provider setup, models and retry behavior are in
 [[file:docs/stt_models.md][docs/stt_models.md]].

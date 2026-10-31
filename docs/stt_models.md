@@ -10,6 +10,22 @@ whether a model works can depend on the key. A guest mention (in a chat the
 bot is not in) uses the settings of the person who mentioned it. Existing
 users keep Google AI Studio and their saved model choice.
 
+## Audio-only visual descriptions
+
+Open `/settings` in a private chat to change **Discard audio-only visuals**.
+It is enabled by default for new and existing users. If every attachment in
+an answer is identified as audio, the bot drops the model's
+`visual_description` field before displaying or saving the transcript, even
+if the model hallucinates a scene. Speech and OCR text are preserved. An
+empty transcript still shows the usual no-speech/text notice.
+
+Turn the setting off to retain the model's visual-field answer. Videos,
+images, mixed albums and unidentified media keep their existing behavior.
+The preference applies to both providers, direct messages and guest jobs.
+It is saved as `discard_audio_visuals` in the user's STT preferences and
+captured when a job is prepared. Raw model responses remain in the existing
+direct-request logs for diagnostics; guest requests are not logged.
+
 ## Provider and key setup
 
 In a private chat, `/provider` shows the selected provider, its model, and

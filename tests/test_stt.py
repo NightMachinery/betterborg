@@ -75,6 +75,7 @@ class LlmSttTests(unittest.TestCase):
         model=None,
         choice=stt_models.AUTO,
         speech=None,
+        discard_audio_visuals=True,
     ):
         status = SimpleNamespace(id=2)
         event = SimpleNamespace(
@@ -89,6 +90,11 @@ class LlmSttTests(unittest.TestCase):
                 patch.object(stt, "get_effective_gemini_api_key", return_value=api_key)
             )
             enter(patch.object(stt, "get_model_choice", return_value=choice))
+            enter(
+                patch.object(
+                    stt, "get_discard_audio_visuals", return_value=discard_audio_visuals
+                )
+            )
             for name in ("get_and_renew", "set_with_expiry"):
                 enter(patch.object(stt.redis_util, name, AsyncMock(return_value=None)))
             if speech is not None:
@@ -141,7 +147,8 @@ class LlmSttTests(unittest.TestCase):
 
     def test_a_video_gets_its_visuals_and_silence_says_so(self):
         visuals = self.run_stt(
-            outcome=json.dumps({"transcription": "hi", "visual_description": "a cat"})
+            outcome=json.dumps({"transcription": "hi", "visual_description": "a cat"}),
+            attachments=(_attachment(b"video", "video/mp4"),),
         )
         silent = self.run_stt(outcome=json.dumps({"transcription": ""}))
 
@@ -149,6 +156,59 @@ class LlmSttTests(unittest.TestCase):
         self.assertEqual(
             silent.edit.await_args.args[1], "__[No speech or text detected]__"
         )
+
+    def test_audio_only_visuals_are_discarded_by_default(self):
+        audio = _attachment(b"OggS", "audio/ogg")
+        for transcript, expected in (
+            ("hello", "hello"),
+            ("", "__[No speech or text detected]__"),
+        ):
+            with self.subTest(transcript=transcript):
+                calls = self.run_stt(
+                    attachments=(audio, audio),
+                    outcome=json.dumps(
+                        {
+                            "transcription": transcript,
+                            "visual_description": "hallucinated scene",
+                        }
+                    ),
+                )
+                self.assertEqual(calls.edit.await_args.args[1], expected)
+
+    def test_disabling_the_setting_and_non_audio_media_keep_visuals(self):
+        audio = _attachment(b"OggS", "audio/ogg")
+        image = _attachment(b"image", "image/png")
+        video = _attachment(b"video", "video/mp4")
+        unknown = SimpleNamespace(resolve_type=lambda: None)
+        for attachments, enabled in (
+            ((audio,), False),
+            ((image,), True),
+            ((audio, image), True),
+            ((audio, video), True),
+            ((audio, unknown), True),
+        ):
+            with self.subTest(attachments=attachments, enabled=enabled):
+                calls = self.run_stt(
+                    attachments=attachments,
+                    discard_audio_visuals=enabled,
+                    outcome=json.dumps(
+                        {
+                            "transcription": "hello",
+                            "visual_description": "a scene",
+                        }
+                    ),
+                )
+                self.assertEqual(
+                    calls.edit.await_args.args[1], "hello\n\n\n**Visuals:**\na scene"
+                )
+
+    def test_unidentified_media_does_not_qualify_as_audio_only(self):
+        def cannot_resolve():
+            raise ValueError("unknown media")
+
+        unknown = SimpleNamespace(resolve_type=cannot_resolve)
+        self.assertFalse(stt._audio_only([unknown]))
+        self.assertFalse(stt._audio_only([]))
 
     def test_unparseable_output_is_shown_raw(self):
         calls = self.run_stt(outcome="not json")
