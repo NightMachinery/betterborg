@@ -15,10 +15,6 @@ from brish import z, zp, zq
 
 borg: Uniborg = None
 
-#: The main deployment's log chat (alicization); other bots fall back to the admins.
-MAIN_LOG_CHAT = -1001179162919
-MAIN_PLUGIN_PATH = "stdplugins"
-
 
 async def borg_init(background_mode=True):
     global borg
@@ -29,10 +25,8 @@ async def borg_init(background_mode=True):
     logging.basicConfig(level=logging.INFO)
     proxy = None
     proxy_port = os.environ.get("borgp")
-    plugin_path = os.environ.get("borg_plugin_path", MAIN_PLUGIN_PATH)
-    log_chat = os.environ.get("borg_log_chat") or (
-        MAIN_LOG_CHAT if plugin_path == MAIN_PLUGIN_PATH else None
-    )
+    log_chat = os.environ.get("borg_log_chat", None)
+    plugin_path = os.environ.get("borg_plugin_path", "stdplugins")
     session = os.environ.get("borg_session", "stdborg")
     if proxy_port != None:
         proxy = (socks.SOCKS5, "127.0.0.1", int(proxy_port))
