@@ -65,6 +65,11 @@ on Codex, on OpenRouter, or automatically on one and then the other when the
 first runs out of credit or quota. See
 [[file:docs/openai_provider.md][docs/openai_provider.md]].
 
+Users can share an API key with each other without revealing it (=/shareKey=),
+and choose in =/keys= the order in which their own and shared keys are tried.
+A request moves to the next key when one is rejected, out of credit or rate
+limited. See [[file:docs/key_sharing.md][docs/key_sharing.md]].
+
 * llm-stt
 #+begin_src zsh :eval never
 borgdir=~/code/betterborg/

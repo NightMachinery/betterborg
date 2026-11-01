@@ -193,6 +193,7 @@ from uniborg.constants import (
 # Import live mode utilities
 from uniborg import gemini_live_util
 from uniborg import codex_util
+from uniborg import key_sharing
 from uniborg import openai_providers
 from uniborg import title_util
 from uniborg import topic_titles
@@ -1248,6 +1249,7 @@ METADATA_MODES = {
 STREAM_CALLBACK_PREFIX = "stream:"
 GEMINI_PROVIDER_CALLBACK_PREFIX = "geminiprovider:"
 OPENAI_PROVIDER_CALLBACK_PREFIX = "openaiprovider:"
+KEYS_CALLBACK_PREFIX = "keys:"
 OPENAI_PROVIDER_RETRY = "retry"
 #: The placeholder an answer streams into, when nothing else is shown first.
 RESPONSE_PLACEHOLDER = "..."
@@ -1277,6 +1279,14 @@ BOT_COMMANDS = [
     {
         "command": "openaiprovider",
         "description": "Run GPT models on your OpenAI key, Codex or OpenRouter",
+    },
+    {
+        "command": "keys",
+        "description": "Order your API keys and see the keys you share",
+    },
+    {
+        "command": "sharekey",
+        "description": "Let someone use one of your API keys without seeing it",
     },
     {
         "command": "setopenrouterkey",
@@ -4452,10 +4462,60 @@ def _with_codex_stand_in(
 OPENAI_QUOTA = openai_providers.QuotaMemory(get_redis=redis_util.get_redis)
 
 
-def _openai_api_keys(user_id: int) -> list[str]:
+def _openai_api_keys(user_id: int, *, codex_access: Optional[bool] = None) -> list[str]:
     """The OpenAI keys USER_ID's requests may use, in order."""
-    key = get_effective_api_key(user_id, "openai")
-    return [key] if key else []
+    return [
+        credential.api_key
+        for credential in _credential_chain(
+            user_id, "openai", codex_access=codex_access
+        )
+    ]
+
+
+async def _request_credentials(
+    user_id: int, service: str, *, codex_access: bool
+) -> list[key_sharing.Credential]:
+    """USER_ID's chain for SERVICE, with OpenAI keys known to be spent last."""
+    credentials = _credential_chain(user_id, service, codex_access=codex_access)
+    if service != "openai":
+        return credentials
+    fresh, spent = [], []
+    for credential in credentials:
+        if await OPENAI_QUOTA.key_spent_until(credential.api_key):
+            spent.append(credential)
+        else:
+            fresh.append(credential)
+    return fresh + spent
+
+
+def _credential_label(credential: key_sharing.Credential) -> str:
+    if credential.kind == key_sharing.OWN:
+        return "your own key"
+    name = _user_display_name(credential.owner_id)
+    if credential.kind == key_sharing.SHARE:
+        return f"the key {name} shares with you"
+    return f"the key {name} shares with Codex users"
+
+
+def _user_display_name(user_id: int) -> str:
+    """A known name for USER_ID, from the bot's recorded profiles."""
+    try:
+        profile = (
+            llm_db.get_user_profile(BOT_ID, user_id) if BOT_ID is not None else None
+        )
+    except Exception:
+        profile = None
+    if profile is not None:
+        return _profile_display_name(profile, user_id)
+    return f"user {user_id}"
+
+
+class _CredentialFailed(Exception):
+    """A key failed in a way the next key in the chain might not."""
+
+    def __init__(self, failure: key_sharing.KeyFailure):
+        super().__init__(failure.value)
+        self.failure = failure
 
 
 async def _route_request_model(
@@ -4475,7 +4535,7 @@ async def _route_request_model(
     model = request.model
     if not openai_providers.is_neutral_gpt(model):
         return request
-    keys = _openai_api_keys(user_id)
+    keys = _openai_api_keys(user_id, codex_access=codex_access)
     usable = [key for key in keys if not await OPENAI_QUOTA.key_spent_until(key)]
     route = openai_providers.choose_backend(
         user_manager.get_openai_provider(user_id),
@@ -4566,12 +4626,43 @@ def get_effective_gemini_api_key(user_id: int) -> str | None:
     )
 
 
-def get_effective_api_key(user_id: int, service: str) -> str | None:
-    if service == "codex":
-        return "codex-oauth"
+def _own_api_key(user_id: int, service: str) -> str | None:
     if service == "gemini":
         return get_effective_gemini_api_key(user_id)
     return llm_db.get_api_key(user_id=user_id, service=service)
+
+
+def _roster_codex_access(user_id: int) -> bool:
+    """USER_ID's personal Codex grant: what is known without a message.
+
+    Admin and trusted-chat grants depend on the message, so the request path
+    passes its own answer instead.
+    """
+    config = llm_chat_config.load_config()
+    return config.valid and llm_chat_config._manual_flag(
+        user_id, config, "codex_enabled"
+    )
+
+
+def _credential_chain(
+    user_id: int, service: str, *, codex_access: Optional[bool] = None
+) -> list[key_sharing.Credential]:
+    """The keys USER_ID's SERVICE requests try, first to last (`key_sharing`)."""
+    if codex_access is None:
+        codex_access = _roster_codex_access(user_id)
+    return key_sharing.chain(
+        user_id, service, codex_access=codex_access, own_key=_own_api_key
+    )
+
+
+def get_effective_api_key(
+    user_id: int, service: str, *, codex_access: Optional[bool] = None
+) -> str | None:
+    """The first key of USER_ID's chain for SERVICE, shared keys included."""
+    if service == "codex":
+        return "codex-oauth"
+    credentials = _credential_chain(user_id, service, codex_access=codex_access)
+    return credentials[0].api_key if credentials else None
 
 
 def _gemini_chat_service(user_id: int, model: str, service: str) -> str:
@@ -7388,6 +7479,23 @@ def register_handlers():
     )(openai_provider_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^/keys{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(keys_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^\.keys{bot_username_suffix_re}\s+(\d+)\s*$",
+        )
+    )(admin_keys_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/sharekey{bot_username_suffix_re}(?:\s+(\S+))?(?:\s+(\S+))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(share_key_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/setmodel{bot_username_suffix_re}(?:\s+(.*))?\s*$",
             func=lambda e: e.is_private,
         )
@@ -7820,6 +7928,8 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setVertexKey: Sets or updates your Vertex AI (Express mode) API key.
 - /setOpenAIKey: Sets or updates your OpenAI API key.
 - /geminiProvider: Run Gemini models on Google AI Studio or Vertex AI. Current: `{gemini_providers.LABELS[user_manager.get_gemini_provider(event.sender_id)]}`.
+- /keys: The order in which your API keys are tried, keys others share with you, and the keys you share.
+- /shareKey: Let someone use one of your API keys without seeing it, e.g. `/shareKey openai @username`.
 - /openaiProvider: Run GPT models on your OpenAI key, Codex, OpenRouter, or automatically on one then the other. Current: `{openai_providers.LABELS[user_manager.get_openai_provider(event.sender_id)]}`.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
 - /setTitleModel: The model that writes file titles and summaries, and names new topics with a matching topic icon. Its panel also chooses the initial name: New Chat or Question text. Current model: `{prefs.title_model}`.
@@ -8555,6 +8665,464 @@ async def _openai_provider_press_handler(event, choice: str):
     except errors.rpcerrorlist.MessageNotModifiedError:
         pass
     await event.answer(feedback)
+
+
+# --- Key sharing and order (/keys, /shareKey) ---
+#: Pending /shareKey confirmations: {(owner_id, token): {"service", "recipient_id"}}.
+KEY_SHARE_PENDING: dict = {}
+KEY_SHARE_USAGE = (
+    "Usage: `/shareKey <service> <user-id or @username>`, for example "
+    "`/shareKey openai @someone`. They can use the key for their requests but "
+    "never see it, and you can stop sharing in /keys."
+)
+
+
+def _service_name(service: str) -> str:
+    config = llm_db.API_KEY_CONFIG.get(service)
+    return config["name"] if config else service
+
+
+def _key_source_label(source: key_sharing.Source, *, viewer_id: int) -> str:
+    if source.kind == key_sharing.OWN:
+        label = "Own key" if source.owner_id != viewer_id else "Your own key"
+    elif source.kind == key_sharing.SHARE:
+        label = f"Shared by {_user_display_name(source.owner_id)}"
+    else:
+        label = f"Admin share by {_user_display_name(source.owner_id)}"
+    if not source.available:
+        label += " (no key set)"
+    if not source.enabled:
+        label += " (off)"
+    return label
+
+
+def _key_sources(target_id: int, service: str) -> list[key_sharing.Source]:
+    return key_sharing.sources(
+        target_id,
+        service,
+        codex_access=_roster_codex_access(target_id),
+        own_key=_own_api_key,
+    )
+
+
+def _keys_panel(target_id: int, *, viewer_id: int):
+    """The /keys text and buttons for TARGET_ID, as VIEWER_ID sees them."""
+    own_view = target_id == viewer_id
+    title = (
+        "**Your API keys**"
+        if own_view
+        else f"**API keys of {_user_display_name(target_id)}** ({target_id})"
+    )
+    lines = [
+        title,
+        "Keys are never shown. Each request uses the first key in a list and "
+        "moves to the next when a key is rejected, out of credit or rate limited.",
+    ]
+    buttons = []
+    for service in llm_db.API_KEY_CONFIG:
+        found = _key_sources(target_id, service)
+        if not any(source.available for source in found):
+            continue
+        lines.append("")
+        lines.append(f"**{_service_name(service)}**")
+        for index, source in enumerate(found, start=1):
+            lines.append(f"{index}. {_key_source_label(source, viewer_id=viewer_id)}")
+        if len(found) > 1:
+            buttons.append(
+                tg_compat.callback_button(
+                    f"Order: {_service_name(service)}",
+                    data=f"{KEYS_CALLBACK_PREFIX}o:{target_id}:{service}",
+                )
+            )
+    shares = key_sharing.shares_by(target_id)
+    if shares:
+        lines += ["", "**Keys shared by " + ("you" if own_view else "them") + "**"]
+        for share in shares:
+            since = (
+                _format_utc(share.created_at, "%Y-%m-%d") if share.created_at else ""
+            )
+            lines.append(
+                f"• {_service_name(share.service)} → "
+                f"{_user_display_name(share.recipient_id)} ({share.recipient_id})"
+                + (f", since {since}" if since else "")
+            )
+            buttons.append(
+                tg_compat.callback_button(
+                    f"✖ {_service_name(share.service)} → "
+                    f"{_truncate_utf16(_user_display_name(share.recipient_id), 20)}",
+                    data=(
+                        f"{KEYS_CALLBACK_PREFIX}r:{target_id}:{share.service}:"
+                        f"{share.recipient_id}"
+                    ),
+                )
+            )
+    if len(lines) == 2:
+        lines += ["", "No API keys yet. Set one with /setGeminiKey, /setOpenAIKey, …"]
+    if own_view:
+        lines += ["", "Share a key with /shareKey."]
+    return "\n".join(lines), (util.build_menu(buttons, n_cols=1) if buttons else None)
+
+
+def _key_order_panel(target_id: int, service: str, *, viewer_id: int):
+    found = _key_sources(target_id, service)
+    lines = [
+        f"**{_service_name(service)} keys of "
+        f"{_user_display_name(target_id)}** ({target_id})",
+        "Tried top to bottom. ⬆/⬇ reorder, ✅/🚫 turn a key on or off.",
+        "",
+    ]
+    rows = []
+    prefix = f"{KEYS_CALLBACK_PREFIX}"
+    for index, source in enumerate(found):
+        label = _key_source_label(source, viewer_id=viewer_id)
+        lines.append(f"{index + 1}. {label}")
+        rows.append(
+            [
+                tg_compat.callback_button(
+                    _truncate_utf16(f"{index + 1}. {label}", 40), data=b"keys:no"
+                ),
+                tg_compat.callback_button(
+                    "⬆", data=f"{prefix}m:{target_id}:{service}:{index}:-1"
+                ),
+                tg_compat.callback_button(
+                    "⬇", data=f"{prefix}m:{target_id}:{service}:{index}:1"
+                ),
+                tg_compat.callback_button(
+                    "✅" if source.enabled else "🚫",
+                    data=f"{prefix}t:{target_id}:{service}:{index}",
+                ),
+            ]
+        )
+    rows.append([tg_compat.callback_button("⬅ Keys", data=f"{prefix}v:{target_id}")])
+    return "\n".join(lines), rows
+
+
+async def _may_manage_keys(event, target_id: int) -> bool:
+    return event.sender_id == target_id or await _codex_users_admin(event)
+
+
+async def keys_handler(event):
+    """/keys: key order, keys shared with you, and the keys you share."""
+    text, buttons = _keys_panel(event.sender_id, viewer_id=event.sender_id)
+    await send_info_message(event, text, parse_mode="md", buttons=buttons)
+
+
+async def admin_keys_handler(event):
+    """.keys <user-id>: a bot admin opens another user's /keys panel."""
+    if not await _codex_users_admin(event):
+        await send_info_message(event, ADMIN_ONLY_COMMAND_IGNORED, parse_mode=None)
+        return
+    target_id = int(event.pattern_match.group(1))
+    text, buttons = _keys_panel(target_id, viewer_id=event.sender_id)
+    text += _admin_provider_lines(target_id)
+    await send_info_message(
+        event,
+        text,
+        parse_mode="md",
+        buttons=(buttons or []) + _admin_provider_buttons(target_id),
+    )
+
+
+def _admin_provider_lines(target_id: int) -> str:
+    return (
+        "\n\n**Providers**\n"
+        f"OpenAI: {openai_providers.LABELS[user_manager.get_openai_provider(target_id)]}\n"
+        f"Gemini: {gemini_providers.LABELS[user_manager.get_gemini_provider(target_id)]}"
+    )
+
+
+def _admin_provider_buttons(target_id: int) -> list:
+    return [
+        [
+            tg_compat.callback_button(
+                "OpenAI provider", data=f"{KEYS_CALLBACK_PREFIX}po:{target_id}"
+            ),
+            tg_compat.callback_button(
+                "Gemini provider", data=f"{KEYS_CALLBACK_PREFIX}pg:{target_id}"
+            ),
+        ]
+    ]
+
+
+def _admin_provider_panel(target_id: int, *, openai_p: bool):
+    """A bot admin sets TARGET_ID's OpenAI or Gemini provider."""
+    if openai_p:
+        labels, current, kind, code = (
+            openai_providers.LABELS,
+            user_manager.get_openai_provider(target_id),
+            "OpenAI",
+            "so",
+        )
+    else:
+        labels, current, kind, code = (
+            gemini_providers.LABELS,
+            user_manager.get_gemini_provider(target_id),
+            "Gemini",
+            "sg",
+        )
+    text = (
+        f"**{kind} provider of {_user_display_name(target_id)}** ({target_id})\n"
+        f"Current: **{labels[current]}**\n\n"
+        "The change applies to their next message. A provider whose key they "
+        "lack asks them for it then."
+    )
+    buttons = [
+        tg_compat.callback_button(
+            f"✅ {label}" if provider == current else label,
+            data=f"{KEYS_CALLBACK_PREFIX}{code}:{target_id}:{provider}",
+        )
+        for provider, label in labels.items()
+    ]
+    buttons.append(
+        tg_compat.callback_button("⬅ Keys", data=f"{KEYS_CALLBACK_PREFIX}v:{target_id}")
+    )
+    return text, util.build_menu(buttons, n_cols=1)
+
+
+async def _resolve_share_target(value: str):
+    """(user_id, entity, error) for the recipient VALUE names."""
+    entity = None
+    if value.startswith("@"):
+        try:
+            entity = await borg.get_entity(value)
+        except Exception:
+            return None, None, "That username could not be resolved to a Telegram user."
+        if not isinstance(entity, User):
+            return (
+                None,
+                None,
+                "That username belongs to a group or channel, not a user.",
+            )
+        user_id = entity.id
+    else:
+        try:
+            user_id = int(value)
+        except ValueError:
+            return None, None, "Name the user by numeric ID or @username."
+        if not 0 < user_id <= TELEGRAM_SIGNED_ID_MAX:
+            return None, None, "The numeric user ID is outside Telegram's range."
+        try:
+            entity = await borg.get_entity(user_id)
+        except Exception:
+            entity = None
+        if entity is not None and not isinstance(entity, User):
+            return None, None, "That ID belongs to a group or channel, not a user."
+    if BOT_ID is not None and user_id == BOT_ID:
+        return None, None, "The bot itself cannot use your key."
+    if entity is not None and getattr(entity, "bot", False):
+        return None, None, "Keys cannot be shared with bots."
+    if entity is not None and BOT_ID is not None:
+        try:
+            llm_db.record_user_profile(
+                BOT_ID, user_id, entity.first_name, entity.last_name, entity.username
+            )
+        except Exception:
+            pass
+    return user_id, entity, None
+
+
+async def share_key_handler(event):
+    """/shareKey <service> <user>: share one of your keys without revealing it."""
+    owner_id = event.sender_id
+    service = (event.pattern_match.group(1) or "").strip().lower()
+    target = (event.pattern_match.group(2) or "").strip()
+    owned = [
+        name
+        for name in llm_db.API_KEY_CONFIG
+        if llm_db.get_api_key(user_id=owner_id, service=name)
+    ]
+    if not service or not target:
+        listing = (
+            "Your keys: " + ", ".join(f"`{name}`" for name in owned) + "."
+            if owned
+            else "You have no API keys to share yet."
+        )
+        await send_info_message(
+            event, f"{KEY_SHARE_USAGE}\n\n{listing}", parse_mode="md"
+        )
+        return
+    if service not in llm_db.API_KEY_CONFIG:
+        await send_info_message(
+            event, f"Unknown service `{service}`.\n\n{KEY_SHARE_USAGE}", parse_mode="md"
+        )
+        return
+    if service not in owned:
+        await send_info_message(
+            event,
+            f"You have no {_service_name(service)} key of your own to share. "
+            "Only your own keys can be shared.",
+            parse_mode=None,
+        )
+        return
+    recipient_id, entity, error = await _resolve_share_target(target)
+    if error:
+        await send_info_message(event, error, parse_mode=None)
+        return
+    if recipient_id == owner_id:
+        await send_info_message(event, "That is you.", parse_mode=None)
+        return
+    token = secrets.token_hex(4)
+    KEY_SHARE_PENDING[(owner_id, token)] = {
+        "service": service,
+        "recipient_id": recipient_id,
+    }
+    name = _codex_user_name(recipient_id, entity) if entity else f"user {recipient_id}"
+    await send_info_message(
+        event,
+        f"Share your **{_service_name(service)}** key with **{name}** "
+        f"({recipient_id})?\n\nTheir requests will use it, billed to you, but "
+        "they never see the key. You see their approximate usage in /keys, and "
+        "can stop sharing there at any time.",
+        parse_mode="md",
+        buttons=[
+            [
+                tg_compat.callback_button(
+                    "Share", data=f"{KEYS_CALLBACK_PREFIX}s:{token}"
+                ),
+                tg_compat.callback_button(
+                    "Cancel", data=f"{KEYS_CALLBACK_PREFIX}c:{token}"
+                ),
+            ]
+        ],
+    )
+
+
+async def _notify_key_recipient(recipient_id: int, text: str) -> None:
+    """Tell RECIPIENT_ID; a user who never started the bot cannot be told."""
+    try:
+        await borg.send_message(recipient_id, f"{BOT_META_INFO_PREFIX}{text}")
+    except Exception as exc:
+        logger.info(f"Could not notify key-share recipient {recipient_id}: {exc}")
+
+
+async def _edit_keys_message(event, text: str, buttons) -> None:
+    try:
+        await event.edit(
+            f"{BOT_META_INFO_PREFIX}{text}", parse_mode="md", buttons=buttons
+        )
+    except errors.rpcerrorlist.MessageNotModifiedError:
+        pass
+
+
+async def _keys_press_handler(event, data: str):
+    """Buttons of /keys, /shareKey and .keys."""
+    parts = data.split(":")
+    action = parts[0]
+    if action == "no":
+        await event.answer()
+        return
+    if action in ("s", "c") and len(parts) == 2:
+        pending = KEY_SHARE_PENDING.pop((event.sender_id, parts[1]), None)
+        if pending is None:
+            await event.answer("This confirmation is stale.", alert=True)
+            return
+        if action == "c":
+            await event.edit(f"{BOT_META_INFO_PREFIX}Not shared.", buttons=None)
+            return
+        service, recipient_id = pending["service"], pending["recipient_id"]
+        if not llm_db.get_api_key(user_id=event.sender_id, service=service):
+            await event.answer("You no longer have that key.", alert=True)
+            return
+        key_sharing.share_key(
+            owner_id=event.sender_id, recipient_id=recipient_id, service=service
+        )
+        await event.edit(
+            f"{BOT_META_INFO_PREFIX}Your {_service_name(service)} key is now shared "
+            f"with {_user_display_name(recipient_id)}. Manage it in /keys.",
+            buttons=None,
+        )
+        await _notify_key_recipient(
+            recipient_id,
+            f"{_user_display_name(event.sender_id)} shared their "
+            f"{_service_name(service)} API key with you. Your requests can use it "
+            "without you seeing it; /keys shows where it sits among your keys.",
+        )
+        return
+    try:
+        target_id = int(parts[1])
+    except (IndexError, ValueError):
+        await event.answer("Unknown button.", alert=True)
+        return
+    if not await _may_manage_keys(event, target_id):
+        await event.answer(ADMIN_ONLY_COMMAND_IGNORED, alert=True)
+        return
+    admin_view = target_id != event.sender_id
+    if action == "v":
+        text, buttons = _keys_panel(target_id, viewer_id=event.sender_id)
+        if admin_view:
+            text += _admin_provider_lines(target_id)
+            buttons = (buttons or []) + _admin_provider_buttons(target_id)
+        await _edit_keys_message(event, text, buttons)
+        await event.answer()
+        return
+    if action in ("o", "m", "t") and len(parts) >= 3:
+        service = parts[2]
+        if service not in llm_db.API_KEY_CONFIG:
+            await event.answer("Unknown service.", alert=True)
+            return
+        found = _key_sources(target_id, service)
+        if action in ("m", "t"):
+            try:
+                index = int(parts[3])
+                source = found[index]
+            except (IndexError, ValueError):
+                await event.answer("This list changed; reopen it.", alert=True)
+                return
+            if action == "m":
+                key_sharing.move_source(
+                    user_id=target_id,
+                    service=service,
+                    token=source.token,
+                    delta=int(parts[4]),
+                    current=[item.token for item in found],
+                )
+            else:
+                key_sharing.toggle_source(
+                    user_id=target_id, service=service, token=source.token
+                )
+        text, buttons = _key_order_panel(target_id, service, viewer_id=event.sender_id)
+        await _edit_keys_message(event, text, buttons)
+        await event.answer()
+        return
+    if action in ("po", "pg", "so", "sg"):
+        if not admin_view and not await _codex_users_admin(event):
+            await event.answer(ADMIN_ONLY_COMMAND_IGNORED, alert=True)
+            return
+        openai_p = action in ("po", "so")
+        labels = openai_providers.LABELS if openai_p else gemini_providers.LABELS
+        if action in ("so", "sg"):
+            choice = parts[2] if len(parts) == 3 else None
+            if choice not in labels:
+                await event.answer("Unknown provider.", alert=True)
+                return
+            if openai_p:
+                user_manager.set_openai_provider(target_id, choice)
+            else:
+                user_manager.set_gemini_provider(target_id, choice)
+        await _edit_keys_message(
+            event,
+            *_admin_provider_panel(target_id, openai_p=openai_p),
+        )
+        await event.answer()
+        return
+    if action == "r" and len(parts) == 4:
+        service, recipient_id = parts[2], int(parts[3])
+        if key_sharing.revoke_share(
+            owner_id=target_id, recipient_id=recipient_id, service=service
+        ):
+            await _notify_key_recipient(
+                recipient_id,
+                f"{_user_display_name(target_id)} stopped sharing their "
+                f"{_service_name(service)} API key with you.",
+            )
+        text, buttons = _keys_panel(target_id, viewer_id=event.sender_id)
+        if admin_view:
+            text += _admin_provider_lines(target_id)
+            buttons = (buttons or []) + _admin_provider_buttons(target_id)
+        await _edit_keys_message(event, text, buttons)
+        await event.answer("Sharing stopped.")
+        return
+    await event.answer("Unknown button.", alert=True)
 
 
 async def set_pioneer_key_handler(event):
@@ -11770,6 +12338,8 @@ async def callback_handler(event):
         await _openai_provider_press_handler(
             event, data_str[len(OPENAI_PROVIDER_CALLBACK_PREFIX) :]
         )
+    elif data_str.startswith(KEYS_CALLBACK_PREFIX):
+        await _keys_press_handler(event, data_str[len(KEYS_CALLBACK_PREFIX) :])
     elif data_str.startswith(STREAM_CALLBACK_PREFIX):
         choice = stream_driver.stream_choice(data_str[len(STREAM_CALLBACK_PREFIX) :])
         await _stream_menu_press_handler(event, scope=choice.scope, mode=choice.mode)
@@ -13233,6 +13803,8 @@ class GenerationRequest:
     reasoning_model: Optional[str] = None
     #: Where a provider-routed GPT request may retry once its backend is spent.
     fallback_backend: Optional[str] = None
+    #: Another key follows `api_key` in the user's chain (`key_sharing`).
+    next_key_p: bool = False
 
 
 @dataclass(frozen=True)
@@ -13561,6 +14133,10 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
             partial = e.response.text.strip()
             if is_openai_api_p and openai_providers.is_insufficient_quota(e):
                 await OPENAI_QUOTA.mark_key_spent(api_key)
+            failure = key_sharing.classify_key_failure(e) if is_openai_api_p else None
+            if failure is not None and not partial and req.next_key_p:
+                raise _CredentialFailed(failure) from e
+            if is_openai_api_p and openai_providers.is_insufficient_quota(e):
                 if not partial and req.fallback_backend == openai_providers.CODEX:
                     raise _RerouteRequest(
                         openai_providers.CODEX,
@@ -13677,6 +14253,9 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
             # (key, model), but the request itself can. Disable caching for it and
             # silently retry once without cache_control so the user still gets a reply.
             if not (caching_applied_p and is_cache_storage_quota_error(e)):
+                failure = key_sharing.classify_key_failure(e)
+                if failure is not None and req.next_key_p:
+                    raise _CredentialFailed(failure) from e
                 raise
             print(
                 f"Gemini cache storage quota hit for model {model_in_use}; "
@@ -13686,6 +14265,11 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
             _strip_cache_control(messages)
             caching_applied_p = False
             llm_response = await _run_llm_call()
+        except Exception as e:
+            failure = key_sharing.classify_key_failure(e)
+            if failure is not None and req.next_key_p:
+                raise _CredentialFailed(failure) from e
+            raise
 
         response_text = llm_response.text
         finish_reason = llm_response.finish_reason
@@ -13858,7 +14442,15 @@ async def _chat_handler(
         await send_info_message(event, vertex_refusal, parse_mode=None)
         return
     gemini_provider = _gemini_provider_of(service_needed)
-    api_key = get_effective_api_key(user_id, service_needed)
+    credentials = await _request_credentials(
+        user_id, service_needed, codex_access=user_has_codex_access
+    )
+    key_index = 0
+    api_key = (
+        credentials[0].api_key
+        if credentials
+        else get_effective_api_key(user_id, service_needed)
+    )
 
     if not api_key:
         if request_model.quota_fallback_from:
@@ -13913,17 +14505,20 @@ async def _chat_handler(
         if group_id:
             await asyncio.sleep(0.1)  # Allow album messages to arrive
 
-        history_result = await build_conversation_history(
-            event,
-            context_mode_to_use,
-            temp_dir,
-            model_capabilities,
-            api_key,
-            model_in_use,
-            is_private=event.is_private,
-            include_system_prompt_p=True,
-            gemini_provider=gemini_provider,
-        )
+        async def build_history():
+            return await build_conversation_history(
+                event,
+                context_mode_to_use,
+                temp_dir,
+                model_capabilities,
+                api_key,
+                model_in_use,
+                is_private=event.is_private,
+                include_system_prompt_p=True,
+                gemini_provider=gemini_provider,
+            )
+
+        history_result = await build_history()
         messages = history_result.history
         warnings = history_result.warnings + list(notes)
         if request_model.quota_fallback_from:
@@ -13963,8 +14558,24 @@ async def _chat_handler(
                         gemini_provider=gemini_provider,
                         reasoning_model=request_model.selected_model,
                         fallback_backend=request_model.fallback_backend,
+                        next_key_p=key_index + 1 < len(credentials),
                     )
                 )
+            except _CredentialFailed as failed:
+                failed_credential = credentials[key_index]
+                key_index += 1
+                api_key = credentials[key_index].api_key
+                warnings.append(
+                    f"{_credential_label(failed_credential).capitalize()} was "
+                    f"{failed.failure.value}, so I used "
+                    f"{_credential_label(credentials[key_index])}."
+                )
+                if is_native_gemini_files_mode(
+                    model_in_use, gemini_provider=gemini_provider
+                ):
+                    #: Uploaded files belong to the key that uploaded them.
+                    messages = (await build_history()).history
+                continue
             except _RerouteRequest as reroute:
                 #: Codex and the OpenAI API take the same history, so only
                 #: the backend changes.
@@ -13973,7 +14584,15 @@ async def _chat_handler(
                 )
                 model_in_use = request_model.model
                 service_needed = request_model.service
-                api_key = get_effective_api_key(user_id, service_needed)
+                credentials = await _request_credentials(
+                    user_id, service_needed, codex_access=user_has_codex_access
+                )
+                key_index = 0
+                api_key = (
+                    credentials[0].api_key
+                    if credentials
+                    else get_effective_api_key(user_id, service_needed)
+                )
                 warnings.append(reroute.note)
                 if api_key:
                     continue
