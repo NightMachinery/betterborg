@@ -87,9 +87,7 @@ class PlaceholderFailureTests(unittest.TestCase):
         send_failure = RuntimeError("CHAT_WRITE_FORBIDDEN")
         handle_llm_error = AsyncMock()
         build_history = AsyncMock()
-        model = SimpleNamespace(
-            model="gemini/x", service="gemini", quota_fallback_from=None
-        )
+        model = plugin.RequestModel(model="gemini/x", service="gemini")
         with patch.object(plugin, "cleanup_completed_tasks"), patch.object(
             plugin.llm_db, "is_awaiting_key", return_value=False
         ), patch.object(
