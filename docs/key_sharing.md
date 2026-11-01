@@ -60,9 +60,13 @@ OpenAI and Gemini providers.
 ## Admin share
 
 A bot admin can share their OpenAI key with every Codex user (the people their
-Codex subscription is shared with). It is off until switched on, and has a
-per-user override: follow Codex access, always on, or always off. It appears in
-the chain as "Admin share by …".
+Codex subscription is shared with): **Share my OpenAI key** on the
+`.codex-users` list. It is off until switched on, needs the admin's own OpenAI
+key, and covers one admin at a time (a second admin switching it on takes it
+over). Each user's detail panel has an override, **OpenAI share**: follow Codex
+access (the default), always on, or always off. The share appears in the chain
+as "Admin share by …", after the user's own and shared keys unless they reorder
+it.
 
 The request path decides Codex access per message, so trusted chats count. The
 `/keys` display only knows the personal Codex grant from the roster, so a user

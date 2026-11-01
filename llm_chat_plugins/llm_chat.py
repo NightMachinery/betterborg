@@ -9628,7 +9628,7 @@ def _codex_users_overview_pages(users):
     return pages
 
 
-def _codex_users_user_buttons(users, page: int, *, pages=None):
+def _codex_users_user_buttons(users, page: int, *, pages=None, extra_buttons=()):
     if pages is None:
         pages = [
             users[start : start + CODEX_USERS_PAGE_SIZE]
@@ -9652,7 +9652,67 @@ def _codex_users_user_buttons(users, page: int, *, pages=None):
         if page + 1 < page_count:
             buttons.append(tg_compat.callback_button("➡️", data=f"cu:p:{page + 1}"))
     buttons.append(tg_compat.callback_button("＋ Add user", data="cu:add"))
+    buttons.extend(extra_buttons)
     return util.build_menu(buttons, n_cols=2), page, page_count
+
+
+def _admin_share_button(viewer_id: int):
+    """The `.codex-users` switch for sharing VIEWER_ID's OpenAI key with Codex users."""
+    policy = key_sharing.admin_share_policy("openai")
+    if policy is None or not policy.enabled:
+        label = "🔑 Share my OpenAI key: off"
+    elif policy.owner_id == viewer_id:
+        label = "🔑 Share my OpenAI key: on"
+    else:
+        label = _truncate_utf16(
+            f"🔑 OpenAI key of {_user_display_name(policy.owner_id)} shared", 48
+        )
+    return tg_compat.callback_button(label, data="cu:sh")
+
+
+async def _toggle_admin_share(event) -> str:
+    """Flip the admin OpenAI share for the pressing admin; returns feedback."""
+    viewer_id = event.sender_id
+    policy = key_sharing.admin_share_policy("openai")
+    if policy is not None and policy.enabled and policy.owner_id == viewer_id:
+        key_sharing.set_admin_share_policy(
+            service="openai", owner_id=viewer_id, enabled=False
+        )
+        return "Your OpenAI key is no longer shared with Codex users."
+    if not llm_db.get_api_key(user_id=viewer_id, service="openai"):
+        raise _PanelRefusal("Set your OpenAI key with /setOpenAIKey first.")
+    key_sharing.set_admin_share_policy(
+        service="openai", owner_id=viewer_id, enabled=True
+    )
+    return "Your OpenAI key is now shared with Codex users."
+
+
+class _PanelRefusal(Exception):
+    """A panel button that cannot act; the message is shown as an alert."""
+
+
+#: The admin share override a detail-panel press moves to.
+ADMIN_SHARE_NEXT_MODE = {
+    key_sharing.FOLLOW: key_sharing.ON,
+    key_sharing.ON: key_sharing.OFF,
+    key_sharing.OFF: key_sharing.FOLLOW,
+}
+ADMIN_SHARE_MODE_LABELS = {
+    key_sharing.FOLLOW: "follows Codex grant",
+    key_sharing.ON: "always on",
+    key_sharing.OFF: "always off",
+}
+
+
+def _admin_share_user_text(target_id: int, *, codex_enabled: bool) -> str:
+    mode = key_sharing.admin_share_override(service="openai", user_id=target_id)
+    applies = key_sharing.admin_share_applies(
+        service="openai", user_id=target_id, codex_access=codex_enabled
+    )
+    return (
+        f"Admin OpenAI share: {ADMIN_SHARE_MODE_LABELS[mode]} "
+        f"({'reaches them' if applies else 'does not reach them'})"
+    )
 
 
 async def _show_codex_users(event, *, page: int = 0, edit: bool = False):
@@ -9670,7 +9730,10 @@ async def _show_codex_users(event, *, page: int = 0, edit: bool = False):
     overview_pages = _codex_users_overview_pages(users)
     button_pages = [[user for user, _ in entries] for entries in overview_pages]
     buttons, page, page_count = _codex_users_user_buttons(
-        users, page, pages=button_pages
+        users,
+        page,
+        pages=button_pages,
+        extra_buttons=[_admin_share_button(getattr(event, "sender_id", None))],
     )
     text = _codex_users_page_text(overview_pages[page], page, page_count)
     assert (
@@ -9728,6 +9791,18 @@ async def _show_codex_user_detail(
                 data=f"cu:a:{target_id}:i:{int(not configured_user.imagegen_enabled)}",
             ),
             tg_compat.callback_button("Model / effort", data=f"cu:models:{target_id}"),
+            tg_compat.callback_button(
+                "OpenAI share: "
+                + ADMIN_SHARE_MODE_LABELS[
+                    key_sharing.admin_share_override(
+                        service="openai", user_id=target_id
+                    )
+                ],
+                data=f"cu:so:{target_id}",
+            ),
+            tg_compat.callback_button(
+                "Keys / providers", data=f"{KEYS_CALLBACK_PREFIX}v:{target_id}"
+            ),
             tg_compat.callback_button("⬅ Users", data="cu:p:0"),
         ],
         n_cols=2,
@@ -9783,6 +9858,7 @@ async def _show_codex_user_detail(
         "<b>Identity</b>\n" + "\n".join(identity_lines) + f"\nBot contact: {contact}"
         f"\n\n<b>Model</b>\n{model_text}"
         f"\n\n<b>Access</b>\n{_codex_user_access_text(configured_user)}"
+        f"\n{_admin_share_user_text(target_id, codex_enabled=configured_user.codex_enabled)}"
         f"\n\n<b>API keys</b>\n{keys_text}"
     )
     if not configured_user.codex_enabled and codex_util.is_codex_model(current):
@@ -11935,6 +12011,31 @@ async def callback_handler(event):
                 if not await _show_codex_user_detail(event, target_id, edit=True):
                     raise ValueError
                 await event.answer()
+                return
+            if parts == ["cu", "sh"]:
+                try:
+                    feedback = await _toggle_admin_share(event)
+                except _PanelRefusal as refusal:
+                    await event.answer(str(refusal), alert=True)
+                    return
+                await _show_codex_users(event, edit=True)
+                await event.answer(feedback)
+                return
+            if len(parts) == 3 and parts[1] == "so":
+                target_id = int(parts[2])
+                mode = ADMIN_SHARE_NEXT_MODE[
+                    key_sharing.admin_share_override(
+                        service="openai", user_id=target_id
+                    )
+                ]
+                key_sharing.set_admin_share_override(
+                    service="openai", user_id=target_id, mode=mode
+                )
+                if not await _show_codex_user_detail(event, target_id, edit=True):
+                    raise ValueError
+                await event.answer(
+                    f"Admin OpenAI share: {ADMIN_SHARE_MODE_LABELS[mode]}"
+                )
                 return
             if len(parts) == 3 and parts[1] == "models":
                 target_id = int(parts[2])

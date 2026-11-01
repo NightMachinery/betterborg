@@ -99,7 +99,12 @@ and leaves absent or unavailable results unknown. See
 
 - `.codex-users`: browse the list and select a user.
 - `.codex-users <user-id>`: inspect access and the saved default, toggle the
-  personal Codex or image grant, or open the model/effort picker.
+  personal Codex or image grant, or open the model/effort picker. **OpenAI
+  share** cycles the user's admin-share override (follows Codex grant, always
+  on, always off), and **Keys / providers** opens their `/keys` panel with
+  their OpenAI and Gemini providers ([key_sharing.md](key_sharing.md)).
+- **Share my OpenAI key** on the list shares the pressing admin's OpenAI key
+  with every Codex user, or stops sharing it.
 - `.codex-users <user-id> <model-id>`: immediately save a specific model as
   that user's personal default, including custom model IDs.
 

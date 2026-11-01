@@ -2052,5 +2052,85 @@ class CodexUsersTests(unittest.TestCase):
         self.assertTrue(llm_chat._is_pending_input_message(event, awaiting=True))
 
 
+class AdminOpenAIShareTests(unittest.TestCase):
+    ADMIN = 900
+
+    def setUp(self):
+        from uniborg import key_sharing
+
+        self.key_sharing = key_sharing
+        self.addCleanup(
+            key_sharing.set_admin_share_policy,
+            service="openai",
+            owner_id=self.ADMIN,
+            enabled=False,
+        )
+        self.addCleanup(
+            key_sharing.set_admin_share_override,
+            service="openai",
+            user_id=123,
+            mode=key_sharing.FOLLOW,
+        )
+
+    def press(self, data, *, show=None):
+        event = Event()
+        event.data = data
+        with patch.object(
+            llm_chat, "_codex_users_admin", new=AsyncMock(return_value=True)
+        ), patch.object(
+            llm_chat, show or "_show_codex_users", new=AsyncMock(return_value=True)
+        ):
+            asyncio.run(llm_chat.callback_handler(event))
+        return event
+
+    def test_the_switch_needs_the_admins_own_openai_key(self):
+        with patch.object(llm_chat.llm_db, "get_api_key", return_value=None):
+            event = self.press(b"cu:sh")
+        self.assertIn("/setOpenAIKey", event.answer.await_args.args[0])
+        policy = self.key_sharing.admin_share_policy("openai")
+        self.assertFalse(policy is not None and policy.enabled)
+
+    def test_the_switch_shares_and_unshares_the_pressing_admins_key(self):
+        with patch.object(llm_chat.llm_db, "get_api_key", return_value="sk-admin"):
+            self.press(b"cu:sh")
+            policy = self.key_sharing.admin_share_policy("openai")
+            self.assertEqual((policy.owner_id, policy.enabled), (self.ADMIN, True))
+            label = tg_compat.button_text(llm_chat._admin_share_button(self.ADMIN))
+            self.assertTrue(label.endswith(": on"))
+            self.press(b"cu:sh")
+        self.assertFalse(self.key_sharing.admin_share_policy("openai").enabled)
+
+    def test_the_list_carries_the_switch(self):
+        users = [(llm_chat_config.CodexUser(123, None, True, False), "Ada", "model")]
+        rows, _, _ = llm_chat._codex_users_user_buttons(
+            users, 0, extra_buttons=[llm_chat._admin_share_button(self.ADMIN)]
+        )
+        payloads = [tg_compat.button_data(b) for row in rows for b in row]
+        self.assertIn(b"cu:sh", payloads)
+
+    def test_the_override_cycles_follow_on_off(self):
+        modes = []
+        for _ in range(3):
+            self.press(b"cu:so:123", show="_show_codex_user_detail")
+            modes.append(
+                self.key_sharing.admin_share_override(service="openai", user_id=123)
+            )
+        ks = self.key_sharing
+        self.assertEqual(modes, [ks.ON, ks.OFF, ks.FOLLOW])
+
+    def test_the_detail_text_says_whether_the_share_reaches_the_user(self):
+        self.key_sharing.set_admin_share_policy(
+            service="openai", owner_id=self.ADMIN, enabled=True
+        )
+        self.assertIn(
+            "follows Codex grant (reaches them)",
+            llm_chat._admin_share_user_text(123, codex_enabled=True),
+        )
+        self.assertIn(
+            "(does not reach them)",
+            llm_chat._admin_share_user_text(123, codex_enabled=False),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
