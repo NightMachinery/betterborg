@@ -12,6 +12,8 @@ import pytest
 _store_dir = tempfile.mkdtemp(prefix="borg-tests-")
 atexit.register(shutil.rmtree, _store_dir, ignore_errors=True)
 os.environ["borg_media_store_path"] = os.path.join(_store_dir, "media_store.sqlite3")
+#: API keys and the tables built on uniborg.llm_db.
+os.environ["borg_llm_db_path"] = os.path.join(_store_dir, "llm_api_keys.db")
 #: uniborg.timetracker_util opens its database there when imported.
 os.environ["timetracker_dir"] = os.path.join(_store_dir, "timetracker")
 

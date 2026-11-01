@@ -159,7 +159,10 @@ class UserProfile:
     private_contact_at: datetime | None
 
 
-db_path = os.path.expanduser("~/.borg/llm_api_keys.db")
+#: `borg_llm_db_path` moves the database, as the tests do.
+db_path = os.path.expanduser(
+    os.environ.get("borg_llm_db_path", "~/.borg/llm_api_keys.db")
+)
 if not os.path.exists(os.path.dirname(db_path)):
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
