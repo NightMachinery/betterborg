@@ -15,3 +15,12 @@ Before retrying a failed launch, confirm the pane is dead and no bot process
 for that session remains. After launch, check plugin-loading success, absence
 of tracebacks and exactly one Python bot process per session. A successful
 tmux command alone does not establish that the bot started.
+
+## Log chat
+
+Each bot sends log messages and alerts to its **log chat**. `borg_log_chat`
+names it explicitly. Without it, the main deployment (`stdplugins`, launched by
+`start_server.py`) uses its channel (`stdborg.MAIN_LOG_CHAT`), and every other
+bot falls back to the first admin in `uniborg.util.admins` that Telegram
+resolves for it. A userbot falls back to its own Saved Messages. A bot that
+resolves no admin runs without a log chat and says so at startup.

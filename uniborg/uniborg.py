@@ -57,8 +57,8 @@ class Uniborg(
     telethon_safety.DifferenceFallbackMixin,
     TelegramClient,
 ):
-    # @warn this var can be None in which case send_message will fail and potentially crash the whole program
-    log_chat = -1001179162919  # alicization
+    #: Where log messages and alerts go; None when no chat could be resolved.
+    log_chat = None
 
     #: What the Telegram safety nets have caught; set by `create`.
     safety_stats = None
@@ -122,29 +122,7 @@ class Uniborg(
         self.trigger_guard = guest_util.trigger_guard_enabled()
 
         await self._async_init(bot_token=bot_token)
-        if log_chat:
-            try:
-                self.log_chat = int(
-                    log_chat
-                )  # Cannot get entity by phone number as a bot (try using integer IDs, not strings)
-            except:
-                pass
-        try:
-            self.log_chat = await self.get_input_entity(self.log_chat)
-        except:
-            if await self.is_bot():
-                print(
-                    f"Borg needs a log chat to send some log messages to. Since this is a bot, you need to explicitly set this using the env var 'borg_log_chat', or you won't receive these messages. Trying to set the log chat automatically anyway ..."
-                )
-                self.log_chat = None
-                for admin in admins:
-                    try:
-                        self.log_chat = await self.get_input_entity(admin)
-                    except:
-                        # self.log_chat = None
-                        pass
-            else:
-                self.log_chat = await self.get_input_entity("me")
+        self.log_chat = await self._resolve_log_chat(log_chat)
 
         core_plugin = Path(__file__).parent / "_core.py"
         self.load_plugin_from_file(core_plugin)
@@ -165,6 +143,35 @@ class Uniborg(
                     p,
                 )
         return self
+
+    async def _resolve_log_chat(self, log_chat=None):
+        """The input entity of LOG_CHAT, else of the first admin that resolves.
+
+        A userbot falls back to its own Saved Messages. A bot cannot write to
+        itself, and only reaches an admin whose user ID Telegram resolves for it.
+        """
+        if log_chat:
+            try:
+                #: A bot cannot look up a phone number; IDs must be integers.
+                target = int(log_chat)
+            except ValueError:
+                target = log_chat
+            try:
+                return await self.get_input_entity(target)
+            except Exception as exc:
+                print(f"Could not open the log chat {log_chat!r}: {exc}")
+        if not await self.is_bot():
+            return await self.get_input_entity("me")
+        for admin in admins:
+            try:
+                return await self.get_input_entity(admin)
+            except Exception:
+                continue
+        print(
+            "No log chat: no admin could be resolved. Set the env var "
+            "'borg_log_chat' to receive log messages and alerts."
+        )
+        return None
 
     async def _async_init(self, **kwargs):
         await self.start(**kwargs)
