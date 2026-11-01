@@ -308,5 +308,90 @@ class KeysPanelTests(unittest.TestCase):
         self.assertIn(f"✖ OpenAI → U{self.user}", self.labels(buttons))
 
 
+class AdminShareScopeTests(unittest.TestCase):
+    CHAIN = [
+        _credential("sk-admin", key_sharing.ADMIN, 7),
+        _credential("sk-friend", key_sharing.SHARE, 8),
+    ]
+
+    def credentials(self, model):
+        with patch.object(plugin, "_credential_chain", return_value=self.CHAIN):
+            return asyncio.run(
+                plugin._request_credentials(
+                    USER_ID, "openai", codex_access=True, model=model
+                )
+            )
+
+    def test_the_admin_share_pays_only_for_gpt_families(self):
+        self.assertEqual(
+            [c.kind for c in self.credentials("openai-api/gpt-sol-latest")],
+            [key_sharing.ADMIN, key_sharing.SHARE],
+        )
+        self.assertEqual(
+            [c.kind for c in self.credentials("openai/gpt-5-pro")],
+            [key_sharing.SHARE],
+        )
+
+    def test_an_empty_openai_chain_finds_no_key_behind_it(self):
+        with patch.object(plugin, "get_effective_api_key", return_value="sk-admin"):
+            self.assertIsNone(plugin._chainless_api_key(USER_ID, "openai"))
+            self.assertEqual(plugin._chainless_api_key(USER_ID, "codex"), "sk-admin")
+
+
+class KeyPressTests(unittest.TestCase):
+    def setUp(self):
+        self.user, self.owner = 999000777, 999000778
+        plugin.llm_db.set_api_key(user_id=self.user, service="openai", key="sk-u2")
+        plugin.llm_db.set_api_key(user_id=self.owner, service="openai", key="sk-o2")
+        key_sharing.share_key(
+            owner_id=self.owner, recipient_id=self.user, service="openai"
+        )
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(
+            patch.object(plugin, "_roster_codex_access", return_value=False)
+        )
+        stack.enter_context(
+            patch.object(plugin, "_user_display_name", return_value="U")
+        )
+
+    def press(self, data):
+        event = SimpleNamespace(
+            sender_id=self.user, answer=AsyncMock(), edit=AsyncMock()
+        )
+        asyncio.run(plugin._keys_press_handler(event, data))
+        return event
+
+    def tokens(self):
+        return [
+            c.token for c in key_sharing.chain(self.user, "openai", codex_access=False)
+        ]
+
+    def test_buttons_name_the_key_not_its_position(self):
+        self.press(f"m:{self.user}:openai:s{self.owner}:-1")
+        self.assertEqual(self.tokens(), [f"share:{self.owner}", "own"])
+
+    def test_a_stale_or_malformed_button_changes_nothing(self):
+        for data in (
+            f"m:{self.user}:openai:s1:-1",
+            f"m:{self.user}:openai:o:5",
+            f"t:{self.user}:openai",
+            f"r:{self.user}:openai:x",
+        ):
+            event = self.press(data)
+            self.assertTrue(event.answer.await_args.kwargs.get("alert"), data)
+        self.assertEqual(self.tokens(), ["own", f"share:{self.owner}"])
+
+    def test_declining_a_share_turns_it_off_and_stays_off(self):
+        for _ in range(2):
+            self.press(f"d:{self.user}:openai:s{self.owner}")
+        self.assertEqual(self.tokens(), ["own"])
+
+    def test_names_lose_markdown(self):
+        self.assertEqual(
+            plugin._markup_free("[click](http://x) *a*"), "clickhttp://x a"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

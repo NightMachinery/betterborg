@@ -16,7 +16,9 @@ request path in `llm_chat_plugins/llm_chat.py` (`_route_request_model`).
 - `openai` (the default): the user's OpenAI API key, set with `/setOpenAIKey`.
   Requests use the public Responses API through the same streaming code as
   Codex (`codex_util.stream_codex_response` with `api_key`), so web search and
-  reasoning effort behave the same.
+  reasoning effort behave the same. When every OpenAI key the user may use is
+  out of credit and they may use Codex, that message is retried on Codex. Unlike
+  `auto-openai-first`, the next message tries the keys again.
 - `codex`: the shared ChatGPT subscription, under the usual Codex access rules
   ([codex_models.md](codex_models.md)).
 - `openrouter`: OpenRouter's router aliases `~openai/gpt-*-latest`, with the
@@ -28,9 +30,12 @@ request path in `llm_chat_plugins/llm_chat.py` (`_route_request_model`).
   the same message is retried on the OpenAI key, and Codex is skipped until the
   reset its error names (one hour when it names none).
 
-A user on `openai` who has no OpenAI key yet but may use Codex is answered by
-Codex, with a note pointing at `/setOpenAIKey`. Nobody with a working backend
-is stranded behind a key prompt. Without Codex access, the key prompt appears.
+A user on `openai` who has no OpenAI key yet is answered by Codex if they may
+use it, else by OpenRouter if they have an OpenRouter key. Nobody with a
+working backend is stranded behind a key prompt; with neither, the key prompt
+appears. The answer carries a note pointing at `/setOpenAIKey` only when the
+user chose `openai` themselves: a user still on the default (most Codex users,
+whose saved Codex models migrated) is not reminded under every answer.
 
 The OpenAI API is sent the slug the Codex alias of the family points at now
 (`codex_aliases`). The two catalogs name models alike; only Codex's is read.

@@ -40,6 +40,30 @@ class ChooseBackendTests(unittest.TestCase):
         )
         self.assertEqual(chosen, op.Route(op.OPENAI))
 
+    def test_a_default_provider_stands_in_without_a_note(self):
+        chosen = route(op.OPENAI, openai_any=False, openai_usable=False, chosen=False)
+        self.assertEqual(chosen, op.Route(op.CODEX))
+
+    def test_openai_without_a_key_or_codex_uses_an_openrouter_key(self):
+        chosen = route(
+            op.OPENAI,
+            openai_any=False,
+            openai_usable=False,
+            codex_access=False,
+            openrouter_any=True,
+        )
+        self.assertEqual(chosen.backend, op.OPENROUTER)
+        self.assertEqual(chosen.note, op.NO_KEY_OPENROUTER_NOTE)
+
+    def test_openai_falls_back_to_codex_when_its_keys_run_out(self):
+        self.assertEqual(route(op.OPENAI), op.Route(op.OPENAI, fallback=op.CODEX))
+        self.assertEqual(route(op.OPENAI, codex_access=False), op.Route(op.OPENAI))
+
+    def test_only_family_models_count_as_family_api_models(self):
+        self.assertTrue(op.is_family_api_model("openai-api/gpt-sol-latest"))
+        self.assertFalse(op.is_family_api_model("openai-api/gpt-5-pro"))
+        self.assertFalse(op.is_family_api_model(None))
+
     def test_auto_openai_first(self):
         self.assertEqual(
             route(op.AUTO_OPENAI_FIRST), op.Route(op.OPENAI, fallback=op.CODEX)

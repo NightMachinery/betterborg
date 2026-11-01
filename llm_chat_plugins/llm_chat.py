@@ -1893,7 +1893,8 @@ class UserPrefs(_SavedSettings):
     #: Where native Gemini chat runs: Google AI Studio or Vertex AI (/geminiProvider).
     gemini_provider: str = Field(default=gemini_providers.AI_STUDIO)
     #: Where GPT models run (/openaiProvider, `openai_providers`).
-    openai_provider: str = Field(default=openai_providers.DEFAULT)
+    #: None until the user picks one; `openai_providers.DEFAULT` applies.
+    openai_provider: Optional[str] = None
     system_prompt: Optional[str] = Field(default=None)
     #: Reasoning effort is per-model: {model_id: level}.
     thinking_by_model: Dict[str, str] = Field(default_factory=dict)
@@ -2000,6 +2001,9 @@ class UserManager:
         return openai_providers.normalize(
             getattr(self.get_prefs(user_id), "openai_provider", None)
         )
+
+    def openai_provider_chosen(self, user_id: int) -> bool:
+        return getattr(self.get_prefs(user_id), "openai_provider", None) is not None
 
     def set_openai_provider(self, user_id: int, provider: str):
         if provider not in openai_providers.LABELS:
@@ -4474,12 +4478,18 @@ def _openai_api_keys(user_id: int, *, codex_access: Optional[bool] = None) -> li
 
 
 async def _request_credentials(
-    user_id: int, service: str, *, codex_access: bool
+    user_id: int, service: str, *, codex_access: bool, model: Optional[str] = None
 ) -> list[key_sharing.Credential]:
-    """USER_ID's chain for SERVICE, with OpenAI keys known to be spent last."""
+    """USER_ID's chain for SERVICE, with OpenAI keys known to be spent last.
+
+    The admin share pays only for the GPT families (MODEL), not for any model
+    id a user can type.
+    """
     credentials = _credential_chain(user_id, service, codex_access=codex_access)
     if service != "openai":
         return credentials
+    if not openai_providers.is_family_api_model(model):
+        credentials = [c for c in credentials if c.kind != key_sharing.ADMIN]
     fresh, spent = [], []
     for credential in credentials:
         if await OPENAI_QUOTA.key_spent_until(credential.api_key):
@@ -4487,6 +4497,18 @@ async def _request_credentials(
         else:
             fresh.append(credential)
     return fresh + spent
+
+
+def _chainless_api_key(user_id: int, service: str, **kwargs) -> str | None:
+    """The key for SERVICE when `_request_credentials` found none.
+
+    That leaves Codex's OAuth marker. An OpenAI chain may be empty only
+    because the admin share does not pay for the model, so no key is looked up
+    behind its back.
+    """
+    if service == "openai":
+        return None
+    return get_effective_api_key(user_id, service, **kwargs)
 
 
 def _credential_label(credential: key_sharing.Credential) -> str:
@@ -4507,8 +4529,16 @@ def _user_display_name(user_id: int) -> str:
     except Exception:
         profile = None
     if profile is not None:
-        return _profile_display_name(profile, user_id)
+        return _markup_free(_profile_display_name(profile, user_id))
     return f"user {user_id}"
+
+
+#: Characters Telegram markdown treats as markup; a name must not carry any.
+_MARKUP_CHARS = re.compile(r"[\[\]()*_`~|]")
+
+
+def _markup_free(text: str) -> str:
+    return _MARKUP_CHARS.sub("", text)
 
 
 class _CredentialFailed(Exception):
@@ -4544,6 +4574,10 @@ async def _route_request_model(
         openai_any=bool(keys),
         openai_usable=bool(usable),
         codex_exhausted=bool(await OPENAI_QUOTA.codex_spent_until()),
+        openrouter_any=bool(
+            get_effective_api_key(user_id, "openrouter", codex_access=codex_access)
+        ),
+        chosen=user_manager.openai_provider_chosen(user_id),
     )
     concrete = openai_providers.backend_model(model, route.backend)
     routed = RequestModel(
@@ -8697,13 +8731,33 @@ def _key_source_label(source: key_sharing.Source, *, viewer_id: int) -> str:
     return label
 
 
+def _stored_api_key(user_id: int, service: str) -> str | None:
+    """The saved key, read without advancing Gemini key rotation."""
+    return llm_db.get_api_key(user_id=user_id, service=service)
+
+
 def _key_sources(target_id: int, service: str) -> list[key_sharing.Source]:
     return key_sharing.sources(
         target_id,
         service,
         codex_access=_roster_codex_access(target_id),
-        own_key=_own_api_key,
+        own_key=_stored_api_key,
     )
+
+
+def _source_code(token: str) -> str:
+    """A short callback form of a source token: `o`, `s42`, `a7`."""
+    kind, _, owner = token.partition(":")
+    return {key_sharing.OWN: "o", key_sharing.SHARE: "s", key_sharing.ADMIN: "a"}[
+        kind
+    ] + owner
+
+
+def _source_by_code(found, code: str):
+    for source in found:
+        if _source_code(source.token) == code:
+            return source
+    return None
 
 
 def _keys_panel(target_id: int, *, viewer_id: int):
@@ -8823,6 +8877,7 @@ def _key_order_panel(target_id: int, service: str, *, viewer_id: int):
     prefix = f"{KEYS_CALLBACK_PREFIX}"
     for index, source in enumerate(found):
         label = _key_source_label(source, viewer_id=viewer_id)
+        code = _source_code(source.token)
         lines.append(f"{index + 1}. {label}")
         rows.append(
             [
@@ -8830,14 +8885,14 @@ def _key_order_panel(target_id: int, service: str, *, viewer_id: int):
                     _truncate_utf16(f"{index + 1}. {label}", 40), data=b"keys:no"
                 ),
                 tg_compat.callback_button(
-                    "⬆", data=f"{prefix}m:{target_id}:{service}:{index}:-1"
+                    "⬆", data=f"{prefix}m:{target_id}:{service}:{code}:-1"
                 ),
                 tg_compat.callback_button(
-                    "⬇", data=f"{prefix}m:{target_id}:{service}:{index}:1"
+                    "⬇", data=f"{prefix}m:{target_id}:{service}:{code}:1"
                 ),
                 tg_compat.callback_button(
                     "✅" if source.enabled else "🚫",
-                    data=f"{prefix}t:{target_id}:{service}:{index}",
+                    data=f"{prefix}t:{target_id}:{service}:{code}",
                 ),
             ]
         )
@@ -9014,7 +9069,11 @@ async def share_key_handler(event):
         "service": service,
         "recipient_id": recipient_id,
     }
-    name = _codex_user_name(recipient_id, entity) if entity else f"user {recipient_id}"
+    name = (
+        _markup_free(_codex_user_name(recipient_id, entity))
+        if entity
+        else f"user {recipient_id}"
+    )
     await send_info_message(
         event,
         f"Share your **{_service_name(service)}** key with **{name}** "
@@ -9035,10 +9094,15 @@ async def share_key_handler(event):
     )
 
 
-async def _notify_key_recipient(recipient_id: int, text: str) -> None:
+async def _notify_key_recipient(recipient_id: int, text: str, *, buttons=None) -> None:
     """Tell RECIPIENT_ID; a user who never started the bot cannot be told."""
     try:
-        await borg.send_message(recipient_id, f"{BOT_META_INFO_PREFIX}{text}")
+        await borg.send_message(
+            recipient_id,
+            f"{BOT_META_INFO_PREFIX}{text}",
+            parse_mode=None,
+            buttons=buttons,
+        )
     except Exception as exc:
         logger.info(f"Could not notify key-share recipient {recipient_id}: {exc}")
 
@@ -9078,12 +9142,26 @@ async def _keys_press_handler(event, data: str):
             f"{BOT_META_INFO_PREFIX}Your {_service_name(service)} key is now shared "
             f"with {_user_display_name(recipient_id)}. Manage it in /keys.",
             buttons=None,
+            parse_mode=None,
         )
         await _notify_key_recipient(
             recipient_id,
             f"{_user_display_name(event.sender_id)} shared their "
             f"{_service_name(service)} API key with you. Your requests can use it "
-            "without you seeing it; /keys shows where it sits among your keys.",
+            "without you seeing it; /keys shows where it sits among your keys.\n\n"
+            "Requests on it run on their account, so its provider's logs, if "
+            "they keep any, are theirs to read. Turn it off if you prefer.",
+            buttons=[
+                [
+                    tg_compat.callback_button(
+                        "Don't use this key",
+                        data=(
+                            f"{KEYS_CALLBACK_PREFIX}d:{recipient_id}:{service}:"
+                            f"{_source_code(key_sharing.token_for(key_sharing.SHARE, event.sender_id))}"
+                        ),
+                    )
+                ]
+            ],
         )
         return
     try:
@@ -9103,17 +9181,16 @@ async def _keys_press_handler(event, data: str):
         await _edit_keys_message(event, text, buttons)
         await event.answer()
         return
-    if action in ("o", "m", "t") and len(parts) >= 3:
+    if action in ("o", "m", "t", "d") and len(parts) >= 3:
         service = parts[2]
         if service not in llm_db.API_KEY_CONFIG:
             await event.answer("Unknown service.", alert=True)
             return
         found = _key_sources(target_id, service)
-        if action in ("m", "t"):
-            try:
-                index = int(parts[3])
-                source = found[index]
-            except (IndexError, ValueError):
+        if action in ("m", "t", "d"):
+            source = _source_by_code(found, parts[3]) if len(parts) >= 4 else None
+            delta = parts[4] if len(parts) == 5 else None
+            if source is None or (action == "m" and delta not in ("-1", "1")):
                 await event.answer("This list changed; reopen it.", alert=True)
                 return
             if action == "m":
@@ -9121,10 +9198,10 @@ async def _keys_press_handler(event, data: str):
                     user_id=target_id,
                     service=service,
                     token=source.token,
-                    delta=int(parts[4]),
+                    delta=int(delta),
                     current=[item.token for item in found],
                 )
-            else:
+            elif action == "t" or source.enabled:
                 key_sharing.toggle_source(
                     user_id=target_id, service=service, token=source.token
                 )
@@ -9153,7 +9230,7 @@ async def _keys_press_handler(event, data: str):
         )
         await event.answer()
         return
-    if action == "r" and len(parts) == 4:
+    if action == "r" and len(parts) == 4 and parts[3].isdigit():
         service, recipient_id = parts[2], int(parts[3])
         if key_sharing.revoke_share(
             owner_id=target_id, recipient_id=recipient_id, service=service
@@ -14639,13 +14716,13 @@ async def _chat_handler(
         return
     gemini_provider = _gemini_provider_of(service_needed)
     credentials = await _request_credentials(
-        user_id, service_needed, codex_access=user_has_codex_access
+        user_id, service_needed, codex_access=user_has_codex_access, model=model_in_use
     )
     key_index = 0
     api_key = (
         credentials[0].api_key
         if credentials
-        else get_effective_api_key(user_id, service_needed)
+        else _chainless_api_key(user_id, service_needed)
     )
 
     if not api_key:
@@ -14781,13 +14858,16 @@ async def _chat_handler(
                 model_in_use = request_model.model
                 service_needed = request_model.service
                 credentials = await _request_credentials(
-                    user_id, service_needed, codex_access=user_has_codex_access
+                    user_id,
+                    service_needed,
+                    codex_access=user_has_codex_access,
+                    model=model_in_use,
                 )
                 key_index = 0
                 api_key = (
                     credentials[0].api_key
                     if credentials
-                    else get_effective_api_key(user_id, service_needed)
+                    else _chainless_api_key(user_id, service_needed)
                 )
                 warnings.append(reroute.note)
                 if api_key:
@@ -15020,14 +15100,16 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
     vertex_refusal = _vertex_refusal(model, service)
     if vertex_refusal:
         raise GuestRequestRefused(vertex_refusal)
-    credentials = await _request_credentials(user_id, service, codex_access=codex_p)
+    credentials = await _request_credentials(
+        user_id, service, codex_access=codex_p, model=model
+    )
     return GuestRequestPlan(
         model=model,
         service=service,
         api_key=(
             credentials[0].api_key
             if credentials
-            else get_effective_api_key(user_id, service, codex_access=codex_p)
+            else _chainless_api_key(user_id, service, codex_access=codex_p)
         ),
         credential=credentials[0] if credentials else None,
         model_capabilities=get_model_capabilities(model),

@@ -42,7 +42,10 @@ history, because uploaded files belong to the key that uploaded them.
 the owner's own key for that service. Only one's own keys can be shared, not
 keys shared with you. The share always uses the owner's current key: setting a
 new key updates every share, and deleting it pauses them. The recipient is told
-when a share starts and ends, if they have started the bot.
+when a share starts and ends, if they have started the bot. The start message
+says that requests on the key run on the owner's account (whose provider logs,
+if any, the owner can read) and has a **Don't use this key** button, which
+turns the share off in the recipient's chain.
 
 Requests made with a shared key are billed to its owner.
 
@@ -50,8 +53,11 @@ Requests made with a shared key are billed to its owner.
 
 `/keys` shows, per service, the chain in order (keys themselves are never
 shown), and the keys you share, each with a button to stop sharing. **Order**
-opens a panel where ⬆/⬇ move a source and ✅/🚫 turn it on or off. A source not
-in your saved order (a share made later) goes after the saved ones.
+opens a panel where ⬆/⬇ move a source and ✅/🚫 turn it on or off. The buttons
+name the source, not its position, so a list that changed since the panel was
+drawn is refused rather than misapplied. A source not in your saved order (a
+share made later) goes after the saved ones. Viewing the panel does not
+advance Gemini key rotation.
 
 A bot admin opens any user's panel with `.keys <user-id>`, and can reorder,
 toggle and revoke there as the user could. The admin view also sets the user's
@@ -66,7 +72,12 @@ key, and covers one admin at a time (a second admin switching it on takes it
 over). Each user's detail panel has an override, **OpenAI share**: follow Codex
 access (the default), always on, or always off. The share appears in the chain
 as "Admin share by …", after the user's own and shared keys unless they reorder
-it.
+it. It pays only for the GPT families (GPT Sol, Astra and Luna on the OpenAI
+API), not for other model ids a user can type under `openai/`.
+
+Switched on, it moves Codex users on the default provider `openai` from Codex
+to the admin's key; when the key runs out of credit, their messages fall back
+to Codex ([openai_provider.md](openai_provider.md)).
 
 The request path decides Codex access per message, so trusted chats count. The
 `/keys` display only knows the personal Codex grant from the roster, so a user

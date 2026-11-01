@@ -93,6 +93,11 @@ def is_openai_api_model(model: Optional[str]) -> bool:
     return bool(model) and model.startswith(OPENAI_API_PREFIX)
 
 
+def is_family_api_model(model: Optional[str]) -> bool:
+    """MODEL is a GPT family on the OpenAI API, as routing produces it."""
+    return any(model == backend_model(f.neutral_id, OPENAI) for f in FAMILIES)
+
+
 def neutral_for_codex(model: Optional[str]) -> Optional[str]:
     """The neutral id of the Codex alias MODEL, or None."""
     family = _FAMILIES_BY_CODEX.get(model)
@@ -161,6 +166,10 @@ NO_KEY_NOTE = (
 )
 OPENAI_SPENT_NOTE = "Your OpenAI keys are out of quota, so Codex answered."
 CODEX_SPENT_NOTE = "Codex is over its usage limit, so your OpenAI key answered."
+NO_KEY_OPENROUTER_NOTE = (
+    "You have no OpenAI API key, so OpenRouter answered. "
+    "Set one with /setOpenAIKey, or choose a provider with /openaiProvider."
+)
 
 
 def choose_backend(
@@ -170,12 +179,16 @@ def choose_backend(
     openai_any: bool,
     openai_usable: bool,
     codex_exhausted: bool,
+    openrouter_any: bool = False,
+    chosen: bool = True,
 ) -> Route:
     """Pick the backend for one request.
 
     OPENAI_ANY: the user has some OpenAI key at all. OPENAI_USABLE: one of them
     is not known to be out of quota. CODEX_EXHAUSTED: the Codex account is known
-    to be over its usage limit.
+    to be over its usage limit. OPENROUTER_ANY: the user has an OpenRouter key.
+    CHOSEN: the user picked PROVIDER themselves; a default does not earn a note
+    on every answer when another backend stands in.
     """
     codex_ready = codex_access and not codex_exhausted
     if provider == CODEX:
@@ -183,10 +196,17 @@ def choose_backend(
     if provider == OPENROUTER:
         return Route(OPENROUTER)
     if provider == OPENAI:
-        if not openai_any and codex_access:
+        if not openai_any:
             #: Never strand someone who has a working backend.
-            return Route(CODEX, note=NO_KEY_NOTE)
-        return Route(OPENAI)
+            if codex_access:
+                return Route(CODEX, note=NO_KEY_NOTE if chosen else None)
+            if openrouter_any:
+                return Route(
+                    OPENROUTER, note=NO_KEY_OPENROUTER_NOTE if chosen else None
+                )
+            return Route(OPENAI)
+        #: Unlike auto-openai-first, every message tries the keys again first.
+        return Route(OPENAI, fallback=CODEX if codex_access else None)
     if provider == AUTO_OPENAI_FIRST:
         if openai_usable:
             return Route(OPENAI, fallback=CODEX if codex_access else None)
