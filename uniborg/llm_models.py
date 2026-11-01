@@ -152,7 +152,9 @@ MODEL_SPECS = [
         GEMINI_REASONING_LEVELS,
         emoji="🪶",
     ),
-    ModelSpec(GEMINI_FLASH_2_5, "Gemini 2.5 Flash", GEMINI_REASONING_LEVELS, emoji="🌩️"),
+    ModelSpec(
+        GEMINI_FLASH_2_5, "Gemini 2.5 Flash", GEMINI_REASONING_LEVELS, emoji="🌩️"
+    ),
     ModelSpec(GEMINI_PRO_LATEST, "Gemini 3 Pro", GEMINI_REASONING_LEVELS, emoji="💎"),
     ModelSpec(GEMINI_FLASH_3, "Gemini 3 Flash", GEMINI_REASONING_LEVELS, emoji="💥"),
     # ModelSpec("gemini/gemini-2.5-pro", "Gemini 2.5 Pro", GEMINI_REASONING_LEVELS),
