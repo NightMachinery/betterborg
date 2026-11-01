@@ -58,6 +58,12 @@ API_KEY_CONFIG = {
         "regex": r"^(?P<openrouter_key>sk-or-v1-[a-zA-Z0-9]{40,100})$",
         "welcome_message": "**To use OpenRouter models, I need an OpenRouter.ai API key.**",
     },
+    "openai": {
+        "name": "OpenAI",
+        "url": "https://platform.openai.com/api-keys",
+        "regex": r"^(?P<openai_key>sk-(?!or-v1-)[A-Za-z0-9_-]{20,250})\Z",
+        "welcome_message": "**To use GPT models with an OpenAI API key, I need your OpenAI API key.**",
+    },
     "deepseek": {
         "name": "DeepSeek",
         "url": "https://platform.deepseek.com/api_keys",

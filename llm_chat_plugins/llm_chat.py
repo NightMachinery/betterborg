@@ -1267,6 +1267,7 @@ BOT_COMMANDS = [
         "command": "setopenrouterkey",
         "description": "Set or update your OpenRouter API key",
     },
+    {"command": "setopenaikey", "description": "Set or update your OpenAI API key"},
     {"command": "setdeepseekkey", "description": "Set or update your DeepSeek API key"},
     {
         "command": "setmistralkey",
@@ -7219,6 +7220,12 @@ def register_handlers():
     )(set_openrouter_key_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^/setopenaikey{bot_username_suffix_re}(?:\s+(.*))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(set_openai_key_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/setdeepseekkey{bot_username_suffix_re}(?:\s+(.*))?\s*$",
             func=lambda e: e.is_private,
         )
@@ -7642,7 +7649,7 @@ async def help_handler(event):
     help_text = f"""
 **Hello! I am a Telegram chat bot powered by third-party AI providers.** It's like ChatGPT but in Telegram!
 
-To get started, you'll need an API key. Send me /setgeminikey for Gemini models, /setopenrouterkey for OpenRouter, /setdeepseekkey for DeepSeek models, or /setmistralkey for Mistral models.
+To get started, you'll need an API key. Send me /setgeminikey for Gemini models, /setopenaikey for GPT models on OpenAI, /setopenrouterkey for OpenRouter, /setdeepseekkey for DeepSeek models, or /setmistralkey for Mistral models.
 
 **How to Chat with Me**
 
@@ -7679,6 +7686,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /asfile or ..: Export conversation history as markdown file.
 - /setgeminikey: Sets or updates your Gemini API key.
 - /setVertexKey: Sets or updates your Vertex AI (Express mode) API key.
+- /setOpenAIKey: Sets or updates your OpenAI API key.
 - /geminiProvider: Run Gemini models on Google AI Studio or Vertex AI. Current: `{gemini_providers.LABELS[user_manager.get_gemini_provider(event.sender_id)]}`.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
 - /setTitleModel: The model that writes file titles and summaries, and names new topics with a matching topic icon. Its panel also chooses the initial name: New Chat or Question text. Current model: `{prefs.title_model}`.
@@ -8132,6 +8140,11 @@ async def set_key_handler(event):
 async def set_openrouter_key_handler(event):
     """Delegates /setopenrouterkey command logic to the shared module."""
     await llm_db.handle_set_key_command(event, "openrouter")
+
+
+async def set_openai_key_handler(event):
+    """Delegates /setopenaikey command logic to the shared module."""
+    await llm_db.handle_set_key_command(event, "openai")
 
 
 async def set_deepseek_key_handler(event):

@@ -38,6 +38,27 @@ class GeminiApiKeyValidationTests(unittest.TestCase):
         self.assertGeminiKeyRejected("sk-" + "a" * 40)
 
 
+class OpenAIApiKeyValidationTests(unittest.TestCase):
+    def test_accepts_project_service_account_and_legacy_keys(self):
+        for key in (
+            "sk-proj-" + "Ab0_-" * 30,
+            "sk-svcacct-" + "A" * 60,
+            "sk-" + "a1B2" * 12,
+        ):
+            with self.subTest(key=key[:12]):
+                self.assertTrue(llm_db.validate_api_key_format("openai", key))
+
+    def test_rejects_openrouter_and_malformed_keys(self):
+        for key in (
+            "sk-or-v1-" + "a" * 64,
+            "sk-short",
+            "sk-proj-" + "A" * 30 + " space",
+            "AIza" + "A" * 35,
+        ):
+            with self.subTest(key=key[:12]):
+                self.assertFalse(llm_db.validate_api_key_format("openai", key))
+
+
 class ApiKeyCommandPatternTests(unittest.TestCase):
     def test_multiple_bot_usernames_preserve_the_optional_key_capture(self):
         pattern = llm_db.gemini_api_key_command_pattern(("PrimaryBot", "@AliasAI"))
