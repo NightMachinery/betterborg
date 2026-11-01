@@ -277,7 +277,8 @@ class _GuestTestCase(unittest.TestCase):
 class AnswerTests(_GuestTestCase):
     def test_an_alias_only_call_is_explicit_and_stripped_from_the_prompt(self):
         self.borg.me = types.User(
-            id=BOT_ID, bot=True,
+            id=BOT_ID,
+            bot=True,
             usernames=[types.Username("ChatTestAI", active=True)],
         )
         query = _query("@chattestai, explain this")
@@ -290,7 +291,9 @@ class AnswerTests(_GuestTestCase):
 
     def test_inactive_alias_is_not_an_explicit_call(self):
         self.borg.me = types.User(
-            id=BOT_ID, bot=True, username=BOT_USERNAME.lstrip("@"),
+            id=BOT_ID,
+            bot=True,
+            username=BOT_USERNAME.lstrip("@"),
             usernames=[types.Username("RetiredAI", active=False)],
         )
         self.assertFalse(plugin._mentions_bot(_query("@RetiredAI hi")))
@@ -840,14 +843,17 @@ class InviteTests(_GuestTestCase):
 
     def test_alias_only_onboarding_links_to_an_active_username(self):
         self.borg.me = types.User(
-            id=BOT_ID, bot=True,
+            id=BOT_ID,
+            bot=True,
             usernames=[types.Username("ChatTestAI", active=True)],
         )
         with patch.object(plugin, "BOT_USERNAME", None):
             self.run_query(_query("@ChatTestAI hi"))
         self.assertEqual(self.answers[0].text, plugin.GUEST_INVITE_TEXT)
         ((button,),) = self.answers[0].buttons
-        self.assertEqual(tg_compat.button_url(button), "https://t.me/ChatTestAI?start=guest")
+        self.assertEqual(
+            tg_compat.button_url(button), "https://t.me/ChatTestAI?start=guest"
+        )
         self.generate.assert_not_awaited()
 
     def test_every_explicit_call_without_a_key_gets_the_invite(self):

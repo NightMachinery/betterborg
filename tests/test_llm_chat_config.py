@@ -24,14 +24,12 @@ class LLMChatConfigTests(unittest.TestCase):
             self.assertIn("// Betterborg", path.read_text())
 
     def test_json5_comments_unquoted_keys_and_trailing_commas(self):
-        config = llm_chat_config.parse_config(
-            """{
+        config = llm_chat_config.parse_config("""{
               // regular Codex access
               codex_allowed_users: [123, "MAGIC_ADMINS",],
               /* image policy */
               codex_imagegen_allowed_users: [456,],
-            }"""
-        )
+            }""")
         self.assertEqual(config.codex_allowed_users, (123, "MAGIC_ADMINS"))
         self.assertEqual(config.codex_imagegen_allowed_users, (456,))
 
@@ -130,9 +128,7 @@ class LLMChatConfigTests(unittest.TestCase):
     def test_codex_models_are_separate_from_admin_models(self):
         self.assertNotIn(OPENAI_CODEX_SOL, llm_models.admin_model_choices())
         self.assertIn(OPENAI_CODEX_SOL, llm_models.codex_model_choices())
-        self.assertNotIn(
-            "Admin", llm_models.codex_model_choices()[OPENAI_CODEX_SOL]
-        )
+        self.assertNotIn("Admin", llm_models.codex_model_choices()[OPENAI_CODEX_SOL])
 
 
 ROOT = "codex_allowed_users: [1], codex_imagegen_allowed_users: [1]"

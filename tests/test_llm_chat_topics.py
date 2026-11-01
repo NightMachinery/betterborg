@@ -1704,7 +1704,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
     def test_in_a_topic_the_model_menu_writes_the_topic(self):
         event = self.command(plugin.set_model_here_handler, "/setModelHere")
 
-        ((text,), kwargs) = event.reply.await_args
+        (text,), kwargs = event.reply.await_args
         self.assertIn("Set Model for This Topic", text)
         rows = kwargs["buttons"]
         self.assert_apply_to_row(rows, "model", scope=plugin.REASONING_SCOPE_TOPIC)
@@ -1724,7 +1724,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
             plugin.set_model_here_handler, "/setModelHere", top_id=None
         )
 
-        ((text,), kwargs) = event.reply.await_args
+        (text,), kwargs = event.reply.await_args
         self.assertIn("Set Model for the Whole Chat", text)
         self.assertNotIn("applyto:", str(_button_rows(kwargs["buttons"])))
         self.assertEqual(
@@ -1741,7 +1741,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
 
         press = self.press("applyto:model:chat")
 
-        ((text,), kwargs) = press.edit.await_args
+        (text,), kwargs = press.edit.await_args
         self.assertIn("Set Model for the Whole Chat", text)
         self.assert_apply_to_row(
             kwargs["buttons"], "model", scope=plugin.REASONING_SCOPE_CHAT
@@ -2119,7 +2119,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
 
         event = self.command(plugin.set_think_here_handler, "/setThinkHere")
 
-        ((text,), kwargs) = event.reply.await_args
+        (text,), kwargs = event.reply.await_args
         self.assertIn("(This Topic)", text)
         self.assert_apply_to_row(
             kwargs["buttons"], "think", scope=plugin.REASONING_SCOPE_TOPIC
@@ -2142,7 +2142,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
 
         press = self.press("applyto:think:chat")
 
-        ((text,), kwargs) = press.edit.await_args
+        (text,), kwargs = press.edit.await_args
         self.assertIn("(Whole Chat)", text)
         self.assert_apply_to_row(
             kwargs["buttons"], "think", scope=plugin.REASONING_SCOPE_CHAT
@@ -2180,7 +2180,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
             plugin.set_system_prompt_here_handler, "/setSystemPromptHere"
         )
 
-        ((text,), kwargs) = event.reply.await_args
+        (text,), kwargs = event.reply.await_args
         self.assertIn("System Prompt for This Topic", text)
         self.assertIn("Not set", text)
         self.assertEqual(
