@@ -66,7 +66,6 @@ from typing import Any, Callable, Optional, List, Dict, Sequence, Tuple
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
-
 REACTION_REFRESH_CHUNK_SIZE = 100
 
 
@@ -451,9 +450,7 @@ def _register_prompt_family(
 
 PROMPT_REPLACEMENTS = {
     re.compile(r"^\.\.\.$", re.IGNORECASE): r"""Continue the conversation.""",
-    re.compile(
-        r"^\.ocr$", re.MULTILINE | re.IGNORECASE
-    ): r"""
+    re.compile(r"^\.ocr$", re.MULTILINE | re.IGNORECASE): r"""
 You will be given a series of images that are part of a single, related sequence. Your task is to perform OCR and combine the text from all images into one final, coherent output, following these specific rules:
 
 *Combine Text:* Transcribe and merge the text from all images into a single, continuous document. Ensure the text flows in the correct sequence from one image to the next.

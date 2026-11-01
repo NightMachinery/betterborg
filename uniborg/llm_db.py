@@ -324,8 +324,7 @@ def record_user_profile(
     session = Session()
     try:
         session.execute(
-            text(
-                """
+            text("""
                 INSERT INTO user_profiles
                     (bot_id, user_id, first_name, last_name, username, private_contact_at)
                 VALUES
@@ -340,8 +339,7 @@ def record_user_profile(
                         WHEN excluded.private_contact_at < user_profiles.private_contact_at THEN excluded.private_contact_at
                         ELSE user_profiles.private_contact_at
                     END
-                """
-            ),
+                """),
             {
                 "bot_id": bot_id,
                 "user_id": user_id,
