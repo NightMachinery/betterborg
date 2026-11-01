@@ -4,7 +4,10 @@ startup files."""
 import atexit
 import os
 import shutil
+import sys
 import tempfile
+
+import pytest
 
 _store_dir = tempfile.mkdtemp(prefix="borg-tests-")
 atexit.register(shutil.rmtree, _store_dir, ignore_errors=True)
@@ -20,3 +23,24 @@ os.environ["timetracker_dir"] = os.path.join(_store_dir, "timetracker")
 _zdotdir = os.path.join(_store_dir, "zdotdir")
 os.mkdir(_zdotdir)
 os.environ["ZDOTDIR"] = _zdotdir
+
+
+@pytest.fixture(autouse=True)
+def _private_quota_memory():
+    """Keeps llm_chat's OpenAI and Codex quota memory out of the local Redis.
+
+    A test that hits a usage limit would otherwise mark the real Codex account
+    spent for every bot sharing that Redis.
+    """
+    plugin = sys.modules.get("llm_chat_plugins.llm_chat")
+    if plugin is None or not hasattr(plugin, "OPENAI_QUOTA"):
+        yield
+        return
+    from uniborg import openai_providers
+
+    saved = plugin.OPENAI_QUOTA
+    plugin.OPENAI_QUOTA = openai_providers.QuotaMemory()
+    try:
+        yield
+    finally:
+        plugin.OPENAI_QUOTA = saved

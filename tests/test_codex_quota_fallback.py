@@ -10,6 +10,9 @@ from unittest.mock import AsyncMock, patch
 
 from uniborg import tg_compat
 from uniborg.constants import (
+    GPT_ASTRA,
+    GPT_LUNA,
+    GPT_SOL,
     GEMINI_FLASH_LATEST,
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_SOL,
@@ -80,12 +83,20 @@ class RetiredModelSettingsTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(prefs.model, plugin.OPENAI_CODEX_SOL)
-        self.assertEqual(prefs.title_model, OPENAI_CODEX_LUNA)
+        self.assertEqual(prefs.model, GPT_SOL)
+        self.assertEqual(prefs.title_model, GPT_LUNA)
         self.assertEqual(prefs.codex_quota_fallback_model, OR_OPENAI_SOL)
-        self.assertEqual(
-            prefs.thinking_by_model, {plugin.OPENAI_CODEX_SOL: "high", "x/y": "low"}
+        self.assertEqual(prefs.thinking_by_model, {GPT_SOL: "high", "x/y": "low"})
+
+    def test_codex_aliases_move_to_their_gpt_family(self):
+        prefs = plugin.UserPrefs.model_validate(
+            {
+                "model": OPENAI_CODEX_ASTRA,
+                "thinking_by_model": {OPENAI_CODEX_SOL: "xhigh"},
+            }
         )
+        self.assertEqual(prefs.model, GPT_ASTRA)
+        self.assertEqual(prefs.thinking_by_model, {GPT_SOL: "xhigh"})
 
     def test_an_effort_saved_for_the_new_id_wins(self):
         for prefs_class in (plugin.UserPrefs, plugin.ChatPrefs, plugin.TopicPrefs):
@@ -94,16 +105,14 @@ class RetiredModelSettingsTests(unittest.TestCase):
                     {
                         "model": "openai-codex/gpt-5.6-terra",
                         "thinking_by_model": {
-                            plugin.OPENAI_CODEX_SOL: "low",
+                            GPT_SOL: "low",
                             self.OLD_SOL: "high",
                         },
                     }
                 )
 
-                self.assertEqual(prefs.model, plugin.OPENAI_CODEX_SOL)
-                self.assertEqual(
-                    prefs.thinking_by_model, {plugin.OPENAI_CODEX_SOL: "low"}
-                )
+                self.assertEqual(prefs.model, GPT_SOL)
+                self.assertEqual(prefs.thinking_by_model, {GPT_SOL: "low"})
 
     def test_current_settings_are_untouched(self):
         data = {"model": GEMINI_FLASH_LATEST, "title_model": "auto"}
@@ -174,15 +183,39 @@ class RequestModelTests(unittest.TestCase):
         ), patch.object(
             plugin.user_manager, "_save_prefs"
         ):
-            return plugin._resolve_request_model(
+            resolved = plugin._resolve_request_model(
                 7, 1, prefix_model=prefix_model, now=NOW
             )
+            with patch.object(
+                plugin, "OPENAI_QUOTA", plugin.openai_providers.QuotaMemory()
+            ):
+                return asyncio.run(
+                    plugin._route_request_model(
+                        resolved,
+                        user_id=1,
+                        codex_access=True,
+                        prefix_p=bool(prefix_model),
+                        now=NOW,
+                    )
+                )
 
     def test_saved_personal_codex_default_is_redirected(self):
-        resolved = self.resolve(_armed_prefs())
+        prefs = _armed_prefs()
+        prefs.openai_provider = "codex"
+        resolved = self.resolve(prefs)
         self.assertEqual(resolved.model, GEMINI_FLASH_LATEST)
         self.assertEqual(resolved.service, "gemini")
         self.assertEqual(resolved.quota_fallback_from, OPENAI_CODEX_SOL)
+        self.assertEqual(resolved.selected_model, GPT_SOL)
+
+    def test_a_gpt_family_on_the_openai_key_is_not_redirected(self):
+        prefs = _armed_prefs()
+        prefs.openai_provider = "openai"
+        with patch.object(plugin, "_openai_api_keys", return_value=["sk-test"]):
+            resolved = self.resolve(prefs)
+        self.assertEqual(resolved.model, "openai-api/gpt-sol-latest")
+        self.assertEqual(resolved.service, "openai")
+        self.assertIsNone(resolved.quota_fallback_from)
 
     def test_chat_level_codex_model_is_redirected(self):
         prefs = _armed_prefs(model=OR_OPENAI_SOL)
@@ -199,8 +232,11 @@ class RequestModelTests(unittest.TestCase):
 
     def test_persian_prefix_alias_is_never_redirected(self):
         detected = plugin._detect_and_process_message_prefix(".چه سلام", codex_p=True)
-        resolved = self.resolve(_armed_prefs(), prefix_model=detected.model)
-        self.assertEqual(resolved.model, detected.model)
+        prefs = _armed_prefs()
+        prefs.openai_provider = "codex"
+        resolved = self.resolve(prefs, prefix_model=detected.model)
+        self.assertEqual(resolved.selected_model, detected.model)
+        self.assertEqual(resolved.model, OPENAI_CODEX_SOL)
         self.assertIsNone(resolved.quota_fallback_from)
 
     def test_non_codex_default_is_left_alone(self):
@@ -211,7 +247,9 @@ class RequestModelTests(unittest.TestCase):
         self.assertIsNone(resolved.quota_fallback_from)
 
     def test_expired_fallback_leaves_the_saved_codex_model_in_place(self):
-        resolved = self.resolve(_armed_prefs(until=NOW - timedelta(seconds=1)))
+        prefs = _armed_prefs(until=NOW - timedelta(seconds=1))
+        prefs.openai_provider = "codex"
+        resolved = self.resolve(prefs)
         self.assertEqual(resolved.model, OPENAI_CODEX_SOL)
         self.assertIsNone(resolved.quota_fallback_from)
 

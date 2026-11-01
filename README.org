@@ -59,6 +59,12 @@ Gemini models run on Google AI Studio or, per user, on Vertex AI Express mode:
 models, has no Files API or explicit caching, and live mode stays on AI Studio; see
 [[file:docs/gemini_vertex_chat.md][docs/gemini_vertex_chat.md]].
 
+GPT Sol and GPT Astra appear once in the model menu. Each user's
+=/openaiProvider= runs them on their OpenAI key (=/setOpenAIKey=, the default),
+on Codex, on OpenRouter, or automatically on one and then the other when the
+first runs out of credit or quota. See
+[[file:docs/openai_provider.md][docs/openai_provider.md]].
+
 * llm-stt
 #+begin_src zsh :eval never
 borgdir=~/code/betterborg/
@@ -329,10 +335,10 @@ all of its messages; the reaction-only bulk command is available separately. See
 [[file:docs/deleter.md][docs/deleter.md]].
 
 ** Codex models
-=llm_chat= can expose the newest GPT Sol and GPT Astra (=openai-codex/gpt-sol-latest=,
-=openai-codex/gpt-astra-latest=, which follow Codex's catalog)
-as access-controlled chat models using the published =llm-openai-via-codex=
-package and local Codex OAuth credentials. Access is configured in
+=llm_chat= can answer GPT Sol and GPT Astra on Codex
+(=openai-codex/gpt-sol-latest=, =openai-codex/gpt-astra-latest=, which follow
+Codex's catalog) for users whose =/openaiProvider= picks Codex, using the
+published =llm-openai-via-codex= package and local Codex OAuth credentials. Access is configured in
 =~/.borg/llm_chat_config.json5= (or =LLM_CHAT_CONFIG_PATH=) using numeric
 Telegram user IDs and the optional =MAGIC_ADMINS= sentinel. See
 [[file:docs/codex_models.md][docs/codex_models.md]] and
@@ -372,8 +378,9 @@ File titles and summaries, and the names of new private topics, come from
 each user's title model (=/setTitleModel=): by default the Luna Reserve with
 Codex access, else Gemini Flash Lite; see
 [[file:docs/title_model.md][docs/title_model.md]].
-Codex quick prefixes have matching Persian aliases: =.چ*= for GPT Sol and
-=.اس*= for GPT Astra; see [[file:docs/codex_models.md][the complete mapping]].
+GPT quick prefixes have matching Persian aliases: =.چ*= for GPT Sol and
+=.اس*= for GPT Astra, both on the user's provider; see
+[[file:docs/codex_models.md][the complete mapping]].
 Use =.i= on the current message to enable Codex image generation, for example
 =.i .cl draw a fox=. Both access policies must allow the sender. Previews and
 final images are sent separately, alongside any text response; the switch does

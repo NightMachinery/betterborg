@@ -2,7 +2,7 @@
 
 import unittest
 
-from uniborg import llm_models
+from uniborg import llm_models, openai_providers
 from uniborg.constants import (
     GEMINI_FLASH_LITE_LATEST,
     OPENAI_CODEX_LUNA,
@@ -44,12 +44,14 @@ class CodexModelTests(unittest.TestCase):
     def test_each_retired_model_maps_to_a_registered_one(self):
         for old, new in llm_models.RETIRED_MODELS.items():
             with self.subTest(old=old):
-                self.assertNotIn(old, llm_models.MODEL_SPECS_BY_ID)
+                #: Codex aliases stay registered as backends of their family.
+                if openai_providers.neutral_for_codex(old) is None:
+                    self.assertNotIn(old, llm_models.MODEL_SPECS_BY_ID)
                 self.assertIn(new, llm_models.MODEL_SPECS_BY_ID)
                 self.assertEqual(llm_models.current_model_id(old), new)
 
     def test_other_ids_are_their_own_current_id(self):
-        for model in (OPENAI_CODEX_SOL, "x/y", "", None):
+        for model in (OPENAI_CODEX_LUNA_RESERVE, "x/y", "", None):
             with self.subTest(model=model):
                 self.assertEqual(llm_models.current_model_id(model), model)
 
@@ -67,7 +69,12 @@ class CodexModelTests(unittest.TestCase):
 
 class ModelEmojiTests(unittest.TestCase):
     def test_registered_models_have_distinct_emoji(self):
-        emoji = [spec.emoji for spec in llm_models.MODEL_SPECS]
+        #: A Codex alias is a backend of its GPT family and shares its emoji.
+        emoji = [
+            spec.emoji
+            for spec in llm_models.MODEL_SPECS
+            if openai_providers.neutral_for_codex(spec.id) is None
+        ]
 
         self.assertNotIn("🤖", emoji)
         self.assertEqual(len(emoji), len(set(emoji)))

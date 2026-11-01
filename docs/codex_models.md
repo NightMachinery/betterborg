@@ -1,6 +1,10 @@
 # Codex Models
 
-`llm_chat` exposes the ChatGPT Codex backend as access-controlled models:
+The pickers offer GPT Sol and GPT Astra once, as provider-neutral models; Codex
+is one of the backends a user's `/openaiProvider` can choose (see
+[openai_provider.md](openai_provider.md)). Settings saved with the Codex ids
+below load as the neutral ids. Codex itself remains access-controlled, and
+these are its models:
 
 - `openai-codex/gpt-sol-latest`, the newest GPT Sol (GPT-6.1 Sol today)
 - `openai-codex/gpt-astra-latest`, the newest GPT Astra (GPT-6 Astra today)
@@ -11,8 +15,9 @@ The first two, and the hidden `openai-codex/gpt-luna-latest`, are this repo's
 own aliases (see "Aliases" below). The pickers name each after the model it
 points at now.
 
-Users without Codex access do not see them in `/setModel` or `/setModelHere`,
-and direct selection attempts are rejected server-side.
+The pickers show the Luna Reserve only to users with Codex access, and direct
+selection of any Codex id without access is rejected server-side. GPT Sol and
+Astra themselves are open to everyone, on whichever provider each user picked.
 
 ## Access configuration
 
@@ -180,8 +185,8 @@ Codex model without rewriting preferences.
 
 There is no fallback notice when trusted-chat or admin rules still grant
 Codex access. Explicit Codex requests and `.i` receive an access denial rather
-than falling back. The existing `.c` exception remains: without Codex access,
-it uses its OpenRouter meaning. Requests already in flight retain their
+than falling back. `.c*` and `.as*` are not Codex requests: they select the GPT
+families, which run on the user's provider. Requests already in flight retain their
 authorization snapshot; toggles affect subsequent requests.
 
 ## Runtime requirements
@@ -280,7 +285,10 @@ The `ultra` level advertised by the Codex CLI model list is a Codex-app
 subagent mode, not an API value. Sending it returns an "Invalid value" error,
 so it is deliberately absent from the level sets.
 
-## Access-controlled quick prefixes
+## Quick prefixes
+
+All but `.cr` select a provider-neutral GPT family and run on the user's
+`/openaiProvider`; `.cr` is Codex-only and access-controlled.
 
 - `.c` / `.چ` and `.cm` / `.چم`: GPT-6.1 Sol with `medium` reasoning.
 - `.cl` / `.چل`: GPT-6.1 Sol with `low` reasoning.

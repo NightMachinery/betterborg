@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 from uniborg import codex_util, llm_chat_config
 
 from uniborg.constants import (
+    GPT_ASTRA,
     GEMINI_FLASH_LATEST,
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_SOL,
@@ -51,7 +52,7 @@ class CodexImagePrefixTests(unittest.TestCase):
         for text in inputs:
             result = llm_chat._detect_and_process_message_prefix(text, codex_p=True)
             self.assertTrue(result.image_generation)
-            self.assertEqual(result.model, OPENAI_CODEX_ASTRA)
+            self.assertEqual(result.model, GPT_ASTRA)
             self.assertEqual(result.reasoning_effort, "high")
             self.assertEqual(result.processed_text, "draw")
 

@@ -13,6 +13,7 @@ from typing import Dict, Optional, Tuple
 
 from uniborg import codex_aliases
 from uniborg import codex_util
+from uniborg import openai_providers
 from uniborg import pioneer_util
 from uniborg.codex_aliases import OPENAI_REASONING_LEVELS
 from uniborg.constants import (
@@ -21,6 +22,9 @@ from uniborg.constants import (
     GEMINI_FLASH_LATEST,
     GEMINI_FLASH_LITE_LATEST,
     GEMINI_PRO_LATEST,
+    GPT_ASTRA,
+    GPT_LUNA,
+    GPT_SOL,
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_LUNA,
     OPENAI_CODEX_SOL,
@@ -126,8 +130,33 @@ def _codex_alias_spec(model: str, *, emoji: str, hidden: bool = False) -> ModelS
     )
 
 
+def _gpt_fields(resolution: "codex_aliases.Resolution") -> dict:
+    return {
+        "display_name": resolution.display_name,
+        "reasoning_levels": resolution.reasoning_levels,
+    }
+
+
+def _gpt_spec(model: str, *, emoji: str, hidden: bool = False) -> ModelSpec:
+    """The provider-neutral GPT family MODEL (`openai_providers`).
+
+    Named and leveled after the Codex alias of its family, the model every
+    backend currently serves under that family.
+    """
+    codex_id = openai_providers.family_for(model).codex_id
+    pinned = codex_aliases.pinned(codex_aliases.family_for(codex_id))
+    return ModelSpec(model, hidden=hidden, emoji=emoji, **_gpt_fields(pinned))
+
+
 def _live(spec: ModelSpec) -> ModelSpec:
     """SPEC, with a Codex alias's current model and levels (`codex_aliases`)."""
+    if openai_providers.is_neutral_gpt(spec.id):
+        resolution = codex_aliases.resolution_for(
+            openai_providers.family_for(spec.id).codex_id
+        )
+        if resolution is None:
+            return spec
+        return dataclasses.replace(spec, **_gpt_fields(resolution))
     resolution = codex_aliases.resolution_for(spec.id)
     if resolution is None:
         return spec
@@ -162,11 +191,16 @@ MODEL_SPECS = [
     # ModelSpec("gemini/gemini-2.0-flash", "Gemini 2 Flash", GEMINI_REASONING_LEVELS),
     # ModelSpec("gemini/gemini-2.0-flash-preview-image-generation", "Gemini 2 Flash Image"),
     # ModelSpec("gemini/gemini-2.5-flash-image-preview", "Gemini 2.5 Flash Image"),
-    ## OpenAI
+    ## OpenAI: one id per family, answered by the user's /openaiProvider.
+    _gpt_spec(GPT_SOL, emoji="☀️"),
+    _gpt_spec(GPT_ASTRA, emoji="✨"),
+    #: Kept for settings saved before the provider-neutral ids; the picker
+    #: offers GPT Sol instead.
     ModelSpec(
         OR_OPENAI_SOL,
         "GPT Sol Latest (OpenRouter)",
         OPENROUTER_REASONING_LEVELS,
+        hidden=True,
         emoji="🌞",
     ),
     # ModelSpec("openrouter/openai/chatgpt-4o-latest", "ChatGPT 4o (OpenRouter)"),
@@ -191,9 +225,10 @@ MODEL_SPECS = [
     ),
     ModelSpec("mistral/pixtral-large-latest", "Pixtral Large (Latest)", emoji="🖼️"),
     ## Codex (configurable access, ChatGPT OAuth)
-    #: Aliases for each family's newest model; their names show which one.
-    _codex_alias_spec(OPENAI_CODEX_SOL, emoji="☀️"),
-    _codex_alias_spec(OPENAI_CODEX_ASTRA, emoji="✨"),
+    #: The backends of GPT Sol and Astra when the provider is Codex. Saved
+    #: settings move to the neutral ids (`RETIRED_MODELS`).
+    _codex_alias_spec(OPENAI_CODEX_SOL, emoji="☀️", hidden=True),
+    _codex_alias_spec(OPENAI_CODEX_ASTRA, emoji="✨", hidden=True),
     #: Billed to the Luna Reserve meter, so it keeps answering once the regular
     #: plan allowance is spent. Every level was verified against the backend.
     ModelSpec(
@@ -211,6 +246,7 @@ MODEL_SPECS = [
     # ModelSpec(PIONEER_SONNET_4_6, "Pioneer Sonnet 4.6 (Admin)", PIONEER_REASONING_LEVELS, admin_only=True),
     ## Codex models known to the registry but kept out of the pickers.
     _codex_alias_spec(OPENAI_CODEX_LUNA, emoji="🌕", hidden=True),
+    _gpt_spec(GPT_LUNA, emoji="🌕", hidden=True),
 ]
 
 MODEL_SPECS_BY_ID: Dict[str, ModelSpec] = {spec.id: spec for spec in MODEL_SPECS}
@@ -222,14 +258,18 @@ MODEL_SPECS_BY_ID: Dict[str, ModelSpec] = {spec.id: spec for spec in MODEL_SPECS
 RETIRED_MODELS: Dict[str, str] = {
     "openrouter/openai/gpt-5.6-sol": OR_OPENAI_SOL,
     "openrouter/openai/gpt-6.1-sol": OR_OPENAI_SOL,
-    "openai-codex/gpt-5.6-sol": OPENAI_CODEX_SOL,
-    "openai-codex/gpt-5.6-terra": OPENAI_CODEX_SOL,
-    "openai-codex/gpt-5.6-luna": OPENAI_CODEX_LUNA,
-    "openai-codex/gpt-5.5": OPENAI_CODEX_SOL,
+    "openai-codex/gpt-5.6-sol": GPT_SOL,
+    "openai-codex/gpt-5.6-terra": GPT_SOL,
+    "openai-codex/gpt-5.6-luna": GPT_LUNA,
+    "openai-codex/gpt-5.5": GPT_SOL,
     #: Pinned until the families became aliases (`codex_aliases`).
-    "openai-codex/gpt-6.1-sol": OPENAI_CODEX_SOL,
-    "openai-codex/gpt-6-astra": OPENAI_CODEX_ASTRA,
-    "openai-codex/gpt-6-luna": OPENAI_CODEX_LUNA,
+    "openai-codex/gpt-6.1-sol": GPT_SOL,
+    "openai-codex/gpt-6-astra": GPT_ASTRA,
+    "openai-codex/gpt-6-luna": GPT_LUNA,
+    #: The Codex aliases became provider-neutral (`openai_providers`).
+    OPENAI_CODEX_SOL: GPT_SOL,
+    OPENAI_CODEX_ASTRA: GPT_ASTRA,
+    OPENAI_CODEX_LUNA: GPT_LUNA,
 }
 
 
@@ -267,6 +307,8 @@ def codex_model_choices() -> Dict[str, str]:
 
 def _synthesized_spec(model: str) -> ModelSpec:
     """Best-effort spec for a model the registry does not know (custom IDs)."""
+    if openai_providers.is_openai_api_model(model):
+        return ModelSpec(model, model, OPENAI_REASONING_LEVELS, hidden=True, emoji="🔷")
     if codex_util.is_codex_model(model):
         return ModelSpec(
             model,

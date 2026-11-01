@@ -358,7 +358,7 @@ class CodexStreamingTests(unittest.IsolatedAsyncioTestCase):
                 reasoning_effort="low",
             )
         self.assertEqual(text, "{}")
-        create_client.assert_awaited_once_with(max_retries=0)
+        create_client.assert_awaited_once_with(max_retries=0, api_key=None)
         kwargs = client.responses.kwargs
         self.assertEqual(kwargs["model"], "gpt-reserve")
         self.assertEqual(kwargs["instructions"], "Reply in JSON.")

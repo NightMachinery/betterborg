@@ -15,7 +15,14 @@ from typing import Awaitable, Callable, Optional, Type, TypeVar
 import litellm
 from pydantic import BaseModel
 
-from uniborg import codex_util, gemini_providers, llm_db, llm_util, util
+from uniborg import (
+    codex_util,
+    gemini_providers,
+    llm_db,
+    llm_util,
+    openai_providers,
+    util,
+)
 from uniborg.constants import GEMINI_FLASH_LITE_LATEST, OPENAI_CODEX_LUNA_RESERVE
 
 AUTO_TITLE_MODEL = "auto"
@@ -43,6 +50,9 @@ def resolve_title_model(choice: Optional[str], *, codex_p: bool) -> str:
     """The model a title choice means for a user with (or without) Codex."""
     if not choice or choice == AUTO_TITLE_MODEL:
         return OPENAI_CODEX_LUNA_RESERVE if codex_p else GEMINI_FLASH_LITE_LATEST
+    if openai_providers.is_neutral_gpt(choice):
+        #: Titles stay off the user's paid keys: Codex, or the free default.
+        choice = openai_providers.family_for(choice).codex_id
     if is_codex_model(choice) and not codex_p:
         return GEMINI_FLASH_LITE_LATEST
     return choice

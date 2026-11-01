@@ -1473,8 +1473,18 @@ class TopicSettingsResolutionTests(_TopicSettingsCase):
         )
         with patch.object(
             plugin.user_manager, "get_codex_quota_fallback", return_value=stand_in
+        ), patch.object(
+            plugin.user_manager, "get_openai_provider", return_value="codex"
+        ), patch.object(
+            plugin, "OPENAI_QUOTA", plugin.openai_providers.QuotaMemory()
         ):
-            request = plugin._resolve_request_model(USER_ID, USER_ID, topic_id=TOPIC_ID)
+            request = asyncio.run(
+                plugin._route_request_model(
+                    plugin._resolve_request_model(USER_ID, USER_ID, topic_id=TOPIC_ID),
+                    user_id=USER_ID,
+                    codex_access=True,
+                )
+            )
 
         self.assertEqual(request.model, self.CHAT_MODEL)
         self.assertEqual(request.quota_fallback_from, plugin.OPENAI_CODEX_SOL)
@@ -1830,7 +1840,7 @@ class TopicSettingsMenuTests(_TopicSettingsCase):
         )
 
     def test_model_and_effort_checkmarks_are_distinct_settings(self):
-        model = plugin.OPENAI_CODEX_SOL
+        model = plugin.GPT_SOL
         self.chats.set_model(USER_ID, model)
         menu = plugin._build_model_menu(
             USER_ID,

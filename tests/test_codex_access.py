@@ -7,9 +7,10 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from uniborg import llm_chat_config, tg_compat
 from uniborg.constants import (
-    OPENAI_CODEX_ASTRA,
+    GPT_ASTRA,
+    GPT_SOL,
+    OPENAI_CODEX_LUNA_RESERVE,
     OPENAI_CODEX_SOL,
-    OR_OPENAI_LATEST,
     PIONEER_OPUS_4_8,
 )
 
@@ -41,13 +42,17 @@ class Event:
 class CodexAccessIntegrationTests(unittest.TestCase):
     def test_authorized_nonadmin_gets_codex_picker_without_admin_models(self):
         choices = llm_chat._model_choices_for_access(admin_p=False, codex_p=True)
-        self.assertIn(OPENAI_CODEX_SOL, choices)
+        self.assertIn(OPENAI_CODEX_LUNA_RESERVE, choices)
+        self.assertIn(GPT_SOL, choices)
+        self.assertNotIn(OPENAI_CODEX_SOL, choices)
         for model in llm_chat.ADMIN_MODEL_CHOICES:
             self.assertNotIn(model, choices)
 
     def test_admin_without_policy_does_not_get_codex_picker(self):
         choices = llm_chat._model_choices_for_access(admin_p=True, codex_p=False)
-        self.assertNotIn(OPENAI_CODEX_SOL, choices)
+        self.assertNotIn(OPENAI_CODEX_LUNA_RESERVE, choices)
+        #: GPT families are provider-routed, so everyone sees them.
+        self.assertIn(GPT_SOL, choices)
 
     def test_combined_menu_hides_reasoning_when_selected_model_access_is_missing(self):
         prefs = SimpleNamespace(
@@ -74,8 +79,8 @@ class CodexAccessIntegrationTests(unittest.TestCase):
 
     def test_normal_model_menu_buttons_keep_friendly_labels_and_callbacks(self):
         prefs = SimpleNamespace(
-            model=OPENAI_CODEX_SOL,
-            thinking_by_model={OPENAI_CODEX_SOL: "high"},
+            model=GPT_SOL,
+            thinking_by_model={GPT_SOL: "high"},
         )
         with patch.object(llm_chat.user_manager, "get_prefs", return_value=prefs):
             menu = llm_chat._build_model_menu(
@@ -94,63 +99,61 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         labels = [tg_compat.button_text(button) for button in buttons]
         callbacks = [tg_compat.button_data_text(button) for button in buttons]
         self.assertIn(
-            f"✅ {llm_chat._model_display_name(OPENAI_CODEX_SOL)}",
+            f"✅ {llm_chat._model_display_name(GPT_SOL)}",
             labels,
         )
         self.assertEqual(labels.count("✅ 🧠 Effort: High"), 1)
         self.assertTrue(all(data.startswith("model_") for data in callbacks))
         self.assertTrue(all(len(data.encode()) <= 64 for data in callbacks))
 
-    def test_codex_prefix_and_reasoning_work_for_authorized_nonadmin(self):
+    def test_gpt_prefixes_and_reasoning_work_with_or_without_codex(self):
         cases = {
-            (".c", ".چ", ".cm", ".چم"): (OPENAI_CODEX_SOL, "medium"),
-            (".cl", ".چل"): (OPENAI_CODEX_SOL, "low"),
-            (".ch", ".چه"): (OPENAI_CODEX_SOL, "high"),
-            (".cx", ".چخ"): (OPENAI_CODEX_SOL, "xhigh"),
-            (".cxx", ".چخخ"): (OPENAI_CODEX_SOL, "max"),
-            (".as", ".اس", ".asm", ".اسم"): (OPENAI_CODEX_ASTRA, "medium"),
-            (".asl", ".اسل"): (OPENAI_CODEX_ASTRA, "low"),
-            (".ash", ".اسه"): (OPENAI_CODEX_ASTRA, "high"),
-            (".asx", ".اسخ"): (OPENAI_CODEX_ASTRA, "xhigh"),
-            (".asxx", ".اسخخ"): (OPENAI_CODEX_ASTRA, "max"),
+            (".c", ".چ", ".cm", ".چم"): (GPT_SOL, "medium"),
+            (".cl", ".چل"): (GPT_SOL, "low"),
+            (".ch", ".چه"): (GPT_SOL, "high"),
+            (".cx", ".چخ"): (GPT_SOL, "xhigh"),
+            (".cxx", ".چخخ"): (GPT_SOL, "max"),
+            (".as", ".اس", ".asm", ".اسم"): (GPT_ASTRA, "medium"),
+            (".asl", ".اسل"): (GPT_ASTRA, "low"),
+            (".ash", ".اسه"): (GPT_ASTRA, "high"),
+            (".asx", ".اسخ"): (GPT_ASTRA, "xhigh"),
+            (".asxx", ".اسخخ"): (GPT_ASTRA, "max"),
         }
         for prefixes, (model, effort) in cases.items():
             for prefix in prefixes:
-                with self.subTest(prefix=prefix):
-                    result = llm_chat._detect_and_process_message_prefix(
-                        f"{prefix} hello", admin_p=False, codex_p=True
-                    )
-                    self.assertEqual(result.model, model)
-                    self.assertEqual(result.reasoning_effort, effort)
-                    self.assertEqual(result.processed_text, "hello")
+                for codex_p in (True, False):
+                    with self.subTest(prefix=prefix, codex_p=codex_p):
+                        result = llm_chat._detect_and_process_message_prefix(
+                            f"{prefix} hello", admin_p=False, codex_p=codex_p
+                        )
+                        self.assertEqual(result.model, model)
+                        self.assertEqual(result.reasoning_effort, effort)
+                        self.assertEqual(result.processed_text, "hello")
 
         result = llm_chat._detect_and_process_message_prefix(
             ".th .چ hello", admin_p=False, codex_p=True
         )
-        self.assertEqual(result.model, OPENAI_CODEX_SOL)
+        self.assertEqual(result.model, GPT_SOL)
         self.assertEqual(result.reasoning_effort, "high")
         self.assertEqual(result.processed_text, "hello")
 
-    def test_revoked_c_prefix_keeps_openrouter_meaning(self):
-        for prefix in (".c", ".چ"):
-            with self.subTest(prefix=prefix):
-                result = llm_chat._detect_and_process_message_prefix(
-                    f"{prefix} hello", admin_p=True, codex_p=False
+    def test_gpt_family_ids_need_no_codex_access(self):
+        config = llm_chat_config.LLMChatConfig((), ())
+        for model in (GPT_SOL, GPT_ASTRA):
+            with self.subTest(model=model):
+                self.assertTrue(
+                    asyncio.run(
+                        llm_chat._can_user_access_model(Event(), model, config=config)
+                    )
                 )
-                self.assertEqual(result.model, OR_OPENAI_LATEST)
 
     def test_restricted_prefix_is_recognized_for_explicit_denial(self):
-        for prefix, model in (
-            (".cm", OPENAI_CODEX_SOL),
-            (".چم", OPENAI_CODEX_SOL),
-            (".asx", OPENAI_CODEX_ASTRA),
-            (".اسخ", OPENAI_CODEX_ASTRA),
-        ):
+        for prefix in (".cr", ".چر"):
             with self.subTest(prefix=prefix):
                 result = llm_chat._detect_and_process_message_prefix(
                     f"{prefix} hello", admin_p=True, codex_p=False
                 )
-                self.assertEqual(result.model, model)
+                self.assertEqual(result.model, OPENAI_CODEX_LUNA_RESERVE)
                 config = llm_chat_config.LLMChatConfig((), ())
                 self.assertFalse(
                     asyncio.run(
@@ -181,8 +184,8 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         event.answer = AsyncMock()
         config = llm_chat_config.LLMChatConfig((123,), ())
         menu = llm_chat.ModelMenu(
-            options={OPENAI_CODEX_SOL: "Codex"},
-            current_value=OPENAI_CODEX_SOL,
+            options={OPENAI_CODEX_LUNA_RESERVE: "Codex"},
+            current_value=OPENAI_CODEX_LUNA_RESERVE,
             think_state=Mock(),
         )
         with patch.object(
@@ -192,14 +195,14 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         ), patch.object(
             llm_chat.bot_util,
             "unsanitize_callback_data",
-            return_value=OPENAI_CODEX_SOL,
+            return_value=OPENAI_CODEX_LUNA_RESERVE,
         ), patch.object(
             llm_chat.user_manager, "set_model"
         ) as set_model, patch.object(
             llm_chat, "_build_model_menu", return_value=menu
         ):
             asyncio.run(llm_chat.callback_handler(event))
-        set_model.assert_called_once_with(123, OPENAI_CODEX_SOL)
+        set_model.assert_called_once_with(123, OPENAI_CODEX_LUNA_RESERVE)
 
     def test_revoked_callback_cannot_select_codex(self):
         event = Event()
@@ -213,7 +216,7 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         ), patch.object(
             llm_chat.bot_util,
             "unsanitize_callback_data",
-            return_value=OPENAI_CODEX_SOL,
+            return_value=OPENAI_CODEX_LUNA_RESERVE,
         ), patch.object(
             llm_chat.user_manager, "set_model"
         ) as set_model:

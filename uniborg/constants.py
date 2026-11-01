@@ -19,7 +19,16 @@ GEMINI_PRO_LATEST = "gemini/gemini-3-pro-preview"
 #: OpenRouter's own router alias here, and this repo's for Codex below.
 #: `llm_models.RETIRED_MODELS` moves settings saved with older ids forward.
 OR_OPENAI_SOL = "openrouter/~openai/gpt-sol-latest"
+OR_OPENAI_ASTRA = "openrouter/~openai/gpt-astra-latest"
+OR_OPENAI_LUNA = "openrouter/~openai/gpt-luna-latest"
 OR_OPENAI_LATEST = OR_OPENAI_SOL
+
+#: Provider-neutral GPT families, the ids the pickers offer. The user's
+#: /openaiProvider decides whether Codex, the OpenAI API or OpenRouter answers
+#: (`uniborg/openai_providers.py`).
+GPT_SOL = "openai/gpt-sol-latest"
+GPT_ASTRA = "openai/gpt-astra-latest"
+GPT_LUNA = "openai/gpt-luna-latest"
 
 #: Codex models are reached through the ChatGPT OAuth backend, not the public
 #: API. Codex has no aliases of its own, so `uniborg/codex_aliases.py` resolves

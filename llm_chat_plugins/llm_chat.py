@@ -183,6 +183,8 @@ from uniborg.constants import (
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_LATEST,
     OPENAI_CODEX_LUNA_RESERVE,
+    GPT_SOL,
+    GPT_ASTRA,
     PIONEER_OPUS_4_8,
     PIONEER_GPT_5_5,
     PIONEER_SONNET_4_6,
@@ -191,6 +193,7 @@ from uniborg.constants import (
 # Import live mode utilities
 from uniborg import gemini_live_util
 from uniborg import codex_util
+from uniborg import openai_providers
 from uniborg import title_util
 from uniborg import topic_titles
 from uniborg import pioneer_util
@@ -246,38 +249,34 @@ PREFIX_MODEL_MAPPING = {
     (".g3", ".ج۳"): GEMINI_PRO_LATEST,
     (".g", ".ج"): "gemini/gemini-2.5-pro",
     (".g2", ".ج۲"): "gemini/gemini-2.5-pro",
-    (".c", ".چ"): OR_OPENAI_LATEST,
     (".d", ".د"): "deepseek/deepseek-reasoner",
+    #: GPT families answer on the user's /openaiProvider.
+    (".cl", ".چل"): (GPT_SOL, "low"),
+    (".cm", ".چم"): (GPT_SOL, "medium"),
+    (".ch", ".چه"): (GPT_SOL, "high"),
+    (".cx", ".چخ"): (GPT_SOL, "xhigh"),
+    (".cxx", ".چخخ"): (GPT_SOL, "max"),
+    (".c", ".چ"): (GPT_SOL, "medium"),
+    #: `.a` belongs to advanced_get and `.o` was Pioneer's, so Astra uses `.as`.
+    (".asl", ".اسل"): (GPT_ASTRA, "low"),
+    (".asm", ".اسم"): (GPT_ASTRA, "medium"),
+    (".ash", ".اسه"): (GPT_ASTRA, "high"),
+    (".asx", ".اسخ"): (GPT_ASTRA, "xhigh"),
+    (".asxx", ".اسخخ"): (GPT_ASTRA, "max"),
+    (".as", ".اس"): (GPT_ASTRA, "medium"),
 }
 
 CODEX_PREFIX_MODEL_MAPPING = {
     #: Pioneer is no longer used; uncomment to bring the prefixes back.
     # ".sn": (PIONEER_SONNET_4_6, None),
     # ".o": (PIONEER_OPUS_4_8, None),
-    (".cl", ".چل"): (OPENAI_CODEX_SOL, "low"),
-    (".cm", ".چم"): (OPENAI_CODEX_SOL, "medium"),
-    (".ch", ".چه"): (OPENAI_CODEX_SOL, "high"),
-    (".cx", ".چخ"): (OPENAI_CODEX_SOL, "xhigh"),
-    (".cxx", ".چخخ"): (OPENAI_CODEX_SOL, "max"),
-    (".c", ".چ"): (OPENAI_CODEX_SOL, "medium"),
-    #: `.a` belongs to advanced_get and `.o` was Pioneer's, so Astra uses `.as`.
-    (".asl", ".اسل"): (OPENAI_CODEX_ASTRA, "low"),
-    (".asm", ".اسم"): (OPENAI_CODEX_ASTRA, "medium"),
-    (".ash", ".اسه"): (OPENAI_CODEX_ASTRA, "high"),
-    (".asx", ".اسخ"): (OPENAI_CODEX_ASTRA, "xhigh"),
-    (".asxx", ".اسخخ"): (OPENAI_CODEX_ASTRA, "max"),
-    (".as", ".اس"): (OPENAI_CODEX_ASTRA, "medium"),
     #: The Luna Reserve meter, which survives the regular allowance running out.
     (".cr", ".چر"): (OPENAI_CODEX_LUNA_RESERVE, "medium"),
 }
 
-# Restricted Codex prefixes which have no public-provider meaning. Recognize
+# Restricted Codex prefixes, which have no public-provider meaning. Recognize
 # these for denied requests too, so they cannot silently become prompt text.
-DENIED_CODEX_PREFIX_MODEL_MAPPING = {
-    key: value
-    for key, value in CODEX_PREFIX_MODEL_MAPPING.items()
-    if key != (".c", ".چ")
-}
+DENIED_CODEX_PREFIX_MODEL_MAPPING = dict(CODEX_PREFIX_MODEL_MAPPING)
 
 CODEX_ACCESS_DENIED = "Codex access is not enabled for you."
 CODEX_IMAGEGEN_ACCESS_DENIED = "Codex image generation access is not enabled for you."
@@ -1079,6 +1078,11 @@ def _is_admin_only_model(model: str) -> bool:
 
 
 async def _can_user_access_model(event, model: str, *, config=None) -> bool:
+    """Whether EVENT's sender may use MODEL.
+
+    A provider-neutral GPT id is open to everyone: its provider decides the
+    backend, which is checked once the request is routed.
+    """
     if not model:
         return True
     if codex_util.is_codex_model(model):
@@ -1119,6 +1123,11 @@ def _resolve_image_generation_model(
     is, and generates images -- since image generation runs as a Codex tool
     and there is nowhere else to send it.
     """
+    #: Image generation runs only on Codex, so a GPT family means its Codex model.
+    if prefix_model and openai_providers.is_neutral_gpt(prefix_model):
+        prefix_model = openai_providers.family_for(prefix_model).codex_id
+    if selected_model and openai_providers.is_neutral_gpt(selected_model):
+        selected_model = openai_providers.family_for(selected_model).codex_id
     if prefix_model:
         if not codex_util.is_codex_model(prefix_model):
             raise ValueError(CODEX_IMAGEGEN_MODEL_CONFLICT)
@@ -1238,6 +1247,8 @@ METADATA_MODES = {
 
 STREAM_CALLBACK_PREFIX = "stream:"
 GEMINI_PROVIDER_CALLBACK_PREFIX = "geminiprovider:"
+OPENAI_PROVIDER_CALLBACK_PREFIX = "openaiprovider:"
+OPENAI_PROVIDER_RETRY = "retry"
 #: The placeholder an answer streams into, when nothing else is shown first.
 RESPONSE_PLACEHOLDER = "..."
 
@@ -1262,6 +1273,10 @@ BOT_COMMANDS = [
     {
         "command": "geminiprovider",
         "description": "Run Gemini models on Google AI Studio or Vertex AI",
+    },
+    {
+        "command": "openaiprovider",
+        "description": "Run GPT models on your OpenAI key, Codex or OpenRouter",
     },
     {
         "command": "setopenrouterkey",
@@ -1866,6 +1881,8 @@ class UserPrefs(_SavedSettings):
     model: str = Field(default=DEFAULT_MODEL)
     #: Where native Gemini chat runs: Google AI Studio or Vertex AI (/geminiProvider).
     gemini_provider: str = Field(default=gemini_providers.AI_STUDIO)
+    #: Where GPT models run (/openaiProvider, `openai_providers`).
+    openai_provider: str = Field(default=openai_providers.DEFAULT)
     system_prompt: Optional[str] = Field(default=None)
     #: Reasoning effort is per-model: {model_id: level}.
     thinking_by_model: Dict[str, str] = Field(default_factory=dict)
@@ -1966,6 +1983,18 @@ class UserManager:
             raise ValueError(f"Unknown Gemini provider: {provider!r}")
         prefs = self.get_prefs(user_id)
         prefs.gemini_provider = provider
+        self._save_prefs(user_id, prefs)
+
+    def get_openai_provider(self, user_id: int) -> str:
+        return openai_providers.normalize(
+            getattr(self.get_prefs(user_id), "openai_provider", None)
+        )
+
+    def set_openai_provider(self, user_id: int, provider: str):
+        if provider not in openai_providers.LABELS:
+            raise ValueError(f"Unknown OpenAI provider: {provider!r}")
+        prefs = self.get_prefs(user_id)
+        prefs.openai_provider = provider
         self._save_prefs(user_id, prefs)
 
     def set_system_prompt(self, user_id: int, prompt: Optional[str]):
@@ -4360,6 +4389,17 @@ class RequestModel:
     service: str
     #: The saved Codex model a quota fallback redirected, when it did.
     quota_fallback_from: Optional[str] = None
+    #: The provider-neutral GPT id MODEL was routed from (`openai_providers`).
+    selected_model: Optional[str] = None
+    #: Why the provider picked this backend, to show the user.
+    route_note: Optional[str] = None
+    #: The backend to retry on if this one turns out to be spent.
+    fallback_backend: Optional[str] = None
+
+    @property
+    def display_model(self) -> str:
+        """The model the user chose: what titles and effort follow."""
+        return self.selected_model or self.model
 
 
 def _resolve_request_model(
@@ -4382,18 +4422,98 @@ def _resolve_request_model(
     model, service = _get_effective_model_and_service(
         chat_id, user_id, prefix_model=prefix_model, topic_id=topic_id
     )
-    if prefix_model or not codex_util.is_codex_model(model):
-        return RequestModel(model=model, service=service)
+    return _with_codex_stand_in(
+        RequestModel(model=model, service=service),
+        user_id=user_id,
+        prefix_p=bool(prefix_model),
+        now=now,
+    )
 
+
+def _with_codex_stand_in(
+    request: RequestModel, *, user_id: int, prefix_p: bool, now=None
+) -> RequestModel:
+    """REQUEST, redirected to the user's Codex stand-in when one is armed."""
+    if prefix_p or not codex_util.is_codex_model(request.model):
+        return request
     fallback = user_manager.get_codex_quota_fallback(user_id, now=now)
     if fallback is None:
-        return RequestModel(model=model, service=service)
-
-    return RequestModel(
+        return request
+    return replace(
+        request,
         model=fallback.model,
         service=llm_util.get_service_from_model(fallback.model),
-        quota_fallback_from=model,
+        quota_fallback_from=request.model,
+        fallback_backend=None,
     )
+
+
+#: Which OpenAI keys are out of credit, and whether Codex is spent.
+OPENAI_QUOTA = openai_providers.QuotaMemory(get_redis=redis_util.get_redis)
+
+
+def _openai_api_keys(user_id: int) -> list[str]:
+    """The OpenAI keys USER_ID's requests may use, in order."""
+    key = get_effective_api_key(user_id, "openai")
+    return [key] if key else []
+
+
+async def _route_request_model(
+    request: RequestModel,
+    *,
+    user_id: int,
+    codex_access: bool,
+    prefix_p: bool = False,
+    now=None,
+) -> RequestModel:
+    """REQUEST with a provider-neutral GPT id sent to its backend.
+
+    The user's /openaiProvider picks the backend (`openai_providers`). Codex
+    reached this way honours an armed stand-in unless PREFIX_P, like a saved
+    Codex model always did.
+    """
+    model = request.model
+    if not openai_providers.is_neutral_gpt(model):
+        return request
+    keys = _openai_api_keys(user_id)
+    usable = [key for key in keys if not await OPENAI_QUOTA.key_spent_until(key)]
+    route = openai_providers.choose_backend(
+        user_manager.get_openai_provider(user_id),
+        codex_access=codex_access,
+        openai_any=bool(keys),
+        openai_usable=bool(usable),
+        codex_exhausted=bool(await OPENAI_QUOTA.codex_spent_until()),
+    )
+    concrete = openai_providers.backend_model(model, route.backend)
+    routed = RequestModel(
+        model=concrete,
+        service=llm_util.get_service_from_model(concrete),
+        selected_model=model,
+        route_note=route.note,
+        fallback_backend=route.fallback,
+    )
+    return _with_codex_stand_in(routed, user_id=user_id, prefix_p=prefix_p, now=now)
+
+
+def _rerouted(request: RequestModel, backend: str, *, note: str) -> RequestModel:
+    """REQUEST moved to BACKEND after its first backend turned out spent."""
+    concrete = openai_providers.backend_model(request.display_model, backend)
+    return replace(
+        request,
+        model=concrete,
+        service=llm_util.get_service_from_model(concrete),
+        route_note=note,
+        fallback_backend=None,
+    )
+
+
+class _RerouteRequest(Exception):
+    """The backend of a provider-routed GPT request is spent; try BACKEND."""
+
+    def __init__(self, backend: str, *, note: str):
+        super().__init__(note)
+        self.backend = backend
+        self.note = note
 
 
 def _apply_personal_model_choice(user_id: int, model: str):
@@ -5274,7 +5394,13 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
         "pdf_input": False,
         "image_generation": False,
     }
-    if codex_util.is_codex_model(model):
+    if (
+        codex_util.is_codex_model(model)
+        or openai_providers.is_openai_api_model(model)
+        or openai_providers.is_neutral_gpt(model)
+    ):
+        #: Every backend of the GPT families takes text and images, no audio
+        #: (OpenRouter's catalog, which mirrors OpenAI's, checked 2026-11-01).
         capabilities["vision"] = True
         return capabilities
     if pioneer_util.is_pioneer_model(model):
@@ -7256,6 +7382,12 @@ def register_handlers():
     )(gemini_provider_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^/openaiprovider{bot_username_suffix_re}(?:\s+(\S+))?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(openai_provider_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/setmodel{bot_username_suffix_re}(?:\s+(.*))?\s*$",
             func=lambda e: e.is_private,
         )
@@ -7616,18 +7748,18 @@ async def help_handler(event):
     sol = codex_aliases.resolution_for(OPENAI_CODEX_SOL).display_name
     astra = codex_aliases.resolution_for(OPENAI_CODEX_ASTRA).display_name
     codex_shortcuts_text = (
-        f"- `.c` / `.چ` / `.cm` / `.چم` → Codex's newest Sol, now {sol} (medium)\n"
+        f"- `.c` / `.چ` / `.cm` / `.چم` → the newest GPT Sol, now {sol} (medium), "
+        "on your /openaiProvider\n"
         "- `.cl` / `.چل` / `.ch` / `.چه` / `.cx` / `.چخ` / "
         f"`.cxx` / `.چخخ` → {sol} "
         "(low / high / extra high / max)\n"
-        "- `.cr` / `.چر` → Codex Luna Reserve (medium)\n"
-        f"- `.as` / `.اس` / `.asm` / `.اسم` → Codex's newest Astra, now {astra} (medium)\n"
+        f"- `.as` / `.اس` / `.asm` / `.اسم` → the newest GPT Astra, now {astra} (medium)\n"
         "- `.asl` / `.اسل` / `.ash` / `.اسه` / `.asx` / `.اسخ` / "
         f"`.asxx` / `.اسخخ` → {astra} "
         "(low / high / extra high / max)"
-        if has_codex_access
-        else "- `.c` → GPT Sol Latest (OpenRouter): Latest OpenAI model on OpenRouter"
     )
+    if has_codex_access:
+        codex_shortcuts_text += "\n- `.cr` / `.چر` → Codex Luna Reserve (medium)"
     if has_codex_imagegen_access:
         codex_shortcuts_text += (
             "\n- `.i` → enable Codex image generation for this message; combine "
@@ -7688,6 +7820,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setVertexKey: Sets or updates your Vertex AI (Express mode) API key.
 - /setOpenAIKey: Sets or updates your OpenAI API key.
 - /geminiProvider: Run Gemini models on Google AI Studio or Vertex AI. Current: `{gemini_providers.LABELS[user_manager.get_gemini_provider(event.sender_id)]}`.
+- /openaiProvider: Run GPT models on your OpenAI key, Codex, OpenRouter, or automatically on one then the other. Current: `{openai_providers.LABELS[user_manager.get_openai_provider(event.sender_id)]}`.
 - /setModel: Change the AI model. Current: `{prefs.model}`.
 - /setTitleModel: The model that writes file titles and summaries, and names new topics with a matching topic icon. Its panel also chooses the initial name: New Chat or Question text. Current model: `{prefs.title_model}`.
 - /codexStatus: Codex usage limits and the temporary stand-in model.
@@ -8261,6 +8394,167 @@ async def _gemini_provider_press_handler(event, provider: str):
     except errors.rpcerrorlist.MessageNotModifiedError:
         pass
     await event.answer(f"Gemini provider: {gemini_providers.LABELS[provider]}.")
+
+
+OPENAI_PROVIDER_USAGE = (
+    "Usage: `/openaiProvider`, or `/openaiProvider "
+    "openai|codex|openrouter|auto-openai-first|auto-codex-first`."
+)
+#: The API-key service each provider needs, when it needs one.
+OPENAI_PROVIDER_KEY_SERVICES = {
+    openai_providers.OPENAI: "openai",
+    openai_providers.OPENROUTER: "openrouter",
+    openai_providers.AUTO_OPENAI_FIRST: "openai",
+}
+
+
+async def _openai_keys_spent_until(user_id: int) -> Optional[datetime]:
+    """When the last of USER_ID's spent OpenAI keys is tried again, if any is."""
+    spent = [
+        until
+        for key in _openai_api_keys(user_id)
+        if (until := await OPENAI_QUOTA.key_spent_until(key)) is not None
+    ]
+    return max(spent) if spent else None
+
+
+async def _openai_provider_menu_text(event, target_id: int) -> str:
+    config = llm_chat_config.load_config()
+    codex_p = await llm_chat_config.can_use_codex(_UserProxy(event, target_id), config)
+    current = user_manager.get_openai_provider(target_id)
+    openai_keys = _openai_api_keys(target_id)
+    spent_until = await _openai_keys_spent_until(target_id)
+    codex_spent_until = await OPENAI_QUOTA.codex_spent_until()
+
+    if not openai_keys:
+        openai_state = "no key yet"
+    elif spent_until is not None and len(openai_keys) == 1:
+        openai_state = f"out of credit, skipped until {_format_local(spent_until)}"
+    else:
+        openai_state = "key set"
+    codex_state = "available" if codex_p else "not enabled for you"
+    if codex_p and codex_spent_until is not None:
+        codex_state = f"over its usage limit until {_format_local(codex_spent_until)}"
+    openrouter_state = (
+        "key set" if get_effective_api_key(target_id, "openrouter") else "no key yet"
+    )
+    hours = int(openai_providers.OPENAI_QUOTA_TTL.total_seconds() // 3600)
+    labels = openai_providers.LABELS
+    return "\n".join(
+        [
+            "**OpenAI Provider**",
+            "Where GPT models (GPT Sol, Astra and Luna) run.",
+            f"• **{labels[openai_providers.OPENAI]}** ({openai_state}): billed to "
+            "your OpenAI account. Key: /setOpenAIKey",
+            f"• **{labels[openai_providers.CODEX]}** ({codex_state}): the shared "
+            "ChatGPT subscription.",
+            f"• **{labels[openai_providers.OPENROUTER]}** ({openrouter_state}). "
+            "Key: /setOpenRouterKey",
+            f"• **{labels[openai_providers.AUTO_OPENAI_FIRST]}**: when an OpenAI "
+            f"key runs out of credit, Codex answers and the key is skipped for "
+            f"{hours} hours.",
+            f"• **{labels[openai_providers.AUTO_CODEX_FIRST]}**: when Codex hits "
+            "its usage limit, your OpenAI key answers until it resets.",
+            "",
+            "Without an OpenAI key, Codex answers whoever may use it. None of "
+            "these models hear audio; audio links go to Gemini Flash. Luna "
+            "Reserve and image generation always use Codex.",
+            "",
+            f"Current: **{labels[current]}**",
+        ]
+    )
+
+
+def _openai_provider_menu_buttons(
+    target_id: int, *, spent_p: bool, callback_prefix: str
+) -> Optional[list]:
+    if not IS_BOT:
+        return None
+    current = user_manager.get_openai_provider(target_id)
+    buttons = [
+        tg_compat.callback_button(
+            f"✅ {label}" if provider == current else label,
+            data=f"{callback_prefix}{provider}",
+        )
+        for provider, label in openai_providers.LABELS.items()
+    ]
+    if spent_p:
+        buttons.append(
+            tg_compat.callback_button(
+                "🔄 Retry OpenAI now",
+                data=f"{callback_prefix}{OPENAI_PROVIDER_RETRY}",
+            )
+        )
+    return util.build_menu(buttons, n_cols=2)
+
+
+class _UserProxy:
+    """EVENT, answering access checks as if TARGET_ID had sent it."""
+
+    def __init__(self, event, target_id: int):
+        self._event = event
+        self.sender_id = target_id
+
+    def __getattr__(self, name):
+        return getattr(self._event, name)
+
+
+async def _openai_provider_menu(event, target_id: int, *, callback_prefix=None):
+    text = await _openai_provider_menu_text(event, target_id)
+    buttons = _openai_provider_menu_buttons(
+        target_id,
+        spent_p=await _openai_keys_spent_until(target_id) is not None,
+        callback_prefix=callback_prefix or OPENAI_PROVIDER_CALLBACK_PREFIX,
+    )
+    return text, buttons
+
+
+async def _apply_openai_provider(event, provider: str) -> None:
+    """Switch to PROVIDER, asking for its key when there is none yet."""
+    user_manager.set_openai_provider(event.sender_id, provider)
+    service = OPENAI_PROVIDER_KEY_SERVICES.get(provider)
+    if service and not get_effective_api_key(event.sender_id, service):
+        await llm_db.request_api_key_message(event, service)
+
+
+async def _retry_openai_keys(user_id: int) -> None:
+    for key in _openai_api_keys(user_id):
+        await OPENAI_QUOTA.clear_key(key)
+
+
+async def openai_provider_handler(event):
+    """/openaiProvider: run GPT models on an OpenAI key, Codex or OpenRouter."""
+    user_id = event.sender_id
+    arg = (event.pattern_match.group(1) or "").strip().lower()
+    if arg:
+        provider = openai_providers.ARGS.get(arg)
+        if provider is None:
+            await send_info_message(event, OPENAI_PROVIDER_USAGE, parse_mode="md")
+            return
+        await _apply_openai_provider(event, provider)
+    text, buttons = await _openai_provider_menu(event, user_id)
+    await send_info_message(event, text, parse_mode="md", buttons=buttons)
+
+
+async def _openai_provider_press_handler(event, choice: str):
+    user_id = event.sender_id
+    if choice == OPENAI_PROVIDER_RETRY:
+        await _retry_openai_keys(user_id)
+        feedback = "OpenAI keys will be tried again."
+    elif choice in openai_providers.LABELS:
+        await _apply_openai_provider(event, choice)
+        feedback = f"OpenAI provider: {openai_providers.LABELS[choice]}."
+    else:
+        await event.answer("Unknown provider.", alert=True)
+        return
+    text, buttons = await _openai_provider_menu(event, user_id)
+    try:
+        await event.edit(
+            f"{BOT_META_INFO_PREFIX}{text}", parse_mode="md", buttons=buttons
+        )
+    except errors.rpcerrorlist.MessageNotModifiedError:
+        pass
+    await event.answer(feedback)
 
 
 async def set_pioneer_key_handler(event):
@@ -11472,6 +11766,10 @@ async def callback_handler(event):
         await _gemini_provider_press_handler(
             event, data_str[len(GEMINI_PROVIDER_CALLBACK_PREFIX) :]
         )
+    elif data_str.startswith(OPENAI_PROVIDER_CALLBACK_PREFIX):
+        await _openai_provider_press_handler(
+            event, data_str[len(OPENAI_PROVIDER_CALLBACK_PREFIX) :]
+        )
     elif data_str.startswith(STREAM_CALLBACK_PREFIX):
         choice = stream_driver.stream_choice(data_str[len(STREAM_CALLBACK_PREFIX) :])
         await _stream_menu_press_handler(event, scope=choice.scope, mode=choice.mode)
@@ -12930,6 +13228,11 @@ class GenerationRequest:
     surface: GenerationSurface = GenerationSurface.CHAT
     #: Where a native Gemini model runs (`gemini_providers`).
     gemini_provider: str = gemini_providers.AI_STUDIO
+    #: The model whose saved reasoning effort applies: the provider-neutral
+    #: GPT id MODEL was routed from, when it was.
+    reasoning_model: Optional[str] = None
+    #: Where a provider-routed GPT request may retry once its backend is spent.
+    fallback_backend: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -12970,6 +13273,16 @@ async def _response_placeholder(event, placeholder_text: str, *, prefs):
         top_msg_id=_thread_topic_id(event) if drafts else None,
         #: Only a draft logs; tests import the plugin with no `logger`.
         logger=logger if drafts else None,
+    )
+
+
+def _openai_quota_hint(exc: Exception) -> str:
+    if not openai_providers.is_insufficient_quota(exc):
+        return ""
+    return (
+        " This OpenAI key is out of credit; I will skip it for "
+        f"{int(openai_providers.OPENAI_QUOTA_TTL.total_seconds() // 3600)} hours "
+        "where another backend can answer. See /openaiProvider."
     )
 
 
@@ -13029,7 +13342,9 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
 
     # --- Construct API call arguments ---
     is_gemini_model_p = is_gemini_model(model_in_use)
-    is_codex_model_p = codex_util.is_codex_model(model_in_use)
+    is_openai_api_p = openai_providers.is_openai_api_model(model_in_use)
+    #: Codex and the OpenAI API share one Responses-API client and stream.
+    is_codex_model_p = codex_util.is_codex_model(model_in_use) or is_openai_api_p
     is_pioneer_model_p = is_pioneer_model(model_in_use)
 
     # Image generation models don't support streaming
@@ -13050,10 +13365,14 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
     reasoning = _get_effective_reasoning(
         chat_id,
         user_id,
-        model=model_in_use,
+        model=req.reasoning_model or model_in_use,
         prefix_effort=req.prefix_effort,
         topic_id=_thread_topic_id(event),
     )
+    if req.reasoning_model and model_in_use.startswith("openrouter/"):
+        reasoning = replace(
+            reasoning, level=openai_providers.openrouter_level(reasoning.level)
+        )
     if reasoning.level:
         api_kwargs["reasoning_effort"] = reasoning.level
 
@@ -13062,7 +13381,11 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
         if prefs.enabled_tools:
             warnings.append("Tools are disabled (not supported in JSON mode).")
     elif prefs.json_mode and is_codex_model_p:
-        warnings.append("JSON mode is disabled for Codex models.")
+        warnings.append(
+            "JSON mode is disabled for OpenAI models."
+            if is_openai_api_p
+            else "JSON mode is disabled for Codex models."
+        )
 
     if is_gemini_model_p:
         api_kwargs["safety_settings"] = SAFETY_SETTINGS
@@ -13212,6 +13535,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
                     image_callback=(
                         deliver_codex_image if req.image_generation else None
                     ),
+                    api_key=api_key if is_openai_api_p else None,
                 )
             )
             add_active_llm_task(user_id, codex_task)
@@ -13235,6 +13559,24 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
             has_image = codex_response.has_image
         except codex_util.CodexStreamError as e:
             partial = e.response.text.strip()
+            if is_openai_api_p and openai_providers.is_insufficient_quota(e):
+                await OPENAI_QUOTA.mark_key_spent(api_key)
+                if not partial and req.fallback_backend == openai_providers.CODEX:
+                    raise _RerouteRequest(
+                        openai_providers.CODEX,
+                        note=openai_providers.OPENAI_SPENT_NOTE,
+                    ) from e
+            if (
+                e.usage_limit is not None
+                and not is_openai_api_p
+                and not codex_util.is_luna_reserve_model(model_in_use)
+            ):
+                await OPENAI_QUOTA.mark_codex_spent(e.usage_limit.resets_at)
+                if not partial and req.fallback_backend == openai_providers.OPENAI:
+                    raise _RerouteRequest(
+                        openai_providers.OPENAI,
+                        note=openai_providers.CODEX_SPENT_NOTE,
+                    ) from e
             if e.usage_limit is not None and guest_p:
                 #: The quota panel needs buttons and a message of its own.
                 notice = (
@@ -13286,8 +13628,11 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
                     )
                 return _ALREADY_DELIVERED
             #: Fenced so JSON braces and backticks cannot break markdown.
+            backend_name = "OpenAI" if is_openai_api_p else "Codex"
             error_text = (
-                f"{BOT_META_INFO_PREFIX}❌ Codex request failed.\n```\n{e}\n```"
+                f"{BOT_META_INFO_PREFIX}❌ {backend_name} request failed."
+                f"{_openai_quota_hint(e) if is_openai_api_p else ''}"
+                f"\n```\n{e}\n```"
             )
             if partial:
                 error_text = f"{partial}\n\n{BOT_META_INFO_LINE}\n{error_text}"
@@ -13479,11 +13824,16 @@ async def _chat_handler(
     # Determine effective model and service (with prefix model override)
     #: Resolved before the access check so a redirected request presents its
     #: stand-in model there and does not also draw the access notice.
-    request_model = _resolve_request_model(
-        chat_id,
-        user_id,
-        prefix_model=prefix_result.model,
-        topic_id=_thread_topic_id(event),
+    request_model = await _route_request_model(
+        _resolve_request_model(
+            chat_id,
+            user_id,
+            prefix_model=prefix_result.model,
+            topic_id=_thread_topic_id(event),
+        ),
+        user_id=user_id,
+        codex_access=user_has_codex_access,
+        prefix_p=bool(prefix_result.model),
     )
     model_in_use, service_needed = request_model.model, request_model.service
     if not await _can_user_access_model(event, model_in_use, config=config):
@@ -13500,6 +13850,7 @@ async def _chat_handler(
             )
         model_in_use = DEFAULT_MODEL
         service_needed = llm_util.get_service_from_model(model_in_use)
+        request_model = RequestModel(model=model_in_use, service=service_needed)
     model_capabilities = get_model_capabilities(model_in_use)
     service_needed = _gemini_chat_service(user_id, model_in_use, service_needed)
     vertex_refusal = _vertex_refusal(model_in_use, service_needed)
@@ -13548,7 +13899,9 @@ async def _chat_handler(
     response_message = None
     try:
         topic_prefixed = await _start_topic_title(
-            event, model=model_in_use, prefix_effort=prefix_result.reasoning_effort
+            event,
+            model=request_model.display_model,
+            prefix_effort=prefix_result.reasoning_effort,
         )
         #: Inside `try`, so a chat the bot cannot post in reaches the error
         #: reply below instead of escaping the handler.
@@ -13578,6 +13931,8 @@ async def _chat_handler(
                 "Codex is over its shared usage limit; using "
                 f"{_model_display_name(request_model.model)} for now. /codexStatus"
             )
+        if request_model.route_note:
+            warnings.append(request_model.route_note)
 
         # ic(messages)
         if not messages:
@@ -13591,21 +13946,39 @@ async def _chat_handler(
             await util.edit_message(response_message, error_message, parse_mode="md")
             return
 
-        generation = await _generate_streamed(
-            GenerationRequest(
-                event=event,
-                response_message=response_message,
-                messages=messages,
-                model=model_in_use,
-                model_capabilities=model_capabilities,
-                api_key=api_key,
-                prefs=prefs,
-                prefix_effort=prefix_result.reasoning_effort,
-                image_generation=prefix_result.image_generation,
-                warnings=warnings,
-                gemini_provider=gemini_provider,
-            )
-        )
+        while True:
+            try:
+                generation = await _generate_streamed(
+                    GenerationRequest(
+                        event=event,
+                        response_message=response_message,
+                        messages=messages,
+                        model=model_in_use,
+                        model_capabilities=model_capabilities,
+                        api_key=api_key,
+                        prefs=prefs,
+                        prefix_effort=prefix_result.reasoning_effort,
+                        image_generation=prefix_result.image_generation,
+                        warnings=warnings,
+                        gemini_provider=gemini_provider,
+                        reasoning_model=request_model.selected_model,
+                        fallback_backend=request_model.fallback_backend,
+                    )
+                )
+            except _RerouteRequest as reroute:
+                #: Codex and the OpenAI API take the same history, so only
+                #: the backend changes.
+                request_model = _rerouted(
+                    request_model, reroute.backend, note=reroute.note
+                )
+                model_in_use = request_model.model
+                service_needed = request_model.service
+                api_key = get_effective_api_key(user_id, service_needed)
+                warnings.append(reroute.note)
+                if api_key:
+                    continue
+                raise
+            break
         if generation.delivered:
             return
         response_text = generation.text
@@ -13649,7 +14022,7 @@ async def _chat_handler(
             event,
             question=prefix_result.processed_text or event.text or "",
             answer=response_text,
-            model=model_in_use,
+            model=request_model.display_model,
             reasoning_level=generation.reasoning_level,
             codex_p=user_has_codex_access,
             prefixed=topic_prefixed,
@@ -13740,6 +14113,8 @@ class GuestRequestPlan:
     warnings: list
     #: An `.i` request, which the guest answer shows as its photo.
     image_generation: bool = False
+    #: The provider-neutral GPT id `model` was routed from, if any.
+    reasoning_model: Optional[str] = None
 
     @property
     def gemini_provider(self) -> str:
@@ -13790,10 +14165,9 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
     caller may not make raises `GuestRequestRefused`.
     """
     user_id = event.sender_id
+    codex_p = await llm_chat_config.can_use_codex(event, config)
     prefix = _detect_and_process_message_prefix(
-        event.text or "",
-        admin_p=is_admin,
-        codex_p=await llm_chat_config.can_use_codex(event, config),
+        event.text or "", admin_p=is_admin, codex_p=codex_p
     )
     prefix_model = prefix.model
     if prefix.image_generation:
@@ -13803,13 +14177,19 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
             )
         except ValueError as exc:
             raise GuestRequestRefused(str(exc)) from exc
-    model = _resolve_request_model(
-        event.chat_id, user_id, prefix_model=prefix_model
-    ).model
+    request = await _route_request_model(
+        _resolve_request_model(event.chat_id, user_id, prefix_model=prefix_model),
+        user_id=user_id,
+        codex_access=codex_p,
+        prefix_p=bool(prefix_model),
+    )
+    model = request.model
+    reasoning_model = request.selected_model
     if not await _can_user_access_model(event, model, config=config):
         if prefix.image_generation:
             raise GuestRequestRefused(CODEX_IMAGEGEN_ACCESS_DENIED)
         model = DEFAULT_MODEL
+        reasoning_model = None
     service = _gemini_chat_service(
         user_id, model, llm_util.get_service_from_model(model)
     )
@@ -13822,8 +14202,9 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
         api_key=get_effective_api_key(user_id, service),
         model_capabilities=get_model_capabilities(model),
         prefix_effort=prefix.reasoning_effort,
-        warnings=[],
+        warnings=[request.route_note] if request.route_note else [],
         image_generation=prefix.image_generation,
+        reasoning_model=reasoning_model,
     )
 
 
@@ -14119,6 +14500,7 @@ async def _run_guest_answer(
                 warnings=warnings,
                 surface=GenerationSurface.GUEST,
                 gemini_provider=plan.gemini_provider,
+                reasoning_model=plan.reasoning_model,
             )
         )
         if generation.delivered:

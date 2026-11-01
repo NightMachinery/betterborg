@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 from uniborg import codex_util, llm_models, tg_compat
 from uniborg.constants import (
+    GPT_SOL,
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_LUNA,
     OPENAI_CODEX_SOL,
@@ -87,7 +88,7 @@ class LunaReservePrefixTests(unittest.TestCase):
 
     def test_cr_does_not_shadow_the_shorter_c_prefix(self):
         #: Longest-match wins, so `.c` must still mean Sol.
-        self.assertEqual(self.detect(".c hello").model, OPENAI_CODEX_SOL)
+        self.assertEqual(self.detect(".c hello").model, GPT_SOL)
 
     def test_cr_combines_with_an_effort_prefix(self):
         result = self.detect(".cr .th hello")

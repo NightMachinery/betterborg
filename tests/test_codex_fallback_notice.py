@@ -121,10 +121,16 @@ class CodexFallbackNoticeTests(unittest.TestCase):
         save.assert_not_called()
 
     def test_explicit_codex_request_denies_without_fallback_notice(self):
-        info, api_key, key_prompt, save = self.run_request(text=".cm hello")
+        info, api_key, key_prompt, save = self.run_request(text=".cr hello")
         self.assertEqual(info.await_args.args[1], plugin.CODEX_ACCESS_DENIED)
         api_key.assert_not_called()
         key_prompt.assert_not_awaited()
+        save.assert_not_called()
+
+    def test_gpt_prefix_without_codex_asks_for_an_openai_key(self):
+        info, _, key_prompt, save = self.run_request(text=".cm hello")
+        info.assert_not_awaited()
+        self.assertEqual(key_prompt.await_args.args[1], "openai")
         save.assert_not_called()
 
     def test_non_codex_default_does_not_warn(self):

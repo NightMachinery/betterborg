@@ -10,8 +10,13 @@ import copy
 import unittest
 from unittest.mock import patch
 
-from uniborg import codex_aliases, codex_util, llm_models
-from uniborg.constants import OPENAI_CODEX_ASTRA, OPENAI_CODEX_LUNA, OPENAI_CODEX_SOL
+from uniborg import codex_aliases, codex_util, llm_models, openai_providers
+from uniborg.constants import (
+    GPT_SOL,
+    OPENAI_CODEX_ASTRA,
+    OPENAI_CODEX_LUNA,
+    OPENAI_CODEX_SOL,
+)
 
 _WITH_ULTRA = ["low", "medium", "high", "xhigh", "max", "ultra"]
 _NO_ULTRA = ["low", "medium", "high", "xhigh", "max"]
@@ -91,7 +96,16 @@ class CodexAliasTests(unittest.TestCase):
         self.assertIn("`gpt-6.2-sol` (GPT-6.2 Sol), was `gpt-6.1-sol`", notice)
         self.assertEqual(codex_util.codex_model_name(OPENAI_CODEX_SOL), "gpt-6.2-sol")
         self.assertEqual(
-            llm_models.codex_model_choices()[OPENAI_CODEX_SOL], "GPT-6.2 Sol (Codex)"
+            llm_models.spec_for_model(OPENAI_CODEX_SOL).display_name,
+            "GPT-6.2 Sol (Codex)",
+        )
+        #: The provider-neutral family and its OpenAI API backend follow too.
+        self.assertEqual(llm_models.public_model_choices()[GPT_SOL], "GPT-6.2 Sol")
+        self.assertEqual(
+            openai_providers.openai_api_slug(
+                openai_providers.backend_model(GPT_SOL, openai_providers.OPENAI)
+            ),
+            "gpt-6.2-sol",
         )
         self.assertEqual(codex_util.codex_model_name(OPENAI_CODEX_ASTRA), "gpt-6-astra")
 

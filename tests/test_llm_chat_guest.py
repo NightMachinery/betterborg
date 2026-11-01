@@ -331,7 +331,9 @@ class AnswerTests(_GuestTestCase):
                 patch.object(
                     plugin,
                     "_resolve_request_model",
-                    return_value=SimpleNamespace(model=IMAGE_MODEL),
+                    return_value=plugin.RequestModel(
+                        model=IMAGE_MODEL, service="gemini"
+                    ),
                 )
             )
             stack.enter_context(

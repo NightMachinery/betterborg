@@ -18,7 +18,7 @@ import httpx
 import openai
 from PIL import Image
 
-from uniborg import codex_aliases, stream_driver, util
+from uniborg import codex_aliases, openai_providers, stream_driver, util
 from uniborg.constants import OPENAI_CODEX_LUNA_RESERVE
 
 CODEX_MODEL_PREFIX = "openai-codex/"
@@ -44,12 +44,22 @@ _USAGE_LIMIT_FIELDS = (
 )
 
 
+@dataclass(frozen=True)
+class TokenUsage:
+    """What one Responses call consumed, as its `usage` reported."""
+
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    output_tokens: int = 0
+
+
 @dataclass
 class CodexResponse:
     text: str
     finish_reason: Optional[str] = None
     previews_delivered: int = 0
     images_delivered: int = 0
+    usage: Optional[TokenUsage] = None
 
     @property
     def has_image(self) -> bool:
@@ -447,6 +457,29 @@ def codex_model_name(model: str) -> str:
     return codex_aliases.slug_for(model) or model.removeprefix(CODEX_MODEL_PREFIX)
 
 
+def responses_model_name(model: str) -> str:
+    """The model name sent for MODEL, a Codex or an OpenAI API model id."""
+    if openai_providers.is_openai_api_model(model):
+        return openai_providers.openai_api_slug(model)
+    return codex_model_name(model)
+
+
+def _token_usage(response) -> Optional[TokenUsage]:
+    usage = _field(response, "usage")
+    if usage is None:
+        return None
+    details = _field(usage, "input_tokens_details")
+
+    def count(value) -> int:
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    return TokenUsage(
+        input_tokens=count(_field(usage, "input_tokens")),
+        cached_input_tokens=count(_field(details, "cached_tokens")),
+        output_tokens=count(_field(usage, "output_tokens")),
+    )
+
+
 def is_luna_reserve_model(model: str) -> bool:
     """Whether `model` routes to the Luna Reserve rather than the plan allowance."""
     return bool(model) and codex_model_name(model) == codex_model_name(
@@ -526,14 +559,18 @@ def _is_supported_codex_image_url(url: str) -> bool:
 
 
 async def _create_async_client(
-    *, max_retries: Optional[int] = None
+    *, max_retries: Optional[int] = None, api_key: Optional[str] = None
 ) -> openai.AsyncOpenAI:
-    token, headers, base_url = await asyncio.to_thread(_get_codex_auth)
-    kwargs = {
-        "api_key": token,
-        "base_url": base_url,
-        "default_headers": headers,
-    }
+    """A Codex client, or with API_KEY one for the public OpenAI API."""
+    if api_key is not None:
+        kwargs = {"api_key": api_key}
+    else:
+        token, headers, base_url = await asyncio.to_thread(_get_codex_auth)
+        kwargs = {
+            "api_key": token,
+            "base_url": base_url,
+            "default_headers": headers,
+        }
     #: Left to the SDK default unless a caller caps it. A usage-limit 429 is not
     #: worth retrying, and the default of 2 triples the wait before we see it.
     if max_retries is not None:
@@ -569,7 +606,7 @@ def prepare_codex_response_kwargs(
     prompt_cache_key: Optional[str] = None,
 ) -> dict:
     kwargs = {
-        "model": codex_model_name(model),
+        "model": responses_model_name(model),
         "input": input_messages,
         "store": False,
         "stream": True,
@@ -641,8 +678,12 @@ async def stream_codex_response(
     prompt_cache_key: Optional[str] = None,
     image_callback: Optional[Callable[[CodexImage], Awaitable[None]]] = None,
     max_retries: Optional[int] = None,
+    api_key: Optional[str] = None,
 ) -> CodexResponse:
     """Deliver images serially; callback success means Telegram accepted the image.
+
+    With API_KEY the request goes to the public OpenAI Responses API instead
+    of Codex, for an OpenAI API model id (`openai_providers`).
 
     Callback failures stop this request without retrying generation. Cancellation
     propagates after resource cleanup; already-delivered images remain intact.
@@ -723,7 +764,7 @@ async def stream_codex_response(
                     )
 
     try:
-        client = await _create_async_client(max_retries=max_retries)
+        client = await _create_async_client(max_retries=max_retries, api_key=api_key)
         stream = await client.responses.create(**kwargs)
         async for stream_event in stream:
             event_type = _field(stream_event, "type")
@@ -765,6 +806,7 @@ async def stream_codex_response(
             ):
                 response = _field(stream_event, "response")
                 result.finish_reason = _field(response, "status")
+                result.usage = _token_usage(response)
                 # Preserve any completed outputs even when the response later fails.
                 for index, item in enumerate(_field(response, "output", []) or []):
                     if _field(item, "status") in (None, "completed"):
