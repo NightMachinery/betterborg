@@ -194,6 +194,7 @@ from uniborg.constants import (
 from uniborg import gemini_live_util
 from uniborg import codex_util
 from uniborg import key_sharing
+from uniborg import key_usage
 from uniborg import openai_providers
 from uniborg import title_util
 from uniborg import topic_titles
@@ -8756,11 +8757,58 @@ def _keys_panel(target_id: int, *, viewer_id: int):
                     ),
                 )
             )
+    usage_lines = _key_usage_lines(target_id)
+    if usage_lines:
+        lines += [
+            "",
+            f"**Use of {'your' if own_view else 'their'} keys by others "
+            f"(last {key_usage.DEFAULT_DAYS} days, approximate)**",
+        ] + usage_lines
     if len(lines) == 2:
         lines += ["", "No API keys yet. Set one with /setGeminiKey, /setOpenAIKey, …"]
     if own_view:
         lines += ["", "Share a key with /shareKey."]
     return "\n".join(lines), (util.build_menu(buttons, n_cols=1) if buttons else None)
+
+
+def _usage_backend_name(backend: str) -> str:
+    return "Codex" if backend == "codex" else _service_name(backend)
+
+
+def _key_usage_lines(payer_id: int) -> list[str]:
+    """One line per user who used PAYER_ID's keys, by service."""
+    try:
+        totals = key_usage.by_user(payer_id=payer_id)
+    except Exception:
+        return []
+    per_user: dict[int, list[str]] = {}
+    for (user_id, backend), total in sorted(totals.items()):
+        per_user.setdefault(user_id, []).append(
+            f"{_usage_backend_name(backend)} {key_usage.describe(total)}"
+        )
+    return [
+        f"• {_user_display_name(user_id)} ({user_id}): " + "; ".join(parts)
+        for user_id, parts in per_user.items()
+    ]
+
+
+def _codex_user_usage_text(target_id: int) -> str:
+    """TARGET_ID's usage paid by Codex or by others' keys, for the admin."""
+    try:
+        totals = key_usage.of_user(target_id)
+    except Exception:
+        return "Usage unavailable"
+    lines = []
+    for (payer_id, backend), total in sorted(totals.items()):
+        if payer_id == key_usage.CODEX_PAYER:
+            source = "Codex"
+        else:
+            source = (
+                f"{_usage_backend_name(backend)}, key of "
+                f"{_html_dynamic(_user_display_name(payer_id), 60)}"
+            )
+        lines.append(f"• {source}: {key_usage.describe(total)}")
+    return "\n".join(lines) or "Nothing on Codex or shared keys"
 
 
 def _key_order_panel(target_id: int, service: str, *, viewer_id: int):
@@ -9860,6 +9908,8 @@ async def _show_codex_user_detail(
         f"\n\n<b>Access</b>\n{_codex_user_access_text(configured_user)}"
         f"\n{_admin_share_user_text(target_id, codex_enabled=configured_user.codex_enabled)}"
         f"\n\n<b>API keys</b>\n{keys_text}"
+        f"\n\n<b>Usage, last {key_usage.DEFAULT_DAYS} days (approximate)</b>\n"
+        f"{_codex_user_usage_text(target_id)}"
     )
     if not configured_user.codex_enabled and codex_util.is_codex_model(current):
         text += f"\nOutside admin/trusted contexts, fallback model: {_html_dynamic(_model_display_name(DEFAULT_MODEL))}"
@@ -13918,6 +13968,8 @@ class GenerationResult:
     delivered: bool = False
     #: The reasoning effort sent with the request, if any.
     reasoning_level: Optional[str] = None
+    #: Tokens the response reported (Codex and the OpenAI API only).
+    usage: Optional[codex_util.TokenUsage] = None
 
 
 _ALREADY_DELIVERED = GenerationResult(
@@ -14117,6 +14169,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
     # Make the API call
     response_text = ""
     has_image = False
+    usage = None
 
     # Check if this is a native Gemini image generation model
     if is_native_gemini_image_generation(model_in_use):
@@ -14230,6 +14283,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
             response_text = codex_response.text
             finish_reason = codex_response.finish_reason
             has_image = codex_response.has_image
+            usage = codex_response.usage
         except codex_util.CodexStreamError as e:
             partial = e.response.text.strip()
             if is_openai_api_p and openai_providers.is_insufficient_quota(e):
@@ -14381,7 +14435,48 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
         finish_reason=finish_reason,
         has_image=has_image,
         reasoning_level=reasoning.level,
+        usage=usage,
     )
+
+
+def _record_usage(
+    user_id: int,
+    *,
+    model: str,
+    service: str,
+    credential: Optional[key_sharing.Credential],
+    generation: GenerationResult,
+) -> None:
+    """Add an answered request to the usage ledger (`key_usage`).
+
+    Only what someone else pays for is recorded: Codex requests, and requests
+    made with another user's key.
+    """
+    if service == "codex":
+        payer_id = key_usage.CODEX_PAYER
+    elif credential is not None and credential.owner_id != user_id:
+        payer_id = credential.owner_id
+    else:
+        return
+    usage = generation.usage
+    tokens = (
+        key_usage.Tokens(
+            usage.input_tokens, usage.cached_input_tokens, usage.output_tokens
+        )
+        if usage is not None
+        else None
+    )
+    try:
+        key_usage.record(
+            payer_id=payer_id,
+            user_id=user_id,
+            backend=service,
+            model=model,
+            tokens=tokens,
+        )
+    except Exception as exc:
+        #: Bookkeeping must never cost the user their answer.
+        logger.warning(f"Could not record usage for {user_id}: {exc}")
 
 
 async def chat_handler(
@@ -14701,6 +14796,13 @@ async def _chat_handler(
             break
         if generation.delivered:
             return
+        _record_usage(
+            user_id,
+            model=model_in_use,
+            service=service_needed,
+            credential=credentials[key_index] if credentials else None,
+            generation=generation,
+        )
         response_text = generation.text
 
         # Final text processing (now handles both success and failure cases)
@@ -14835,6 +14937,8 @@ class GuestRequestPlan:
     image_generation: bool = False
     #: The provider-neutral GPT id `model` was routed from, if any.
     reasoning_model: Optional[str] = None
+    #: Whose key `api_key` is, when it comes from the credential chain.
+    credential: Optional[key_sharing.Credential] = None
 
     @property
     def gemini_provider(self) -> str:
@@ -14916,10 +15020,16 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
     vertex_refusal = _vertex_refusal(model, service)
     if vertex_refusal:
         raise GuestRequestRefused(vertex_refusal)
+    credentials = await _request_credentials(user_id, service, codex_access=codex_p)
     return GuestRequestPlan(
         model=model,
         service=service,
-        api_key=get_effective_api_key(user_id, service),
+        api_key=(
+            credentials[0].api_key
+            if credentials
+            else get_effective_api_key(user_id, service, codex_access=codex_p)
+        ),
+        credential=credentials[0] if credentials else None,
         model_capabilities=get_model_capabilities(model),
         prefix_effort=prefix.reasoning_effort,
         warnings=[request.route_note] if request.route_note else [],
@@ -15225,6 +15335,13 @@ async def _run_guest_answer(
         )
         if generation.delivered:
             return
+        _record_usage(
+            event.sender_id,
+            model=plan.model,
+            service=plan.service,
+            credential=plan.credential,
+            generation=generation,
+        )
         text = _append_warnings(generation.text.strip(), warnings, event=event)
         note = guest_util.album_note(query)
         await _finalize_guest_answer(answer, f"{text}\n\n{note}" if note else text)

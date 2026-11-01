@@ -72,3 +72,25 @@ The request path decides Codex access per message, so trusted chats count. The
 `/keys` display only knows the personal Codex grant from the roster, so a user
 who has Codex only through a trusted chat does not see the admin share listed,
 though their requests in that chat use it.
+
+## Usage
+
+Code: `uniborg/key_usage.py`.
+
+Every answered request that someone else pays for adds to a daily row of the
+`key_usage_daily` table: Codex requests (paid by the shared subscription) and
+requests made with another user's key (paid by its owner). Requests on a
+user's own key are not recorded.
+
+- `/keys` shows the owner who else used their keys in the last 30 days, per
+  user and service.
+- The `.codex-users` detail panel shows the admin a user's last 30 days on
+  Codex and on others' keys.
+
+Codex and the OpenAI API report tokens, so their rows carry token counts and an
+estimated cost. Other services (Gemini, OpenRouter, …) record request counts
+only; a total that includes them ends in `+`, since its cost is a lower bound.
+Costs use approximate list prices per GPT family (`key_usage.PRICES`), with
+cached input assumed at a tenth of the input price. Codex requests are priced
+as if they had run on the API, to show what the subscription covers. Treat all
+of it as an estimate, not a bill.

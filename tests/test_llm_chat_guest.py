@@ -246,7 +246,12 @@ class _GuestTestCase(unittest.TestCase):
             ),
             (plugin.llm_chat_config, "load_config", lambda: config),
             (plugin.util, "isAdmin", AsyncMock(return_value=self.admin)),
-            (plugin, "get_effective_api_key", lambda user_id, service: self.api_key),
+            (
+                plugin,
+                "get_effective_api_key",
+                lambda user_id, service, **_: self.api_key,
+            ),
+            (plugin, "_request_credentials", AsyncMock(return_value=[])),
             (plugin, "_generate_response", self.generate),
             (plugin, "_guest_claims", guest_util.QueryClaims()),
             (plugin, "_guest_limiter", guest_util.CallLimiter()),
