@@ -391,10 +391,5 @@ Use =.i= on the current message to enable Codex image generation, for example
 final images are sent separately, alongside any text response; the switch does
 not persist. See [[file:docs/codex_image_generation.md][Codex image generation]].
 
-** Pioneer (not in use)
-The Pioneer backend is still wired up but its models and prefixes are commented
-out, so they no longer appear in the chat model menus. See
-[[file:docs/pioneer.md][docs/pioneer.md]].
-
 ** learning
 Check out the already-mentioned [[https://github.com/uniborg/uniborg/tree/master/stdplugins][plugins]] directory to learn how to write your own, and consider reading [[http://telethon.readthedocs.io/][Telethon's documentation]].

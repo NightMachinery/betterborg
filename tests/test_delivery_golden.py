@@ -54,14 +54,13 @@ from unittest.mock import AsyncMock, patch
 from PIL import Image
 
 from test_codex_streaming import _Client, _Stream, _completed, _image_item
-from uniborg import codex_util, llm_chat_config, pioneer_util, util
+from uniborg import codex_util, llm_chat_config, util
 from uniborg.constants import (
     BOT_META_INFO_LINE,
     BOT_META_INFO_PREFIX,
     DEFAULT_FILE_LENGTH_THRESHOLD,
     DEFAULT_FILE_ONLY_LENGTH_THRESHOLD,
     OPENAI_CODEX_SOL,
-    PIONEER_GPT_5_5,
 )
 
 
@@ -105,7 +104,7 @@ _EVENT_ID = 4242
 _PLACEHOLDER_ID = 4343
 _GEMINI_KEY = "gemini-key"
 
-#: Any litellm model outside the Gemini, Codex and Pioneer branches whose
+#: Any litellm model outside the Gemini and Codex branches whose
 #: streaming delay is the 0.8 s default.
 _LITELLM_MODEL = "openrouter/test/model"
 
@@ -334,16 +333,6 @@ def _codex_delta(text):
     }
 
 
-def _pioneer_delta(text):
-    return SimpleNamespace(type="response.output_text.delta", delta=text)
-
-
-def _pioneer_completed():
-    return SimpleNamespace(
-        type="response.completed", response=SimpleNamespace(status="completed")
-    )
-
-
 def _serve_from_litellm(stack: ExitStack, stream):
     stack.enter_context(
         patch.object(plugin.litellm, "acompletion", new=AsyncMock(return_value=stream))
@@ -429,17 +418,6 @@ CODEX = _Backend(
     done=_completed,
     serve=_serve_from_client_of(codex_util),
 )
-PIONEER = _Backend(
-    model=PIONEER_GPT_5_5,
-    service="pioneer",
-    #: Pioneer models are admin-only.
-    admin=True,
-    delta=_pioneer_delta,
-    done=_pioneer_completed,
-    serve=_serve_from_client_of(pioneer_util),
-)
-
-
 #: (seconds since the stream opened, text delta). Every backend streams at the
 #: 0.8 s default interval, slows to 15 s ("▌💤") after 30 s and to 60 s
 #: ("▌💤💤") after 120 s. Every comparison is strict, which the exact
@@ -469,7 +447,7 @@ TIERED_PARTIALS = (
     "Hello world. A B C D E F G▌💤💤",
 )
 #: Codex checks the interval on every delta event, even one without text,
-#: while litellm and Pioneer skip those.
+#: while litellm skips those.
 CODEX_TIERED_PARTIALS = (
     "Hello▌",
     "Hello world▌",
@@ -720,9 +698,6 @@ class StreamingDeliveryGoldenTests(unittest.TestCase):
     def test_litellm(self):
         self.assert_golden(LITELLM, TIERED_PARTIALS)
 
-    def test_pioneer(self):
-        self.assert_golden(PIONEER, TIERED_PARTIALS)
-
     def test_codex(self):
         self.assert_golden(CODEX, CODEX_TIERED_PARTIALS)
 
@@ -859,10 +834,6 @@ class FinalDeliveryGoldenTests(unittest.TestCase):
             [PLACEHOLDER_SENT, self.LITELLM_IMAGE_SENT, final_edit("Here it is:")],
         )
 
-    def test_empty_pioneer_answer_deletes_the_placeholder(self):
-        calls = _run_chat(PIONEER, timed_events=_timed_events(PIONEER, ()))
-        self.assertEqual(calls, [PLACEHOLDER_SENT, PLACEHOLDER_DELETED])
-
 
 class CancelAndErrorGoldenTests(unittest.TestCase):
     #: The first two steps of the tiered timeline: one partial edit, "Hello▌".
@@ -879,9 +850,6 @@ class CancelAndErrorGoldenTests(unittest.TestCase):
 
     def test_stop_appends_the_cancel_note_litellm(self):
         self.assert_stop_golden(LITELLM)
-
-    def test_stop_appends_the_cancel_note_pioneer(self):
-        self.assert_stop_golden(PIONEER)
 
     def test_stop_appends_the_cancel_note_codex(self):
         self.assert_stop_golden(CODEX)

@@ -11,7 +11,6 @@ from uniborg.constants import (
     GPT_SOL,
     OPENAI_CODEX_LUNA_RESERVE,
     OPENAI_CODEX_SOL,
-    PIONEER_OPUS_4_8,
 )
 
 
@@ -40,6 +39,29 @@ class Event:
 
 
 class CodexAccessIntegrationTests(unittest.TestCase):
+    def test_saved_pioneer_models_migrate_to_gemini(self):
+        migrated = llm_chat._current_model_settings(
+            {
+                "model": "pioneer/claude-opus-4-8",
+                "title_model": "pioneer/custom-title-model",
+                "thinking_by_model": {"pioneer/custom-model": "high"},
+            }
+        )
+        self.assertEqual(migrated["model"], llm_chat.DEFAULT_MODEL)
+        self.assertEqual(migrated["title_model"], llm_chat.DEFAULT_MODEL)
+        self.assertEqual(
+            migrated["thinking_by_model"], {llm_chat.DEFAULT_MODEL: "high"}
+        )
+
+    def test_direct_pioneer_model_selection_is_rejected(self):
+        with patch.object(llm_chat, "send_info_message", new=AsyncMock()) as send:
+            accepted = asyncio.run(
+                llm_chat._guard_model_access(Event(), "pioneer/custom-model")
+            )
+        self.assertFalse(accepted)
+        self.assertIn("retired", send.await_args.args[1])
+        self.assertNotIn("pioneer", llm_chat.llm_db.API_KEY_CONFIG)
+
     def test_authorized_nonadmin_gets_codex_picker_without_admin_models(self):
         choices = llm_chat._model_choices_for_access(admin_p=False, codex_p=True)
         self.assertIn(OPENAI_CODEX_LUNA_RESERVE, choices)
@@ -53,29 +75,6 @@ class CodexAccessIntegrationTests(unittest.TestCase):
         self.assertNotIn(OPENAI_CODEX_LUNA_RESERVE, choices)
         #: GPT families are provider-routed, so everyone sees them.
         self.assertIn(GPT_SOL, choices)
-
-    def test_combined_menu_hides_reasoning_when_selected_model_access_is_missing(self):
-        prefs = SimpleNamespace(
-            model=PIONEER_OPUS_4_8,
-            thinking_by_model={PIONEER_OPUS_4_8: "high"},
-        )
-        with patch.object(llm_chat.user_manager, "get_prefs", return_value=prefs):
-            denied = llm_chat._build_model_menu(
-                456,
-                123,
-                scope=llm_chat.REASONING_SCOPE_PERSONAL,
-                admin_p=False,
-                codex_p=True,
-            )
-            allowed = llm_chat._build_model_menu(
-                456,
-                123,
-                scope=llm_chat.REASONING_SCOPE_PERSONAL,
-                admin_p=True,
-                codex_p=True,
-            )
-        self.assertFalse(any(key.startswith("think:") for key in denied.options))
-        self.assertTrue(any(key.startswith("think:") for key in allowed.options))
 
     def test_normal_model_menu_buttons_keep_friendly_labels_and_callbacks(self):
         prefs = SimpleNamespace(

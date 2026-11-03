@@ -95,7 +95,7 @@ distinct.
 - 🖼️ Pixtral Large
 
 A custom model id gets its provider's emoji (`_synthesized_spec`): 🔷 Codex,
-🧭 Pioneer, ♊ Gemini, 🔀 OpenRouter, and 🤖 for anything else.
+♊ Gemini, 🔀 OpenRouter, and 🤖 for anything else.
 
 ## Topic icons
 
@@ -123,7 +123,6 @@ use a stand-in (`TOPIC_ICON_STAND_INS` in `uniborg/llm_models.py`):
 - 🧙 Magistral: 🎩
 - 🖼️ Pixtral: 🎨
 - 🔷 Codex custom ids: 💻
-- 🧭 Pioneer: 🧪
 - ♊ Gemini custom ids: 💎
 - 🔀 OpenRouter custom ids: 🤖
 

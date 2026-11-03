@@ -2,9 +2,10 @@
 
 import unittest
 
-from uniborg import llm_models, openai_providers
+from uniborg import llm_models, llm_util, openai_providers
 from uniborg.constants import (
     GEMINI_FLASH_LITE_LATEST,
+    GEMINI_FLASH_LATEST,
     OPENAI_CODEX_LUNA,
     OPENAI_CODEX_LUNA_RESERVE,
     OPENAI_CODEX_SOL,
@@ -54,6 +55,17 @@ class CodexModelTests(unittest.TestCase):
         for model in (OPENAI_CODEX_LUNA_RESERVE, "x/y", "", None):
             with self.subTest(model=model):
                 self.assertEqual(llm_models.current_model_id(model), model)
+
+    def test_retired_pioneer_ids_fall_back_to_gemini(self):
+        for model in ("pioneer/claude-opus-4-8", "pioneer/custom-model"):
+            with self.subTest(model=model):
+                self.assertTrue(llm_models.is_retired_model(model))
+                self.assertEqual(
+                    llm_models.current_model_id(model), GEMINI_FLASH_LATEST
+                )
+        self.assertFalse(llm_models.is_retired_model("provider/custom-model"))
+        with self.assertRaisesRegex(ValueError, "Pioneer models have been retired"):
+            llm_util.get_service_from_model("pioneer/custom-model")
 
     def test_sol_rejects_none_and_luna_takes_it(self):
         self.assertFalse(
@@ -111,7 +123,6 @@ class TopicIconTests(unittest.TestCase):
     def test_every_model_has_an_icon_a_bot_may_set(self):
         models = [spec.id for spec in llm_models.MODEL_SPECS] + [
             "openai-codex/gpt-9",
-            "pioneer/model",
             "gemini/gemini-9-ultra",
             "openrouter/vendor/model",
             "somebody/else",

@@ -185,9 +185,6 @@ from uniborg.constants import (
     OPENAI_CODEX_LUNA_RESERVE,
     GPT_SOL,
     GPT_ASTRA,
-    PIONEER_OPUS_4_8,
-    PIONEER_GPT_5_5,
-    PIONEER_SONNET_4_6,
 )
 
 # Import live mode utilities
@@ -198,7 +195,6 @@ from uniborg import key_usage
 from uniborg import openai_providers
 from uniborg import title_util
 from uniborg import topic_titles
-from uniborg import pioneer_util
 from uniborg import llm_models
 from uniborg import llm_chat_config
 from uniborg.llm_models import DEFAULT_REASONING_EFFORT, ModelSpec
@@ -259,7 +255,7 @@ PREFIX_MODEL_MAPPING = {
     (".cx", ".چخ"): (GPT_SOL, "xhigh"),
     (".cxx", ".چخخ"): (GPT_SOL, "max"),
     (".c", ".چ"): (GPT_SOL, "medium"),
-    #: `.a` belongs to advanced_get and `.o` was Pioneer's, so Astra uses `.as`.
+    #: `.a` belongs to advanced_get, so Astra uses `.as`.
     (".asl", ".اسل"): (GPT_ASTRA, "low"),
     (".asm", ".اسم"): (GPT_ASTRA, "medium"),
     (".ash", ".اسه"): (GPT_ASTRA, "high"),
@@ -269,9 +265,6 @@ PREFIX_MODEL_MAPPING = {
 }
 
 CODEX_PREFIX_MODEL_MAPPING = {
-    #: Pioneer is no longer used; uncomment to bring the prefixes back.
-    # ".sn": (PIONEER_SONNET_4_6, None),
-    # ".o": (PIONEER_OPUS_4_8, None),
     #: The Luna Reserve meter, which survives the regular allowance running out.
     (".cr", ".چر"): (OPENAI_CODEX_LUNA_RESERVE, "medium"),
 }
@@ -1067,16 +1060,8 @@ def _topic_model_options_for_access(*, admin_p: bool, codex_p: bool) -> dict:
     return choices
 
 
-def is_pioneer_model(model: str) -> bool:
-    return pioneer_util.is_pioneer_model(model)
-
-
-def pioneer_model_name(model: str) -> str:
-    return pioneer_util.pioneer_model_name(model)
-
-
 def _is_admin_only_model(model: str) -> bool:
-    return is_pioneer_model(model) or model in ADMIN_MODEL_CHOICES
+    return model in ADMIN_MODEL_CHOICES
 
 
 async def _can_user_access_model(event, model: str, *, config=None) -> bool:
@@ -1096,6 +1081,9 @@ async def _can_user_access_model(event, model: str, *, config=None) -> bool:
 
 
 async def _guard_model_access(event, model: str, *, config=None) -> bool:
+    if llm_models.is_retired_model(model):
+        await send_info_message(event, "Pioneer models have been retired.")
+        return False
     if await _can_user_access_model(event, model, config=config):
         return True
     await send_info_message(event, _model_access_denial(model))
@@ -5127,13 +5115,6 @@ def _strip_cache_control(messages: list) -> None:
         message.pop("cache_control", None)
 
 
-def pioneer_tools_from_enabled(enabled_tools: list[str]) -> list[dict]:
-    """Map Betterborg tool toggles to Pioneer/OpenAI-compatible built-in tools."""
-    if "googleSearch" in (enabled_tools or []):
-        return [{"type": "web_search"}]
-    return []
-
-
 def is_cache_storage_quota_error(exception) -> bool:
     """Detect the free-tier 'cached content storage tokens' 429 (limit=0).
 
@@ -5528,10 +5509,6 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
         #: Every backend of the GPT families takes text and images, no audio
         #: (OpenRouter's catalog, which mirrors OpenAI's, checked 2026-11-01).
         capabilities["vision"] = True
-        return capabilities
-    if pioneer_util.is_pioneer_model(model):
-        capabilities["vision"] = True
-        capabilities["pdf_input"] = True
         return capabilities
     try:
         capabilities["vision"] = litellm.supports_vision(model)
@@ -7490,12 +7467,6 @@ def register_handlers():
     )(set_mistral_key_handler)
     borg.on(
         events.NewMessage(
-            pattern=rf"(?i)^/setpioneerkey{bot_username_suffix_re}(?:\s+(.*))?\s*$",
-            func=lambda e: e.is_private,
-        )
-    )(set_pioneer_key_handler)
-    borg.on(
-        events.NewMessage(
             pattern=rf"(?i)^/setvertexkey{bot_username_suffix_re}(?:\s+(.*))?\s*$",
             func=lambda e: e.is_private,
         )
@@ -9250,14 +9221,6 @@ async def _keys_press_handler(event, data: str):
     await event.answer("Unknown button.", alert=True)
 
 
-async def set_pioneer_key_handler(event):
-    """Delegates /setpioneerkey command logic to the shared module."""
-    if not await util.isAdmin(event):
-        await send_info_message(event, ADMIN_ONLY_COMMAND_IGNORED)
-        return
-    await llm_db.handle_set_key_command(event, "pioneer")
-
-
 CODEX_USERS_PAGE_SIZE = 8
 CODEX_USERS_DIALOG_SCAN_LIMIT = 500
 CODEX_USERS_CALLBACK_PREFIX = "cu:"
@@ -9641,11 +9604,12 @@ def _codex_users_key_names(user_id: int) -> tuple[str, ...]:
         "openrouter": "OpenRouter",
         "deepseek": "DeepSeek",
         "mistral": "Mistral",
-        "pioneer": "Pioneer",
     }
     names = []
     for item in metadata:
         service = str(item.service)
+        if service.lower() == "pioneer":
+            continue
         name = provider_names.get(service.lower(), service)
         if name not in names:
             names.append(name)
@@ -14104,7 +14068,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
 
     Builds the API arguments (context caching, reasoning effort, JSON mode,
     tools), then dispatches to the backend: native Gemini image generation,
-    Pioneer, Codex, or litellm. The final delivery is the caller's.
+    Codex or litellm. The final delivery is the caller's.
     """
     event = req.event
     response_message = req.response_message
@@ -14148,7 +14112,6 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
     is_openai_api_p = openai_providers.is_openai_api_model(model_in_use)
     #: Codex and the OpenAI API share one Responses-API client and stream.
     is_codex_model_p = codex_util.is_codex_model(model_in_use) or is_openai_api_p
-    is_pioneer_model_p = is_pioneer_model(model_in_use)
 
     # Image generation models don't support streaming
     # Note: Native Gemini image generation has separate handling with its own streaming
@@ -14225,13 +14188,6 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
         # Add modalities for image generation models
         if model_capabilities.get("image_generation", False):
             api_kwargs["modalities"] = ["image", "text"]
-    elif is_pioneer_model_p:
-        pioneer_tools = pioneer_tools_from_enabled(prefs.enabled_tools)
-        if pioneer_tools:
-            api_kwargs["tools"] = pioneer_tools
-        unsupported_pioneer_tools = set(prefs.enabled_tools) - {"googleSearch"}
-        if unsupported_pioneer_tools and WARN_UNAVAILABLE_TOOLS_P:
-            warnings.append("Only Google Search is supported for Pioneer models.")
     elif is_codex_model_p:
         codex_tools = _codex_tools_for_request(
             prefs.enabled_tools,
@@ -14264,36 +14220,6 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
         finish_reason = (
             None  # Native Gemini image generation doesn't provide finish_reason
         )
-    elif is_pioneer_model_p:
-        edit_interval = get_streaming_delay(model_in_use)
-        pioneer_task = asyncio.create_task(
-            pioneer_util.stream_pioneer_response(
-                event=event,
-                response_message=response_message,
-                model=model_in_use,
-                messages=messages,
-                api_key=api_key,
-                reasoning_effort=api_kwargs.get("reasoning_effort"),
-                tools=api_kwargs.get("tools"),
-                edit_interval=edit_interval,
-            )
-        )
-        add_active_llm_task(user_id, pioneer_task)
-        try:
-            pioneer_response = await pioneer_task
-            response_text = pioneer_response.text
-            finish_reason = pioneer_response.finish_reason
-            has_image = False
-        except asyncio.CancelledError:
-            await util.edit_message(
-                response_message,
-                f"{BOT_META_INFO_PREFIX}❌ Request was canceled.",
-                append_p=True,
-                parse_mode="md",
-            )
-            raise
-        finally:
-            remove_active_llm_task(user_id, pioneer_task)
     elif is_codex_model_p:
         edit_interval = get_streaming_delay(model_in_use)
         delivered_image_count = 0

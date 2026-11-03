@@ -24,7 +24,7 @@ same drafts, with its own setting; see [shell_streaming.md](shell_streaming.md).
 - **Stand-in**: `draft_stream.DraftAnswerMessage`, the object the streaming
   code edits in place of the placeholder message. It looks enough like a
   Telethon `Message` (`edit`, `reply`, `delete`, `id`, `text`) that the
-  streaming loops of litellm, Codex and Pioneer, and `util.edit_message`, work
+  streaming loops of litellm and Codex, and `util.edit_message`, work
   on it unchanged.
 - **Part**: one message of the finished answer. An answer longer than 4096
   characters is several messages, which `util.edit_message` builds by editing
@@ -101,7 +101,7 @@ streams by edits.
    worker**, a background task that sends the last live part as a draft, at
    most once per second (`DRAFT_MIN_INTERVAL`), and sends a heartbeat after
    20 s without changes (`DRAFT_HEARTBEAT_SECONDS`). Every streaming loop
-   (litellm, Pioneer, Codex and native Gemini images) shows the answer
+   (litellm, Codex and native Gemini images) shows the answer
    through a `stream_driver.PacedEditor`, which edits only when an edit is
    due. The pace comes from `draft_stream.streaming_pace`: for a stand-in it
    is at most once a second with a plain cursor, and for a real message it is

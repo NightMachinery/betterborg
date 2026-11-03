@@ -38,7 +38,6 @@ from uniborg.constants import (
     GPT_SOL,
     OPENAI_CODEX_ASTRA,
     OPENAI_CODEX_SOL,
-    PIONEER_OPUS_4_8,
 )
 
 
@@ -331,8 +330,8 @@ class CodexUsersTests(unittest.TestCase):
         self.assertEqual(records[123]["enabled_tools"], ["googleSearch"])
         self.assertEqual(records[900], {"model": "caller-model", "json_mode": True})
 
-    def test_direct_assignment_blocks_admin_only_model(self):
-        _, _, set_model = self.run_command(f"123 {PIONEER_OPUS_4_8}")
+    def test_direct_assignment_blocks_retired_provider_model(self):
+        _, _, set_model = self.run_command("123 pioneer/claude-opus-4-8")
         set_model.assert_not_called()
 
     def test_invalid_revoked_nonallowlisted_and_admin_targets_do_not_write(self):
@@ -741,7 +740,7 @@ class CodexUsersTests(unittest.TestCase):
             (config(123, valid=False), OPENAI_CODEX_SOL, "high"),
             (config(123), OPENAI_CODEX_SOL, "ultra"),
             (config(123), OPENAI_CODEX_ASTRA, "none"),
-            (config(123), PIONEER_OPUS_4_8, "high"),
+            (config(123), "pioneer/claude-opus-4-8", "high"),
             (config(123), "provider/no-reasoning", "clear"),
         )
         for cfg, model, level in cases:

@@ -14,7 +14,6 @@ from typing import Dict, Optional, Tuple
 from uniborg import codex_aliases
 from uniborg import codex_util
 from uniborg import openai_providers
-from uniborg import pioneer_util
 from uniborg.codex_aliases import OPENAI_REASONING_LEVELS
 from uniborg.constants import (
     GEMINI_FLASH_2_5,
@@ -41,10 +40,6 @@ GEMINI_REASONING_LEVELS = ("disable", "low", "medium", "high")
 #: `OPENAI_REASONING_LEVELS` comes from `codex_aliases`, which also resolves
 #: each Codex family's levels.
 OPENROUTER_REASONING_LEVELS = ("low", "medium", "high")
-#: Pioneer's OpenAI-compatible Responses endpoint. Not probed directly; these
-#: match what Pioneer's own model list advertises for its Claude models.
-PIONEER_REASONING_LEVELS = ("low", "medium", "high")
-
 #: Short text names of the reasoning levels. The `.t` effort prefixes are built
 #: from them (`.th` is high).
 REASONING_LEVEL_ALIASES = {
@@ -238,12 +233,6 @@ MODEL_SPECS = [
         codex_access=True,
         emoji="🌙",
     ),
-    ## Pioneer (admin-only) - no longer used, kept for easy re-enabling.
-    #: Uncomment these and the `.sn`/`.o` prefixes in llm_chat.py to bring it
-    #: back; the Pioneer backend itself is still wired up.
-    # ModelSpec(PIONEER_OPUS_4_8, "Pioneer Opus 4.8 (Admin)", PIONEER_REASONING_LEVELS, admin_only=True),
-    # ModelSpec(PIONEER_GPT_5_5, "Pioneer GPT-5.5 (Admin)", PIONEER_GPT_REASONING_LEVELS, admin_only=True),
-    # ModelSpec(PIONEER_SONNET_4_6, "Pioneer Sonnet 4.6 (Admin)", PIONEER_REASONING_LEVELS, admin_only=True),
     ## Codex models known to the registry but kept out of the pickers.
     _codex_alias_spec(OPENAI_CODEX_LUNA, emoji="🌕", hidden=True),
     _gpt_spec(GPT_LUNA, emoji="🌕", hidden=True),
@@ -272,9 +261,23 @@ RETIRED_MODELS: Dict[str, str] = {
     OPENAI_CODEX_LUNA: GPT_LUNA,
 }
 
+#: Pioneer has been retired. Saved model settings with any Pioneer model id
+#: fall back to the default Gemini model when loaded.
+RETIRED_MODEL_PREFIXES: Dict[str, str] = {"pioneer/": GEMINI_FLASH_LATEST}
+
+
+def is_retired_model(model: Optional[str]) -> bool:
+    return bool(model) and any(
+        model.startswith(prefix) for prefix in RETIRED_MODEL_PREFIXES
+    )
+
 
 def current_model_id(model: Optional[str]) -> Optional[str]:
     """MODEL, or the model that replaced it when it was retired."""
+    if model:
+        for prefix, replacement in RETIRED_MODEL_PREFIXES.items():
+            if model.startswith(prefix):
+                return replacement
     return RETIRED_MODELS.get(model, model) if model else model
 
 
@@ -317,15 +320,6 @@ def _synthesized_spec(model: str) -> ModelSpec:
             codex_access=True,
             hidden=True,
             emoji="🔷",
-        )
-    if pioneer_util.is_pioneer_model(model):
-        return ModelSpec(
-            model,
-            model,
-            PIONEER_REASONING_LEVELS,
-            admin_only=True,
-            hidden=True,
-            emoji="🧭",
         )
     if is_gemini_model_p(model):
         return ModelSpec(model, model, GEMINI_REASONING_LEVELS, hidden=True, emoji="♊")
@@ -371,7 +365,6 @@ TOPIC_ICON_STAND_INS = {
     "🧙": "🎩",
     "🖼": "🎨",
     "🔷": "💻",
-    "🧭": "🧪",
     "♊": "💎",
     "🔀": "🤖",
 }

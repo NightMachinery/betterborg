@@ -304,7 +304,7 @@ All but `.cr` select a provider-neutral GPT family and run on the user's
   `.asx` / `.اسخ`, and `.asxx` / `.اسخخ`: the same ladder for GPT-6 Astra.
 - `.cr` / `.چر`: Luna Reserve with `medium` reasoning.
 
-`.a` belongs to `advanced_get` and `.o` was Pioneer's, so Astra uses `.as`.
+`.a` belongs to `advanced_get`, so Astra uses `.as`.
 
 ## Tools
 

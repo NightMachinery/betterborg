@@ -44,10 +44,6 @@ OPENAI_CODEX_LUNA_RESERVE = "openai-codex/gpt-reserve"
 #: The Codex catalog's "latest workhorse model"; Astra is its frontier one.
 OPENAI_CODEX_LATEST = OPENAI_CODEX_SOL
 
-PIONEER_BASE_URL = "https://api.pioneer.ai/v1"
-PIONEER_OPUS_4_8 = "pioneer/claude-opus-4-8"
-PIONEER_GPT_5_5 = "pioneer/gpt-5.5"
-PIONEER_SONNET_4_6 = "pioneer/claude-sonnet-4-6"
 ##
 CHAT_TITLE_MODEL = GEMINI_FLASH_LITE_LATEST
 ##

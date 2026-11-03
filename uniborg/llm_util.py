@@ -973,7 +973,7 @@ def get_service_from_model(model: str) -> str:
         model: The model name (e.g., "openrouter/openai/gpt-5-chat", "deepseek/deepseek-chat")
 
     Returns:
-        str: The service name ("openrouter", "openai", "codex", "deepseek", "mistral", "pioneer", or "gemini" as default)
+        str: The service name ("openrouter", "openai", "codex", "deepseek", "mistral", or "gemini" as default)
     """
     if model.startswith("openrouter/"):
         return "openrouter"
@@ -988,7 +988,7 @@ def get_service_from_model(model: str) -> str:
     elif model.startswith("mistral/"):
         return "mistral"
     elif model.startswith("pioneer/"):
-        return "pioneer"
+        raise ValueError("Pioneer models have been retired.")
     else:
         return "gemini"
 
