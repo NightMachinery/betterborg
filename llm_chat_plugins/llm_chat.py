@@ -11016,7 +11016,8 @@ async def codex_status_handler(event):
 async def key_submission_handler(event):
     """Delegates plain-text key submission logic to the shared module."""
     service = llm_db.get_awaiting_service(event.sender_id)
-    success_msg = f"You can now use {service.capitalize()} models."
+    service_name = llm_db.API_KEY_CONFIG[service]["name"]
+    success_msg = f"You can now use {service_name} models."
     await llm_db.handle_key_submission(event, success_msg=success_msg)
 
 
