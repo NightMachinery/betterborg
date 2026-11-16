@@ -26,6 +26,7 @@ from telethon._updates import EntityCache
 from uniborg import (
     codex_util,
     guest_util,
+    key_sharing,
     llm_chat_config,
     llm_util,
     media_store,
@@ -924,6 +925,70 @@ class AdminRateLimitTests(RateLimitTests):
         self.run_query(_query(f"{BOT_USERNAME} again", query_id=2))
 
         self.assertEqual(self.generate.await_count, 2)
+
+
+class ProviderFailoverTests(_GuestTestCase):
+    """A guest answer fails over between GPT backends as a chat message does."""
+
+    def setUp(self):
+        super().setUp()
+        memory = plugin.openai_providers.QuotaMemory()
+        own = key_sharing.Credential(
+            "sk-user",
+            key_sharing.token_for(key_sharing.OWN, CALLER),
+            key_sharing.OWN,
+            CALLER,
+        )
+
+        async def credentials(user_id, service, **kwargs):
+            return [own] if service == "openai" else []
+
+        for target, name, value in (
+            (
+                plugin,
+                "_get_effective_model_and_service",
+                lambda *args, **kwargs: (plugin.GPT_SOL, "openai"),
+            ),
+            (
+                plugin.user_manager,
+                "get_openai_provider",
+                lambda user_id: plugin.openai_providers.AUTO_OPENAI_FIRST,
+            ),
+            (plugin.user_manager, "get_codex_quota_fallback", lambda *a, **k: None),
+            (plugin, "_openai_api_keys", lambda *a, **k: ["sk-user"]),
+            (plugin, "OPENAI_QUOTA", memory),
+            (plugin, "_request_credentials", AsyncMock(side_effect=credentials)),
+            (plugin.llm_chat_config, "can_use_codex", AsyncMock(return_value=True)),
+            (plugin, "_can_user_access_model", AsyncMock(return_value=True)),
+        ):
+            patcher = patch.object(target, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_a_spent_openai_key_is_retried_on_codex(self):
+        answered = self.generate.side_effect
+        spent = [
+            plugin._RerouteRequest(
+                plugin.openai_providers.CODEX,
+                note=plugin.openai_providers.OPENAI_SPENT_NOTE,
+            )
+        ]
+
+        def generate(req):
+            if spent:
+                raise spent.pop()
+            return answered(req)
+
+        self.generate.side_effect = generate
+        self.run_query(_query(f"{BOT_USERNAME} hi"))
+
+        first, second = (call.args[0] for call in self.generate.await_args_list)
+        self.assertEqual(first.model, "openai-api/gpt-sol-latest")
+        self.assertEqual(first.fallback_backend, plugin.openai_providers.CODEX)
+        self.assertEqual(second.model, plugin.OPENAI_CODEX_SOL)
+        self.assertIsNone(second.fallback_backend)
+        self.assertIn(plugin.openai_providers.OPENAI_SPENT_NOTE, second.warnings)
+        self.assertTrue(self.edits[-1]["markdown"].startswith(self.answer_text))
 
 
 class SurfaceTests(unittest.TestCase):

@@ -14053,13 +14053,127 @@ def _openai_quota_hint(exc: Exception) -> str:
     )
 
 
-async def _generate_streamed(req: GenerationRequest) -> GenerationResult:
-    """`_generate_response`, ending a draft stream when it returns or fails.
+@dataclass(frozen=True)
+class KeyedRequest:
+    """A request's model, the keys it may try, and the one it tries now."""
 
-    The draft's Stop button cancels the generation, as /stop would.
+    request_model: RequestModel
+    #: What the keys are for: REQUEST_MODEL's service, or Vertex AI's for a
+    #: native Gemini model the user runs there.
+    service: str
+    credentials: Tuple[key_sharing.Credential, ...]
+    #: None when the user has no key for SERVICE.
+    api_key: Optional[str]
+    key_index: int = 0
+
+    @property
+    def model(self) -> str:
+        return self.request_model.model
+
+    @property
+    def credential(self) -> Optional[key_sharing.Credential]:
+        return self.credentials[self.key_index] if self.credentials else None
+
+    @property
+    def next_key_p(self) -> bool:
+        return self.key_index + 1 < len(self.credentials)
+
+    def with_next_key(self) -> "KeyedRequest":
+        index = self.key_index + 1
+        return replace(self, key_index=index, api_key=self.credentials[index].api_key)
+
+
+async def _keyed_request(
+    request_model: RequestModel,
+    *,
+    user_id: int,
+    codex_access: bool,
+    service: Optional[str] = None,
+) -> KeyedRequest:
+    """REQUEST_MODEL with USER_ID's keys for SERVICE (default: its own)."""
+    service = service or request_model.service
+    credentials = tuple(
+        await _request_credentials(
+            user_id, service, codex_access=codex_access, model=request_model.model
+        )
+    )
+    return KeyedRequest(
+        request_model=request_model,
+        service=service,
+        credentials=credentials,
+        api_key=(
+            credentials[0].api_key
+            if credentials
+            else _chainless_api_key(user_id, service, codex_access=codex_access)
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class FailoverResult:
+    generation: GenerationResult
+    #: The model and key that produced GENERATION.
+    keyed: KeyedRequest
+
+
+async def _generate_with_failover(
+    keyed: KeyedRequest,
+    *,
+    user_id: int,
+    codex_access: bool,
+    warnings: list,
+    build_request: Callable[[KeyedRequest], GenerationRequest],
+    on_new_key: Optional[Callable[[KeyedRequest], Any]] = None,
+) -> FailoverResult:
+    """`_generate_response` on KEYED, moving on when a key or backend is spent.
+
+    A key that failed in a way the next might not (`_CredentialFailed`) hands
+    over to the next key in the chain; ON_NEW_KEY is then awaited, so the
+    caller can redo what belonged to the old key, such as uploaded files. A
+    provider-routed GPT request whose backend is spent (`_RerouteRequest`)
+    moves to the other backend and its keys; Codex and the OpenAI API take
+    the same history, so only the backend changes. Each move leaves a note in
+    WARNINGS. BUILD_REQUEST makes each attempt's request.
+    """
+    while True:
+        try:
+            generation = await _generate_response(build_request(keyed))
+        except _CredentialFailed as failed:
+            failed_credential = keyed.credential
+            keyed = keyed.with_next_key()
+            warnings.append(
+                f"{_credential_label(failed_credential).capitalize()} was "
+                f"{failed.failure.value}, so I used "
+                f"{_credential_label(keyed.credential)}."
+            )
+            if on_new_key is not None:
+                await on_new_key(keyed)
+            continue
+        except _RerouteRequest as reroute:
+            rerouted = await _keyed_request(
+                _rerouted(keyed.request_model, reroute.backend, note=reroute.note),
+                user_id=user_id,
+                codex_access=codex_access,
+            )
+            if not rerouted.api_key:
+                raise
+            keyed = rerouted
+            warnings.append(reroute.note)
+            continue
+        return FailoverResult(generation=generation, keyed=keyed)
+
+
+async def _generate_streamed(
+    keyed: KeyedRequest, *, response_message, **failover
+) -> FailoverResult:
+    """`_generate_with_failover`, ending a draft stream when it returns or fails.
+
+    The whole failover is one task, so an answer retried on another key or
+    backend still streams as a draft, and the draft's Stop button cancels
+    whichever attempt is running, as /stop would.
     """
     return await stream_driver.run_stoppable(
-        req.response_message, _generate_response(req)
+        response_message, _generate_with_failover(keyed, **failover)
     )
 
 
@@ -14642,15 +14756,13 @@ async def _chat_handler(
         await send_info_message(event, vertex_refusal, parse_mode=None)
         return
     gemini_provider = _gemini_provider_of(service_needed)
-    credentials = await _request_credentials(
-        user_id, service_needed, codex_access=user_has_codex_access, model=model_in_use
+    keyed = await _keyed_request(
+        request_model,
+        user_id=user_id,
+        codex_access=user_has_codex_access,
+        service=service_needed,
     )
-    key_index = 0
-    api_key = (
-        credentials[0].api_key
-        if credentials
-        else _chainless_api_key(user_id, service_needed)
-    )
+    api_key = keyed.api_key
 
     if not api_key:
         if request_model.quota_fallback_from:
@@ -14705,20 +14817,20 @@ async def _chat_handler(
         if group_id:
             await asyncio.sleep(0.1)  # Allow album messages to arrive
 
-        async def build_history():
+        async def build_history(key):
             return await build_conversation_history(
                 event,
                 context_mode_to_use,
                 temp_dir,
                 model_capabilities,
-                api_key,
+                key,
                 model_in_use,
                 is_private=event.is_private,
                 include_system_prompt_p=True,
                 gemini_provider=gemini_provider,
             )
 
-        history_result = await build_history()
+        history_result = await build_history(api_key)
         messages = history_result.history
         warnings = history_result.warnings + list(notes)
         if request_model.quota_fallback_from:
@@ -14741,73 +14853,51 @@ async def _chat_handler(
             await util.edit_message(response_message, error_message, parse_mode="md")
             return
 
-        while True:
-            try:
-                generation = await _generate_streamed(
-                    GenerationRequest(
-                        event=event,
-                        response_message=response_message,
-                        messages=messages,
-                        model=model_in_use,
-                        model_capabilities=model_capabilities,
-                        api_key=api_key,
-                        prefs=prefs,
-                        prefix_effort=prefix_result.reasoning_effort,
-                        image_generation=prefix_result.image_generation,
-                        warnings=warnings,
-                        gemini_provider=gemini_provider,
-                        reasoning_model=request_model.selected_model,
-                        fallback_backend=request_model.fallback_backend,
-                        next_key_p=key_index + 1 < len(credentials),
-                    )
-                )
-            except _CredentialFailed as failed:
-                failed_credential = credentials[key_index]
-                key_index += 1
-                api_key = credentials[key_index].api_key
-                warnings.append(
-                    f"{_credential_label(failed_credential).capitalize()} was "
-                    f"{failed.failure.value}, so I used "
-                    f"{_credential_label(credentials[key_index])}."
-                )
-                if is_native_gemini_files_mode(
-                    model_in_use, gemini_provider=gemini_provider
-                ):
-                    #: Uploaded files belong to the key that uploaded them.
-                    messages = (await build_history()).history
-                continue
-            except _RerouteRequest as reroute:
-                #: Codex and the OpenAI API take the same history, so only
-                #: the backend changes.
-                request_model = _rerouted(
-                    request_model, reroute.backend, note=reroute.note
-                )
-                model_in_use = request_model.model
-                service_needed = request_model.service
-                credentials = await _request_credentials(
-                    user_id,
-                    service_needed,
-                    codex_access=user_has_codex_access,
-                    model=model_in_use,
-                )
-                key_index = 0
-                api_key = (
-                    credentials[0].api_key
-                    if credentials
-                    else _chainless_api_key(user_id, service_needed)
-                )
-                warnings.append(reroute.note)
-                if api_key:
-                    continue
-                raise
-            break
+        def build_request(attempt: KeyedRequest) -> GenerationRequest:
+            return GenerationRequest(
+                event=event,
+                response_message=response_message,
+                messages=messages,
+                model=attempt.model,
+                model_capabilities=model_capabilities,
+                api_key=attempt.api_key,
+                prefs=prefs,
+                prefix_effort=prefix_result.reasoning_effort,
+                image_generation=prefix_result.image_generation,
+                warnings=warnings,
+                gemini_provider=gemini_provider,
+                reasoning_model=attempt.request_model.selected_model,
+                fallback_backend=attempt.request_model.fallback_backend,
+                next_key_p=attempt.next_key_p,
+            )
+
+        async def on_new_key(attempt: KeyedRequest) -> None:
+            nonlocal messages
+            if is_native_gemini_files_mode(
+                attempt.model, gemini_provider=gemini_provider
+            ):
+                #: Uploaded files belong to the key that uploaded them.
+                messages = (await build_history(attempt.api_key)).history
+
+        failover = await _generate_streamed(
+            keyed,
+            response_message=response_message,
+            user_id=user_id,
+            codex_access=user_has_codex_access,
+            warnings=warnings,
+            build_request=build_request,
+            on_new_key=on_new_key,
+        )
+        generation, keyed = failover.generation, failover.keyed
+        request_model = keyed.request_model
+        model_in_use, service_needed = keyed.model, keyed.service
         if generation.delivered:
             return
         _record_usage(
             user_id,
             model=model_in_use,
             service=service_needed,
-            credential=credentials[key_index] if credentials else None,
+            credential=keyed.credential,
             generation=generation,
         )
         response_text = generation.text
@@ -14931,25 +15021,54 @@ _guest_albums = guest_util.AlbumBatcher()
 
 @dataclass
 class GuestRequestPlan:
-    """The model and key a guest answer will use, decided before answering."""
+    """The model and key a guest answer starts on, decided before answering.
 
-    model: str
-    service: str
-    #: None when the caller has no key for `service`.
-    api_key: Optional[str]
+    The answer may move on from them as a chat message would
+    (`_generate_with_failover`).
+    """
+
+    #: The routed model, its keys, and where it may fail over to.
+    keyed: KeyedRequest
     model_capabilities: Dict[str, bool]
     prefix_effort: Optional[str]
     warnings: list
     #: An `.i` request, which the guest answer shows as its photo.
     image_generation: bool = False
-    #: The provider-neutral GPT id `model` was routed from, if any.
-    reasoning_model: Optional[str] = None
-    #: Whose key `api_key` is, when it comes from the credential chain.
-    credential: Optional[key_sharing.Credential] = None
+    #: The caller may use Codex, so a spent OpenAI key can fail over to it.
+    codex_access: bool = False
+
+    @property
+    def model(self) -> str:
+        return self.keyed.model
+
+    @property
+    def service(self) -> str:
+        return self.keyed.service
+
+    @property
+    def api_key(self) -> Optional[str]:
+        """None when the caller has no key for `service`."""
+        return self.keyed.api_key
+
+    @property
+    def reasoning_model(self) -> Optional[str]:
+        """The provider-neutral GPT id `model` was routed from, if any."""
+        return self.keyed.request_model.selected_model
 
     @property
     def gemini_provider(self) -> str:
         return _gemini_provider_of(self.service)
+
+
+@dataclass(frozen=True)
+class _GuestHistory:
+    """A guest answer's history, built on one key."""
+
+    #: Empty when the query holds nothing to answer.
+    history: list
+    warnings: list
+    #: The query's own turns, as the guest thread stores them.
+    new_turns: list
 
 
 class GuestRequestRefused(Exception):
@@ -15014,36 +15133,29 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
         codex_access=codex_p,
         prefix_p=bool(prefix_model),
     )
-    model = request.model
-    reasoning_model = request.selected_model
-    if not await _can_user_access_model(event, model, config=config):
+    warnings = [request.route_note] if request.route_note else []
+    if not await _can_user_access_model(event, request.model, config=config):
         if prefix.image_generation:
             raise GuestRequestRefused(CODEX_IMAGEGEN_ACCESS_DENIED)
-        model = DEFAULT_MODEL
-        reasoning_model = None
+        request = RequestModel(
+            model=DEFAULT_MODEL,
+            service=llm_util.get_service_from_model(DEFAULT_MODEL),
+        )
     service = _gemini_chat_service(
-        user_id, model, llm_util.get_service_from_model(model)
+        user_id, request.model, llm_util.get_service_from_model(request.model)
     )
-    vertex_refusal = _vertex_refusal(model, service)
+    vertex_refusal = _vertex_refusal(request.model, service)
     if vertex_refusal:
         raise GuestRequestRefused(vertex_refusal)
-    credentials = await _request_credentials(
-        user_id, service, codex_access=codex_p, model=model
-    )
     return GuestRequestPlan(
-        model=model,
-        service=service,
-        api_key=(
-            credentials[0].api_key
-            if credentials
-            else _chainless_api_key(user_id, service, codex_access=codex_p)
+        keyed=await _keyed_request(
+            request, user_id=user_id, codex_access=codex_p, service=service
         ),
-        credential=credentials[0] if credentials else None,
-        model_capabilities=get_model_capabilities(model),
+        model_capabilities=get_model_capabilities(request.model),
         prefix_effort=prefix.reasoning_effort,
-        warnings=[request.route_note] if request.route_note else [],
+        warnings=warnings,
         image_generation=prefix.image_generation,
-        reasoning_model=reasoning_model,
+        codex_access=codex_p,
     )
 
 
@@ -15279,76 +15391,110 @@ async def _run_guest_answer(
     query = event.query
     temp_dir = Path(tempfile.gettempdir()) / f"temp_llm_chat_guest_{uuid.uuid4().hex}"
     temp_dir.mkdir()
-    restore_warnings = []
     issued_warnings = set()
 
-    async def media_part(key):
-        result = await _process_media(
-            None,
-            temp_dir,
-            plan.model_capabilities,
-            issued_warnings,
-            event.sender_id,
-            plan.api_key,
-            plan.model,
-            is_private=False,
-            media_key=key,
-            gemini_provider=plan.gemini_provider,
-        )
-        restore_warnings.extend(result.warnings)
-        return result.media_part
+    async def build_history(api_key) -> _GuestHistory:
+        """The history on API_KEY, which owns any media it uploads."""
+        restore_warnings = []
 
-    try:
-        chain = await _guest_continuation(query)
-        messages = query.triggers if chain else query.messages
+        async def media_part(key):
+            result = await _process_media(
+                None,
+                temp_dir,
+                plan.model_capabilities,
+                issued_warnings,
+                event.sender_id,
+                api_key,
+                plan.model,
+                is_private=False,
+                media_key=key,
+                gemini_provider=plan.gemini_provider,
+            )
+            restore_warnings.extend(result.warnings)
+            return result.media_part
+
         history, warnings = await _process_turns_to_history(
             event,
             messages,
             temp_dir,
             plan.model_capabilities,
-            plan.api_key,
+            api_key,
             plan.model,
             is_private=False,
             gemini_provider=plan.gemini_provider,
         )
         if not any(entry["role"] != "system" for entry in history):
-            await answer.finalize(
-                text="I couldn't find any text or supported media to answer."
-            )
-            return
+            return _GuestHistory(history=[], warnings=warnings, new_turns=[])
         new_turns = [
             {"role": entry["role"], "content": _stored_content(entry["content"])}
             for entry in history[1:]
         ]
         history[1:1] = await _restored_chain(chain, media_part=media_part)
-        warnings = plan.warnings + warnings + restore_warnings
         append_runtime_context_to_latest_user_message(
             history, get_runtime_context_text()
         )
-        generation = await _generate_response(
-            GenerationRequest(
+        return _GuestHistory(
+            history=history,
+            warnings=warnings + restore_warnings,
+            new_turns=new_turns,
+        )
+
+    try:
+        chain = await _guest_continuation(query)
+        messages = query.triggers if chain else query.messages
+        built = await build_history(plan.api_key)
+        if not built.history:
+            await answer.finalize(
+                text="I couldn't find any text or supported media to answer."
+            )
+            return
+        history, new_turns = built.history, built.new_turns
+        warnings = plan.warnings + built.warnings
+        prefs = user_manager.get_prefs(event.sender_id)
+
+        def build_request(attempt: KeyedRequest) -> GenerationRequest:
+            return GenerationRequest(
                 event=event,
                 response_message=answer,
                 messages=history,
-                model=plan.model,
+                model=attempt.model,
                 model_capabilities=plan.model_capabilities,
-                api_key=plan.api_key,
-                prefs=user_manager.get_prefs(event.sender_id),
+                api_key=attempt.api_key,
+                prefs=prefs,
                 prefix_effort=plan.prefix_effort,
                 image_generation=plan.image_generation,
                 warnings=warnings,
                 surface=GenerationSurface.GUEST,
                 gemini_provider=plan.gemini_provider,
-                reasoning_model=plan.reasoning_model,
+                reasoning_model=attempt.request_model.selected_model,
+                fallback_backend=attempt.request_model.fallback_backend,
+                next_key_p=attempt.next_key_p,
             )
+
+        async def on_new_key(attempt: KeyedRequest) -> None:
+            nonlocal history
+            if is_native_gemini_files_mode(
+                attempt.model, gemini_provider=plan.gemini_provider
+            ):
+                #: Uploaded files belong to the key that uploaded them.
+                history = (await build_history(attempt.api_key)).history
+
+        failover = await _generate_with_failover(
+            plan.keyed,
+            user_id=event.sender_id,
+            codex_access=plan.codex_access,
+            warnings=warnings,
+            build_request=build_request,
+            on_new_key=on_new_key,
         )
+        generation, keyed = failover.generation, failover.keyed
         if generation.delivered:
             return
         _record_usage(
             event.sender_id,
-            model=plan.model,
-            service=plan.service,
-            credential=plan.credential,
+            model=keyed.model,
+            service=keyed.service,
+            credential=keyed.credential,
             generation=generation,
         )
         text = _append_warnings(generation.text.strip(), warnings, event=event)

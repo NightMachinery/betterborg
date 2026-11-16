@@ -60,6 +60,15 @@ A request moves to the other backend only when nothing has been streamed yet,
 and the answer carries a note saying so. Codex and the OpenAI API take the same
 history (text and images), so only the backend changes.
 
+Both request paths, chat messages and guest answers (mentions in other chats),
+fail over through one helper, `_generate_with_failover` in `llm_chat`. It moves
+to the next key of the user's chain first (`key_sharing`), then to the other
+backend. Guest answers used to start on the first key and stop there, so a
+spent OpenAI key ended a guest answer with "OpenAI request failed" even on an
+auto provider; only the next message, which found the key marked spent, went
+to Codex. A chat answer streamed as a Telegram draft keeps streaming as a draft
+across a retry, and its Stop button cancels whichever attempt is running.
+
 ## What stays on Codex
 
 - The Luna Reserve (`.cr`), a Codex meter.

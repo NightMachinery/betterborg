@@ -108,6 +108,31 @@ class PlaceholderTests(_Case):
             self.assertEqual(self.placeholder(_event()), "placeholder")
 
 
+def _keyed(model="openai-api/gpt-sol-latest", api_key="sk"):
+    return plugin.KeyedRequest(
+        request_model=plugin.RequestModel(
+            model=model,
+            service=plugin.llm_util.get_service_from_model(model),
+            selected_model=plugin.GPT_SOL,
+            fallback_backend=plugin.openai_providers.CODEX,
+        ),
+        service=plugin.llm_util.get_service_from_model(model),
+        credentials=(),
+        api_key=api_key,
+    )
+
+
+def _streamed(response_message, *, build_request=lambda keyed: keyed):
+    return plugin._generate_streamed(
+        _keyed(),
+        response_message=response_message,
+        user_id=31,
+        codex_access=True,
+        warnings=[],
+        build_request=build_request,
+    )
+
+
 class StopTests(_Case):
     def test_stop_cancels_the_generation_and_ends_the_stream(self):
         async def generate(req):
@@ -116,9 +141,8 @@ class StopTests(_Case):
         async def run():
             draft = draft_stream.DraftAnswerMessage(object(), event=_event())
             draft.streaming = True
-            request = SimpleNamespace(response_message=draft)
             with patch.object(plugin, "_generate_response", generate):
-                task = asyncio.ensure_future(plugin._generate_streamed(request))
+                task = asyncio.ensure_future(_streamed(draft))
                 await asyncio.sleep(0)
                 draft.stop_pressed()
                 with self.assertRaises(asyncio.CancelledError):
@@ -132,13 +156,37 @@ class StopTests(_Case):
 
     def test_an_edit_streamed_answer_is_generated_as_before(self):
         generate = AsyncMock(return_value="result")
-        request = SimpleNamespace(response_message="placeholder")
 
         with patch.object(plugin, "_generate_response", generate):
-            result = asyncio.run(plugin._generate_streamed(request))
+            result = asyncio.run(_streamed("placeholder"))
 
-        self.assertEqual(result, "result")
-        generate.assert_awaited_once_with(request)
+        self.assertEqual(result.generation, "result")
+        generate.assert_awaited_once_with(_keyed())
+
+    def test_a_rerouted_answer_still_streams_as_a_draft(self):
+        """The retry on Codex runs inside the same draft stream."""
+        streaming = []
+
+        async def generate(keyed):
+            streaming.append(draft.streaming)
+            if keyed.model != plugin.OPENAI_CODEX_SOL:
+                raise plugin._RerouteRequest(
+                    plugin.openai_providers.CODEX,
+                    note=plugin.openai_providers.OPENAI_SPENT_NOTE,
+                )
+            return "answer"
+
+        draft = draft_stream.DraftAnswerMessage(object(), event=_event())
+        draft.streaming = True
+        with patch.object(plugin, "_generate_response", generate), patch.object(
+            plugin, "_request_credentials", AsyncMock(return_value=[])
+        ):
+            result = asyncio.run(_streamed(draft))
+
+        self.assertEqual(result.generation, "answer")
+        self.assertEqual(result.keyed.model, plugin.OPENAI_CODEX_SOL)
+        self.assertEqual(streaming, [True, True])
+        self.assertFalse(draft.streaming)
 
 
 class StreamCommandTests(_Case):

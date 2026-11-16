@@ -110,14 +110,16 @@ class CodexFallbackNoticeTests(unittest.TestCase):
         self.assertIn("saved model settings are unchanged", info.await_args.args[1])
         self.assertIsNone(info.await_args.kwargs["parse_mode"])
         fallback_service = plugin.llm_util.get_service_from_model(plugin.DEFAULT_MODEL)
-        api_key.assert_called_once_with(123, fallback_service)
+        api_key.assert_called_once()
+        self.assertEqual(api_key.call_args.args, (123, fallback_service))
         self.assertEqual(key_prompt.await_args.args[1], fallback_service)
         save.assert_not_called()
 
     def test_trusted_access_does_not_warn_or_fall_back(self):
         info, api_key, _, save = self.run_request(trusted=True)
         info.assert_not_awaited()
-        api_key.assert_called_once_with(123, "codex")
+        api_key.assert_called_once()
+        self.assertEqual(api_key.call_args.args, (123, "codex"))
         save.assert_not_called()
 
     def test_explicit_codex_request_denies_without_fallback_notice(self):

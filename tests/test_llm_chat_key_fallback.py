@@ -243,7 +243,7 @@ class ChatHandlerFallbackTests(unittest.TestCase):
             stack.enter_context(
                 patch.object(plugin, "_user_display_name", return_value="Owner")
             )
-            stack.enter_context(patch.object(plugin, "_generate_streamed", generate))
+            stack.enter_context(patch.object(plugin, "_generate_response", generate))
             shim = _current_task_shim()
             if shim is not None:
                 stack.enter_context(patch.object(plugin.asyncio, "current_task", shim))
