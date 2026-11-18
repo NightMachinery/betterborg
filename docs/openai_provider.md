@@ -63,8 +63,14 @@ explicit choice before a request can use another billing source.
 documents the Responses route for ChatGPT plan usage.
 
 Start with chat. The [documented preview](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
-excludes image generation. If Betterborg adds Codex coding sessions with
-workspace tools, use the [Codex App Server integration](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server).
+excludes image generation, including through the Codex App Server plan-usage
+configuration. For user-funded `.i` requests, a separate option would call the
+[Images API](https://developers.openai.com/api/docs/guides/image-generation)
+with the user's OpenAI project key. Eligible Pro and Business subscribers can
+[claim API credits](https://developers.openai.com/api/docs/guides/chatgpt-api-credits)
+that cover image generation and editing in the linked API organization.
+If Betterborg adds coding sessions with workspace tools, use the
+[Codex App Server integration](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server).
 
 ## Quota memory
 
