@@ -70,36 +70,25 @@ delivery of App Server image results to Telegram.
 
 ### Pilot setup
 
-In the bot's private chat, use `/ChatGPT_Quickstart` for the enrollment command
-and buttons to select the ChatGPT provider, save a personal default model,
-and test it against the linked subscription. `/ChatGPT_Quickstart_fa` opens
-the same guide in Farsi. The test sends one short prompt with low reasoning
-effort.
+In the bot's private chat, send `/ChatGPT_Login` or tap **Connect ChatGPT** in
+`/ChatGPT_Quickstart`. Open the sign-in button in your browser and allow plan
+usage. The browser will land on an unavailable `127.0.0.1` page. Copy its full
+address and paste it into the same Telegram chat within five minutes. The bot
+checks that the return address matches your sign-in, exchanges the one-time
+code, and selects the ChatGPT plan provider.
 
-Run the enrollment command from the checkout as the same operating system user
-and with the same Python environment as the chat bot. Supply the numeric
-Telegram ID of the person signing into ChatGPT.
+Choose GPT Sol or GPT Astra in the quickstart and tap **Send a test message**.
+The test sends one short prompt with low reasoning effort.
+`/ChatGPT_Quickstart_fa` and `/ChatGPT_Login_fa` open the Farsi versions.
 
-```sh
-python -m uniborg.chatgpt_plan connect TELEGRAM_USER_ID
-```
-
-The browser needs access to the loopback listener on port 1455. For a remote
-bot, start the SSH session from the browser machine with
-`ssh -L 1455:127.0.0.1:1455 BOT_HOST`. The sign-in command prints the URL to
-open. Choose the intended ChatGPT account and grant plan usage there. The
-terminal confirms the link after verifying the callback and account.
-
-In Telegram, select `/openaiProvider chatgpt-plan`, then send `.c hello` to
-try GPT Sol. The provider routes GPT families through the [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+The provider routes GPT families through the [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
 and shows reported input, cached and output token counts under each answer.
 It declines inputs over 48 KiB and leaves other billing sources untouched if
 the plan reaches its limit. The user can review the app's allowance in
 [ChatGPT usage settings](https://chatgpt.com/settings/usage).
 
-Run `python -m uniborg.chatgpt_plan disconnect TELEGRAM_USER_ID` to revoke the
-renewable session and remove the local connection. The user can switch
-providers with `/openaiProvider` or revoke Betterborg from ChatGPT settings.
+To stop using the plan in Betterborg, choose another provider with
+`/openaiProvider` or revoke Betterborg from ChatGPT settings.
 
 The pilot covers text chat. `.i` still uses the existing Codex route for users
 with image access. The [documented preview](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)

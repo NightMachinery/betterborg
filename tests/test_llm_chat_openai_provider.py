@@ -8,6 +8,7 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from uniborg import codex_util, guest_util, openai_providers
 from uniborg.constants import GPT_ASTRA, GPT_SOL, OPENAI_CODEX_SOL, OR_OPENAI_SOL
@@ -283,7 +284,7 @@ class ProviderMenuTests(unittest.TestCase):
 
 
 class ChatGPTQuickstartTests(unittest.IsolatedAsyncioTestCase):
-    async def test_english_command_and_farsi_switch_show_the_enrollment_command(self):
+    async def test_quickstart_links_to_telegram_login_in_both_languages(self):
         event = SimpleNamespace(
             sender_id=USER_ID,
             is_private=True,
@@ -298,16 +299,60 @@ class ChatGPTQuickstartTests(unittest.IsolatedAsyncioTestCase):
             await plugin.chatgpt_quickstart_handler(event)
             await plugin._chatgpt_quickstart_press(event, f"{USER_ID}:en:language")
         english = send.await_args
-        self.assertIn(f"uniborg.chatgpt_plan connect {USER_ID}", english.args[1])
+        self.assertIn("/ChatGPT_Login", english.args[1])
+        self.assertNotIn("SSH", english.args[1])
+        self.assertEqual(
+            plugin.tg_compat.button_text(english.kwargs["buttons"][-1][0]),
+            "Send a test message",
+        )
         self.assertEqual(
             plugin.tg_compat.button_text(english.kwargs["buttons"][-1][-1]),
             "/ChatGPT_Quickstart_fa",
         )
         farsi = event.edit.await_args
         self.assertIn("راهنمای سریع ChatGPT", farsi.args[0])
-        self.assertIn(f"uniborg.chatgpt_plan connect {USER_ID}", farsi.args[0])
+        self.assertIn("/ChatGPT_Login_fa", farsi.args[0])
+        self.assertIn("ارسال پیام آزمایشی", farsi.args[0])
         self.assertTrue(plugin._is_known_command("/ChatGPT_Quickstart"))
         self.assertTrue(plugin._is_known_command("/ChatGPT_Quickstart_fa"))
+        self.assertTrue(plugin._is_known_command("/ChatGPT_Login_fa"))
+
+    async def test_connect_button_starts_browser_sign_in_without_a_shell(self):
+        event = SimpleNamespace(sender_id=USER_ID, is_private=True, answer=AsyncMock())
+        login = plugin.chatgpt_plan.Login(
+            USER_ID, {}, {"state": "pending"}, "verifier"
+        )
+        with patch.object(plugin, "IS_BOT", True), patch.object(
+            plugin, "CHATGPT_PENDING_LOGINS", {}
+        ) as pending, patch.object(
+            plugin.chatgpt_plan, "start_login", return_value=login
+        ) as start, patch.object(plugin, "send_info_message", AsyncMock()) as send:
+            await plugin._chatgpt_quickstart_press(event, f"{USER_ID}:en:connect")
+        start.assert_called_once_with(USER_ID)
+        self.assertIs(pending[USER_ID][1], login)
+        url = plugin.tg_compat.button_url(send.await_args.kwargs["buttons"][0][0])
+        self.assertEqual(urlsplit(url).hostname, "auth.openai.com")
+        self.assertEqual(parse_qs(urlsplit(url).query)["redirect_uri"], [login.telegram_redirect])
+
+    async def test_return_link_only_completes_the_correct_users_login_once(self):
+        login = plugin.chatgpt_plan.Login(
+            USER_ID, {}, {"state": "pending"}, "verifier"
+        )
+        address = f"{login.telegram_redirect}?{urlencode({'state': 'pending', 'code': 'test'})}"
+        event = SimpleNamespace(sender_id=USER_ID, raw_text=address, delete=AsyncMock())
+        wrong = SimpleNamespace(sender_id=123, raw_text=address, delete=AsyncMock())
+        with patch.object(plugin, "CHATGPT_PENDING_LOGINS", {USER_ID: ("en", login)}), patch.object(
+            plugin.chatgpt_plan, "finish_login"
+        ) as finish, patch.object(plugin.user_manager, "set_openai_provider") as set_provider, patch.object(
+            plugin, "send_info_message", AsyncMock()
+        ):
+            for update in (wrong, event, event):
+                with self.assertRaises(plugin.events.StopPropagation):
+                    await plugin.chatgpt_login_callback_handler(update)
+        finish.assert_called_once_with(login, login.telegram_redirect, {"state": ["pending"], "code": ["test"]})
+        set_provider.assert_called_once_with(USER_ID, openai_providers.CHATGPT_PLAN)
+        wrong.delete.assert_awaited_once()
+        self.assertEqual(event.delete.await_count, 2)
 
     async def test_model_button_only_changes_the_menu_owners_personal_default(self):
         event = SimpleNamespace(sender_id=USER_ID, is_private=True, answer=AsyncMock())

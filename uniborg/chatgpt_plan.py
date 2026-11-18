@@ -3,6 +3,7 @@
 import argparse
 import base64
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 import fcntl
 import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -28,13 +29,49 @@ PLAN_SCOPE = "chatgpt.tokens.use.direct"
 SCOPES = f"openid profile email offline_access resource.invoke {PLAN_SCOPE}"
 DYNAMIC_CLIENT = "dynamic_agent_client"
 CALLBACK_PATH = "/auth/callback"
-CONNECT_NEEDED = "Your ChatGPT plan connection needs setup or renewal. Contact the bot operator."
+CONNECT_NEEDED = "Your ChatGPT plan connection needs setup or renewal. Send /ChatGPT_Login in my private chat."
 USAGE_URL = "https://chatgpt.com/settings/usage"
 CONTEXT_BYTES = 48 * 1024
 
 
 class PlanError(Exception):
     """An error safe to relay without revealing a credential or OAuth payload."""
+
+
+@dataclass(repr=False)
+class Login:
+    user_id: int
+    previous: dict
+    parameters: dict
+    verifier: str
+    telegram_redirect: str = field(
+        default_factory=lambda: f"http://127.0.0.1:{49152 + secrets.randbelow(16384)}{CALLBACK_PATH}"
+    )
+
+    def url(self, redirect_uri):
+        query = urlencode({**self.parameters, "redirect_uri": redirect_uri})
+        return f"{AUTHORIZE}?{query}"
+
+
+def is_callback_url(text):
+    text = (text or "").strip()
+    if not text.startswith("http://127.0.0.1:"):
+        return False
+    try:
+        return urlsplit(text).path == CALLBACK_PATH
+    except ValueError:
+        return False
+
+
+def telegram_callback(login, text):
+    """Match a browser callback against the redirect and state issued in chat."""
+    address, _, query = text.strip().partition("?")
+    if address != login.telegram_redirect:
+        return None
+    params = parse_qs(query)
+    if params.get("state") != [login.parameters["state"]]:
+        return None
+    return params
 
 
 def request_error(code=None, *, status=None):
@@ -241,11 +278,11 @@ def _callback(port, state, parameters):
     return redirect, received
 
 
-def connect(user_id, port):
+def start_login(user_id):
     host_id = _host_id()
     path = _path(user_id)
     with _locked(path):
-        previous = _read(path) or {}
+        previous = _connection_identity(_read(path))
     state, nonce, verifier = (secrets.token_urlsafe(32) for _ in range(3))
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
     client_id = previous.get("client_id", DYNAMIC_CLIENT)
@@ -257,7 +294,20 @@ def connect(user_id, port):
     }
     if client_id == DYNAMIC_CLIENT:
         params["agent_name_hint"] = "Betterborg"
-    redirect, query = _callback(port, state, params)
+    return Login(user_id, previous, params, verifier)
+
+
+def _connection_identity(record):
+    record = record or {}
+    return {name: record[name] for name in ("client_id", "subject", "link_id") if name in record}
+
+
+def finish_login(login, redirect, query):
+    if query.get("state") != [login.parameters["state"]]:
+        raise PlanError("The ChatGPT authorization did not match this login.")
+    if "error" in query:
+        raise PlanError("ChatGPT authorization was declined or interrupted.")
+    client_id = login.parameters["client_id"]
     codes, issued = query.get("code", []), query.get("client_id", [])
     if len(codes) != 1 or len(issued) > 1:
         raise PlanError("ChatGPT returned an invalid authorization callback.")
@@ -267,19 +317,28 @@ def connect(user_id, port):
         client_id = issued[0]
     elif issued and issued[0] != client_id:
         raise PlanError("ChatGPT returned a different OAuth client ID.")
+    path = _path(login.user_id)
     with _locked(path):
-        current = _read(path) or {}
-        if current != previous:
+        current = _connection_identity(_read(path))
+        if current != login.previous:
             raise PlanError("Another operation changed this connection. Start again.")
         payload = _token_request({
             "grant_type": "authorization_code", "client_id": client_id,
-            "code": codes[0], "code_verifier": verifier, "redirect_uri": redirect,
+            "code": codes[0], "code_verifier": login.verifier, "redirect_uri": redirect,
         })
-        subject = _verify_id_token(payload.get("id_token"), client_id, nonce)
-        if previous.get("subject", subject) != subject:
+        subject = _verify_id_token(payload.get("id_token"), client_id, login.parameters["nonce"])
+        if login.previous.get("subject", subject) != subject:
             raise PlanError("This is a different ChatGPT account. Disconnect the previous one first.")
-        record = _token_record(payload, {"subject": subject, "client_id": client_id})
+        record = _token_record(payload, {
+            "subject": subject, "client_id": client_id, "link_id": uuid.uuid4().hex,
+        })
         _write(path, record)
+
+
+def connect(user_id, port):
+    login = start_login(user_id)
+    redirect, query = _callback(port, login.parameters["state"], login.parameters)
+    finish_login(login, redirect, query)
 
 
 def disconnect(user_id):

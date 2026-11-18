@@ -35,6 +35,7 @@ from itertools import groupby
 
 import httpx
 import litellm
+from cachetools import TTLCache
 
 # litellm._turn_on_debug()
 
@@ -1271,6 +1272,8 @@ BOT_COMMANDS = [
     },
     {"command": "chatgpt_quickstart", "description": "Set up and test your ChatGPT plan"},
     {"command": "chatgpt_quickstart_fa", "description": "راهنمای راه‌اندازی و آزمایش اشتراک ChatGPT"},
+    {"command": "chatgpt_login", "description": "Connect your ChatGPT account"},
+    {"command": "chatgpt_login_fa", "description": "اتصال حساب ChatGPT"},
     {
         "command": "keys",
         "description": "Order your API keys and see the keys you share",
@@ -5089,6 +5092,7 @@ def _is_pending_input_message(event, *, awaiting: bool) -> bool:
         event.is_private
         and awaiting
         and event.text
+        and not chatgpt_plan.is_callback_url(getattr(event, "raw_text", event.text))
         and not event.text.startswith("/")
         and not _is_known_command(event.text)
     )
@@ -6871,6 +6875,10 @@ async def _process_turns_to_history(
     history = []
     all_warnings = []
     issued_warnings = set()  # Track issued warnings for this turn processing.
+    message_list = [
+        message for message in message_list
+        if not chatgpt_plan.is_callback_url(getattr(message, "raw_text", None))
+    ]
 
     #: We do NOT include the system prompt if there are no messages to process.
     if not message_list:
@@ -7502,6 +7510,12 @@ def register_handlers():
     )(chatgpt_quickstart_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^/chatgpt_login(_fa)?{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private and not e.out,
+        )
+    )(chatgpt_login_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/keys{bot_username_suffix_re}\s*$",
             func=lambda e: e.is_private,
         )
@@ -7737,6 +7751,7 @@ def register_handlers():
     borg.on(CodexUserRequestedPeer())(codex_user_requested_peer_handler)
     borg.on(events.NewMessage())(codex_user_add_input_handler)
     borg.on(events.NewMessage())(observe_incoming_user_profile)
+    borg.on(events.NewMessage(func=_is_chatgpt_login_callback))(chatgpt_login_callback_handler)
 
     print("LLM_Chat: All event handlers registered.")
 
@@ -8707,21 +8722,32 @@ async def _openai_provider_press_handler(event, choice: str):
 
 CHATGPT_QUICKSTART_CALLBACK_PREFIX = "cgqs:"
 CHATGPT_QUICKSTART_MODELS = {"sol": GPT_SOL, "astra": GPT_ASTRA}
+CHATGPT_PENDING_LOGINS = TTLCache(maxsize=512, ttl=300)
 CHATGPT_QUICKSTART_TEXT = {
     "en": {
         "help": (
             "<b>ChatGPT quickstart</b>\n\n"
-            "1. Ask the bot operator to run this on the bot host (forward port 1455 over SSH if remote):\n"
-            "<code>python -m uniborg.chatgpt_plan connect {user_id}</code>\n"
-            "Open the URL it prints and allow plan usage.\n"
-            "2. Tap <b>Use my ChatGPT plan</b> or send <code>/openaiProvider chatgpt-plan</code>.\n"
-            "3. Pick your personal default model, then tap <b>Test default</b> for a short reply on your plan.\n\n"
+            "{setup}\n"
+            "Pick a model and tap <b>Send a test message</b> for a short reply on your plan.\n\n"
             "<b>Personal default</b> {model}"
         ),
+        "setup": "Tap <b>Connect ChatGPT</b> or send /ChatGPT_Login to link your subscription.",
+        "linked": "Tap <b>Use my ChatGPT plan</b> to use your subscription for GPT chat.",
+        "active": "Your ChatGPT plan is selected for GPT chat.",
+        "connect": "Connect ChatGPT",
         "enable": "Use my ChatGPT plan",
-        "test": "Test default",
+        "test": "Send a test message",
         "other": "/ChatGPT_Quickstart_fa",
-        "unlinked": "Link your ChatGPT account first using the command above.",
+        "unlinked": "Link your ChatGPT account first with /ChatGPT_Login.",
+        "sign_in": "Sign in with ChatGPT",
+        "login_steps": (
+            "Open the button in your browser and allow plan usage. After you sign in, your browser "
+            "will show a page it can’t open. Copy the full address starting with http://127.0.0.1: "
+            "and paste it here within 5 minutes."
+        ),
+        "login_expired": "That link doesn’t match an active sign-in. Send /ChatGPT_Login to start again.",
+        "login_failed": "Couldn’t link your ChatGPT account. Send /ChatGPT_Login to try again.",
+        "login_done": "ChatGPT connected. Open /ChatGPT_Quickstart to choose a GPT model and send a test message.",
         "choose": "Choose a GPT model as your personal default first.",
         "saved": "Personal default saved.",
         "enabled": "ChatGPT plan selected.",
@@ -8732,18 +8758,27 @@ CHATGPT_QUICKSTART_TEXT = {
     "fa": {
         "help": (
             "<b>راهنمای سریع ChatGPT</b>\n\n"
-            "۱. از مدیر ربات بخواهید این دستور را روی میزبان ربات اجرا کند. "
-            "اگر میزبان راه دور است، پورت ۱۴۵۵ را با SSH به رایانهٔ خود هدایت کنید:\n"
-            "<code>python -m uniborg.chatgpt_plan connect {user_id}</code>\n"
-            "پیوندی را که دستور چاپ می‌کند باز کنید و اجازهٔ استفاده از اشتراک را بدهید.\n"
-            "۲. دکمهٔ <b>استفاده از اشتراک من</b> را بزنید یا <code>/openaiProvider chatgpt-plan</code> را بفرستید.\n"
-            "۳. مدل پیش‌فرض خود را انتخاب کنید و <b>آزمایش پیش‌فرض</b> را بزنید تا با اشتراک خود پاسخ کوتاهی بگیرید.\n\n"
+            "{setup}\n"
+            "مدل خود را انتخاب کنید و <b>ارسال پیام آزمایشی</b> را بزنید تا با اشتراک خود پاسخ کوتاهی بگیرید.\n\n"
             "<b>مدل پیش‌فرض شخصی</b> {model}"
         ),
+        "setup": "برای اتصال اشتراک، <b>اتصال حساب ChatGPT</b> را بزنید یا /ChatGPT_Login_fa را بفرستید.",
+        "linked": "برای گفت‌وگو با مدل‌های GPT، <b>استفاده از اشتراک من</b> را بزنید.",
+        "active": "اشتراک ChatGPT شما برای گفت‌وگو با مدل‌های GPT انتخاب شده است.",
+        "connect": "اتصال حساب ChatGPT",
         "enable": "استفاده از اشتراک من",
-        "test": "آزمایش پیش‌فرض",
+        "test": "ارسال پیام آزمایشی",
         "other": "/ChatGPT_Quickstart",
-        "unlinked": "ابتدا با دستور بالا حساب ChatGPT خود را وصل کنید.",
+        "unlinked": "ابتدا با /ChatGPT_Login_fa حساب ChatGPT خود را وصل کنید.",
+        "sign_in": "ورود با ChatGPT",
+        "login_steps": (
+            "دکمه را در مرورگر باز کنید، وارد شوید و اجازهٔ استفاده از اشتراک را بدهید. "
+            "مرورگر سپس صفحه‌ای را نشان می‌دهد که باز نمی‌شود. نشانی کامل صفحه را که با "
+            "http://127.0.0.1: شروع می‌شود کپی کنید و تا ۵ دقیقه در همین گفتگو بفرستید."
+        ),
+        "login_expired": "این پیوند به ورود فعالی مربوط نیست. برای شروع دوباره /ChatGPT_Login_fa را بفرستید.",
+        "login_failed": "اتصال حساب انجام نشد. برای تلاش دوباره /ChatGPT_Login_fa را بفرستید.",
+        "login_done": "حساب ChatGPT وصل شد. برای انتخاب مدل و ارسال پیام آزمایشی، /ChatGPT_Quickstart_fa را باز کنید.",
         "choose": "ابتدا یک مدل GPT را به‌عنوان پیش‌فرض خود انتخاب کنید.",
         "saved": "مدل پیش‌فرض شخصی ذخیره شد.",
         "enabled": "اشتراک ChatGPT انتخاب شد.",
@@ -8758,8 +8793,13 @@ async def _show_chatgpt_quickstart(event, language, *, edit=False):
     user_id = event.sender_id
     strings = CHATGPT_QUICKSTART_TEXT[language]
     model = user_manager.get_prefs(user_id).model
+    linked = chatgpt_plan.linked(user_id)
+    enabled = (
+        linked and user_manager.get_openai_provider(user_id) == openai_providers.CHATGPT_PLAN
+    )
+    setup = strings["active"] if enabled else strings["linked" if linked else "setup"]
     text = strings["help"].format(
-        user_id=user_id, model=_html_dynamic(_model_display_name(model))
+        setup=setup, model=_html_dynamic(_model_display_name(model))
     )
     buttons = None
     if IS_BOT:
@@ -8770,12 +8810,12 @@ async def _show_chatgpt_quickstart(event, language, *, edit=False):
                 data=f"{CHATGPT_QUICKSTART_CALLBACK_PREFIX}{user_id}:{language}:{action}",
             )
 
-        enabled = (
-            chatgpt_plan.linked(user_id)
-            and user_manager.get_openai_provider(user_id) == openai_providers.CHATGPT_PLAN
+        provider_button = (
+            button(f"✅ {strings['enable']}" if enabled else strings["enable"], "enable")
+            if linked else button(strings["connect"], "connect")
         )
         buttons = [
-            [button(f"✅ {strings['enable']}" if enabled else strings["enable"], "enable")],
+            [provider_button],
             [
                 button(
                     f"{'✅ ' if model == choice else ''}{_model_display_name(choice)}",
@@ -8801,6 +8841,64 @@ async def chatgpt_quickstart_handler(event):
     await _show_chatgpt_quickstart(event, language)
 
 
+async def _start_chatgpt_login(event, language):
+    strings = CHATGPT_QUICKSTART_TEXT[language]
+    try:
+        login = await asyncio.to_thread(chatgpt_plan.start_login, event.sender_id)
+    except (chatgpt_plan.PlanError, OSError, ValueError):
+        await send_info_message(event, strings["login_failed"], parse_mode=None)
+        return
+    CHATGPT_PENDING_LOGINS[event.sender_id] = (language, login)
+    url = login.url(login.telegram_redirect)
+    text = strings["login_steps"]
+    buttons = [[tg_compat.url_button(strings["sign_in"], url)]] if IS_BOT else None
+    if not buttons:
+        text = f"{url}\n\n{text}"
+    await send_info_message(
+        event, text, parse_mode=None, buttons=buttons, link_preview=False
+    )
+
+
+async def chatgpt_login_handler(event):
+    language = "fa" if event.pattern_match.group(1) else "en"
+    await _start_chatgpt_login(event, language)
+
+
+def _is_chatgpt_login_callback(event):
+    return event.is_private and not event.out and chatgpt_plan.is_callback_url(event.raw_text)
+
+
+async def chatgpt_login_callback_handler(event):
+    pending = CHATGPT_PENDING_LOGINS.get(event.sender_id)
+    language, login = pending if pending is not None else ("en", None)
+    strings = CHATGPT_QUICKSTART_TEXT[language]
+    query = chatgpt_plan.telegram_callback(login, event.raw_text) if login else None
+    if query is not None:
+        # Consume the attempt before the first await to prevent duplicate exchanges.
+        CHATGPT_PENDING_LOGINS.pop(event.sender_id, None)
+    try:
+        await event.delete()
+    except errors.RPCError:
+        pass
+    if query is None:
+        await send_info_message(
+            event, strings["login_expired"], parse_mode=None, reply_to=False
+        )
+        raise events.StopPropagation
+    try:
+        await asyncio.to_thread(
+            chatgpt_plan.finish_login, login, login.telegram_redirect, query
+        )
+    except (chatgpt_plan.PlanError, httpx.HTTPError, OSError, KeyError, TypeError, ValueError):
+        await send_info_message(
+            event, strings["login_failed"], parse_mode=None, reply_to=False
+        )
+        raise events.StopPropagation
+    user_manager.set_openai_provider(event.sender_id, openai_providers.CHATGPT_PLAN)
+    await send_info_message(event, strings["login_done"], parse_mode=None, reply_to=False)
+    raise events.StopPropagation
+
+
 async def _chatgpt_quickstart_press(event, data):
     owner, _, selection = data.partition(":")
     language, _, action = selection.partition(":")
@@ -8813,6 +8911,10 @@ async def _chatgpt_quickstart_press(event, data):
     strings = CHATGPT_QUICKSTART_TEXT[language]
     if action == "language":
         language = "en" if language == "fa" else "fa"
+    elif action == "connect":
+        await event.answer(strings["sign_in"])
+        await _start_chatgpt_login(event, language)
+        return
     elif action in CHATGPT_QUICKSTART_MODELS:
         _apply_personal_model_choice(event.sender_id, CHATGPT_QUICKSTART_MODELS[action])
         await event.answer(strings["saved"])
@@ -13805,6 +13907,8 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     processed by the main chat handler.
     """
     # Universal filters
+    if chatgpt_plan.is_callback_url(getattr(event, "raw_text", None)):
+        return False
     if not (
         event.text
         or event.media
