@@ -47,6 +47,14 @@ want to pay for their own requests today, `/setOpenAIKey` and
 `/openaiProvider openai` use OpenAI API billing. See the provider and key
 fallback rules above.
 
+The first option to test for a shared bot is native Codex sign-in with one
+isolated [Codex App Server](https://learn.chatgpt.com/docs/app-server#authentication)
+worker per linked Telegram user. A disposable worker obtained and cancelled a
+ChatGPT device code without an app registration. Two local workers also
+reported distinct account state from separate `CODEX_HOME` directories. A live
+pilot still needs to verify sign-in, subscription usage, and `.i` delivery for
+two linked users on the same bot.
+
 OpenAI offers **Sign in with ChatGPT** with a separate permission to spend an
 eligible user's ChatGPT plan allowance. A remotely hosted Betterborg instance
 needs to [request hosted access](https://openai.com/form/sign-in-with-chatgpt-interest/)
