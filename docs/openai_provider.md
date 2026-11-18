@@ -40,6 +40,32 @@ whose saved Codex models migrated) is not reminded under every answer.
 The OpenAI API is sent the slug the Codex alias of the family points at now
 (`codex_aliases`). The two catalogs name models alike; only Codex's is read.
 
+## Personal ChatGPT plan usage
+
+The `codex` provider uses one account for all authorized users. For users who
+want to pay for their own requests today, `/setOpenAIKey` and
+`/openaiProvider openai` use OpenAI API billing. See the provider and key
+fallback rules above.
+
+OpenAI offers **Sign in with ChatGPT** with a separate permission to spend an
+eligible user's ChatGPT plan allowance. A remotely hosted Betterborg instance
+needs to [request hosted access](https://openai.com/form/sign-in-with-chatgpt-interest/)
+before offering that permission. The [open-source integration guide](https://developers.openai.com/siwc/token-sharing-open-source)
+covers local clients and personal installations.
+
+For a hosted integration, start with a **Connect ChatGPT** button in the user's
+private bot chat. Bind the completed browser authorization to the initiating
+Telegram user ID. Route eligible chat requests through the existing Responses
+stream with that user's OAuth credential, using a distinct provider selection.
+Keep quota and reconnect state scoped to the linked account, and require an
+explicit choice before a request can use another billing source.
+[OpenAI's inference guide](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+documents the Responses route for ChatGPT plan usage.
+
+Start with chat. The [documented preview](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+excludes image generation. If Betterborg adds Codex coding sessions with
+workspace tools, use the [Codex App Server integration](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server).
+
 ## Quota memory
 
 `openai_providers.QuotaMemory` records two facts in Redis, so every process and
