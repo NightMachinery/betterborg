@@ -89,6 +89,12 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(routed.model, OR_OPENAI_SOL)
         self.assertEqual(routed.service, "openrouter")
 
+    def test_preview_uses_a_distinct_route_without_fallback(self):
+        routed = self.route(openai_providers.CHATGPT_PLAN, keys=["sk-a"])
+        self.assertEqual(routed.model, "chatgpt-plan/gpt-sol-latest")
+        self.assertEqual(routed.service, openai_providers.CHATGPT_PLAN)
+        self.assertIsNone(routed.fallback_backend)
+
     def test_auto_openai_first_skips_a_spent_key(self):
         routed = self.route(
             openai_providers.AUTO_OPENAI_FIRST, keys=["sk-a"], spent=["sk-a"]
@@ -152,6 +158,34 @@ class GenerationTests(unittest.TestCase):
             self._request(model=OPENAI_CODEX_SOL, api_key="codex-oauth"), stream
         )
         self.assertIsNone(stream.await_args.kwargs["api_key"])
+
+    def test_preview_uses_the_senders_oauth_token(self):
+        stream = AsyncMock(return_value=codex_util.CodexResponse(text="hello"))
+        request = self._request(model="chatgpt-plan/gpt-sol-latest")
+        request.prefs.enabled_tools = ["googleSearch"]
+        with patch.object(plugin.chatgpt_plan, "access_token", return_value="pilot") as get:
+            result, _ = self.run_generation(request, stream)
+        self.assertEqual(result.text, "hello")
+        get.assert_called_once_with(request.event.sender_id)
+        kwargs = stream.await_args.kwargs
+        self.assertEqual(kwargs["plan_token"], "pilot")
+        self.assertIsNone(kwargs["api_key"])
+        self.assertIsNone(kwargs["tools"])
+
+    def test_preview_failure_leaves_shared_codex_quota_alone(self):
+        error = codex_util.CodexStreamError(
+            "Your ChatGPT plan is over its usage limit.",
+            codex_util.CodexResponse(text="partial"),
+            usage_limit=codex_util.CodexUsageLimit(plan_type="pro"),
+        )
+        stream = AsyncMock(side_effect=error)
+        with patch.object(plugin.chatgpt_plan, "access_token", return_value="pilot"):
+            result, edit = self.run_generation(
+                self._request(model="chatgpt-plan/gpt-sol-latest"), stream
+            )
+        self.assertTrue(result.delivered)
+        self.assertIn("partial", edit.await_args.args[1])
+        self.assertIsNone(asyncio.run(plugin.OPENAI_QUOTA.codex_spent_until()))
 
     def test_a_spent_key_reroutes_to_codex_and_is_remembered(self):
         stream = AsyncMock(side_effect=_insufficient_quota())
@@ -217,7 +251,9 @@ class ProviderMenuTests(unittest.TestCase):
             plugin.user_manager,
             "get_openai_provider",
             return_value=openai_providers.AUTO_CODEX_FIRST,
-        ), patch.object(plugin, "IS_BOT", True):
+        ), patch.object(plugin, "IS_BOT", True), patch.object(
+            plugin.chatgpt_plan, "linked", return_value=True
+        ):
             buttons = plugin._openai_provider_menu_buttons(
                 USER_ID, spent_p=True, callback_prefix="openaiprovider:"
             )

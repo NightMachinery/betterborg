@@ -31,6 +31,7 @@ _log = logging.getLogger(__name__)
 CODEX = "codex"
 OPENAI = "openai"
 OPENROUTER = "openrouter"
+CHATGPT_PLAN = "chatgpt-plan"
 AUTO_OPENAI_FIRST = "auto-openai-first"
 AUTO_CODEX_FIRST = "auto-codex-first"
 
@@ -39,17 +40,19 @@ DEFAULT = OPENAI
 LABELS = {
     OPENAI: "OpenAI API key",
     CODEX: "Codex (ChatGPT plan)",
+    CHATGPT_PLAN: "Personal ChatGPT plan (preview)",
     OPENROUTER: "OpenRouter",
     AUTO_OPENAI_FIRST: "Auto: OpenAI key, then Codex",
     AUTO_CODEX_FIRST: "Auto: Codex, then OpenAI key",
 }
-BACKENDS = (CODEX, OPENAI, OPENROUTER)
+BACKENDS = (CODEX, OPENAI, OPENROUTER, CHATGPT_PLAN)
 
 #: `/openaiProvider ARG` names a provider without the menu.
 ARGS = {
     "openai": OPENAI,
     "api": OPENAI,
     "codex": CODEX,
+    CHATGPT_PLAN: CHATGPT_PLAN,
     "openrouter": OPENROUTER,
     "or": OPENROUTER,
     "auto-openai-first": AUTO_OPENAI_FIRST,
@@ -59,6 +62,7 @@ ARGS = {
 
 #: Concrete OpenAI API model ids. The suffix is a Codex alias name or a slug.
 OPENAI_API_PREFIX = "openai-api/"
+CHATGPT_PLAN_PREFIX = f"{CHATGPT_PLAN}/"
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,10 @@ def is_openai_api_model(model: Optional[str]) -> bool:
     return bool(model) and model.startswith(OPENAI_API_PREFIX)
 
 
+def is_chatgpt_plan_model(model: Optional[str]) -> bool:
+    return bool(model) and model.startswith(CHATGPT_PLAN_PREFIX)
+
+
 def is_family_api_model(model: Optional[str]) -> bool:
     """MODEL is a GPT family on the OpenAI API, as routing produces it."""
     return any(model == backend_model(f.neutral_id, OPENAI) for f in FAMILIES)
@@ -118,6 +126,8 @@ def backend_model(model: str, backend: str) -> str:
         return family.codex_id
     if backend == OPENAI:
         return OPENAI_API_PREFIX + model.split("/", 1)[1]
+    if backend == CHATGPT_PLAN:
+        return CHATGPT_PLAN_PREFIX + model.split("/", 1)[1]
     if backend == OPENROUTER:
         return family.openrouter_id
     raise ValueError(f"Unknown GPT backend: {backend!r}")
@@ -129,7 +139,7 @@ def openai_api_slug(model: str) -> str:
     A family alias goes out as the slug its Codex alias points at now: the two
     catalogs name models alike, and only Codex's is read (`codex_aliases`).
     """
-    name = model.removeprefix(OPENAI_API_PREFIX)
+    name = model.removeprefix(OPENAI_API_PREFIX).removeprefix(CHATGPT_PLAN_PREFIX)
     neutral = "openai/" + name
     if neutral in _FAMILIES_BY_NEUTRAL:
         return codex_aliases.slug_for(_FAMILIES_BY_NEUTRAL[neutral].codex_id) or name
@@ -191,8 +201,8 @@ def choose_backend(
     on every answer when another backend stands in.
     """
     codex_ready = codex_access and not codex_exhausted
-    if provider == CODEX:
-        return Route(CODEX)
+    if provider in (CODEX, CHATGPT_PLAN):
+        return Route(provider)
     if provider == OPENROUTER:
         return Route(OPENROUTER)
     if provider == OPENAI:

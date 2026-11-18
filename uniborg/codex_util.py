@@ -4,6 +4,7 @@ import base64
 import binascii
 import hashlib
 import io
+import json
 import logging
 import re
 import socket
@@ -18,7 +19,7 @@ import httpx
 import openai
 from PIL import Image
 
-from uniborg import codex_aliases, openai_providers, stream_driver, util
+from uniborg import chatgpt_plan, codex_aliases, openai_providers, stream_driver, util
 from uniborg.constants import OPENAI_CODEX_LUNA_RESERVE
 
 CODEX_MODEL_PREFIX = "openai-codex/"
@@ -459,7 +460,9 @@ def codex_model_name(model: str) -> str:
 
 def responses_model_name(model: str) -> str:
     """The model name sent for MODEL, a Codex or an OpenAI API model id."""
-    if openai_providers.is_openai_api_model(model):
+    if openai_providers.is_openai_api_model(model) or (
+        openai_providers.is_chatgpt_plan_model(model)
+    ):
         return openai_providers.openai_api_slug(model)
     return codex_model_name(model)
 
@@ -559,10 +562,15 @@ def _is_supported_codex_image_url(url: str) -> bool:
 
 
 async def _create_async_client(
-    *, max_retries: Optional[int] = None, api_key: Optional[str] = None
+    *,
+    max_retries: Optional[int] = None,
+    api_key: Optional[str] = None,
+    plan_token: Optional[str] = None,
 ) -> openai.AsyncOpenAI:
     """A Codex client, or with API_KEY one for the public OpenAI API."""
-    if api_key is not None:
+    if plan_token is not None:
+        kwargs = {"api_key": plan_token, "base_url": chatgpt_plan.RESOURCE}
+    elif api_key is not None:
         kwargs = {"api_key": api_key}
     else:
         token, headers, base_url = await asyncio.to_thread(_get_codex_auth)
@@ -679,11 +687,12 @@ async def stream_codex_response(
     image_callback: Optional[Callable[[CodexImage], Awaitable[None]]] = None,
     max_retries: Optional[int] = None,
     api_key: Optional[str] = None,
+    plan_token: Optional[str] = None,
 ) -> CodexResponse:
     """Deliver images serially; callback success means Telegram accepted the image.
 
-    With API_KEY the request goes to the public OpenAI Responses API instead
-    of Codex, for an OpenAI API model id (`openai_providers`).
+    API_KEY and PLAN_TOKEN authenticate to the public Responses API. Each is
+    kept separate from the shared Codex account.
 
     Callback failures stop this request without retrying generation. Cancellation
     propagates after resource cleanup; already-delivered images remain intact.
@@ -708,6 +717,8 @@ async def stream_codex_response(
     stream = None
     completed = False
     usage_limit = None
+    if openai_providers.is_chatgpt_plan_model(model) and not plan_token:
+        raise CodexStreamError(chatgpt_plan.CONNECT_NEEDED, result)
 
     def text_key(item_id, output_index, content_index):
         return (item_id if item_id is not None else output_index, content_index)
@@ -764,7 +775,16 @@ async def stream_codex_response(
                     )
 
     try:
-        client = await _create_async_client(max_retries=max_retries, api_key=api_key)
+        if plan_token is None:
+            client = await _create_async_client(max_retries=max_retries, api_key=api_key)
+        else:
+            payload_bytes = len(json.dumps(kwargs, ensure_ascii=False).encode())
+            if payload_bytes > chatgpt_plan.CONTEXT_BYTES:
+                raise chatgpt_plan.PlanError(
+                    "This chat exceeds the ChatGPT plan pilot's context budget. "
+                    "Start a new topic or use a shorter history."
+                )
+            client = await _create_async_client(max_retries=0, plan_token=plan_token)
         stream = await client.responses.create(**kwargs)
         async for stream_event in stream:
             event_type = _field(stream_event, "type")
@@ -815,6 +835,11 @@ async def stream_codex_response(
                     None,
                     "completed",
                 ):
+                    if plan_token is not None:
+                        error = _field(response, "error")
+                        raise chatgpt_plan.PlanError(
+                            chatgpt_plan.request_error(_field(error, "code"))
+                        )
                     raise RuntimeError(
                         f"Codex response ended with {result.finish_reason or event_type}."
                     )
@@ -823,6 +848,10 @@ async def stream_codex_response(
                 #: A plain RuntimeError here; raising CodexStreamError inside the
                 #: try would be re-wrapped below and duplicate the message.
                 usage_limit = parse_usage_limit(stream_event)
+                if plan_token is not None:
+                    raise chatgpt_plan.PlanError(
+                        chatgpt_plan.request_error(_field(stream_event, "code"))
+                    )
                 raise RuntimeError(_stream_error_message(stream_event))
         if not completed:
             raise RuntimeError("Codex stream ended before response completion.")
@@ -830,6 +859,14 @@ async def stream_codex_response(
             raise RuntimeError("Codex returned an empty result (no text or images).")
         return result
     except Exception as exc:
+        if plan_token is not None:
+            message = (
+                str(exc) if isinstance(exc, chatgpt_plan.PlanError)
+                else chatgpt_plan.request_error(
+                    getattr(exc, "code", None), status=getattr(exc, "status_code", None)
+                )
+            )
+            raise CodexStreamError(message, result) from None
         network_message = _network_error_message(exc)
         if network_message is not None:
             logger.warning(

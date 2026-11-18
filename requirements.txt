@@ -54,6 +54,7 @@ litellm>=1.82.0
 llm
 llm-gemini
 llm-openai-via-codex
+PyJWT[crypto]>=2.10,<3
 
 aiofiles
 json5

@@ -979,6 +979,8 @@ def get_service_from_model(model: str) -> str:
         return "openrouter"
     elif model.startswith("openai-codex/"):
         return "codex"
+    elif model.startswith("chatgpt-plan/"):
+        return "chatgpt-plan"
     elif model.startswith(("openai/", "openai-api/")):
         #: `openai/` is a provider-neutral GPT id, which the request path
         #: routes first (`openai_providers`); OpenAI is its default backend.

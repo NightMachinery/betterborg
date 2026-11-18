@@ -55,11 +55,10 @@ reported distinct account state from separate `CODEX_HOME` directories. A live
 pilot still needs to verify sign-in, subscription usage, and `.i` delivery for
 two linked users on the same bot.
 
-OpenAI offers **Sign in with ChatGPT** with a separate permission to spend an
-eligible user's ChatGPT plan allowance. A remotely hosted Betterborg instance
-needs to [request hosted access](https://openai.com/form/sign-in-with-chatgpt-interest/)
-before offering that permission. The [open-source integration guide](https://developers.openai.com/siwc/token-sharing-open-source)
-covers local clients and personal installations.
+The **Personal ChatGPT plan (preview)** provider uses the open-source
+[Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source)
+flow. The pilot uses dynamic OAuth registration and a loopback callback. It
+appears in `/openaiProvider` for linked users.
 
 A personal Telegram bot is another deployment option for users who can run
 their own process. A Betterborg runner could connect directly to Telegram and
@@ -69,18 +68,36 @@ run the process on their own machine. Codex's [built-in image generation](https:
 uses the account's Codex allowance. A personal runner would need to verify
 delivery of App Server image results to Telegram.
 
-For a hosted integration, start with a **Connect ChatGPT** button in the user's
-private bot chat. Bind the completed browser authorization to the initiating
-Telegram user ID. Route eligible chat requests through the existing Responses
-stream with that user's OAuth credential, using a distinct provider selection.
-Keep quota and reconnect state scoped to the linked account, and require an
-explicit choice before a request can use another billing source.
-[OpenAI's inference guide](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
-documents the Responses route for ChatGPT plan usage.
+### Pilot setup
 
-Start with chat. The [documented preview](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
-excludes image generation, including through the Codex App Server plan-usage
-configuration. For user-funded `.i` requests, a separate option would call the
+Run the enrollment command from the checkout as the same operating system user
+and with the same Python environment as the chat bot. Supply the numeric
+Telegram ID of the person signing into ChatGPT.
+
+```sh
+python -m uniborg.chatgpt_plan connect TELEGRAM_USER_ID
+```
+
+The browser needs access to the loopback listener on port 1455. For a remote
+bot, start the SSH session from the browser machine with
+`ssh -L 1455:127.0.0.1:1455 BOT_HOST`. The sign-in command prints the URL to
+open. Choose the intended ChatGPT account and grant plan usage there. The
+terminal confirms the link after verifying the callback and account.
+
+In Telegram, select `/openaiProvider chatgpt-plan`, then send `.c hello` to
+try GPT Sol. The provider routes GPT families through the [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+and shows reported input, cached and output token counts under each answer.
+It declines inputs over 48 KiB and leaves other billing sources untouched if
+the plan reaches its limit. The user can review the app's allowance in
+[ChatGPT usage settings](https://chatgpt.com/settings/usage).
+
+Run `python -m uniborg.chatgpt_plan disconnect TELEGRAM_USER_ID` to revoke the
+renewable session and remove the local connection. The user can switch
+providers with `/openaiProvider` or revoke Betterborg from ChatGPT settings.
+
+The pilot covers text chat. `.i` still uses the existing Codex route for users
+with image access. The [documented preview](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+excludes image generation. For user-funded `.i` requests, a separate option would call the
 [Images API](https://developers.openai.com/api/docs/guides/image-generation)
 with the user's OpenAI project key. Eligible Pro and Business subscribers can
 [claim API credits](https://developers.openai.com/api/docs/guides/chatgpt-api-credits)

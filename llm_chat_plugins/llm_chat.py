@@ -189,7 +189,7 @@ from uniborg.constants import (
 
 # Import live mode utilities
 from uniborg import gemini_live_util
-from uniborg import codex_util
+from uniborg import chatgpt_plan, codex_util
 from uniborg import key_sharing
 from uniborg import key_usage
 from uniborg import openai_providers
@@ -4554,10 +4554,17 @@ async def _route_request_model(
     model = request.model
     if not openai_providers.is_neutral_gpt(model):
         return request
+    provider = user_manager.get_openai_provider(user_id)
+    if provider == openai_providers.CHATGPT_PLAN:
+        return RequestModel(
+            model=openai_providers.backend_model(model, provider),
+            service=provider,
+            selected_model=model,
+        )
     keys = _openai_api_keys(user_id, codex_access=codex_access)
     usable = [key for key in keys if not await OPENAI_QUOTA.key_spent_until(key)]
     route = openai_providers.choose_backend(
-        user_manager.get_openai_provider(user_id),
+        provider,
         codex_access=codex_access,
         openai_any=bool(keys),
         openai_usable=bool(usable),
@@ -5501,6 +5508,8 @@ def get_model_capabilities(model: str) -> Dict[str, bool]:
         "pdf_input": False,
         "image_generation": False,
     }
+    if openai_providers.is_chatgpt_plan_model(model):
+        return capabilities
     if (
         codex_util.is_codex_model(model)
         or openai_providers.is_openai_api_model(model)
@@ -8514,7 +8523,7 @@ async def _gemini_provider_press_handler(event, provider: str):
 
 OPENAI_PROVIDER_USAGE = (
     "Usage: `/openaiProvider`, or `/openaiProvider "
-    "openai|codex|openrouter|auto-openai-first|auto-codex-first`."
+    "openai|codex|openrouter|auto-openai-first|auto-codex-first|chatgpt-plan`."
 )
 #: The API-key service each provider needs, when it needs one.
 OPENAI_PROVIDER_KEY_SERVICES = {
@@ -8556,6 +8565,12 @@ async def _openai_provider_menu_text(event, target_id: int) -> str:
     )
     hours = int(openai_providers.OPENAI_QUOTA_TTL.total_seconds() // 3600)
     labels = openai_providers.LABELS
+    plan_label = labels[openai_providers.CHATGPT_PLAN]
+    plan_lines = (
+        [f"• **{plan_label}**: uses your linked ChatGPT allowance for GPT chat."]
+        if chatgpt_plan.linked(target_id)
+        else []
+    )
     return "\n".join(
         [
             "**OpenAI Provider**",
@@ -8564,6 +8579,7 @@ async def _openai_provider_menu_text(event, target_id: int) -> str:
             "your OpenAI account. Key: /setOpenAIKey",
             f"• **{labels[openai_providers.CODEX]}** ({codex_state}): the shared "
             "ChatGPT subscription.",
+            *plan_lines,
             f"• **{labels[openai_providers.OPENROUTER]}** ({openrouter_state}). "
             "Key: /setOpenRouterKey",
             f"• **{labels[openai_providers.AUTO_OPENAI_FIRST]}**: when an OpenAI "
@@ -8593,6 +8609,7 @@ def _openai_provider_menu_buttons(
             data=f"{callback_prefix}{provider}",
         )
         for provider, label in openai_providers.LABELS.items()
+        if provider != openai_providers.CHATGPT_PLAN or chatgpt_plan.linked(target_id)
     ]
     if spent_p:
         buttons.append(
@@ -8625,12 +8642,16 @@ async def _openai_provider_menu(event, target_id: int, *, callback_prefix=None):
     return text, buttons
 
 
-async def _apply_openai_provider(event, provider: str) -> None:
+async def _apply_openai_provider(event, provider: str) -> bool:
     """Switch to PROVIDER, asking for its key when there is none yet."""
+    if provider == openai_providers.CHATGPT_PLAN and not chatgpt_plan.linked(event.sender_id):
+        await send_info_message(event, chatgpt_plan.CONNECT_NEEDED, parse_mode=None)
+        return False
     user_manager.set_openai_provider(event.sender_id, provider)
     service = OPENAI_PROVIDER_KEY_SERVICES.get(provider)
     if service and not get_effective_api_key(event.sender_id, service):
         await llm_db.request_api_key_message(event, service)
+    return True
 
 
 async def _retry_openai_keys(user_id: int) -> None:
@@ -8647,7 +8668,8 @@ async def openai_provider_handler(event):
         if provider is None:
             await send_info_message(event, OPENAI_PROVIDER_USAGE, parse_mode="md")
             return
-        await _apply_openai_provider(event, provider)
+        if not await _apply_openai_provider(event, provider):
+            return
     text, buttons = await _openai_provider_menu(event, user_id)
     await send_info_message(event, text, parse_mode="md", buttons=buttons)
 
@@ -8658,7 +8680,9 @@ async def _openai_provider_press_handler(event, choice: str):
         await _retry_openai_keys(user_id)
         feedback = "OpenAI keys will be tried again."
     elif choice in openai_providers.LABELS:
-        await _apply_openai_provider(event, choice)
+        if not await _apply_openai_provider(event, choice):
+            await event.answer()
+            return
         feedback = f"OpenAI provider: {openai_providers.LABELS[choice]}."
     else:
         await event.answer("Unknown provider.", alert=True)
@@ -14092,6 +14116,10 @@ async def _keyed_request(
 ) -> KeyedRequest:
     """REQUEST_MODEL with USER_ID's keys for SERVICE (default: its own)."""
     service = service or request_model.service
+    if service == openai_providers.CHATGPT_PLAN:
+        # The bearer token is loaded inside generation, never as a shareable key.
+        marker = service if chatgpt_plan.linked(user_id) else None
+        return KeyedRequest(request_model, service, (), marker)
     credentials = tuple(
         await _request_credentials(
             user_id, service, codex_access=codex_access, model=request_model.model
@@ -14224,8 +14252,11 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
     # --- Construct API call arguments ---
     is_gemini_model_p = is_gemini_model(model_in_use)
     is_openai_api_p = openai_providers.is_openai_api_model(model_in_use)
+    is_chatgpt_plan_p = openai_providers.is_chatgpt_plan_model(model_in_use)
     #: Codex and the OpenAI API share one Responses-API client and stream.
-    is_codex_model_p = codex_util.is_codex_model(model_in_use) or is_openai_api_p
+    is_codex_model_p = (
+        codex_util.is_codex_model(model_in_use) or is_openai_api_p or is_chatgpt_plan_p
+    )
 
     # Image generation models don't support streaming
     # Note: Native Gemini image generation has separate handling with its own streaming
@@ -14263,7 +14294,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
     elif prefs.json_mode and is_codex_model_p:
         warnings.append(
             "JSON mode is disabled for OpenAI models."
-            if is_openai_api_p
+            if is_openai_api_p or is_chatgpt_plan_p
             else "JSON mode is disabled for Codex models."
         )
 
@@ -14302,7 +14333,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
         # Add modalities for image generation models
         if model_capabilities.get("image_generation", False):
             api_kwargs["modalities"] = ["image", "text"]
-    elif is_codex_model_p:
+    elif is_codex_model_p and not is_chatgpt_plan_p:
         codex_tools = _codex_tools_for_request(
             prefs.enabled_tools,
             image_generation=req.image_generation,
@@ -14364,6 +14395,16 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
 
         async def _run_codex(model, *, reasoning_effort):
             """One Codex attempt, tracked so /stop can still cancel it."""
+            credentials = {"api_key": api_key if is_openai_api_p else None}
+            if is_chatgpt_plan_p:
+                try:
+                    credentials["plan_token"] = await asyncio.to_thread(
+                        chatgpt_plan.access_token, user_id
+                    )
+                except chatgpt_plan.PlanError as exc:
+                    raise codex_util.CodexStreamError(
+                        str(exc), codex_util.CodexResponse(text="")
+                    ) from None
             codex_task = asyncio.create_task(
                 codex_util.stream_codex_response(
                     event=event,
@@ -14374,12 +14415,14 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
                     tools=api_kwargs.get("tools"),
                     edit_interval=edit_interval,
                     prompt_cache_key=codex_util.codex_prompt_cache_key(
-                        model=model, chat_id=chat_id, user_id=user_id
+                        model=model,
+                        chat_id=f"{user_id}:{chat_id}" if is_chatgpt_plan_p else chat_id,
+                        user_id=user_id,
                     ),
                     image_callback=(
                         deliver_codex_image if req.image_generation else None
                     ),
-                    api_key=api_key if is_openai_api_p else None,
+                    **credentials,
                 )
             )
             add_active_llm_task(user_id, codex_task)
@@ -14402,8 +14445,21 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
             finish_reason = codex_response.finish_reason
             has_image = codex_response.has_image
             usage = codex_response.usage
+            if is_chatgpt_plan_p and usage is not None:
+                warnings.append(
+                    f"ChatGPT plan: {usage.input_tokens:,} input tokens "
+                    f"({usage.cached_input_tokens:,} cached), {usage.output_tokens:,} output."
+                )
         except codex_util.CodexStreamError as e:
             partial = e.response.text.strip()
+            if is_chatgpt_plan_p:
+                notice = f"{BOT_META_INFO_PREFIX}❌ {e}"
+                await util.edit_message(
+                    response_message,
+                    f"{partial}\n\n{BOT_META_INFO_LINE}\n{notice}" if partial else notice,
+                    parse_mode=None,
+                )
+                return _ALREADY_DELIVERED
             if is_openai_api_p and openai_providers.is_insufficient_quota(e):
                 await OPENAI_QUOTA.mark_key_spent(api_key)
             failure = key_sharing.classify_key_failure(e) if is_openai_api_p else None
@@ -14765,6 +14821,9 @@ async def _chat_handler(
     api_key = keyed.api_key
 
     if not api_key:
+        if service_needed == openai_providers.CHATGPT_PLAN:
+            await send_info_message(event, chatgpt_plan.CONNECT_NEEDED, parse_mode=None)
+            return
         if request_model.quota_fallback_from:
             #: Prompting for a key the user never chose would be baffling; drop
             #: the stand-in instead and say why.
@@ -15142,15 +15201,18 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
             service=llm_util.get_service_from_model(DEFAULT_MODEL),
         )
     service = _gemini_chat_service(
-        user_id, request.model, llm_util.get_service_from_model(request.model)
+        user_id, request.model, request.service
     )
     vertex_refusal = _vertex_refusal(request.model, service)
     if vertex_refusal:
         raise GuestRequestRefused(vertex_refusal)
+    keyed = await _keyed_request(
+        request, user_id=user_id, codex_access=codex_p, service=service
+    )
+    if service == openai_providers.CHATGPT_PLAN and keyed.api_key is None:
+        raise GuestRequestRefused(chatgpt_plan.CONNECT_NEEDED)
     return GuestRequestPlan(
-        keyed=await _keyed_request(
-            request, user_id=user_id, codex_access=codex_p, service=service
-        ),
+        keyed=keyed,
         model_capabilities=get_model_capabilities(request.model),
         prefix_effort=prefix.reasoning_effort,
         warnings=warnings,

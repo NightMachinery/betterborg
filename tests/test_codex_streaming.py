@@ -81,6 +81,37 @@ class CodexStreamingTests(unittest.IsolatedAsyncioTestCase):
         cls.png = buffer.getvalue()
         cls.png_b64 = base64.b64encode(cls.png).decode("ascii")
 
+    async def test_preview_without_a_token_cannot_use_shared_codex(self):
+        with mock.patch.object(codex_util, "_create_async_client") as client:
+            with self.assertRaisesRegex(codex_util.CodexStreamError, "needs setup"):
+                await codex_util.stream_codex_response(
+                    event=None,
+                    response_message=None,
+                    model="chatgpt-plan/gpt-sol-latest",
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+        client.assert_not_called()
+
+    async def test_preview_reports_subscription_limit_from_stream_failure(self):
+        stream = _Stream([
+            {"type": "response.failed", "response": {
+                "status": "failed", "output": [],
+                "error": {"code": "subscription_sharing_usage_limit_exceeded"},
+            }},
+        ])
+        with mock.patch.object(
+            codex_util, "_create_async_client", mock.AsyncMock(return_value=_Client(stream))
+        ) as client:
+            with self.assertRaisesRegex(codex_util.CodexStreamError, "plan has reached"):
+                await codex_util.stream_codex_response(
+                    event=None,
+                    response_message=None,
+                    model="chatgpt-plan/gpt-sol-latest",
+                    messages=[{"role": "user", "content": "hi"}],
+                    plan_token="pilot",
+                )
+        client.assert_awaited_once_with(max_retries=0, plan_token="pilot")
+
     async def _run(
         self,
         events=(),
