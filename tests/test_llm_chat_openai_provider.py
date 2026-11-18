@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from uniborg import codex_util, guest_util, openai_providers
-from uniborg.constants import GPT_SOL, OPENAI_CODEX_SOL, OR_OPENAI_SOL
+from uniborg.constants import GPT_ASTRA, GPT_SOL, OPENAI_CODEX_SOL, OR_OPENAI_SOL
 
 USER_ID = 999000772
 
@@ -280,6 +280,73 @@ class ProviderMenuTests(unittest.TestCase):
             )
         set_provider.assert_called_once_with(USER_ID, openai_providers.OPENROUTER)
         self.assertEqual(ask.await_args.args[1], "openrouter")
+
+
+class ChatGPTQuickstartTests(unittest.IsolatedAsyncioTestCase):
+    async def test_english_command_and_farsi_switch_show_the_enrollment_command(self):
+        event = SimpleNamespace(
+            sender_id=USER_ID,
+            is_private=True,
+            pattern_match=SimpleNamespace(group=lambda _: None),
+            edit=AsyncMock(),
+        )
+        with patch.object(plugin, "IS_BOT", True), patch.object(
+            plugin.user_manager, "get_prefs", return_value=SimpleNamespace(model=GPT_SOL)
+        ), patch.object(plugin.chatgpt_plan, "linked", return_value=False), patch.object(
+            plugin, "send_info_message", AsyncMock()
+        ) as send:
+            await plugin.chatgpt_quickstart_handler(event)
+            await plugin._chatgpt_quickstart_press(event, f"{USER_ID}:en:language")
+        english = send.await_args
+        self.assertIn(f"uniborg.chatgpt_plan connect {USER_ID}", english.args[1])
+        self.assertEqual(
+            plugin.tg_compat.button_text(english.kwargs["buttons"][-1][-1]),
+            "/ChatGPT_Quickstart_fa",
+        )
+        farsi = event.edit.await_args
+        self.assertIn("راهنمای سریع ChatGPT", farsi.args[0])
+        self.assertIn(f"uniborg.chatgpt_plan connect {USER_ID}", farsi.args[0])
+        self.assertTrue(plugin._is_known_command("/ChatGPT_Quickstart"))
+        self.assertTrue(plugin._is_known_command("/ChatGPT_Quickstart_fa"))
+
+    async def test_model_button_only_changes_the_menu_owners_personal_default(self):
+        event = SimpleNamespace(sender_id=USER_ID, is_private=True, answer=AsyncMock())
+        with patch.object(plugin, "_apply_personal_model_choice") as set_model, patch.object(
+            plugin, "_show_chatgpt_quickstart", AsyncMock()
+        ):
+            await plugin._chatgpt_quickstart_press(event, "123:en:sol")
+            await plugin._chatgpt_quickstart_press(event, f"{USER_ID}:en:astra")
+        set_model.assert_called_once_with(USER_ID, GPT_ASTRA)
+
+    async def test_test_button_uses_only_the_linked_plan_and_saved_model(self):
+        event = SimpleNamespace(
+            sender_id=USER_ID, is_private=True, answer=AsyncMock()
+        )
+        model = SimpleNamespace(model=GPT_ASTRA)
+        answer = plugin.GenerationResult("سلام!", None, False)
+        with patch.object(plugin.chatgpt_plan, "linked", return_value=True), patch.object(
+            plugin.user_manager, "get_prefs", return_value=model
+        ), patch.object(plugin, "send_info_message", AsyncMock()), patch.object(
+            plugin, "_generate_response", AsyncMock(return_value=answer)
+        ) as generate, patch.object(plugin.util, "edit_message", AsyncMock()) as edit:
+            await plugin._chatgpt_quickstart_press(event, f"{USER_ID}:fa:test")
+        request = generate.await_args.args[0]
+        self.assertEqual(request.model, "chatgpt-plan/gpt-astra-latest")
+        self.assertEqual(request.reasoning_model, GPT_ASTRA)
+        self.assertIsNone(request.api_key)
+        self.assertEqual(request.prefix_effort, "low")
+        self.assertEqual(len(request.messages), 1)
+        self.assertIn("به فارسی", request.messages[0]["content"])
+        self.assertIn("سلام!", edit.await_args.args[1])
+
+    async def test_unlinked_user_cannot_start_a_test(self):
+        event = SimpleNamespace(sender_id=USER_ID, is_private=True, answer=AsyncMock())
+        with patch.object(plugin.chatgpt_plan, "linked", return_value=False), patch.object(
+            plugin, "_generate_response", AsyncMock()
+        ) as generate:
+            await plugin._chatgpt_quickstart_press(event, f"{USER_ID}:en:test")
+        generate.assert_not_awaited()
+        self.assertIn("Link your ChatGPT account", event.answer.await_args.args[0])
 
 
 if __name__ == "__main__":

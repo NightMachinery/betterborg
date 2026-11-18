@@ -70,6 +70,12 @@ delivery of App Server image results to Telegram.
 
 ### Pilot setup
 
+In the bot's private chat, use `/ChatGPT_Quickstart` for the enrollment command
+and buttons to select the ChatGPT provider, save a personal default model,
+and test it against the linked subscription. `/ChatGPT_Quickstart_fa` opens
+the same guide in Farsi. The test sends one short prompt with low reasoning
+effort.
+
 Run the enrollment command from the checkout as the same operating system user
 and with the same Python environment as the chat bot. Supply the numeric
 Telegram ID of the person signing into ChatGPT.

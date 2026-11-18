@@ -1269,6 +1269,8 @@ BOT_COMMANDS = [
         "command": "openaiprovider",
         "description": "Run GPT models on your OpenAI key, Codex or OpenRouter",
     },
+    {"command": "chatgpt_quickstart", "description": "Set up and test your ChatGPT plan"},
+    {"command": "chatgpt_quickstart_fa", "description": "راهنمای راه‌اندازی و آزمایش اشتراک ChatGPT"},
     {
         "command": "keys",
         "description": "Order your API keys and see the keys you share",
@@ -7494,6 +7496,12 @@ def register_handlers():
     )(openai_provider_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^/chatgpt_quickstart(_fa)?{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(chatgpt_quickstart_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/keys{bot_username_suffix_re}\s*$",
             func=lambda e: e.is_private,
         )
@@ -8695,6 +8703,168 @@ async def _openai_provider_press_handler(event, choice: str):
     except errors.rpcerrorlist.MessageNotModifiedError:
         pass
     await event.answer(feedback)
+
+
+CHATGPT_QUICKSTART_CALLBACK_PREFIX = "cgqs:"
+CHATGPT_QUICKSTART_MODELS = {"sol": GPT_SOL, "astra": GPT_ASTRA}
+CHATGPT_QUICKSTART_TEXT = {
+    "en": {
+        "help": (
+            "<b>ChatGPT quickstart</b>\n\n"
+            "1. Ask the bot operator to run this on the bot host (forward port 1455 over SSH if remote):\n"
+            "<code>python -m uniborg.chatgpt_plan connect {user_id}</code>\n"
+            "Open the URL it prints and allow plan usage.\n"
+            "2. Tap <b>Use my ChatGPT plan</b> or send <code>/openaiProvider chatgpt-plan</code>.\n"
+            "3. Pick your personal default model, then tap <b>Test default</b> for a short reply on your plan.\n\n"
+            "<b>Personal default</b> {model}"
+        ),
+        "enable": "Use my ChatGPT plan",
+        "test": "Test default",
+        "other": "/ChatGPT_Quickstart_fa",
+        "unlinked": "Link your ChatGPT account first using the command above.",
+        "choose": "Choose a GPT model as your personal default first.",
+        "saved": "Personal default saved.",
+        "enabled": "ChatGPT plan selected.",
+        "testing": "Testing {model} on your ChatGPT plan…",
+        "prompt": "Say hello in one short sentence.",
+        "usage": "Input tokens {input:,} ({cached:,} cached), output {output:,}.",
+    },
+    "fa": {
+        "help": (
+            "<b>راهنمای سریع ChatGPT</b>\n\n"
+            "۱. از مدیر ربات بخواهید این دستور را روی میزبان ربات اجرا کند. "
+            "اگر میزبان راه دور است، پورت ۱۴۵۵ را با SSH به رایانهٔ خود هدایت کنید:\n"
+            "<code>python -m uniborg.chatgpt_plan connect {user_id}</code>\n"
+            "پیوندی را که دستور چاپ می‌کند باز کنید و اجازهٔ استفاده از اشتراک را بدهید.\n"
+            "۲. دکمهٔ <b>استفاده از اشتراک من</b> را بزنید یا <code>/openaiProvider chatgpt-plan</code> را بفرستید.\n"
+            "۳. مدل پیش‌فرض خود را انتخاب کنید و <b>آزمایش پیش‌فرض</b> را بزنید تا با اشتراک خود پاسخ کوتاهی بگیرید.\n\n"
+            "<b>مدل پیش‌فرض شخصی</b> {model}"
+        ),
+        "enable": "استفاده از اشتراک من",
+        "test": "آزمایش پیش‌فرض",
+        "other": "/ChatGPT_Quickstart",
+        "unlinked": "ابتدا با دستور بالا حساب ChatGPT خود را وصل کنید.",
+        "choose": "ابتدا یک مدل GPT را به‌عنوان پیش‌فرض خود انتخاب کنید.",
+        "saved": "مدل پیش‌فرض شخصی ذخیره شد.",
+        "enabled": "اشتراک ChatGPT انتخاب شد.",
+        "testing": "در حال آزمایش {model} با اشتراک ChatGPT شما…",
+        "prompt": "در یک جملهٔ کوتاه به فارسی سلام کن.",
+        "usage": "توکن ورودی {input:,} ({cached:,} از حافظهٔ نهان)، خروجی {output:,}.",
+    },
+}
+
+
+async def _show_chatgpt_quickstart(event, language, *, edit=False):
+    user_id = event.sender_id
+    strings = CHATGPT_QUICKSTART_TEXT[language]
+    model = user_manager.get_prefs(user_id).model
+    text = strings["help"].format(
+        user_id=user_id, model=_html_dynamic(_model_display_name(model))
+    )
+    buttons = None
+    if IS_BOT:
+
+        def button(label, action):
+            return tg_compat.callback_button(
+                label,
+                data=f"{CHATGPT_QUICKSTART_CALLBACK_PREFIX}{user_id}:{language}:{action}",
+            )
+
+        enabled = (
+            chatgpt_plan.linked(user_id)
+            and user_manager.get_openai_provider(user_id) == openai_providers.CHATGPT_PLAN
+        )
+        buttons = [
+            [button(f"✅ {strings['enable']}" if enabled else strings["enable"], "enable")],
+            [
+                button(
+                    f"{'✅ ' if model == choice else ''}{_model_display_name(choice)}",
+                    action,
+                )
+                for action, choice in CHATGPT_QUICKSTART_MODELS.items()
+            ],
+            [button(strings["test"], "test"), button(strings["other"], "language")],
+        ]
+    if edit:
+        try:
+            await event.edit(
+                f"{BOT_META_INFO_PREFIX}{text}", parse_mode="html", buttons=buttons
+            )
+        except errors.rpcerrorlist.MessageNotModifiedError:
+            pass
+    else:
+        await send_info_message(event, text, parse_mode="html", buttons=buttons)
+
+
+async def chatgpt_quickstart_handler(event):
+    language = "fa" if event.pattern_match.group(1) else "en"
+    await _show_chatgpt_quickstart(event, language)
+
+
+async def _chatgpt_quickstart_press(event, data):
+    owner, _, selection = data.partition(":")
+    language, _, action = selection.partition(":")
+    if (
+        not event.is_private
+        or owner != str(event.sender_id)
+        or language not in CHATGPT_QUICKSTART_TEXT
+    ):
+        return
+    strings = CHATGPT_QUICKSTART_TEXT[language]
+    if action == "language":
+        language = "en" if language == "fa" else "fa"
+    elif action in CHATGPT_QUICKSTART_MODELS:
+        _apply_personal_model_choice(event.sender_id, CHATGPT_QUICKSTART_MODELS[action])
+        await event.answer(strings["saved"])
+    elif action in ("enable", "test"):
+        if not chatgpt_plan.linked(event.sender_id):
+            await event.answer(strings["unlinked"], alert=True)
+            return
+        if action == "test":
+            await _test_chatgpt_default(event, strings)
+            return
+        user_manager.set_openai_provider(event.sender_id, openai_providers.CHATGPT_PLAN)
+        await event.answer(strings["enabled"])
+    else:
+        return
+    await _show_chatgpt_quickstart(event, language, edit=True)
+
+
+async def _test_chatgpt_default(event, strings):
+    prefs = user_manager.get_prefs(event.sender_id)
+    model = prefs.model
+    if not openai_providers.is_neutral_gpt(model):
+        await event.answer(strings["choose"], alert=True)
+        return
+    testing = strings["testing"].format(model=_model_display_name(model))
+    await event.answer(testing)
+    message = await send_info_message(event, testing, parse_mode=None)
+    preview_model = openai_providers.backend_model(model, openai_providers.CHATGPT_PLAN)
+    result = await _generate_response(
+        GenerationRequest(
+            event=event,
+            response_message=message,
+            messages=[{"role": "user", "content": strings["prompt"]}],
+            model=preview_model,
+            model_capabilities=get_model_capabilities(preview_model),
+            api_key=None,
+            prefs=prefs,
+            prefix_effort="low",
+            image_generation=False,
+            warnings=[],
+            reasoning_model=model,
+        )
+    )
+    if result.delivered:
+        return
+    text = f"{BOT_META_INFO_PREFIX}{_model_display_name(model)}\n\n{result.text}"
+    if result.usage is not None:
+        text += "\n\n" + strings["usage"].format(
+            input=result.usage.input_tokens,
+            cached=result.usage.cached_input_tokens,
+            output=result.usage.output_tokens,
+        )
+    await util.edit_message(message, text, parse_mode=None)
 
 
 # --- Key sharing and order (/keys, /shareKey) ---
@@ -11972,6 +12142,12 @@ async def callback_handler(event):
     data_str = event.data.decode("utf-8")
     user_id = event.sender_id
     #: @Claude Based on the Telethon documentation, I can now confirm that event.sender_id in a CallbackQuery event is indeed the ID of the person who clicked the button, not the original sender of the menu message.
+
+    if data_str.startswith(CHATGPT_QUICKSTART_CALLBACK_PREFIX):
+        await _chatgpt_quickstart_press(
+            event, data_str[len(CHATGPT_QUICKSTART_CALLBACK_PREFIX) :]
+        )
+        return
 
     if (
         data_str == "replychainhere_toggle"
