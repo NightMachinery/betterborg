@@ -53,6 +53,14 @@ needs to [request hosted access](https://openai.com/form/sign-in-with-chatgpt-in
 before offering that permission. The [open-source integration guide](https://developers.openai.com/siwc/token-sharing-open-source)
 covers local clients and personal installations.
 
+A personal Telegram bot is another deployment option for users who can run
+their own process. A Betterborg runner could connect directly to Telegram and
+use a local [Codex App Server](https://learn.chatgpt.com/docs/app-server#authentication)
+with Codex-managed ChatGPT sign-in. The user would keep their credentials and
+run the process on their own machine. Codex's [built-in image generation](https://learn.chatgpt.com/docs/image-generation)
+uses the account's Codex allowance. A personal runner would need to verify
+delivery of App Server image results to Telegram.
+
 For a hosted integration, start with a **Connect ChatGPT** button in the user's
 private bot chat. Bind the completed browser authorization to the initiating
 Telegram user ID. Route eligible chat requests through the existing Responses
