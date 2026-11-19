@@ -147,7 +147,7 @@ from uniborg import util
 from uniborg import telegram_queue
 from uniborg import llm_db
 from uniborg import llm_util
-from uniborg import gemini_providers, vertex_latest
+from uniborg import antigravity, gemini_providers, vertex_latest
 from uniborg.llm_util import (
     AutoDeleteMode,
     AUTO_DELETE_TIME,
@@ -1264,7 +1264,7 @@ BOT_COMMANDS = [
     {"command": "setvertexkey", "description": "Set or update your Vertex AI API key"},
     {
         "command": "geminiprovider",
-        "description": "Run Gemini models on Google AI Studio or Vertex AI",
+        "description": "Choose where to run Gemini models",
     },
     {
         "command": "openaiprovider",
@@ -1413,7 +1413,9 @@ BOT_COMMANDS = [
 # This command is intentionally omitted from Telegram's public command list.
 CODEX_USERS_COMMAND = ".codex-users"
 # Create a set of command strings (e.g., {"/start", "/help"}) for efficient lookup
-KNOWN_COMMAND_SET = {f"/{cmd['command']}".lower() for cmd in BOT_COMMANDS}
+KNOWN_COMMAND_SET = {f"/{cmd['command']}".lower() for cmd in BOT_COMMANDS} | {
+    "/antigravity_login", "/antigravity_usage", "/antigravity_logout",
+}
 #: KNOWN_STRICT_COMMANDS will be skipped when constructing the message history only if the whole text of message equals them. KNOWN_COMMAND_SET only checks if the first word of the message is a command.
 KNOWN_STRICT_COMMANDS = {
     ".",
@@ -1981,10 +1983,10 @@ class UserManager:
         self._save_prefs(user_id, prefs)
 
     def get_gemini_provider(self, user_id: int) -> str:
-        return gemini_providers.normalize(self.get_prefs(user_id).gemini_provider)
+        return gemini_providers.normalize_chat(self.get_prefs(user_id).gemini_provider)
 
     def set_gemini_provider(self, user_id: int, provider: str):
-        if provider not in gemini_providers.LABELS:
+        if provider not in gemini_providers.CHAT_LABELS:
             raise ValueError(f"Unknown Gemini provider: {provider!r}")
         prefs = self.get_prefs(user_id)
         prefs.gemini_provider = provider
@@ -3063,7 +3065,7 @@ def _title_settings(user_id: int, *, codex_p: bool) -> dict:
             ),
         },
         api_user_id=user_id,
-        gemini_provider=user_manager.get_gemini_provider(user_id),
+        gemini_provider=gemini_providers.normalize(user_manager.get_gemini_provider(user_id)),
     )
 
 
@@ -4701,20 +4703,14 @@ def get_effective_api_key(
 
 
 def _gemini_chat_service(user_id: int, model: str, service: str) -> str:
-    """SERVICE, or Vertex AI's when USER_ID runs native Gemini models there."""
-    if (
-        service == gemini_providers.AI_STUDIO
-        and is_native_gemini(model)
-        and user_manager.get_gemini_provider(user_id) == gemini_providers.VERTEX
-    ):
-        return gemini_providers.VERTEX
+    """Use the chosen provider for native Gemini requests."""
+    if service == gemini_providers.AI_STUDIO and is_native_gemini(model):
+        return user_manager.get_gemini_provider(user_id)
     return service
 
 
 def _gemini_provider_of(service: str) -> str:
-    if service == gemini_providers.VERTEX:
-        return gemini_providers.VERTEX
-    return gemini_providers.AI_STUDIO
+    return gemini_providers.normalize_chat(service)
 
 
 def _vertex_model_names() -> str:
@@ -5092,7 +5088,7 @@ def _is_pending_input_message(event, *, awaiting: bool) -> bool:
         event.is_private
         and awaiting
         and event.text
-        and not chatgpt_plan.is_callback_url(getattr(event, "raw_text", event.text))
+        and not _is_provider_login_link(getattr(event, "raw_text", event.text))
         and not event.text.startswith("/")
         and not _is_known_command(event.text)
     )
@@ -6877,7 +6873,7 @@ async def _process_turns_to_history(
     issued_warnings = set()  # Track issued warnings for this turn processing.
     message_list = [
         message for message in message_list
-        if not chatgpt_plan.is_callback_url(getattr(message, "raw_text", None))
+        if not _is_provider_login_link(getattr(message, "raw_text", None))
     ]
 
     #: We do NOT include the system prompt if there are no messages to process.
@@ -7498,6 +7494,12 @@ def register_handlers():
     )(gemini_provider_handler)
     borg.on(
         events.NewMessage(
+            pattern=rf"(?i)^/antigravity_(login|usage|logout){bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private and not e.out,
+        )
+    )(antigravity_account_handler)
+    borg.on(
+        events.NewMessage(
             pattern=rf"(?i)^/openaiprovider{bot_username_suffix_re}(?:\s+(\S+))?\s*$",
             func=lambda e: e.is_private,
         )
@@ -7752,6 +7754,7 @@ def register_handlers():
     borg.on(events.NewMessage())(codex_user_add_input_handler)
     borg.on(events.NewMessage())(observe_incoming_user_profile)
     borg.on(events.NewMessage(func=_is_chatgpt_login_callback))(chatgpt_login_callback_handler)
+    borg.on(events.NewMessage(func=_is_antigravity_login_callback))(antigravity_callback_handler)
 
     print("LLM_Chat: All event handlers registered.")
 
@@ -7837,6 +7840,13 @@ async def start_handler(event):
 
     # Check for the key of the user's Gemini provider specifically
     provider = user_manager.get_gemini_provider(user_id)
+    if provider == gemini_providers.ANTIGRAVITY:
+        await send_info_message(
+            event,
+            "Google Antigravity is your Gemini provider. Use /geminiProvider to view it.",
+            parse_mode=None,
+        )
+        return
     if get_effective_api_key(user_id, provider):
         await event.reply(
             f"{BOT_META_INFO_PREFIX}Welcome back! Your {gemini_providers.LABELS[provider]} API key is configured. You can start chatting with me.\n\n"
@@ -7965,7 +7975,7 @@ You can attach **images, audio, video, and text files**. Sending multiple files 
 - /setgeminikey: Sets or updates your Gemini API key.
 - /setVertexKey: Sets or updates your Vertex AI (Express mode) API key.
 - /setOpenAIKey: Sets or updates your OpenAI API key.
-- /geminiProvider: Run Gemini models on Google AI Studio or Vertex AI. Current: `{gemini_providers.LABELS[user_manager.get_gemini_provider(event.sender_id)]}`.
+- /geminiProvider: Choose where Gemini models run. Current: `{gemini_providers.CHAT_LABELS[user_manager.get_gemini_provider(event.sender_id)]}`.
 - /keys: The order in which your API keys are tried, keys others share with you, and the keys you share.
 - /shareKey: Let someone use one of your API keys without seeing it, e.g. `/shareKey openai @username`.
 - /openaiProvider: Run GPT models on your OpenAI key, Codex, OpenRouter, or automatically on one then the other. Current: `{openai_providers.LABELS[user_manager.get_openai_provider(event.sender_id)]}`.
@@ -8312,7 +8322,7 @@ async def status_handler(event):
     status_message = (
         f"**Your Personal Bot Settings**\n\n"
         f"• **Model:** {model_status}\n"
-        f"• **Gemini Provider:** `{gemini_providers.LABELS[user_manager.get_gemini_provider(user_id)]}`\n"
+        f"• **Gemini Provider:** `{gemini_providers.CHAT_LABELS[user_manager.get_gemini_provider(user_id)]}`\n"
         f"• **Title Model:** `{prefs.title_model}`\n"
         f"• **Initial Topic Name:** `{topic_titles.INITIAL_NAME_STYLES[user_manager.get_topic_initial_name(user_id)]}`\n"
         f"{codex_quota_line}"
@@ -8449,13 +8459,26 @@ GEMINI_PROVIDER_ARGS = {
     "studio": gemini_providers.AI_STUDIO,
     "gemini": gemini_providers.AI_STUDIO,
     "vertex": gemini_providers.VERTEX,
+    "antigravity": gemini_providers.ANTIGRAVITY,
 }
 GEMINI_PROVIDER_USAGE = (
     "Usage: `/geminiProvider`, or `/geminiProvider aistudio|vertex`."
 )
 
 
-def _gemini_provider_menu_text(user_id: int) -> str:
+def _antigravity_admin(event) -> bool:
+    user_id = getattr(event, "sender_id", None)
+    return bool(
+        getattr(event, "is_private", False)
+        and not getattr(event, "out", False)
+        and type(user_id) is int
+        and user_id > 0
+        and event.chat_id == user_id
+        and util.is_admin_by_id(user_id)
+    )
+
+
+def _gemini_provider_menu_text(user_id: int, *, antigravity_p=False) -> str:
     current = user_manager.get_gemini_provider(user_id)
 
     def key_status(service: str) -> str:
@@ -8472,22 +8495,33 @@ def _gemini_provider_menu_text(user_id: int) -> str:
     return "\n".join(
         [
             "**Gemini Provider**",
-            "Where Gemini models run. Each provider needs its own API key.",
+            "Where Gemini models run.",
             f"• **{gemini_providers.LABELS[ai_studio]}** ({key_status(ai_studio)}): "
             "every Gemini model. Key: /setGeminiKey",
             f"• **{gemini_providers.LABELS[vertex]}** ({key_status(vertex)}): "
             f"{_vertex_model_names()}. Other Gemini models are refused. "
             "Key: /setVertexKey",
+            *(
+                [
+                    "• **Google Antigravity** (admin pilot). "
+                    + (
+                        "Google account connected. /antigravity_usage · /antigravity_logout"
+                        if antigravity.linked(user_id)
+                        else "Connect your Google account with /antigravity_login."
+                    )
+                ]
+                if antigravity_p else []
+            ),
             "",
             "Live mode always uses Google AI Studio.",
             "",
-            f"Current: **{gemini_providers.LABELS[current]}**",
+            f"Current: **{gemini_providers.CHAT_LABELS[current]}**",
             *(["", f"⚠️ Your model: {refusal}"] if refusal else []),
         ]
     )
 
 
-def _gemini_provider_menu_buttons(user_id: int) -> Optional[list]:
+def _gemini_provider_menu_buttons(user_id: int, *, antigravity_p=False) -> Optional[list]:
     if not IS_BOT:
         return None
     current = user_manager.get_gemini_provider(user_id)
@@ -8497,21 +8531,36 @@ def _gemini_provider_menu_buttons(user_id: int) -> Optional[list]:
                 f"✅ {label}" if provider == current else label,
                 data=f"{GEMINI_PROVIDER_CALLBACK_PREFIX}{provider}",
             )
-            for provider, label in gemini_providers.LABELS.items()
+            for provider, label in (
+                gemini_providers.CHAT_LABELS if antigravity_p else gemini_providers.LABELS
+            ).items()
         ],
         n_cols=2,
     )
 
 
-async def _apply_gemini_provider(event, provider: str) -> None:
-    """Switch to PROVIDER, asking for its key when there is none yet."""
+async def _apply_gemini_provider(event, provider: str) -> bool:
+    """Switch to PROVIDER, prompting for credentials when needed."""
+    if provider == gemini_providers.ANTIGRAVITY:
+        if not _antigravity_admin(event) or not antigravity.available():
+            await send_info_message(event, antigravity.UNAVAILABLE, parse_mode=None)
+            return False
+        if not antigravity.linked(event.sender_id):
+            try:
+                await _antigravity_login(event)
+            except antigravity.AntigravityError as exc:
+                await send_info_message(event, str(exc), parse_mode=None)
+            return False
+        user_manager.set_gemini_provider(event.sender_id, provider)
+        return True
     user_manager.set_gemini_provider(event.sender_id, provider)
     if not get_effective_api_key(event.sender_id, provider):
         await llm_db.request_api_key_message(event, provider)
+    return True
 
 
 async def gemini_provider_handler(event):
-    """/geminiProvider: run Gemini models on Google AI Studio or Vertex AI."""
+    """Choose the provider for Gemini chat."""
     user_id = event.sender_id
     arg = (event.pattern_match.group(1) or "").strip().lower()
     if arg:
@@ -8519,29 +8568,111 @@ async def gemini_provider_handler(event):
         if provider is None:
             await send_info_message(event, GEMINI_PROVIDER_USAGE, parse_mode="md")
             return
-        await _apply_gemini_provider(event, provider)
+        if not await _apply_gemini_provider(event, provider):
+            return
+    show_antigravity = _antigravity_admin(event) and antigravity.available()
     await send_info_message(
         event,
-        _gemini_provider_menu_text(user_id),
+        _gemini_provider_menu_text(user_id, antigravity_p=show_antigravity),
         parse_mode="md",
-        buttons=_gemini_provider_menu_buttons(user_id),
+        buttons=_gemini_provider_menu_buttons(user_id, antigravity_p=show_antigravity),
     )
 
 
 async def _gemini_provider_press_handler(event, provider: str):
-    if provider not in gemini_providers.LABELS:
+    if provider not in gemini_providers.CHAT_LABELS:
         await event.answer("Unknown provider.", alert=True)
         return
-    await _apply_gemini_provider(event, provider)
+    if not await _apply_gemini_provider(event, provider):
+        await event.answer()
+        return
+    show_antigravity = _antigravity_admin(event) and antigravity.available()
+    menu_text = _gemini_provider_menu_text(event.sender_id, antigravity_p=show_antigravity)
     try:
         await event.edit(
-            f"{BOT_META_INFO_PREFIX}{_gemini_provider_menu_text(event.sender_id)}",
+            f"{BOT_META_INFO_PREFIX}{menu_text}",
             parse_mode="md",
-            buttons=_gemini_provider_menu_buttons(event.sender_id),
+            buttons=_gemini_provider_menu_buttons(event.sender_id, antigravity_p=show_antigravity),
         )
     except errors.rpcerrorlist.MessageNotModifiedError:
         pass
-    await event.answer(f"Gemini provider: {gemini_providers.LABELS[provider]}.")
+    await event.answer(f"Gemini provider: {gemini_providers.CHAT_LABELS[provider]}.")
+
+
+def _is_provider_login_link(text):
+    return chatgpt_plan.is_callback_url(text) or antigravity.is_callback_url(text)
+
+
+async def _antigravity_login(event):
+    if llm_db.is_awaiting_key(event.sender_id):
+        llm_db.cancel_key_flow(event.sender_id)
+    cancel_input_flow(event.sender_id)
+    link = await antigravity.backend.start_login(event.sender_id)
+    buttons = [[tg_compat.url_button("Sign in with Google", link.url)]] if IS_BOT else None
+    text = (
+        "Sign in with Google in your browser. When it opens a 127.0.0.1 page, "
+        "copy the full address from the browser and paste it into this DM. "
+        "The page may show a connection error. The link expires in five minutes. "
+        "Betterborg keeps your Google sign-in on its server. "
+        "Use /antigravity_logout to remove it."
+    )
+    if not buttons:
+        text = f"{link.url}\n\n{text}"
+    await send_info_message(event, text, buttons=buttons, parse_mode=None, link_preview=False)
+
+
+async def antigravity_account_handler(event):
+    if not _antigravity_admin(event):
+        return
+    action = event.pattern_match.group(1).lower()
+    try:
+        if action == "login":
+            await _antigravity_login(event)
+            return
+        if action == "logout":
+            if not await antigravity.backend.logout(event.sender_id):
+                raise antigravity.AntigravityError("Could not disconnect Google. Please try again.")
+            if user_manager.get_gemini_provider(event.sender_id) == gemini_providers.ANTIGRAVITY:
+                user_manager.set_gemini_provider(event.sender_id, gemini_providers.AI_STUDIO)
+            text = "Disconnected Google. You can revoke access in your Google account settings."
+        elif antigravity.linked(event.sender_id):
+            chunks = []
+
+            async def collect(chunk):
+                chunks.append(chunk)
+
+            async with antigravity.backend.worker(event.sender_id) as client:
+                await client.new_session()
+                await client.prompt("/usage", collect)
+            text = "".join(chunks) or "Google did not report your Antigravity allowance."
+        else:
+            text = antigravity.CONNECT_NEEDED
+    except antigravity.AntigravityError as exc:
+        text = str(exc)
+    await send_info_message(event, text, parse_mode=None, link_preview=False)
+
+
+def _is_antigravity_login_callback(event):
+    return event.is_private and not event.out and antigravity.is_callback_url(event.raw_text)
+
+
+async def antigravity_callback_handler(event):
+    try:
+        await event.delete()
+    except errors.RPCError:
+        pass
+    if _antigravity_admin(event):
+        linked = await antigravity.backend.finish_login(event.sender_id, event.raw_text)
+        if linked:
+            user_manager.set_gemini_provider(event.sender_id, gemini_providers.ANTIGRAVITY)
+            note = (
+                "Google Antigravity is now your Gemini provider. Send a message to use "
+                "your plan, choose a model with /setModel, or check /antigravity_usage."
+            )
+        else:
+            note = "Google sign-in could not be completed. Start again with /antigravity_login."
+        await send_info_message(event, note, parse_mode=None, reply_to=False)
+    raise events.StopPropagation
 
 
 OPENAI_PROVIDER_USAGE = (
@@ -9197,7 +9328,7 @@ def _admin_provider_lines(target_id: int) -> str:
     return (
         "\n\n**Providers**\n"
         f"OpenAI: {openai_providers.LABELS[user_manager.get_openai_provider(target_id)]}\n"
-        f"Gemini: {gemini_providers.LABELS[user_manager.get_gemini_provider(target_id)]}"
+        f"Gemini: {gemini_providers.CHAT_LABELS[user_manager.get_gemini_provider(target_id)]}"
     )
 
 
@@ -9232,7 +9363,7 @@ def _admin_provider_panel(target_id: int, *, openai_p: bool):
         )
     text = (
         f"**{kind} provider of {_user_display_name(target_id)}** ({target_id})\n"
-        f"Current: **{labels[current]}**\n\n"
+        f"Current: **{(labels if openai_p else gemini_providers.CHAT_LABELS)[current]}**\n\n"
         "The change applies to their next message. A provider whose key they "
         "lack asks them for it then."
     )
@@ -13907,7 +14038,7 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     processed by the main chat handler.
     """
     # Universal filters
-    if chatgpt_plan.is_callback_url(getattr(event, "raw_text", None)):
+    if _is_provider_login_link(getattr(event, "raw_text", None)):
         return False
     if not (
         event.text
@@ -14396,6 +14527,9 @@ async def _keyed_request(
 ) -> KeyedRequest:
     """REQUEST_MODEL with USER_ID's keys for SERVICE (default: its own)."""
     service = service or request_model.service
+    if service == gemini_providers.ANTIGRAVITY:
+        marker = service if antigravity.linked(user_id) else None
+        return KeyedRequest(request_model, service, (), marker)
     if service == openai_providers.CHATGPT_PLAN:
         # The bearer token is loaded inside generation, never as a shareable key.
         marker = service if chatgpt_plan.linked(user_id) else None
@@ -14485,6 +14619,62 @@ async def _generate_streamed(
     )
 
 
+async def _generate_antigravity_response(req: GenerationRequest) -> GenerationResult:
+    user_id = req.event.sender_id
+    if req.surface is not GenerationSurface.CHAT or not _antigravity_admin(req.event):
+        raise antigravity.AntigravityError(antigravity.UNAVAILABLE)
+    instructions, prompt = antigravity.conversation_text(req.messages)
+    reasoning = _get_effective_reasoning(
+        req.event.chat_id, user_id, model=req.model,
+        prefix_effort=req.prefix_effort, topic_id=_thread_topic_id(req.event),
+    )
+    editor = stream_driver.PacedEditor(
+        req.response_message, edit_interval=get_streaming_delay(req.model),
+    )
+    chunks = []
+
+    async def show(chunk):
+        chunks.append(chunk)
+        await editor.show("".join(chunks))
+
+    async def run():
+        async with antigravity.backend.worker(user_id) as client:
+            session = await client.new_session(
+                instructions=instructions, search="googleSearch" in req.prefs.enabled_tools,
+            )
+            model = antigravity.select_model(session, req.model, reasoning.level)
+            if model != (session.get("models") or {}).get("currentModelId"):
+                await client.request("session/set_model", sessionId=client.session_id, modelId=model)
+            return await client.prompt(prompt, show)
+
+    task = asyncio.create_task(run())
+    add_active_llm_task(user_id, task)
+    try:
+        result = await task
+    except antigravity.AntigravityError as exc:
+        note = f"{BOT_META_INFO_PREFIX}❌ {exc}"
+        await util.edit_message(
+            req.response_message, "\n\n".join(filter(None, ("".join(chunks), note))),
+            parse_mode=None,
+        )
+        return _ALREADY_DELIVERED
+    finally:
+        remove_active_llm_task(user_id, task)
+    usage = result.get("usage") or {}
+    cached = usage.get("cachedReadTokens", 0)
+    return GenerationResult(
+        text="".join(chunks),
+        finish_reason=result.get("stopReason"),
+        has_image=False,
+        reasoning_level=reasoning.level,
+        usage=codex_util.TokenUsage(
+            input_tokens=usage.get("inputTokens", 0) + cached,
+            cached_input_tokens=cached,
+            output_tokens=usage.get("outputTokens", 0),
+        ) if usage else None,
+    )
+
+
 async def _generate_response(req: GenerationRequest) -> GenerationResult:
     """Calls the model, streaming into `req.response_message`.
 
@@ -14492,6 +14682,8 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
     tools), then dispatches to the backend: native Gemini image generation,
     Codex or litellm. The final delivery is the caller's.
     """
+    if req.gemini_provider == gemini_providers.ANTIGRAVITY:
+        return await _generate_antigravity_response(req)
     event = req.event
     response_message = req.response_message
     messages = req.messages
@@ -15089,6 +15281,17 @@ async def _chat_handler(
         request_model = RequestModel(model=model_in_use, service=service_needed)
     model_capabilities = get_model_capabilities(model_in_use)
     service_needed = _gemini_chat_service(user_id, model_in_use, service_needed)
+    agy_p = service_needed == gemini_providers.ANTIGRAVITY
+    if agy_p:
+        if not _antigravity_admin(event) or not antigravity.available():
+            await send_info_message(event, antigravity.UNAVAILABLE, parse_mode=None)
+            return
+        if is_native_gemini_image_generation(model_in_use):
+            await send_info_message(
+                event, "Choose a text model for Antigravity with /setModel.", parse_mode=None,
+            )
+            return
+        model_capabilities = dict.fromkeys(model_capabilities, False)
     vertex_refusal = _vertex_refusal(model_in_use, service_needed)
     if vertex_refusal:
         await send_info_message(event, vertex_refusal, parse_mode=None)
@@ -15103,6 +15306,9 @@ async def _chat_handler(
     api_key = keyed.api_key
 
     if not api_key:
+        if agy_p:
+            await send_info_message(event, antigravity.CONNECT_NEEDED, parse_mode=None)
+            return
         if service_needed == openai_providers.CHATGPT_PLAN:
             await send_info_message(event, chatgpt_plan.CONNECT_NEEDED, parse_mode=None)
             return
@@ -15262,8 +15468,8 @@ async def _chat_handler(
                     send_file_mode=util.SendFileMode.ALSO_IF_LESS_THAN,
                     file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
                     file_only_threshold=file_only_threshold,
-                    file_name_mode="llm",
-                    title_generator=_file_title_generator(
+                    file_name_mode="timestamp" if agy_p else "llm",
+                    title_generator=None if agy_p else _file_title_generator(
                         user_id, codex_p=user_has_codex_access
                     ),
                     reply_to=event.message,
@@ -15278,18 +15484,17 @@ async def _chat_handler(
             except Exception as e:
                 print(f"Error deleting placeholder message: {e}")
 
-        await _schedule_topic_title(
-            event,
-            question=prefix_result.processed_text or event.text or "",
-            answer=response_text,
-            model=request_model.display_model,
-            reasoning_level=generation.reasoning_level,
-            codex_p=user_has_codex_access,
-            prefixed=topic_prefixed,
-        )
-
-        # TTS Integration Hook
-        await _handle_tts_response(event, final_text)
+        if not agy_p:
+            await _schedule_topic_title(
+                event,
+                question=prefix_result.processed_text or event.text or "",
+                answer=response_text,
+                model=request_model.display_model,
+                reasoning_level=generation.reasoning_level,
+                codex_p=user_has_codex_access,
+                prefixed=topic_prefixed,
+            )
+            await _handle_tts_response(event, final_text)
 
         await _log_conversation(event, prefs, model_in_use, messages, final_text)
 
@@ -15485,6 +15690,8 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
     service = _gemini_chat_service(
         user_id, request.model, request.service
     )
+    if service == gemini_providers.ANTIGRAVITY:
+        raise GuestRequestRefused("Antigravity is available in the bot’s DM.")
     vertex_refusal = _vertex_refusal(request.model, service)
     if vertex_refusal:
         raise GuestRequestRefused(vertex_refusal)

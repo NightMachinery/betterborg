@@ -18,6 +18,7 @@ from uniborg.constants import (
 #: Also the llm_db service names of their API keys.
 AI_STUDIO = "gemini"
 VERTEX = "vertex"
+ANTIGRAVITY = "antigravity"
 
 GEMINI_4_CHAT_MODELS = (GEMINI_HYDROGEN, GEMINI_NEON, GEMINI_CARBON)
 
@@ -25,6 +26,7 @@ LABELS = {
     AI_STUDIO: "Google AI Studio",
     VERTEX: "Vertex AI",
 }
+CHAT_LABELS = {**LABELS, ANTIGRAVITY: "Google Antigravity"}
 
 VERTEX_API_BASE = "https://aiplatform.googleapis.com/v1/publishers/google"
 
@@ -77,6 +79,10 @@ VERTEX_MODEL_IDS = {
 
 def normalize(provider) -> str:
     return provider if provider in LABELS else AI_STUDIO
+
+
+def normalize_chat(provider) -> str:
+    return provider if provider in CHAT_LABELS else AI_STUDIO
 
 
 def vertex_model_id(model: str) -> str:
