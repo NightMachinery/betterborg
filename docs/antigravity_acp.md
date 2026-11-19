@@ -55,25 +55,26 @@ The ACP client offers no filesystem or terminal capabilities and
 provides no MCP servers. Shared API keys and the service's fallback routes do
 not apply to Antigravity requests.
 
-On Linux x86-64, install both `agy_acp_server.par` and
-`localharness_external` from the release archive in
-`~/.local/lib/betterborg/antigravity-acp/1.5.0/`. Verify the registry's SHA-256
-before extracting and keep both files executable. Pull the pinned Python
-container image as the bot operator for the Docker backend.
-[ACP registry manifest](https://raw.githubusercontent.com/agentclientprotocol/registry/main/antigravity-acp/agent.json)
-
-```sh
-docker pull python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
-```
-
 ### Systemd service
 
-On Linux x86-64 with systemd and Landlock ABI 3 or newer, run
-`/bin/sh deployment/antigravity/install.sh BOT_UNIX_USER` as root from
-a reviewed checkout. Use the Unix account shared by the three bot
-processes. The installer verifies both ACP binaries from that account's
-existing pinned installation, creates the dedicated worker account, and
-starts a Unix socket restricted to the bot account.
+Set up Betterborg from a reviewed checkout on a Linux x86-64 VM with systemd,
+Landlock ABI 3 or newer, Python 3.11 or newer, and `curl`. From the
+Betterborg checkout, run the installer as root and pass the Unix account
+that runs the three bots.
+
+```sh
+sudo /bin/sh deployment/antigravity/install.sh BOT_UNIX_USER
+```
+
+On a fresh VM, the installer downloads the pinned ACP release from Google
+and verifies the archive and extracted binaries. It reuses matching binaries
+from an earlier systemd or Docker setup. On a VM without access to Google's
+download server, pass the path to the official ZIP as the second argument.
+The same SHA-256 checks apply. [ACP registry manifest](https://raw.githubusercontent.com/agentclientprotocol/registry/main/antigravity-acp/agent.json)
+
+The installer creates the dedicated worker account, starts its Unix socket,
+and checks that the pinned agent initializes from the bot account. Use the
+same checkout command after a worker upgrade. [Deployment checks](deployment.md)
 
 The systemd worker uses a private network namespace, a read-only system,
 bounded temporary storage, a syscall filter, and CPU, RAM and process
@@ -91,6 +92,17 @@ During an initial switch, sign in once in the Chat bot to create a shared
 systemd profile. The service keeps it under its own Unix account. The
 existing Docker profile remains in its original location and can be used
 again on rollback.
+
+### Docker backend
+
+Install `agy_acp_server.par` and `localharness_external` from the Linux x86-64
+release in `~/.local/lib/betterborg/antigravity-acp/1.5.0/`. Verify the
+registry's SHA-256 before extracting and keep both files executable. Pull the
+pinned Python image as the bot operator.
+
+```sh
+docker pull python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+```
 
 ### Worker startup benchmark
 

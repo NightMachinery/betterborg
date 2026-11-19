@@ -4,8 +4,12 @@ set -eu
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 umask 027
 
-if [ "$(id -u)" != 0 ] || [ "$#" != 1 ]; then
-    echo "Usage as root: sh deployment/antigravity/install.sh BOT_UNIX_USER" >&2
+if [ "$(id -u)" != 0 ] || [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+    echo "Usage as root: sh deployment/antigravity/install.sh BOT_UNIX_USER [ACP_ARCHIVE]" >&2
+    exit 1
+fi
+if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
+    echo "This installer requires Linux x86-64." >&2
     exit 1
 fi
 bot_user=$1
@@ -18,22 +22,34 @@ if [ "$(id -u "$bot_user")" -eq 0 ] || [ "$bot_user" = betterborg-agy ]; then
 fi
 bot_group=$(id -gn "$bot_user")
 bot_home=$(getent passwd "$bot_user" | cut -d: -f6)
-repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-pinned="$bot_home/.local/lib/betterborg/antigravity-acp/1.5.0"
+installer_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo=$(CDPATH='' cd -- "$installer_dir/../.." && pwd)
+. "$installer_dir/agent-release.sh"
+pinned="$bot_home/.local/lib/betterborg/antigravity-acp/$agent_version"
 runtime=/usr/local/lib/betterborg-antigravity
 state=/var/lib/betterborg-antigravity
 worker_user=betterborg-agy
 
 stage=$(mktemp -d /var/tmp/betterborg-antigravity.XXXXXXXX)
 trap 'command rm -r -- "$stage"' EXIT
-install -m 0755 "$pinned/agy_acp_server.par" "$pinned/localharness_external" "$stage/"
-(
-    cd "$stage"
-    sha256sum --check --status <<'SUMS'
-8a35f63dd2284e3790a1d97dd0cb2236057c55a0c598b26f3bde022b843d5c04  agy_acp_server.par
-13dca92307524722a3434cd50baba3f33502d71a24f804f03ee2efbd18b6017d  localharness_external
-SUMS
-)
+agent_source="$stage/agent"
+mkdir "$agent_source"
+if [ "$#" -eq 2 ]; then
+    install -m 0644 -- "$2" "$stage/agent.zip"
+    extract_agent "$stage/agent.zip" "$agent_source"
+elif verify_agent "$runtime/agent" 2>/dev/null; then
+    agent_source="$runtime/agent"
+elif verify_agent "$pinned" 2>/dev/null; then
+    install -m 0644 "$pinned/agy_acp_server.par" "$pinned/localharness_external" "$agent_source/"
+else
+    echo "Downloading Google Antigravity ACP $agent_version."
+    curl --fail --show-error --silent --location --proto '=https' --proto-redir '=https' \
+        --connect-timeout 15 --retry 3 --output "$stage/agent.zip" "$agent_url"
+    extract_agent "$stage/agent.zip" "$agent_source"
+fi
+if [ "$agent_source" != "$runtime/agent" ]; then
+    verify_agent "$agent_source"
+fi
 
 # Stop new connections before replacing the installed code and unit files.
 if systemctl is-active --quiet betterborg-antigravity.socket; then
@@ -57,7 +73,9 @@ fi
 install -d -o root -g root -m 0755 "$runtime" "$runtime/agent"
 install -m 0644 "$repo/uniborg/antigravity_worker.py" "$repo/uniborg/antigravity_protocol.py" \
     "$repo/uniborg/antigravity_network.py" "$runtime/"
-install -m 0755 "$stage/agy_acp_server.par" "$stage/localharness_external" "$runtime/agent/"
+if [ "$agent_source" != "$runtime/agent" ]; then
+    install -m 0755 "$agent_source/agy_acp_server.par" "$agent_source/localharness_external" "$runtime/agent/"
+fi
 install -d -o root -g root -m 0711 "$state"
 install -d -o "$worker_user" -g "$worker_user" -m 0700 "$state/profiles"
 install -d -o "$worker_user" -g "$bot_group" -m 0710 "$state/linked"
