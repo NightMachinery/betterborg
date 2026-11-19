@@ -72,8 +72,9 @@ from an earlier systemd or Docker setup. On a VM without access to Google's
 download server, pass the path to the official ZIP as the second argument.
 The same SHA-256 checks apply. [ACP registry manifest](https://raw.githubusercontent.com/agentclientprotocol/registry/main/antigravity-acp/agent.json)
 
-The installer creates the dedicated worker account, starts its Unix socket,
-and checks that the pinned agent initializes from the bot account. Use the
+The installer creates any missing systemd configuration directories and the
+dedicated worker account. It starts the Unix socket and checks that the
+pinned agent initializes from the bot account. Use the
 same checkout command after a worker upgrade. [Deployment checks](deployment.md)
 
 The systemd worker uses a private network namespace, a read-only system,

@@ -62,7 +62,7 @@ if systemctl is-active --quiet betterborg-antigravity.socket; then
     fi
 fi
 printf 'u %s - "Betterborg Antigravity" %s /usr/sbin/nologin\n' "$worker_user" "$state" > "$stage/betterborg-antigravity.conf"
-install -m 0644 "$stage/betterborg-antigravity.conf" /etc/sysusers.d/
+install -D -m 0644 "$stage/betterborg-antigravity.conf" /etc/sysusers.d/betterborg-antigravity.conf
 systemd-sysusers /etc/sysusers.d/betterborg-antigravity.conf
 worker_identity=$(getent passwd "$worker_user" | cut -d: -f6-7)
 if [ "$worker_identity" != "$state:/usr/sbin/nologin" ] || [ "$(id -u "$worker_user")" -eq 0 ]; then
@@ -81,14 +81,14 @@ install -d -o "$worker_user" -g "$worker_user" -m 0700 "$state/profiles"
 install -d -o "$worker_user" -g "$bot_group" -m 0710 "$state/linked"
 
 printf 'd /run/betterborg-antigravity-egress 2710 %s %s -\n' "$bot_user" "$worker_user" > "$stage/egress.conf"
-install -m 0644 "$stage/egress.conf" /etc/tmpfiles.d/betterborg-antigravity.conf
+install -D -m 0644 "$stage/egress.conf" /etc/tmpfiles.d/betterborg-antigravity.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/betterborg-antigravity.conf
 
-install -m 0644 "$repo/deployment/antigravity/betterborg-antigravity.socket" \
-    "$repo/deployment/antigravity/betterborg-antigravity@.service" /etc/systemd/system/
-install -d -m 0755 /etc/systemd/system/betterborg-antigravity.socket.d
+for unit in betterborg-antigravity.socket betterborg-antigravity@.service; do
+    install -D -m 0644 "$installer_dir/$unit" "/etc/systemd/system/$unit"
+done
 printf '[Socket]\nSocketUser=%s\nSocketGroup=root\n' "$bot_user" > "$stage/bot-user.conf"
-install -m 0644 "$stage/bot-user.conf" /etc/systemd/system/betterborg-antigravity.socket.d/
+install -D -m 0644 "$stage/bot-user.conf" /etc/systemd/system/betterborg-antigravity.socket.d/bot-user.conf
 systemd-analyze verify /etc/systemd/system/betterborg-antigravity.socket \
     /etc/systemd/system/betterborg-antigravity@.service
 systemctl daemon-reload
@@ -99,5 +99,4 @@ probe="$state/profiles/9223372036854775807"
 if [ -d "$probe" ] && [ ! -L "$probe" ]; then
     command rm -r -- "$probe"
 fi
-install -d -m 0755 /etc/betterborg-antigravity
-install -m 0644 /dev/null /etc/betterborg-antigravity/enabled
+install -D -m 0644 /dev/null /etc/betterborg-antigravity/enabled
