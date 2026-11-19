@@ -24,7 +24,7 @@ PROFILES = Path.home() / ".borg/antigravity"
 WORKER_BUSY = (
     "Antigravity is already in use. Try again when the current operation ends."
 )
-WORKER_WAIT_TIMEOUT = 360
+WORKER_WAIT_TIMEOUT = 15 * 60
 WORKER_POLL_INTERVAL = 0.5
 CONNECT_NEEDED = "Connect your Google account in this bot’s DM with /antigravity_login."
 SHARED_CONNECT_NEEDED = (
@@ -529,7 +529,7 @@ class Antigravity:
                                 break
                 except TimeoutError:
                     raise AntigravityError(
-                        "Antigravity stayed busy for six minutes. Please send the media again."
+                        "Antigravity stayed busy throughout the wait. Please send the media again."
                     ) from None
                 async with _worker(user_id) as client:
                     yield client
