@@ -5112,7 +5112,7 @@ def is_gemini_model(model_name):
 
 
 def is_native_gemini(model: str) -> bool:
-    """Check if model is native Gemini (not OpenRouter) and supports context caching."""
+    """Whether MODEL uses a native Gemini provider."""
     return model.startswith("gemini/")
 
 
@@ -14521,8 +14521,10 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
     vertex_p = req.gemini_provider == gemini_providers.VERTEX
     if is_native_gemini(model_in_use):
         #: Vertex AI Express keys cannot create cached contents.
-        if vertex_p or await history_util.is_gemini_caching_disabled(
-            api_key, model_in_use
+        if (
+            vertex_p
+            or model_in_use in gemini_providers.GEMINI_4_CHAT_MODELS
+            or await history_util.is_gemini_caching_disabled(api_key, model_in_use)
         ):
             _strip_cache_control(messages)
         else:

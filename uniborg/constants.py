@@ -10,6 +10,9 @@ GEMINI_STT_LATEST = "gemini/gemini-flash-latest"
 GEMINI_FLASH_LATEST = "gemini/gemini-flash-latest"
 GEMINI_FLASH_LITE_LATEST = "gemini/gemini-flash-lite-latest"
 GEMINI_PRO_LATEST = "gemini/gemini-3-pro-preview"
+GEMINI_HYDROGEN = "gemini/gemini-4-hydrogen"
+GEMINI_NEON = "gemini/gemini-4-neon"
+GEMINI_CARBON = "gemini/gemini-4-carbon"
 
 # Old 2.5 versions (commented for when 3.0 arrives)
 # GEMINI_FLASH_2_5 = "gemini/gemini-2.5-flash"

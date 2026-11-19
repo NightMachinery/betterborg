@@ -33,6 +33,11 @@ and `GenerationRequest`.
 
 ## Differences on Vertex AI
 
+Gemini 4 Hydrogen, Neon, and Carbon are in the chat model picker. API access
+depends on Google's model availability and the key's entitlement. These models
+use Google's implicit context caching on both API providers.
+[Gemini 4 API model IDs and features](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/get-started-with-gemini-4)
+
 - **Models.** Only the models in `gemini_providers.VERTEX_CHAT_MODELS` answer.
   Any other Gemini model is refused with a message naming the Vertex models,
   rather than silently falling back to AI Studio. `gemini-3-pro-preview` exists

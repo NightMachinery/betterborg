@@ -6,15 +6,20 @@ Vertex AI is used in Express mode: an API key alone, no project or region. Its
 """
 
 from uniborg.constants import (
+    GEMINI_CARBON,
     GEMINI_FLASH_2_5,
     GEMINI_FLASH_3,
     GEMINI_FLASH_LATEST,
     GEMINI_FLASH_LITE_LATEST,
+    GEMINI_HYDROGEN,
+    GEMINI_NEON,
 )
 
 #: Also the llm_db service names of their API keys.
 AI_STUDIO = "gemini"
 VERTEX = "vertex"
+
+GEMINI_4_CHAT_MODELS = (GEMINI_HYDROGEN, GEMINI_NEON, GEMINI_CARBON)
 
 LABELS = {
     AI_STUDIO: "Google AI Studio",
@@ -44,6 +49,7 @@ VERTEX_LATEST_IDS = {
 #: exists only on AI Studio, and the `-latest` aliases are sent as
 #: `VERTEX_LATEST_IDS` says.
 VERTEX_CHAT_MODELS = (
+    *GEMINI_4_CHAT_MODELS,
     GEMINI_FLASH_LATEST,
     GEMINI_FLASH_LITE_LATEST,
     GEMINI_FLASH_2_5,

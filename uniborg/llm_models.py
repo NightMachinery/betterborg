@@ -16,10 +16,13 @@ from uniborg import codex_util
 from uniborg import openai_providers
 from uniborg.codex_aliases import OPENAI_REASONING_LEVELS
 from uniborg.constants import (
+    GEMINI_CARBON,
     GEMINI_FLASH_2_5,
     GEMINI_FLASH_3,
     GEMINI_FLASH_LATEST,
     GEMINI_FLASH_LITE_LATEST,
+    GEMINI_HYDROGEN,
+    GEMINI_NEON,
     GEMINI_PRO_LATEST,
     GPT_ASTRA,
     GPT_LUNA,
@@ -37,6 +40,8 @@ DEFAULT_REASONING_EFFORT = "medium"
 #: Level sets, ordered from cheapest to most expensive.
 NO_REASONING_LEVELS: Tuple[str, ...] = ()
 GEMINI_REASONING_LEVELS = ("disable", "low", "medium", "high")
+GEMINI_4_REASONING_LEVELS = ("low", "medium", "high")
+GEMINI_4_EXTENDED_REASONING_LEVELS = (*GEMINI_4_REASONING_LEVELS, "xhigh")
 #: `OPENAI_REASONING_LEVELS` comes from `codex_aliases`, which also resolves
 #: each Codex family's levels.
 OPENROUTER_REASONING_LEVELS = ("low", "medium", "high")
@@ -181,6 +186,13 @@ MODEL_SPECS = [
     ),
     ModelSpec(GEMINI_PRO_LATEST, "Gemini 3 Pro", GEMINI_REASONING_LEVELS, emoji="💎"),
     ModelSpec(GEMINI_FLASH_3, "Gemini 3 Flash", GEMINI_REASONING_LEVELS, emoji="💥"),
+    ModelSpec(
+        GEMINI_HYDROGEN, "Gemini 4 Hydrogen", GEMINI_4_EXTENDED_REASONING_LEVELS, emoji="🔥"
+    ),
+    ModelSpec(
+        GEMINI_NEON, "Gemini 4 Neon", GEMINI_4_EXTENDED_REASONING_LEVELS, emoji="💡"
+    ),
+    ModelSpec(GEMINI_CARBON, "Gemini 4 Carbon", GEMINI_4_REASONING_LEVELS, emoji="🔬"),
     # ModelSpec("gemini/gemini-2.5-pro", "Gemini 2.5 Pro", GEMINI_REASONING_LEVELS),
     # ModelSpec("openrouter/google/gemini-2.5-pro", "Gemini 2.5 Pro (OpenRouter)", GEMINI_REASONING_LEVELS),
     # ModelSpec("gemini/gemini-2.0-flash", "Gemini 2 Flash", GEMINI_REASONING_LEVELS),
