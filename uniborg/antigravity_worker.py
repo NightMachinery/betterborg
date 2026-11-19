@@ -243,7 +243,9 @@ async def serve(reader, writer):
 
 
 async def main():
-    if {name for _, name in socket.if_nameindex()} != {"lo"}:
+    # Reading procfs uses this process's network namespace without a Netlink socket.
+    interfaces = Path("/proc/self/net/dev").read_text().splitlines()[2:]
+    if {line.partition(":")[0].strip() for line in interfaces} != {"lo"}:
         raise RuntimeError("Private networking is required")
     connection = socket.socket(fileno=os.dup(0))
     reader, writer = await asyncio.open_unix_connection(
@@ -296,7 +298,8 @@ async def check_installed_socket():
                 raise RuntimeError("The installed worker did not close after disconnect")
     finally:
         writer.close()
-        await writer.wait_closed()
+        with suppress(OSError):
+            await writer.wait_closed()
 
 
 if __name__ == "__main__":

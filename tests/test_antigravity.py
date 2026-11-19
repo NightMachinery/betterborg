@@ -475,3 +475,24 @@ def test_systemd_configuration_does_not_fall_back_to_docker(tmp_path, monkeypatc
     protocol.CONFIGURED.touch()
     assert not antigravity.available()
     assert not antigravity.linked(7)
+
+
+def test_systemd_startup_probe_preserves_failure_on_socket_reset(monkeypatch):
+    from uniborg import antigravity_worker as worker
+
+    async def scenario():
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        writer = SimpleNamespace(
+            write=lambda _packet: None,
+            drain=AsyncMock(),
+            close=lambda: None,
+            wait_closed=AsyncMock(side_effect=ConnectionResetError),
+        )
+        monkeypatch.setattr(worker.asyncio, "open_unix_connection", AsyncMock(
+            return_value=(reader, writer),
+        ))
+        with pytest.raises(RuntimeError, match="No ACP response"):
+            await worker.check_installed_socket()
+
+    asyncio.run(scenario())

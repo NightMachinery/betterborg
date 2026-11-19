@@ -74,8 +74,9 @@ The same SHA-256 checks apply. [ACP registry manifest](https://raw.githubusercon
 
 The installer creates any missing systemd configuration directories and the
 dedicated worker account. It starts the Unix socket and checks that the
-pinned agent initializes from the bot account. Use the
-same checkout command after a worker upgrade. [Deployment checks](deployment.md)
+pinned agent initializes from the bot account. Worker startup errors are
+available in the systemd journal. Use the same checkout command after a
+worker upgrade. [Deployment checks](deployment.md)
 
 The systemd worker uses a private network namespace, a read-only system,
 bounded temporary storage, a syscall filter, and CPU, RAM and process
