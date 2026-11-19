@@ -1,0 +1,14 @@
+[Unit]
+Description=Betterborg Antigravity worker socket
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/betterborg-antigravity.sock
+SocketMode=0600
+Accept=yes
+MaxConnections=1
+Backlog=1
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

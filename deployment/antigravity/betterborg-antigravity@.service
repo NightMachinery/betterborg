@@ -1,0 +1,40 @@
+[Unit]
+Description=Betterborg Antigravity worker (%i)
+
+[Service]
+Type=exec
+User=betterborg-agy
+Group=betterborg-agy
+ExecStart=/usr/bin/python3 -EBs /usr/local/lib/betterborg-antigravity/antigravity_worker.py
+StandardInput=socket
+StandardOutput=null
+StandardError=null
+UMask=0077
+RuntimeMaxSec=365
+TimeoutStopSec=3
+KillMode=control-group
+LimitCORE=0
+MemoryMax=800M
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=80
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+SystemCallFilter=~@debug @mount @reboot @swap @raw-io io_uring_setup io_uring_enter io_uring_register
+PrivateNetwork=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+TemporaryFileSystem=/tmp:rw,nosuid,nodev,size=380M,mode=1777 /run:ro,nosuid,nodev,noexec,mode=0755
+BindReadOnlyPaths=/run/betterborg-antigravity-egress
+InaccessiblePaths=-/var/tmp
+ReadWritePaths=/var/lib/betterborg-antigravity/profiles /var/lib/betterborg-antigravity/linked

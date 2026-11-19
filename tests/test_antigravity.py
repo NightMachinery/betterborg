@@ -358,3 +358,120 @@ def test_wait_expiry_never_claims_the_busy_slot(tmp_path, monkeypatch):
                     pytest.fail("A timed-out job should never start.")
 
     asyncio.run(run())
+
+
+def test_systemd_transport_sign_in_logout_and_profile_status(tmp_path, monkeypatch):
+    from uniborg import antigravity_protocol as protocol, antigravity_worker as worker
+
+    state = tmp_path / "state"
+    (state / "profiles").mkdir(parents=True)
+    (state / "linked").mkdir()
+    (tmp_path / "egress").mkdir()
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(protocol, "STATE_DIR", state)
+    monkeypatch.setattr(protocol, "EGRESS_DIR", tmp_path / "egress")
+    monkeypatch.setattr(protocol, "SOCKET_PATH", tmp_path / "worker.sock")
+    monkeypatch.setattr(protocol, "WORKDIR", str(scratch / "work"))
+    monkeypatch.setattr(protocol, "CONFIGURED", tmp_path / "enabled")
+    protocol.CONFIGURED.touch()
+    monkeypatch.setattr(worker, "SCRATCH", scratch)
+    monkeypatch.setattr(worker.network, "PROXY_PORT", 0)
+    agent = tmp_path / "fake_agent.py"
+    agent.write_text("""
+import http.server
+import json
+import os
+import sys
+from pathlib import Path
+from urllib.parse import urlencode
+
+token = Path(os.environ["GEMINI_HOME"]) / "antigravity-acp" / "acp_token.json"
+
+class Callback(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        token.write_text("synthetic grant")
+        self.send_response(200)
+        self.end_headers()
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    result = {}
+    if msg["method"] == "initialize":
+        result = {
+            "protocolVersion": 1,
+            "agentInfo": {"name": "antigravity-acp", "version": "1.5.0"},
+        }
+    elif msg["method"] == "authenticate":
+        with http.server.HTTPServer(("127.0.0.1", 0), Callback) as server:
+            query = urlencode({
+                "redirect_uri": f"http://127.0.0.1:{server.server_port}/",
+                "state": "synthetic-state",
+            })
+            print(f"https://accounts.google.com/o/oauth2/v2/auth?{query}", file=sys.stderr)
+            server.handle_request()
+    elif msg["method"] == "logout":
+        token.unlink()
+    print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
+""")
+    import sys
+
+    spawn = asyncio.create_subprocess_exec
+
+    async def fake_spawn(*args, **kwargs):
+        assert args[-2] == "--agent"
+        return await spawn(sys.executable, "-u", agent, **kwargs)
+
+    monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", fake_spawn)
+
+    async def scenario():
+        errors = []
+        finished = asyncio.Event()
+
+        async def accept(reader, writer):
+            try:
+                await worker.serve(reader, writer)
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                finished.set()
+
+        async with await asyncio.start_unix_server(accept, protocol.SOCKET_PATH):
+            async with antigravity._worker(7) as client:
+                assert not antigravity.linked(7)
+                auth = asyncio.create_task(client.request("authenticate", methodId="oauth-personal"))
+                link = await asyncio.wait_for(client.login_url, 5)
+                with pytest.raises(antigravity.AntigravityError, match="sign-in failed"):
+                    await client.complete_login(link, "/?state=wrong&code=test")
+                target = "/?state=synthetic-state&code=test"
+                await client.complete_login(link, target)
+                await asyncio.wait_for(auth, 5)
+                assert antigravity.linked(7)
+                assert not antigravity.linked(8)
+                with pytest.raises(antigravity.AntigravityError, match="sign-in failed"):
+                    await client.complete_login(link, target)
+                await client.request("logout")
+                assert not antigravity.linked(7)
+            await asyncio.wait_for(finished.wait(), 5)
+        assert not errors
+        assert not list(protocol.EGRESS_DIR.iterdir())
+
+    asyncio.run(scenario())
+
+
+def test_systemd_configuration_does_not_fall_back_to_docker(tmp_path, monkeypatch):
+    from uniborg import antigravity_protocol as protocol
+
+    monkeypatch.setattr(protocol, "CONFIGURED", tmp_path / "enabled")
+    monkeypatch.setattr(protocol, "SOCKET_PATH", tmp_path / "missing")
+    monkeypatch.setattr(protocol, "STATE_DIR", tmp_path / "worker-state")
+    monkeypatch.setattr(antigravity, "PROFILES", tmp_path / "docker-profiles")
+    token = antigravity.PROFILES / "7" / "antigravity-acp" / "acp_token.json"
+    token.parent.mkdir(parents=True)
+    token.touch()
+    assert antigravity.linked(7)
+    protocol.CONFIGURED.touch()
+    assert not antigravity.available()
+    assert not antigravity.linked(7)

@@ -1,4 +1,4 @@
-"""HTTPS egress for the official ACP agent in a Docker network-none worker."""
+"""HTTPS egress for the official ACP agent in a private network namespace."""
 
 import asyncio
 import contextlib
@@ -88,13 +88,12 @@ async def google_connect(reader, writer):
         writer.close()
 
 
-async def worker():
-    """Bridge the agent's loopback HTTPS_PROXY to the host allowlist."""
-
+async def loopback_proxy(path):
+    """Start the agent's private loopback bridge to the host allowlist."""
     async def bridge(reader, writer):
         upstream = None
         try:
-            upstream = await asyncio.open_unix_connection("/egress/connect")
+            upstream = await asyncio.open_unix_connection(path)
             await relay((reader, writer), upstream)
         except OSError:
             pass
@@ -103,7 +102,11 @@ async def worker():
                 upstream[1].close()
             writer.close()
 
-    async with await asyncio.start_server(bridge, "127.0.0.1", PROXY_PORT):
+    return await asyncio.start_server(bridge, "127.0.0.1", PROXY_PORT)
+
+
+async def worker():
+    async with await loopback_proxy("/egress/connect"):
         agent = await asyncio.create_subprocess_exec(
             "/opt/agy/agy_acp_server.par",
             "--uid=",

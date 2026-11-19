@@ -41,13 +41,12 @@ and LLM-generated titles are skipped for Antigravity turns.
 The three bots share one worker slot. If it is busy, Transcribe shows that it
 is waiting and starts automatically when a slot becomes available. Use `/stop`
 to cancel a waiting transcription. The wait expires after 15 minutes.
-Each operation uses a fresh unprivileged,
-read-only container with an ephemeral workspace and session store. The worker
-mounts the shared official distribution and only the signing-in user's
-persistent profile. It has no direct network interface and can make HTTPS
-CONNECT requests through the loopback proxy for a fixed set of Google hosts.
+Each operation uses a fresh sandbox with an ephemeral workspace and session
+store. The worker gets the shared official distribution and only the signing-in
+user's persistent profile. Its private network has only loopback and can make
+HTTPS CONNECT requests through a proxy for a fixed set of Google hosts.
 The host side rejects private and loopback destinations. The bot relays the
-authorization response to the original agent inside that same container and
+authorization response to the original agent inside that same worker and
 discards it from the chat history used for generation.
 
 Chat's Google Search toggle in `/tools` controls `search_web` on text turns.
@@ -60,12 +59,38 @@ On Linux x86-64, install both `agy_acp_server.par` and
 `localharness_external` from the release archive in
 `~/.local/lib/betterborg/antigravity-acp/1.5.0/`. Verify the registry's SHA-256
 before extracting and keep both files executable. Pull the pinned Python
-container image as the bot operator. The worker launch uses that digest.
+container image as the bot operator for the Docker backend.
 [ACP registry manifest](https://raw.githubusercontent.com/agentclientprotocol/registry/main/antigravity-acp/agent.json)
 
 ```sh
 docker pull python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 ```
+
+### Systemd service
+
+On Linux x86-64 with systemd and Landlock ABI 3 or newer, run
+`/bin/sh deployment/antigravity/install.sh BOT_UNIX_USER` as root from
+a reviewed checkout. Use the Unix account shared by the three bot
+processes. The installer verifies both ACP binaries from that account's
+existing pinned installation, creates the dedicated worker account, and
+starts a Unix socket restricted to the bot account.
+
+The systemd worker uses a private network namespace, a read-only system,
+bounded temporary storage, a syscall filter, and CPU, RAM and process
+limits. The trusted wrapper launches the native agent under a Landlock
+allowlist for the current Google profile. OAuth returns enter the same
+worker that initiated the sign-in. The Google proxy remains in Betterborg.
+
+The installer enables systemd selection for bot revisions that support it.
+If the installed service is unavailable, requests fail closed. Docker is
+the backend on hosts without the installer configuration. For a rollback,
+remove `/etc/betterborg-antigravity/enabled` as root and restart the three
+bots together.
+
+During an initial switch, sign in once in the Chat bot to create a shared
+systemd profile. The service keeps it under its own Unix account. The
+existing Docker profile remains in its original location and can be used
+again on rollback.
 
 ### Worker startup benchmark
 
@@ -88,10 +113,9 @@ initialization. Shared daemons, root-owned runtime helpers, and peak memory
 during authenticated model turns fall outside these measurements. Antigravity
 itself accounted for about 281 MiB in each configuration.
 
-A Docker-free production candidate is a system-level systemd service with
-a separate Unix account, filesystem and network isolation, cgroup limits,
-and the restricted Google proxy. A Unix account alone relies on host file
-permissions and can reach services on the host network.
+The lightweight benchmark used a transient user-level service and
+blocked all IP sockets. The production unit adds a separate Unix account
+and private network, with the same restricted Google proxy used by Docker.
 [systemd sandbox options](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html)
 
 Before expanding beyond the pilot, measure peak memory and profile growth

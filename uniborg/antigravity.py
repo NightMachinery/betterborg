@@ -6,18 +6,16 @@ import binascii
 import fcntl
 import json
 import os
-import re
 import tempfile
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, suppress
-from dataclasses import dataclass, field
-from hmac import compare_digest
+from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
-from uniborg import antigravity_network
+from uniborg import antigravity_network, antigravity_protocol as protocol
+from uniborg.antigravity_protocol import LoginLink, is_callback_url
 
-VERSION = "1.5.0"
+VERSION = protocol.VERSION
 IMAGE = "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
 INSTALL = Path.home() / ".local/lib/betterborg/antigravity-acp" / VERSION
 PROFILES = Path.home() / ".borg/antigravity"
@@ -32,8 +30,7 @@ SHARED_CONNECT_NEEDED = (
 )
 UNAVAILABLE = "Antigravity is temporarily unavailable."
 LOGIN_TIMEOUT = 300
-MAX_LINK_LENGTH = 8192
-MAX_MEDIA_BYTES = 12 * 1024 * 1024
+MAX_MEDIA_BYTES = protocol.MAX_MEDIA_BYTES
 IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 
 # Fixed script. The validated return URL is sent on stdin, outside argv and logs.
@@ -58,6 +55,8 @@ class WorkerBusy(AntigravityError):
 
 
 def available():
+    if protocol.CONFIGURED.is_file():
+        return protocol.SOCKET_PATH.is_socket()
     return all(
         os.access(INSTALL / name, os.X_OK)
         for name in (
@@ -74,7 +73,10 @@ def _profile(user_id):
 
 
 def linked(user_id):
-    return (_profile(user_id) / "antigravity-acp" / "acp_token.json").is_file()
+    profile = _profile(user_id)
+    if protocol.CONFIGURED.is_file():
+        return (protocol.STATE_DIR / "linked" / profile.name).is_file()
+    return (profile / "antigravity-acp" / "acp_token.json").is_file()
 
 
 def private_admin(event):
@@ -133,67 +135,9 @@ def inline_image(block):
     return data, IMAGE_TYPES[mime]
 
 
-def _loopback(url):
-    if not url or len(url) > MAX_LINK_LENGTH or not url.startswith("http://127.0.0.1:"):
-        return None
-    try:
-        parts = urlsplit(url)
-        if (
-            not parts.port
-            or parts.netloc != f"127.0.0.1:{parts.port}"
-            or parts.path != "/"
-            or parts.fragment
-            or any(c.isspace() for c in url)
-        ):
-            return None
-    except ValueError:
-        return None
-    return parts
-
-
-def is_callback_url(text):
-    parts = _loopback((text or "").strip())
-    if not parts:
-        return False
-    query = parse_qs(parts.query)
-    return bool(query.get("state") and (query.get("code") or query.get("error")))
-
-
-@dataclass(frozen=True)
-class LoginLink:
-    url: str = field(repr=False)
-    port: int
-    state: str = field(repr=False)
-
-    @classmethod
-    def from_output(cls, line):
-        match = re.search(
-            r"https://accounts\.google\.com/o/oauth2/v2/auth\?[^\s]+", line
-        )
-        if not match or len(match[0]) > MAX_LINK_LENGTH:
-            return None
-        query = parse_qs(urlsplit(match[0]).query)
-        (redirect,) = query.get("redirect_uri", [None])
-        (state,) = query.get("state", [None])
-        parts = _loopback(redirect)
-        if parts and not parts.query and state and state.isascii():
-            return cls(match[0], parts.port, state)
-        return None
-
-    def callback(self, text):
-        parts = _loopback(text.strip())
-        if not parts or parts.port != self.port:
-            return None
-        query = parse_qs(parts.query)
-        states = query.get("state", [])
-        if len(states) != 1 or not states[0].isascii():
-            return None
-        if not compare_digest(states[0], self.state) or not is_callback_url(text):
-            return None
-        return f"/?{parts.query}"
-
-
 class Client:
+    workdir = "/work"
+
     def __init__(self, process, container):
         self.process = process
         self.container = container
@@ -208,8 +152,14 @@ class Client:
 
     async def send(self, **message):
         packet = json.dumps({"jsonrpc": "2.0", **message})
-        self.process.stdin.write(packet.encode() + b"\n")
+        await self.write_packet(packet.encode() + b"\n")
+
+    async def write_packet(self, raw):
+        self.process.stdin.write(raw)
         await self.process.stdin.drain()
+
+    async def read_packet(self):
+        return await self.process.stdout.readline()
 
     async def request(self, method, *, timeout=35, **params):
         self.reply_id += 1
@@ -233,7 +183,7 @@ class Client:
 
     async def read(self):
         try:
-            while raw := await self.process.stdout.readline():
+            while raw := await self.read_packet():
                 try:
                     message = json.loads(raw)
                 except ValueError:
@@ -349,7 +299,7 @@ class Client:
         if instructions:
             meta["systemPrompt"] = {"append": instructions}
         session = await self.request(
-            "session/new", cwd="/work", mcpServers=[], _meta={"antigravity": meta}
+            "session/new", cwd=self.workdir, mcpServers=[], _meta={"antigravity": meta}
         )
         self.session_id = session["sessionId"]
         return session
@@ -393,8 +343,93 @@ class Client:
             )
 
 
+class SystemdClient(Client):
+    workdir = protocol.WORKDIR
+
+    def __init__(self, reader, writer):
+        super().__init__(None, None)
+        self.reader = reader
+        self.writer = writer
+        self.callback_result = None
+
+    async def write_packet(self, raw):
+        self.writer.write(b"A" + raw)
+        await self.writer.drain()
+
+    async def read_packet(self):
+        while raw := await self.reader.readline():
+            if raw.startswith(b"A"):
+                return raw[1:]
+            if raw.startswith(b"C") and len(raw) <= protocol.MAX_LINK_LENGTH * 2:
+                try:
+                    control = json.loads(raw[1:])
+                    if control.get("kind") == "login" and not self.login_url.done():
+                        link = LoginLink.from_output(control["url"])
+                        if link:
+                            self.login_url.set_result(link)
+                    if control.get("kind") == "callback" and self.callback_result is not None:
+                        if not self.callback_result.done():
+                            self.callback_result.set_result(control.get("ok") is True)
+                except (AttributeError, KeyError, TypeError, ValueError):
+                    continue
+        return b""
+
+    async def complete_login(self, link, target):
+        self.callback_result = asyncio.get_running_loop().create_future()
+        async with asyncio.timeout(15):
+            await protocol.send_control(
+                self.writer, kind="callback", url=f"http://127.0.0.1:{link.port}{target}"
+            )
+            ok = await self.callback_result
+        if not ok:
+            raise AntigravityError(
+                "Google sign-in failed. Please start again with /antigravity_login."
+            )
+
+
 @asynccontextmanager
-async def _worker(user_id):
+async def _systemd_worker(user_id):
+    socket_name = uuid4().hex
+    egress_path = protocol.EGRESS_DIR / socket_name
+    server = await asyncio.start_unix_server(
+        antigravity_network.google_connect, egress_path, limit=4096, backlog=8
+    )
+    try:
+        async with server:
+            os.chmod(egress_path, 0o660)
+            reader, writer = await asyncio.open_unix_connection(
+                protocol.SOCKET_PATH, limit=protocol.FRAME_LIMIT
+            )
+            client = SystemdClient(reader, writer)
+            reads = asyncio.create_task(client.read())
+            try:
+                await protocol.send_control(
+                    writer, kind="start", version=protocol.WORKER_VERSION,
+                    owner=user_id, egress=socket_name,
+                )
+                await client.initialize()
+                yield client
+            finally:
+                with suppress(OSError, TimeoutError, ValueError):
+                    writer.write_eof()
+                    await asyncio.wait_for(reads, 5)
+                reads.cancel()
+                await asyncio.gather(reads, return_exceptions=True)
+                writer.close()
+                with suppress(OSError):
+                    await writer.wait_closed()
+    finally:
+        egress_path.unlink(missing_ok=True)
+
+
+def _worker(user_id):
+    if protocol.CONFIGURED.is_file():
+        return _systemd_worker(user_id)
+    return _docker_worker(user_id)
+
+
+@asynccontextmanager
+async def _docker_worker(user_id):
     if not available():
         raise AntigravityError(UNAVAILABLE)
     root = _profile(user_id)
@@ -466,7 +501,7 @@ async def _worker(user_id):
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                limit=MAX_MEDIA_BYTES * 4 // 3 + 262144,
+                limit=protocol.FRAME_LIMIT,
             )
             client = Client(process, container)
             readers = [
