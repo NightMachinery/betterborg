@@ -5,15 +5,18 @@ HTTP clients are created inside the STT proxy context, including key validation.
 """
 
 import base64
+import json
+import re
 from dataclasses import dataclass
 
 import httpx
 
-from uniborg import gemini_providers, stt_models
+from uniborg import antigravity, gemini_providers, stt_models
 from uniborg.constants import GEMINI_FLASH_LATEST, GEMINI_FLASH_LITE_LATEST
 
 GEMINI = gemini_providers.AI_STUDIO
 VERTEX = gemini_providers.VERTEX
+ANTIGRAVITY = gemini_providers.ANTIGRAVITY
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,13 @@ PROVIDERS = {
             GEMINI_FLASH_LITE_LATEST,
             "gemini/gemini-3.5-transcribe",
         ),
+    ),
+    ANTIGRAVITY: Provider(
+        gemini_providers.CHAT_LABELS[ANTIGRAVITY],
+        "",
+        "",
+        model_ids=("gemini/gemini-3.8-flash",),
+        auto_models=("gemini/gemini-3.8-flash",),
     ),
 }
 
@@ -191,5 +201,62 @@ async def transcribe_vertex(
     if not text.strip():
         raise RuntimeError(
             "Vertex AI returned no transcription. Try another model with /model."
+        )
+    return text
+
+
+async def transcribe_antigravity(*, user_id, model, attachments, prompt, schema):
+    media = []
+    byte_count = 0
+    for attachment in attachments:
+        mime = attachment.resolve_type()
+        if mime in antigravity.IMAGE_TYPES:
+            files = [(mime, attachment.content_bytes())]
+        elif stt_models.has_sound(attachment):
+            try:
+                sound = await stt_models.audio_inputs([attachment])
+            except stt_models.NoSoundError:
+                continue
+            files = [(audio.mime_type, audio.data) for audio in sound.audio]
+        else:
+            continue
+        for mime, data in files:
+            byte_count += len(data)
+            if byte_count > antigravity.MAX_MEDIA_BYTES:
+                raise antigravity.AntigravityError(
+                    "This job is too large for Antigravity. Split it into smaller clips."
+                )
+            media.append(
+                {
+                    "type": "image" if mime.startswith("image/") else "audio",
+                    "mimeType": mime,
+                    "data": base64.b64encode(data).decode("ascii"),
+                }
+            )
+    if not media:
+        raise antigravity.AntigravityError(
+            "Send an audio clip, an image, or a video with sound."
+        )
+
+    chunks = []
+
+    async def collect(text):
+        chunks.append(text)
+
+    async with antigravity.backend.worker(user_id) as client:
+        session = await client.new_session()
+        await client.set_model(session, model, "low")
+        await client.prompt(
+            prompt
+            + "\n\nVideo attachments are supplied as audio.\nJSON schema: "
+            + json.dumps(schema.model_json_schema()),
+            collect,
+            media=media,
+        )
+    text = "".join(chunks).strip()
+    text = re.sub(r"(?s)^\x60\x60\x60(?:json)?\s*(.*?)\s*\x60\x60\x60$", r"\1", text)
+    if not text:
+        raise antigravity.AntigravityError(
+            "Antigravity did not return a transcription."
         )
     return text

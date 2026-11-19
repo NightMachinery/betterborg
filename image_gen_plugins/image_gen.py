@@ -7,6 +7,7 @@ import tempfile
 import traceback
 import uuid
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Optional, Dict
 
@@ -16,7 +17,7 @@ from telethon.tl.types import Message
 from pydantic import BaseModel, Field
 
 # Import uniborg utilities
-from uniborg import util
+from uniborg import antigravity, gemini_providers, llm_util, tg_compat, util
 from uniborg import llm_db
 from uniborg import bot_util
 from uniborg import callback_util
@@ -71,6 +72,7 @@ BOT_COMMANDS = [
     {"command": "start", "description": "Set up image generation bot"},
     {"command": "help", "description": "Show detailed help"},
     {"command": "status", "description": "Show current image generation settings"},
+    {"command": "provider", "description": "Choose the image generation provider"},
     {
         "command": "setgeminikey",
         "description": "Set Gemini API key for image generation",
@@ -98,6 +100,7 @@ class ImageGenPrefs(BaseModel):
     """Pydantic model for image generation preferences."""
 
     model: str = Field(default=DEFAULT_MODEL)
+    provider: str = Field(default=gemini_providers.AI_STUDIO)
     size: str = Field(default="1024x1024")
     aspect_ratio: str = Field(default="1:1")
     quality: str = Field(default="standard")
@@ -124,6 +127,11 @@ class UserManager:
     def set_model(self, user_id: int, model: str):
         prefs = self.get_prefs(user_id)
         prefs.model = model
+        self._save_prefs(user_id, prefs)
+
+    def set_provider(self, user_id: int, provider: str):
+        prefs = self.get_prefs(user_id)
+        prefs.provider = provider
         self._save_prefs(user_id, prefs)
 
     def set_size(self, user_id: int, size: str):
@@ -168,6 +176,9 @@ async def start_handler(event):
     user_id = event.sender_id
     cancel_input_flow(user_id)
 
+    if antigravity.private_admin(event) and antigravity.available():
+        await provider_handler(event)
+        return
     api_key = llm_db.get_api_key(user_id)
     if not api_key:
         await event.reply(
@@ -215,6 +226,15 @@ async def status_handler(event):
     """Handle /status command."""
     user_id = event.sender_id
     prefs = user_manager.get_prefs(user_id)
+    if prefs.provider == gemini_providers.ANTIGRAVITY:
+        connected = antigravity.private_admin(event) and antigravity.linked(user_id)
+        await llm_util.send_info_message(
+            event, "Google Antigravity\n\n"
+            + ("Google account connected. Send a prompt to generate an image." if connected
+               else antigravity.SHARED_CONNECT_NEEDED),
+            parse_mode=None,
+        )
+        return
     api_key = llm_db.get_api_key(user_id)
 
     status_text = f"""**Image Generation Settings 🎨**
@@ -343,6 +363,24 @@ async def set_gemini_key_handler(event):
     )
 
 
+async def provider_handler(event, *, edit=False):
+    user_id = event.sender_id
+    current = user_manager.get_prefs(user_id).provider
+    options = gemini_providers.CHAT_LABELS
+    providers = [gemini_providers.AI_STUDIO]
+    if antigravity.private_admin(event) and antigravity.available():
+        providers.append(gemini_providers.ANTIGRAVITY)
+    buttons = [[tg_compat.callback_button(
+        ("✓ " if provider == current else "") + options[provider],
+        data=f"imgprovider:{user_id}:{provider}",
+    )] for provider in providers]
+    text = f"**Image provider**\n\nCurrent: **{options.get(current, options[gemini_providers.AI_STUDIO])}**"
+    if edit:
+        await event.edit(BOT_META_INFO_PREFIX + text, buttons=buttons, parse_mode="md")
+    else:
+        await llm_util.send_info_message(event, text, buttons=buttons, parse_mode="md")
+
+
 # --- Callback Handler ---
 @callback_util.hold_bare_answers
 async def callback_handler(event):
@@ -350,6 +388,26 @@ async def callback_handler(event):
     data_str = event.data.decode("utf-8")
     user_id = event.sender_id
     prefs = user_manager.get_prefs(user_id)
+
+    if data_str.startswith("imgprovider:"):
+        _, owner, provider = data_str.split(":", 2)
+        if not event.is_private or owner != str(user_id) or provider not in (
+            gemini_providers.AI_STUDIO, gemini_providers.ANTIGRAVITY,
+        ):
+            await event.answer("Open /provider in your own chat.", alert=True)
+            return
+        if provider == gemini_providers.ANTIGRAVITY:
+            if not antigravity.private_admin(event) or not antigravity.available():
+                await event.answer(antigravity.UNAVAILABLE, alert=True)
+                return
+            if not antigravity.linked(user_id):
+                await event.answer(antigravity.SHARED_CONNECT_NEEDED, alert=True)
+                return
+        if prefs.provider != provider:
+            user_manager.set_provider(user_id, provider)
+            await provider_handler(event, edit=True)
+        await event.answer()
+        return
 
     if data_str.startswith("model_"):
         model_id = bot_util.unsanitize_callback_data(data_str.split("_", 1)[1])
@@ -511,10 +569,37 @@ async def _log_image_generation(
 async def message_handler(event, *, log_p=True):
     """Handle incoming messages for image generation."""
     # Only process private, non-forwarded messages that aren't commands
-    if not event.is_private or event.forward or event.text.lower().startswith("/"):
+    if (
+        not event.is_private or event.forward or not event.text
+        or event.text.startswith("/") or antigravity.is_callback_url(event.text)
+    ):
         return
 
     user_id = event.sender_id
+    prefs = user_manager.get_prefs(user_id)
+    if prefs.provider == gemini_providers.ANTIGRAVITY:
+        if not antigravity.private_admin(event) or not antigravity.available():
+            await llm_util.send_info_message(event, antigravity.UNAVAILABLE, parse_mode=None)
+            return
+        if not antigravity.linked(user_id):
+            await llm_util.send_info_message(event, antigravity.SHARED_CONNECT_NEEDED, parse_mode=None)
+            return
+        prompt = event.text.strip()
+        if not prompt or user_id in AWAITING_INPUT_FROM_USERS:
+            return
+        status = await llm_util.send_info_message(event, "Generating with Google Antigravity…")
+        try:
+            images = await antigravity.generate_images(
+                user_id, prompt, number=prefs.number, aspect_ratio=prefs.aspect_ratio,
+            )
+            for index, (data, extension) in enumerate(images, 1):
+                file = BytesIO(data)
+                file.name = f"antigravity-{index}.{extension}"
+                await event.reply(file=file)
+            await status.edit(f"{BOT_META_INFO_PREFIX}Generated {len(images)} image(s).")
+        except antigravity.AntigravityError as exc:
+            await status.edit(BOT_META_INFO_PREFIX + str(exc), parse_mode=None)
+        return
     api_key = llm_db.get_api_key(user_id)
 
     if not api_key:
@@ -644,6 +729,12 @@ def register_handlers():
             func=lambda e: e.is_private,
         )
     )(set_gemini_key_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=r"(?i)^/provider(?:@\w+)?\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(provider_handler)
 
     # Message handler for image generation
     borg.on(events.NewMessage(func=lambda e: e.is_private and not e.forward))(

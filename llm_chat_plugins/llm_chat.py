@@ -8467,15 +8467,7 @@ GEMINI_PROVIDER_USAGE = (
 
 
 def _antigravity_admin(event) -> bool:
-    user_id = getattr(event, "sender_id", None)
-    return bool(
-        getattr(event, "is_private", False)
-        and not getattr(event, "out", False)
-        and type(user_id) is int
-        and user_id > 0
-        and event.chat_id == user_id
-        and util.is_admin_by_id(user_id)
-    )
+    return antigravity.private_admin(event)
 
 
 def _gemini_provider_menu_text(user_id: int, *, antigravity_p=False) -> str:
@@ -8603,6 +8595,9 @@ def _is_provider_login_link(text):
     return chatgpt_plan.is_callback_url(text) or antigravity.is_callback_url(text)
 
 
+ANTIGRAVITY_SIGN_IN_CARDS = TTLCache(maxsize=64, ttl=antigravity.LOGIN_TIMEOUT + 30)
+
+
 async def _antigravity_login(event):
     if llm_db.is_awaiting_key(event.sender_id):
         llm_db.cancel_key_flow(event.sender_id)
@@ -8618,7 +8613,27 @@ async def _antigravity_login(event):
     )
     if not buttons:
         text = f"{link.url}\n\n{text}"
-    await send_info_message(event, text, buttons=buttons, parse_mode=None, link_preview=False)
+    card = await send_info_message(
+        event, text, buttons=buttons, parse_mode=None, link_preview=False, reply_to=False,
+    )
+    ANTIGRAVITY_SIGN_IN_CARDS[event.sender_id] = card
+
+
+async def _show_antigravity_quota(event, markdown):
+    session, delimiter, quota = markdown.partition("### Quota Limits")
+    if delimiter and "data not available yet" in session:
+        markdown = delimiter + quota
+    try:
+        await tg_raw.send_rich_markdown(
+            event, BOT_META_INFO_PREFIX + "\n\n" + markdown, topic_id=_thread_topic_id(event),
+        )
+    except (AttributeError, TypeError, errors.BadRequestError):
+        # Some Telegram accounts or layers only accept classic message entities.
+        text = re.sub(r"(?m)^#{1,6} (.+)$", r"**\1**", markdown)
+        text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"__\1__", text)
+        await send_info_message(
+            event, text, parse_mode="md", link_preview=False, reply_to=False,
+        )
 
 
 async def antigravity_account_handler(event):
@@ -8644,12 +8659,15 @@ async def antigravity_account_handler(event):
             async with antigravity.backend.worker(event.sender_id) as client:
                 await client.new_session()
                 await client.prompt("/usage", collect)
-            text = "".join(chunks) or "Google did not report your Antigravity allowance."
+            if chunks:
+                await _show_antigravity_quota(event, "".join(chunks))
+                return
+            text = "Google did not report your Antigravity allowance."
         else:
             text = antigravity.CONNECT_NEEDED
     except antigravity.AntigravityError as exc:
         text = str(exc)
-    await send_info_message(event, text, parse_mode=None, link_preview=False)
+    await send_info_message(event, text, parse_mode=None, link_preview=False, reply_to=False)
 
 
 def _is_antigravity_login_callback(event):
@@ -8657,12 +8675,16 @@ def _is_antigravity_login_callback(event):
 
 
 async def antigravity_callback_handler(event):
+    completion = (
+        antigravity.backend.accept_callback(event.sender_id, event.raw_text)
+        if _antigravity_admin(event) else None
+    )
     try:
         await event.delete()
     except errors.RPCError:
         pass
     if _antigravity_admin(event):
-        linked = await antigravity.backend.finish_login(event.sender_id, event.raw_text)
+        linked = await asyncio.shield(completion) if completion is not None else False
         if linked:
             user_manager.set_gemini_provider(event.sender_id, gemini_providers.ANTIGRAVITY)
             note = (
@@ -8671,6 +8693,21 @@ async def antigravity_callback_handler(event):
             )
         else:
             note = "Google sign-in could not be completed. Start again with /antigravity_login."
+        card = (
+            ANTIGRAVITY_SIGN_IN_CARDS.pop(event.sender_id, None)
+            if completion is not None else None
+        )
+        if card is not None:
+            try:
+                await card.edit(
+                    BOT_META_INFO_PREFIX + note, buttons=[], parse_mode=None, link_preview=False,
+                )
+            except errors.RPCError:
+                pass
+            else:
+                raise events.StopPropagation
+        if completion is None and antigravity.linked(event.sender_id):
+            note = "Your Google account is connected. Use /antigravity_usage to check your plan."
         await send_info_message(event, note, parse_mode=None, reply_to=False)
     raise events.StopPropagation
 
@@ -14642,9 +14679,7 @@ async def _generate_antigravity_response(req: GenerationRequest) -> GenerationRe
             session = await client.new_session(
                 instructions=instructions, search="googleSearch" in req.prefs.enabled_tools,
             )
-            model = antigravity.select_model(session, req.model, reasoning.level)
-            if model != (session.get("models") or {}).get("currentModelId"):
-                await client.request("session/set_model", sessionId=client.session_id, modelId=model)
+            await client.set_model(session, req.model, reasoning.level)
             return await client.prompt(prompt, show)
 
     task = asyncio.create_task(run())
@@ -15127,6 +15162,26 @@ def _record_usage(
         logger.warning(f"Could not record usage for {user_id}: {exc}")
 
 
+async def _antigravity_image_reply(event, prompt):
+    if not _antigravity_admin(event) or not antigravity.available():
+        await send_info_message(event, antigravity.UNAVAILABLE, parse_mode=None)
+        return
+    if not antigravity.linked(event.sender_id):
+        await send_info_message(event, antigravity.CONNECT_NEEDED, parse_mode=None)
+        return
+    if not prompt:
+        await send_info_message(event, "Write an image prompt after .i.", parse_mode=None)
+        return
+    status = await send_info_message(event, "Generating with Google Antigravity…", parse_mode=None)
+    try:
+        for data, extension in await antigravity.generate_images(event.sender_id, prompt):
+            if not await _send_image_to_telegram(event, data, file_extension=f".{extension}"):
+                raise antigravity.AntigravityError("Telegram could not deliver the generated image.")
+        await status.delete()
+    except antigravity.AntigravityError as exc:
+        await util.edit_message(status, BOT_META_INFO_PREFIX + str(exc), parse_mode=None)
+
+
 async def chat_handler(
     event,
     *,
@@ -15220,6 +15275,17 @@ async def _chat_handler(
     if forced_effort is not None:
         prefix_result.reasoning_effort = forced_effort
 
+    if (
+        prefix_result.image_generation
+        and prefix_result.model is None
+        and getattr(prefs, "gemini_provider", None) == gemini_providers.ANTIGRAVITY
+    ):
+        try:
+            await _antigravity_image_reply(event, prefix_result.processed_text.strip())
+        finally:
+            if group_id:
+                bot_util.PROCESSED_GROUP_IDS.discard(group_id)
+        return
     if prefix_result.image_generation:
         try:
             prefix_result.model = await _image_generation_model(

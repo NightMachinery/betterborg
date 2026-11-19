@@ -192,3 +192,103 @@ def test_select_only_the_requested_model_on_the_accounts_list():
     )
     with pytest.raises(antigravity.AntigravityError, match="unavailable"):
         antigravity.select_model(session, "gemini/gemini-4-neon")
+
+
+def test_worker_slot_is_shared_across_clients(tmp_path, monkeypatch):
+    monkeypatch.setattr(antigravity, "PROFILES", tmp_path)
+    with (
+        antigravity._worker_slot(),
+        pytest.raises(antigravity.AntigravityError, match="already in use"),
+        antigravity._worker_slot(),
+    ):
+        pytest.fail("Two workers held the same server slot.")
+    with antigravity._worker_slot():
+        pass
+
+
+def test_quota_uses_rich_markdown_and_skips_empty_session():
+    async def scenario():
+        event = SimpleNamespace(is_private=True)
+        with (
+            patch.object(
+                plugin.tg_raw,
+                "send_rich_markdown",
+                new_callable=AsyncMock,
+            ) as send,
+            patch.object(plugin, "_thread_topic_id", return_value=None),
+        ):
+            await plugin._show_antigravity_quota(
+                event,
+                "### Session Usage\n- data not available yet\n\n### Quota Limits\n- **Weekly**",
+            )
+        assert send.await_args.args[1].endswith("### Quota Limits\n- **Weekly**")
+        assert "Session Usage" not in send.await_args.args[1]
+
+    asyncio.run(scenario())
+
+
+def test_signin_callback_updates_the_original_card():
+    async def scenario():
+        event = SimpleNamespace(
+            sender_id=7, raw_text=callback_query(), delete=AsyncMock()
+        )
+        card = SimpleNamespace(edit=AsyncMock())
+        task = asyncio.get_running_loop().create_future()
+        task.set_result(True)
+        with (
+            patch.object(plugin, "_antigravity_admin", return_value=True),
+            patch.object(plugin, "ANTIGRAVITY_SIGN_IN_CARDS", {7: card}),
+            patch.object(antigravity.backend, "accept_callback", return_value=task),
+            patch.object(plugin.user_manager, "set_gemini_provider") as set_provider,
+            pytest.raises(plugin.events.StopPropagation),
+        ):
+            await plugin.antigravity_callback_handler(event)
+        event.delete.assert_awaited_once()
+        set_provider.assert_called_once_with(7, gemini_providers.ANTIGRAVITY)
+        card.edit.assert_awaited_once()
+        assert "now your Gemini provider" in card.edit.await_args.args[0]
+        assert card.edit.await_args.kwargs["buttons"] == []
+
+    asyncio.run(scenario())
+
+
+def test_only_completed_inline_acp_image_is_delivered():
+    async def scenario():
+        import base64
+
+        client = antigravity.Client(None, "worker")
+        client.request = AsyncMock(return_value={"sessionId": "unique"})
+        await client.new_session(images=True)
+        assert client.request.await_args.kwargs["_meta"]["antigravity"][
+            "enabledTools"
+        ] == ["generate_image"]
+        client.on_image = AsyncMock()
+        data = b"\x89PNG\r\n\x1a\nfixture"
+        frame = {
+            "method": "session/update",
+            "params": {
+                "sessionId": "unique",
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "status": "in_progress",
+                    "content": [
+                        {
+                            "type": "content",
+                            "content": {
+                                "type": "image",
+                                "mimeType": "image/png",
+                                "data": base64.b64encode(data).decode(),
+                            },
+                        }
+                    ],
+                    "rawOutput": {"imagePath": "/ignored"},
+                },
+            },
+        }
+        await client.dispatch(frame)
+        client.on_image.assert_not_awaited()
+        frame["params"]["update"]["status"] = "completed"
+        await client.dispatch(frame)
+        client.on_image.assert_awaited_once_with(data, "png")
+
+    asyncio.run(scenario())

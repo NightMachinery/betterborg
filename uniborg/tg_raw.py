@@ -8,6 +8,7 @@ docs/guest_mode.md. This module imports only the standard library, Telethon
 and `telethon_safety`, never ``uniborg.util``, so ``util`` may import modules
 that depend on it.
 """
+
 import logging
 from typing import Any, Optional
 
@@ -20,6 +21,21 @@ _log = logging.getLogger(__name__)
 #: Guest answers are inline results; Telegram rejects an article without a
 #: title (ARTICLE_TITLE_EMPTY), although the title is never shown in the chat.
 GUEST_RESULT_TYPE = "article"
+
+
+async def send_rich_markdown(event, markdown: str, *, topic_id=None):
+    """Post server-rendered Markdown in a normal chat."""
+    return await event.client(
+        functions.messages.SendMessageRequest(
+            peer=await event.get_input_chat(),
+            message="",
+            rich_message=types.InputRichMessageMarkdown(markdown=markdown),
+            no_webpage=True,
+            reply_to=types.InputReplyToMessage(reply_to_msg_id=topic_id)
+            if topic_id
+            else None,
+        )
+    )
 
 
 async def send_once(client: Any, request: Any) -> Any:

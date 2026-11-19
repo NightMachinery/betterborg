@@ -1,11 +1,14 @@
 """Personal Google OAuth and chat through the pinned Antigravity ACP agent."""
 
 import asyncio
+import base64
+import binascii
+import fcntl
 import json
 import os
 import re
 import tempfile
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass, field
 from hmac import compare_digest
 from pathlib import Path
@@ -22,9 +25,14 @@ WORKER_BUSY = (
     "Antigravity is already in use. Try again when the current operation ends."
 )
 CONNECT_NEEDED = "Connect your Google account in this bot’s DM with /antigravity_login."
+SHARED_CONNECT_NEEDED = (
+    "Run /antigravity_login in the Chat bot, then choose Antigravity here."
+)
 UNAVAILABLE = "Antigravity is temporarily unavailable."
 LOGIN_TIMEOUT = 300
 MAX_LINK_LENGTH = 8192
+MAX_MEDIA_BYTES = 12 * 1024 * 1024
+IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 
 # Fixed script. The validated return URL is sent on stdin, outside argv and logs.
 CALLBACK_SCRIPT = """
@@ -61,6 +69,62 @@ def _profile(user_id):
 
 def linked(user_id):
     return (_profile(user_id) / "antigravity-acp" / "acp_token.json").is_file()
+
+
+def private_admin(event):
+    from uniborg.util import is_admin_by_id
+
+    user_id = getattr(event, "sender_id", None)
+    return bool(
+        getattr(event, "is_private", False)
+        and not getattr(event, "out", False)
+        and type(user_id) is int
+        and user_id > 0
+        and getattr(event, "chat_id", None) == user_id
+        and is_admin_by_id(user_id)
+    )
+
+
+@contextmanager
+def _worker_slot():
+    PROFILES.mkdir(mode=0o700, exist_ok=True, parents=True)
+    fd = os.open(
+        PROFILES / "worker.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
+    )
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise AntigravityError(WORKER_BUSY) from None
+        yield
+    finally:
+        os.close(fd)
+
+
+def inline_image(block):
+    if not isinstance(block, dict) or block.get("type") != "image":
+        return None
+    mime, encoded = block.get("mimeType"), block.get("data")
+    if (
+        mime not in IMAGE_TYPES
+        or not isinstance(encoded, str)
+        or len(encoded) > MAX_MEDIA_BYTES * 4 // 3
+    ):
+        return None
+    try:
+        data = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    signatures = {
+        "image/jpeg": b"\xff\xd8\xff",
+        "image/png": b"\x89PNG\r\n\x1a\n",
+        "image/webp": b"RIFF",
+    }
+    if not data.startswith(signatures[mime]) or (
+        mime == "image/webp" and data[8:12] != b"WEBP"
+    ):
+        return None
+    return data, IMAGE_TYPES[mime]
 
 
 def _loopback(url):
@@ -132,7 +196,9 @@ class Client:
         self.login_url = asyncio.get_running_loop().create_future()
         self.session_id = None
         self.search = False
+        self.images = False
         self.on_text = None
+        self.on_image = None
 
     async def send(self, **message):
         packet = json.dumps({"jsonrpc": "2.0", **message})
@@ -184,15 +250,31 @@ class Client:
             return
         if method == "session/update":
             params = message.get("params") or {}
+            if self.session_id is None or params.get("sessionId") != self.session_id:
+                return
             update = params.get("update") or {}
             content = update.get("content") or {}
             if (
                 self.on_text
-                and params.get("sessionId") == self.session_id
                 and update.get("sessionUpdate") == "agent_message_chunk"
+                and isinstance(content, dict)
                 and content.get("type") == "text"
             ):
                 await self.on_text(content["text"])
+            if (
+                self.on_image
+                and self.images
+                and update.get("sessionUpdate") == "tool_call_update"
+                and update.get("status") == "completed"
+                and isinstance(content, list)
+            ):
+                for item in content:
+                    if not isinstance(item, dict):
+                        continue
+                    block = item.get("content", item)
+                    image = inline_image(block)
+                    if image is not None:
+                        await self.on_image(*image)
             return
         if (
             message.get("id") == self.reply_id
@@ -210,12 +292,19 @@ class Client:
         call = params.get("toolCall") or {}
         # The pinned agent derives this title from the built-in name and
         # marks exec and MCP calls with different kinds.
-        if (
+        allowed = (
             self.search
-            and self.session_id
-            and params.get("sessionId") == self.session_id
             and call.get("title") == "Run search_web?"
             and call.get("kind") == "search"
+        ) or (
+            self.images
+            and call.get("title") == "Run generate_image?"
+            and call.get("kind") == "other"
+        )
+        if (
+            allowed
+            and self.session_id
+            and params.get("sessionId") == self.session_id
             and not call.get("locations")
             and not call.get("_meta")
         ):
@@ -242,9 +331,15 @@ class Client:
         ):
             raise AntigravityError(UNAVAILABLE)
 
-    async def new_session(self, *, instructions="", search=False):
+    async def new_session(self, *, instructions="", search=False, images=False):
         self.search = search
-        meta = {"enabledTools": ["search_web"] if search else []}
+        self.images = images
+        tools = [
+            name
+            for name, enabled in (("search_web", search), ("generate_image", images))
+            if enabled
+        ]
+        meta = {"enabledTools": tools}
         if instructions:
             meta["systemPrompt"] = {"append": instructions}
         session = await self.request(
@@ -253,14 +348,23 @@ class Client:
         self.session_id = session["sessionId"]
         return session
 
-    async def prompt(self, text, on_text):
+    async def prompt(self, text, on_text, *, media=(), on_image=None):
         self.on_text = on_text
+        self.on_image = on_image
         return await self.request(
             "session/prompt",
             timeout=240,
             sessionId=self.session_id,
-            prompt=[{"type": "text", "text": text}],
+            prompt=[{"type": "text", "text": text}, *media],
         )
+
+    async def set_model(self, session, model, effort=None):
+        model_id = select_model(session, model, effort)
+        if model_id != (session.get("models") or {}).get("currentModelId"):
+            await self.request(
+                "session/set_model", sessionId=self.session_id, modelId=model_id
+            )
+        return model_id
 
     async def complete_login(self, link, target):
         process = await asyncio.create_subprocess_exec(
@@ -356,7 +460,7 @@ async def _worker(user_id):
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                limit=2**20,
+                limit=MAX_MEDIA_BYTES * 4 // 3 + 262144,
             )
             client = Client(process, container)
             readers = [
@@ -405,8 +509,10 @@ class Antigravity:
         if self.active.locked():
             raise AntigravityError(WORKER_BUSY)
         try:
-            async with self.active, _worker(user_id) as client:
-                yield client
+            async with self.active:
+                with _worker_slot():
+                    async with _worker(user_id) as client:
+                        yield client
         except (OSError, TimeoutError) as exc:
             raise AntigravityError(UNAVAILABLE) from exc
 
@@ -461,16 +567,20 @@ class Antigravity:
                 pending.link.cancel()
             self.pending.pop(user_id, None)
 
-    async def finish_login(self, user_id, text):
+    def accept_callback(self, user_id, text):
         pending = self.pending.get(user_id)
         if not pending or not pending.link.done() or pending.callback.done():
-            return False
+            return None
         link = pending.link.result()
         target = link.callback(text)
         if not target:
-            return False
+            return None
         pending.callback.set_result(target)
-        return await asyncio.shield(pending.task)
+        return pending.task
+
+    async def finish_login(self, user_id, text):
+        task = self.accept_callback(user_id, text)
+        return await asyncio.shield(task) if task is not None else False
 
     async def logout(self, user_id):
         pending = self.pending.get(user_id)
@@ -484,6 +594,38 @@ class Antigravity:
 
 
 backend = Antigravity()
+
+
+async def generate_images(user_id, prompt, *, number=1, aspect_ratio="1:1"):
+    """Request images from the official tool and collect only inline ACP output."""
+    from uniborg.constants import GEMINI_FLASH_LATEST
+
+    images = []
+
+    async def collect_image(data, extension):
+        image = (data, extension)
+        if image not in images and len(images) < number:
+            images.append(image)
+
+    async def ignore_text(_text):
+        pass
+
+    async with backend.worker(user_id) as client:
+        session = await client.new_session(
+            images=True,
+            instructions="Use the generate_image tool to deliver the requested images.",
+        )
+        await client.set_model(session, GEMINI_FLASH_LATEST)
+        await client.prompt(
+            f"Generate {number} image(s) with aspect ratio {aspect_ratio}.\n\nImage prompt: {prompt}",
+            ignore_text,
+            on_image=collect_image,
+        )
+    if not images:
+        raise AntigravityError(
+            "Antigravity returned no image. Try another prompt or check /antigravity_usage in the Chat bot."
+        )
+    return images
 
 
 def select_model(session, model, effort=None):

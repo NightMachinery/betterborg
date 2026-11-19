@@ -11,7 +11,7 @@ from uniborg import tg_raw
 from uniborg import callback_util
 from uniborg import bot_util
 from uniborg import stt_models
-from uniborg import stt_providers
+from uniborg import antigravity, stt_providers
 from uniborg.storage import UserStorage
 from uniborg.constants import (
     GEMINI_FLASH_LATEST,
@@ -60,7 +60,7 @@ BOT_COMMANDS = [
     {"command": "setvertexkey", "description": "Set or update your Vertex AI API key"},
     {
         "command": "provider",
-        "description": "Choose Google AI Studio or Vertex AI; manage keys",
+        "description": "Choose the transcription provider and manage keys",
     },
     {"command": "model", "description": "Choose the transcription model"},
     {"command": "settings", "description": "Configure transcription output"},
@@ -282,6 +282,8 @@ def get_effective_gemini_api_key(user_id: int) -> str | None:
 
 def get_provider_key(user_id: int, provider: str | None = None) -> str | None:
     provider = provider or get_provider_choice(user_id)
+    if provider == stt_providers.ANTIGRAVITY:
+        return provider if util.is_admin_by_id(user_id) and antigravity.linked(user_id) else None
     if provider == stt_providers.GEMINI:
         return get_effective_gemini_api_key(user_id)
     return llm_db.get_api_key(user_id=user_id, service=provider)
@@ -757,6 +759,8 @@ def prepare_stt_job(cwd, *, user_id: int, model_choice: Optional[str] = None) ->
     provider = get_provider_choice(user_id)
     api_key = get_provider_key(user_id, provider)
     if not api_key:
+        if provider == stt_providers.ANTIGRAVITY:
+            raise SttRequestError(antigravity.SHARED_CONNECT_NEEDED)
         raise MissingSttKeyError(
             f"No {stt_providers.PROVIDERS[provider].label} API key is set."
         )
@@ -885,6 +889,20 @@ async def run_stt_job(
     job: SttJob, *, user_id: int, status_message, italics_marker: str = "__"
 ) -> Transcription:
     """Transcribes JOB, showing retry progress on STATUS_MESSAGE."""
+    if job.provider == stt_providers.ANTIGRAVITY:
+        if not util.is_admin_by_id(user_id):
+            raise SttRequestError(antigravity.UNAVAILABLE)
+        try:
+            raw = await stt_providers.transcribe_antigravity(
+                user_id=user_id, model=job.models[0], attachments=job.attachments,
+                prompt=TRANSCRIPTION_PROMPT, schema=TranscriptionResult,
+            )
+        except antigravity.AntigravityError as exc:
+            raise SttRequestError(str(exc)) from None
+        return Transcription(
+            text=format_transcription(raw, italics_marker=italics_marker, discard_visuals=True),
+            raw=raw, model_name=job.models[0],
+        )
     # Route this request's Gemini traffic through GEMINI_SPECIAL_HTTP_PROXY if configured.
     # Honors the admin-only gate (may raise ProxyRestrictedException for blocked users).
     proxy_url, _ = llm_util.get_proxy_config_or_error(user_id)
@@ -1027,6 +1045,10 @@ async def llm_stt(*, cwd, event, model_choice=None, log=True):
         )
         return
 
+    agy = job.provider == stt_providers.ANTIGRAVITY
+    if agy and not antigravity.private_admin(event):
+        await event.reply("Antigravity transcription is available in this bot’s DM.")
+        return
     status_message = await event.reply(
         f"Transcribing with {stt_providers.PROVIDERS[job.provider].label}..."
     )
@@ -1047,14 +1069,14 @@ async def llm_stt(*, cwd, event, model_choice=None, log=True):
             reply_to=event.message,
             link_preview=False,
             parse_mode=parse_mode,
-            file_name_mode="llm",
+            file_name_mode="timestamp" if agy else "llm",
             send_file_mode=util.SendFileMode.ALSO_IF_LESS_THAN,
             file_length_threshold=STT_FILE_LENGTH_THRESHOLD,
             file_only_threshold=STT_FILE_ONLY_LENGTH_THRESHOLD,
             api_keys={
                 job.provider: job.api_key,
             },
-            title_generator=_job_title_generator(job, event.sender_id),
+            title_generator=None if agy else _job_title_generator(job, event.sender_id),
             #: The transcript must survive a status message it can no longer edit.
             send_new_on_head_failure=True,
         )
@@ -1203,6 +1225,12 @@ async def _show_provider_panel(event, *, edit=False, welcome=False, keys=False):
     buttons = []
     for value, spec in stt_providers.PROVIDERS.items():
         has_key = bool(get_provider_key(user_id, value))
+        if value == stt_providers.ANTIGRAVITY:
+            if not keys and antigravity.private_admin(event) and antigravity.available():
+                marker = "✓ " if value == provider else ""
+                status = "Connected" if has_key else "Sign in via Chat"
+                buttons.append([_provider_button(user_id, f"{marker}{spec.label} · {status}", f"use:{value}")])
+            continue
         status = "Key saved" if has_key else "Add key"
         prefix = "✓ " if value == provider and not keys else ""
         action = f"key:{value}" if keys else f"use:{value}"
@@ -1239,6 +1267,9 @@ async def _show_provider_panel(event, *, edit=False, welcome=False, keys=False):
 
 async def _start_key_setup(event, provider: str, *, switch: bool) -> None:
     if not await _require_private_setup(event):
+        return
+    if provider == stt_providers.ANTIGRAVITY:
+        await llm_util.send_info_message(event, antigravity.SHARED_CONNECT_NEEDED, reply_to=False)
         return
     user_id = event.sender_id
     _cancel_key_setup(user_id)
@@ -1441,7 +1472,7 @@ async def _show_settings_panel(event, *, edit=False):
         "When on (the default), discard the model's visual description if every "
         "attachment is audio. This prevents hallucinated visuals in audio-only "
         "answers. Videos, images and mixed albums keep their existing behavior. "
-        "Applies to both providers and your guest transcriptions."
+        "Applies to both API providers and their guest transcriptions."
     )
     buttons = [
         [
@@ -1515,6 +1546,13 @@ async def provider_callback_handler(event):
             "This option is no longer available. Open /provider again.", alert=True
         )
         return
+    if provider == stt_providers.ANTIGRAVITY:
+        if verb != "use" or not antigravity.private_admin(event) or not antigravity.available():
+            await event.answer(antigravity.UNAVAILABLE, alert=True)
+            return
+        if not get_provider_key(event.sender_id, provider):
+            await event.answer(antigravity.SHARED_CONNECT_NEEDED, alert=True)
+            return
     if verb == "key" or not get_provider_key(event.sender_id, provider):
         await event.answer()
         await _start_key_setup(event, provider, switch=verb == "use")
@@ -1616,6 +1654,8 @@ MODEL_MENU_COLUMNS = 2
 
 def _model_menu_title(provider: str = "gemini") -> str:
     spec = stt_providers.PROVIDERS[provider]
+    if provider == stt_providers.ANTIGRAVITY:
+        return "**Transcription model**\n\nAntigravity uses Gemini 3.8 Flash with your Google plan."
     auto = ", then ".join(
         stt_models.label_for(name) for name in spec.auto_models or STT_MODELS
     )
@@ -1743,11 +1783,12 @@ async def stop_stt_handler(event):
         and llm_db.is_awaiting_key(e.sender_id)
         and not e.text.startswith("/")
         and not _is_stt_stop_text(e.text)
+        and not antigravity.is_callback_url(e.text)
     )
 )
 async def key_submission_handler(event):
     provider = llm_db.get_awaiting_service(event.sender_id)
-    if provider in stt_providers.PROVIDERS:
+    if provider in (stt_providers.GEMINI, stt_providers.VERTEX):
         await _submit_provider_key(event, provider, event.text.strip())
 
 
@@ -1903,6 +1944,9 @@ async def guest_stt_handler(query):
     caller_id = query.caller_id
     if caller_id is None:
         await _guest_note(query, "I can only answer people, not channels.")
+        return
+    if get_provider_choice(caller_id) == stt_providers.ANTIGRAVITY:
+        await _guest_note(query, "Antigravity transcription is available in this bot’s DM.")
         return
     media = [m for m in query.messages if is_transcribable_media(m)]
     if not media:
