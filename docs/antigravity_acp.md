@@ -67,6 +67,33 @@ container image as the bot operator. The worker launch uses that digest.
 docker pull python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 ```
 
+### Worker startup benchmark
+
+Median across nine interleaved launches per configuration on Linux x86-64.
+The Antigravity 1.5.0 package and Docker image were warm. Each run started with
+a disposable profile and ended after the ACP initialization response. Memory
+is proportional set size (PSS), which splits shared memory across the
+processes that map it.
+
+- Native launch under an unprivileged UID took 3.85 s, 3.80 CPU seconds, and
+  297 MiB of PSS. This measures the agent after starting under the UID.
+- A transient systemd service with Landlock filesystem restrictions, TCP
+  sockets blocked, and cgroup limits took 3.95 s, 3.82 CPU seconds, and
+  297 MiB of PSS.
+- The deployed Docker launcher took 4.64 s, 4.30 CPU seconds, and 332 MiB of
+  PSS.
+
+Measurements include the worker and launcher processes at
+initialization. Shared daemons, root-owned runtime helpers, and peak memory
+during authenticated model turns fall outside these measurements. Antigravity
+itself accounted for about 281 MiB in each configuration.
+
+A Docker-free production candidate is a system-level systemd service with
+a separate Unix account, filesystem and network isolation, cgroup limits,
+and the restricted Google proxy. A Unix account alone relies on host file
+permissions and can reach services on the host network.
+[systemd sandbox options](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html)
+
 Before expanding beyond the pilot, measure peak memory and profile growth
 and verify each target workflow across restart and unlink. Google documents personal OAuth for ACP
 clients. A wider hosted rollout needs its own review of the service terms.
