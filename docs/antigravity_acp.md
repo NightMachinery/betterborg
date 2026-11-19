@@ -38,7 +38,10 @@ and LLM-generated titles are skipped for Antigravity turns.
 
 ## Worker operation
 
-The three bots share one worker slot. Each operation uses a fresh unprivileged,
+The three bots share one worker slot. If it is busy, Transcribe shows that it
+is waiting and starts automatically when a slot becomes available. Use `/stop`
+to cancel a waiting transcription. The wait expires after six minutes.
+Each operation uses a fresh unprivileged,
 read-only container with an ephemeral workspace and session store. The worker
 mounts the shared official distribution and only the signing-in user's
 persistent profile. It has no direct network interface and can make HTTPS

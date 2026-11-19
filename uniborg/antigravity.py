@@ -8,7 +8,7 @@ import json
 import os
 import re
 import tempfile
-from contextlib import asynccontextmanager, contextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass, field
 from hmac import compare_digest
 from pathlib import Path
@@ -24,6 +24,8 @@ PROFILES = Path.home() / ".borg/antigravity"
 WORKER_BUSY = (
     "Antigravity is already in use. Try again when the current operation ends."
 )
+WORKER_WAIT_TIMEOUT = 360
+WORKER_POLL_INTERVAL = 0.5
 CONNECT_NEEDED = "Connect your Google account in this bot’s DM with /antigravity_login."
 SHARED_CONNECT_NEEDED = (
     "Run /antigravity_login in the Chat bot, then choose Antigravity here."
@@ -48,6 +50,10 @@ connection.close()
 
 
 class AntigravityError(Exception):
+    pass
+
+
+class WorkerBusy(AntigravityError):
     pass
 
 
@@ -95,7 +101,7 @@ def _worker_slot():
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise AntigravityError(WORKER_BUSY) from None
+            raise WorkerBusy(WORKER_BUSY) from None
         yield
     finally:
         os.close(fd)
@@ -502,17 +508,31 @@ class PendingLogin:
 class Antigravity:
     def __init__(self):
         self.pending = {}
-        self.active = asyncio.Lock()
 
     @asynccontextmanager
-    async def worker(self, user_id):
-        if self.active.locked():
-            raise AntigravityError(WORKER_BUSY)
+    async def worker(self, user_id, *, wait=False, on_wait=None):
         try:
-            async with self.active:
-                with _worker_slot():
-                    async with _worker(user_id) as client:
-                        yield client
+            async with AsyncExitStack() as stack:
+                try:
+                    async with asyncio.timeout(WORKER_WAIT_TIMEOUT):
+                        while True:
+                            try:
+                                stack.enter_context(_worker_slot())
+                            except WorkerBusy:
+                                if not wait:
+                                    raise
+                                if on_wait is not None:
+                                    on_wait()
+                                    on_wait = None
+                                await asyncio.sleep(WORKER_POLL_INTERVAL)
+                            else:
+                                break
+                except TimeoutError:
+                    raise AntigravityError(
+                        "Antigravity stayed busy for six minutes. Please send the media again."
+                    ) from None
+                async with _worker(user_id) as client:
+                    yield client
         except (OSError, TimeoutError) as exc:
             raise AntigravityError(UNAVAILABLE) from exc
 

@@ -292,3 +292,69 @@ def test_only_completed_inline_acp_image_is_delivered():
         client.on_image.assert_awaited_once_with(data, "png")
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_transcription_waits_without_starting_a_second_worker(
+    tmp_path,
+    monkeypatch,
+    cancel,
+):
+    monkeypatch.setattr(antigravity, "PROFILES", tmp_path)
+    monkeypatch.setattr(antigravity, "WORKER_POLL_INTERVAL", 0.01)
+
+    async def run():
+        active = antigravity.Antigravity()
+        transcribe = antigravity.Antigravity()
+        waiting = asyncio.Event()
+        started = []
+
+        @asynccontextmanager
+        async def fake_worker(owner):
+            started.append(owner)
+            yield owner
+
+        monkeypatch.setattr(antigravity, "_worker", fake_worker)
+
+        async def request():
+            async with transcribe.worker(2, wait=True, on_wait=waiting.set) as worker:
+                return worker
+
+        async with active.worker(1):
+            task = asyncio.create_task(request())
+            try:
+                await asyncio.wait_for(waiting.wait(), 1)
+                assert started == [1]
+                if cancel:
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+            finally:
+                if not waiting.is_set():
+                    task.cancel()
+        if cancel:
+            assert started == [1]
+        else:
+            assert await asyncio.wait_for(task, 1) == 2
+            assert started == [1, 2]
+        with antigravity._worker_slot():
+            pass
+
+    asyncio.run(run())
+
+
+def test_wait_expiry_never_claims_the_busy_slot(tmp_path, monkeypatch):
+    monkeypatch.setattr(antigravity, "PROFILES", tmp_path)
+    monkeypatch.setattr(antigravity, "WORKER_WAIT_TIMEOUT", 0.02)
+
+    async def run():
+        backend = antigravity.Antigravity()
+        with antigravity._worker_slot():
+            with pytest.raises(antigravity.WorkerBusy):
+                async with backend.worker(1):
+                    pytest.fail("Account management should still fail fast.")
+            with pytest.raises(antigravity.AntigravityError, match="stayed busy"):
+                async with backend.worker(1, wait=True):
+                    pytest.fail("A timed-out job should never start.")
+
+    asyncio.run(run())

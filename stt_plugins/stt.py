@@ -893,10 +893,15 @@ async def run_stt_job(
         if not util.is_admin_by_id(user_id):
             raise SttRequestError(antigravity.UNAVAILABLE)
         try:
-            raw = await stt_providers.transcribe_antigravity(
-                user_id=user_id, model=job.models[0], attachments=job.attachments,
-                prompt=TRANSCRIPTION_PROMPT, schema=TranscriptionResult,
-            )
+            async with SttProgress(status_message, italics_marker=italics_marker) as progress:
+                raw = await stt_providers.transcribe_antigravity(
+                    user_id=user_id,
+                    model=job.models[0],
+                    attachments=job.attachments,
+                    prompt=TRANSCRIPTION_PROMPT,
+                    schema=TranscriptionResult,
+                    progress=progress.show,
+                )
         except antigravity.AntigravityError as exc:
             raise SttRequestError(str(exc)) from None
         return Transcription(

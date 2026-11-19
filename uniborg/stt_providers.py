@@ -8,6 +8,7 @@ import base64
 import json
 import re
 from dataclasses import dataclass
+from functools import partial
 
 import httpx
 
@@ -205,7 +206,9 @@ async def transcribe_vertex(
     return text
 
 
-async def transcribe_antigravity(*, user_id, model, attachments, prompt, schema):
+async def transcribe_antigravity(
+    *, user_id, model, attachments, prompt, schema, progress=None
+):
     media = []
     byte_count = 0
     for attachment in attachments:
@@ -243,7 +246,12 @@ async def transcribe_antigravity(*, user_id, model, attachments, prompt, schema)
     async def collect(text):
         chunks.append(text)
 
-    async with antigravity.backend.worker(user_id) as client:
+    on_wait = partial(progress, "Waiting for Antigravity") if progress else None
+    async with antigravity.backend.worker(
+        user_id, wait=True, on_wait=on_wait
+    ) as client:
+        if progress:
+            progress("🎙 Transcribing with Google Antigravity")
         session = await client.new_session()
         await client.set_model(session, model, "low")
         await client.prompt(
