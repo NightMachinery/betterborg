@@ -25,10 +25,9 @@ WORKER_BUSY = (
 )
 WORKER_WAIT_TIMEOUT = 15 * 60
 WORKER_POLL_INTERVAL = 0.5
-CONNECT_NEEDED = "Connect your Google account in this bot’s DM with /antigravity_login."
-SHARED_CONNECT_NEEDED = (
-    "Connect Google once in the Chat bot’s DM with /antigravity_login. "
-    "Then return here to use Antigravity."
+CONNECT_NEEDED = (
+    "Connect Google with /antigravity_login in this bot’s DM. "
+    "One sign-in works across Chat, Transcribe, and Imagine."
 )
 UNAVAILABLE = "Antigravity is temporarily unavailable."
 LOGIN_TIMEOUT = 300
@@ -605,7 +604,7 @@ class Antigravity:
             )
         except antigravity_gateway.GatewayError as exc:
             messages = {
-                "login_required": SHARED_CONNECT_NEEDED,
+                "login_required": CONNECT_NEEDED,
                 "worker_busy": WORKER_BUSY,
                 "queue_full": "The Antigravity queue is full. Try again in a moment.",
                 "queue_timeout": "Antigravity stayed busy throughout the wait. Try again.",

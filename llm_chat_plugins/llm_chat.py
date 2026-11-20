@@ -145,7 +145,7 @@ from uniborg import util
 from uniborg import telegram_queue
 from uniborg import llm_db
 from uniborg import llm_util
-from uniborg import antigravity, gemini_providers, vertex_latest
+from uniborg import antigravity, antigravity_telegram, gemini_providers, vertex_latest
 from uniborg.llm_util import (
     AutoDeleteMode,
     AUTO_DELETE_TIME,
@@ -7510,7 +7510,7 @@ def register_handlers():
     )(gemini_provider_handler)
     borg.on(
         events.NewMessage(
-            pattern=rf"(?i)^/antigravity_(login|usage|logout){bot_username_suffix_re}\s*$",
+            pattern=rf"(?i)^/antigravity_(usage|logout){bot_username_suffix_re}\s*$",
             func=lambda e: e.is_private and not e.out,
         )
     )(antigravity_account_handler)
@@ -7782,7 +7782,7 @@ def register_handlers():
     borg.on(events.NewMessage())(codex_user_add_input_handler)
     borg.on(events.NewMessage())(observe_incoming_user_profile)
     borg.on(events.NewMessage(func=_is_chatgpt_login_callback))(chatgpt_login_callback_handler)
-    borg.on(events.NewMessage(func=_is_antigravity_login_callback))(antigravity_callback_handler)
+    antigravity_login.register(borg)
 
     print("LLM_Chat: All event handlers registered.")
 
@@ -8576,10 +8576,7 @@ async def _apply_gemini_provider(event, provider: str) -> bool:
             await send_info_message(event, antigravity.UNAVAILABLE, parse_mode=None)
             return False
         if not antigravity.linked(event.sender_id):
-            try:
-                await _antigravity_login(event)
-            except antigravity.AntigravityError as exc:
-                await send_info_message(event, str(exc), parse_mode=None)
+            await antigravity_login.start(event)
             return False
         user_manager.set_gemini_provider(event.sender_id, provider)
         return True
@@ -8633,28 +8630,20 @@ def _is_provider_login_link(text):
     return chatgpt_plan.is_callback_url(text) or antigravity.is_callback_url(text)
 
 
-ANTIGRAVITY_SIGN_IN_CARDS = TTLCache(maxsize=64, ttl=antigravity.LOGIN_TIMEOUT + 30)
+def _cancel_input_for_antigravity(user_id):
+    if llm_db.is_awaiting_key(user_id):
+        llm_db.cancel_key_flow(user_id)
+    cancel_input_flow(user_id)
 
 
-async def _antigravity_login(event):
-    if llm_db.is_awaiting_key(event.sender_id):
-        llm_db.cancel_key_flow(event.sender_id)
-    cancel_input_flow(event.sender_id)
-    link = await antigravity.backend.start_login(event.sender_id)
-    buttons = [[tg_compat.url_button("Sign in with Google", link.url)]] if IS_BOT else None
-    text = (
-        "Sign in with Google in your browser. When it opens a 127.0.0.1 page, "
-        "copy the full address from the browser and paste it into this DM. "
-        "The page may show a connection error. The link expires in five minutes. "
-        "Betterborg keeps your Google sign-in on its server. "
-        "Use /antigravity_logout to remove it."
-    )
-    if not buttons:
-        text = f"{link.url}\n\n{text}"
-    card = await send_info_message(
-        event, text, buttons=buttons, parse_mode=None, link_preview=False, reply_to=False,
-    )
-    ANTIGRAVITY_SIGN_IN_CARDS[event.sender_id] = card
+def _antigravity_connected(user_id):
+    user_manager.set_gemini_provider(user_id, gemini_providers.ANTIGRAVITY)
+    return "Antigravity is now your Gemini provider here. Send a message or check /antigravity_usage."
+
+
+antigravity_login = antigravity_telegram.TelegramLogin(
+    cancel_input=_cancel_input_for_antigravity, on_connected=_antigravity_connected,
+)
 
 
 async def _show_antigravity_quota(event, markdown):
@@ -8679,9 +8668,6 @@ async def antigravity_account_handler(event):
         return
     action = event.pattern_match.group(1).lower()
     try:
-        if action == "login":
-            await _antigravity_login(event)
-            return
         if action == "logout":
             if not await antigravity.backend.logout(event.sender_id):
                 raise antigravity.AntigravityError("Could not disconnect Google. Please try again.")
@@ -8706,48 +8692,6 @@ async def antigravity_account_handler(event):
     except antigravity.AntigravityError as exc:
         text = str(exc)
     await send_info_message(event, text, parse_mode=None, link_preview=False, reply_to=False)
-
-
-def _is_antigravity_login_callback(event):
-    return event.is_private and not event.out and antigravity.is_callback_url(event.raw_text)
-
-
-async def antigravity_callback_handler(event):
-    completion = (
-        antigravity.backend.accept_callback(event.sender_id, event.raw_text)
-        if _antigravity_admin(event) else None
-    )
-    try:
-        await event.delete()
-    except errors.RPCError:
-        pass
-    if _antigravity_admin(event):
-        linked = await asyncio.shield(completion) if completion is not None else False
-        if linked:
-            user_manager.set_gemini_provider(event.sender_id, gemini_providers.ANTIGRAVITY)
-            note = (
-                "Google Antigravity is now your Gemini provider. Send a message to use "
-                "your plan, choose a model with /setModel, or check /antigravity_usage."
-            )
-        else:
-            note = "Google sign-in could not be completed. Start again with /antigravity_login."
-        card = (
-            ANTIGRAVITY_SIGN_IN_CARDS.pop(event.sender_id, None)
-            if completion is not None else None
-        )
-        if card is not None:
-            try:
-                await card.edit(
-                    BOT_META_INFO_PREFIX + note, buttons=[], parse_mode=None, link_preview=False,
-                )
-            except errors.RPCError:
-                pass
-            else:
-                raise events.StopPropagation
-        if completion is None and antigravity.linked(event.sender_id):
-            note = "Your Google account is connected. Use /antigravity_usage to check your plan."
-        await send_info_message(event, note, parse_mode=None, reply_to=False)
-    raise events.StopPropagation
 
 
 OPENAI_PROVIDER_USAGE = (

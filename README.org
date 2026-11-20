@@ -58,8 +58,8 @@ Gemini models run on Google AI Studio or, per user, on Vertex AI Express mode:
 =/geminiProvider= switches, =/setVertexKey= sets the key. Vertex serves fewer
 models, has no Files API or explicit caching, and live mode stays on AI Studio; see
 [[file:docs/gemini_vertex_chat.md][docs/gemini_vertex_chat.md]].
-Bot admins can use =/antigravity_login= in Chat, then select Google Antigravity
-with =/provider= in Transcribe and Imagine. The three bots share the sign-in.
+Bot admins can use =/antigravity_login= in Chat, Transcribe, or Imagine.
+The three bots share the Google sign-in and each saves its own provider selection.
 See [[file:docs/antigravity_acp.md][the Antigravity pilot]].
 
 GPT Sol and GPT Astra appear once in the model menu. Each user's

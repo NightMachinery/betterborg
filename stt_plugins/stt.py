@@ -11,7 +11,7 @@ from uniborg import tg_raw
 from uniborg import callback_util
 from uniborg import bot_util
 from uniborg import stt_models
-from uniborg import antigravity, stt_providers
+from uniborg import antigravity, antigravity_telegram, stt_providers
 from uniborg.storage import UserStorage
 from uniborg.constants import (
     GEMINI_FLASH_LATEST,
@@ -60,6 +60,7 @@ BOT_COMMANDS = [
         "description": "Choose AI Studio, Vertex AI or Google Antigravity",
     },
     {"command": "antigravity", "description": "Use Google Antigravity for transcription (admins)"},
+    {"command": "antigravity_login", "description": "Connect Google Antigravity in DM (admins)"},
     {"command": "model", "description": "Choose the transcription model"},
     {"command": "settings", "description": "Configure transcription output"},
     {"command": "stop", "description": "Stop a transcription, or all yours privately"},
@@ -784,7 +785,7 @@ def prepare_stt_job(cwd, *, user_id: int, model_choice: Optional[str] = None) ->
     api_key = get_provider_key(user_id, provider)
     if not api_key:
         if provider == stt_providers.ANTIGRAVITY:
-            raise SttRequestError(antigravity.SHARED_CONNECT_NEEDED)
+            raise SttRequestError(antigravity.CONNECT_NEEDED)
         raise MissingSttKeyError(
             f"No {stt_providers.PROVIDERS[provider].label} API key is set."
         )
@@ -1192,6 +1193,19 @@ def _cancel_key_setup(user_id: int) -> None:
     _key_setups.pop(user_id, None)
 
 
+def _antigravity_connected(user_id):
+    try:
+        set_provider_choice(user_id, stt_providers.ANTIGRAVITY)
+    except SttRequestError:
+        return "Run /antigravity to set it as your transcription provider."
+    return "Antigravity is now your transcription provider. Send media to transcribe."
+
+
+antigravity_login = antigravity_telegram.TelegramLogin(
+    cancel_input=_cancel_key_setup, on_connected=_antigravity_connected,
+)
+
+
 def _provider_button(user_id: int, text: str, action: str):
     return tg_compat.callback_button(
         text, f"{PROVIDER_CALLBACK_PREFIX}{user_id}:{action}".encode()
@@ -1240,7 +1254,7 @@ async def _show_provider_panel(event, *, edit=False, welcome=False, keys=False):
         if value == stt_providers.ANTIGRAVITY:
             if not keys and antigravity.private_admin(event) and antigravity.available():
                 marker = "✓ " if value == provider else ""
-                status = "Connected" if has_key else "Sign in via Chat"
+                status = "Connected" if has_key else "Sign in"
                 buttons.append([_provider_button(user_id, f"{marker}{spec.label} · {status}", f"use:{value}")])
             continue
         status = "Key saved" if has_key else "Add key"
@@ -1281,7 +1295,7 @@ async def _start_key_setup(event, provider: str, *, switch: bool) -> None:
     if not await _require_private_setup(event):
         return
     if provider == stt_providers.ANTIGRAVITY:
-        await llm_util.send_info_message(event, antigravity.SHARED_CONNECT_NEEDED, reply_to=False)
+        await llm_util.send_info_message(event, antigravity.CONNECT_NEEDED, reply_to=False)
         return
     user_id = event.sender_id
     _cancel_key_setup(user_id)
@@ -1485,7 +1499,7 @@ async def antigravity_provider_handler(event):
     if not antigravity.private_admin(event) or not antigravity.available():
         text = antigravity.UNAVAILABLE
     elif not get_provider_key(user_id, provider):
-        text = antigravity.SHARED_CONNECT_NEEDED
+        text = antigravity.CONNECT_NEEDED
     else:
         _cancel_key_setup(user_id)
         try:
@@ -1584,7 +1598,8 @@ async def provider_callback_handler(event):
             await event.answer(antigravity.UNAVAILABLE, alert=True)
             return
         if not get_provider_key(event.sender_id, provider):
-            await event.answer(antigravity.SHARED_CONNECT_NEEDED, alert=True)
+            await event.answer()
+            await antigravity_login.start(event)
             return
     if verb == "key" or not get_provider_key(event.sender_id, provider):
         await event.answer()
@@ -1644,7 +1659,8 @@ Here's how to use me:
 - `/setGeminiKey [API_KEY]`: Sets or updates your Gemini API key.
 - `/setVertexKey [API_KEY]`: Sets or updates your Vertex AI Express-mode key.
 - `/provider`: Chooses the transcription provider and manages keys.
-- `/antigravity`: Switches to Google Antigravity for admins. Connect once in the Chat bot with /antigravity_login.
+- `/antigravity`: Switches to Google Antigravity for admins.
+- `/antigravity_login`: Connects Google for Chat, Transcribe, and Imagine.
 - `/model`: Chooses the transcription model.
 - `/settings`: Discards visual descriptions for audio-only media by default; turn this off to keep them.
 - `/stop` or `.stop`: Reply to a transcription or its progress message to stop it, including in guest chats. Without a reply in my private chat, stops all your running transcriptions, including guest jobs. Only you can stop your jobs.
@@ -2000,7 +2016,7 @@ async def guest_stt_handler(query):
         return
     if not get_provider_key(caller_id):
         if provider == stt_providers.ANTIGRAVITY:
-            await _guest_note(query, antigravity.SHARED_CONNECT_NEEDED)
+            await _guest_note(query, antigravity.CONNECT_NEEDED)
             return
         await _guest_note(
             query,
@@ -2095,6 +2111,7 @@ async def register_guest_mode():
 
 
 # --- Initialization ---
+antigravity_login.register(borg)
 # Schedule the command menu setup to run on the bot's event loop upon loading.
 borg.loop.create_task(bot_util.register_bot_commands(borg, BOT_COMMANDS))
 borg.loop.create_task(register_guest_mode())

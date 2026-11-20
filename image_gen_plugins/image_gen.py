@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 # Import uniborg utilities
 from uniborg import (
-    antigravity, gemini_providers, guest_util, llm_util, tg_compat, tg_raw,
+    antigravity, antigravity_telegram, gemini_providers, guest_util, llm_util, tg_compat, tg_raw,
     username_util, util,
 )
 from uniborg import llm_db
@@ -80,6 +80,7 @@ BOT_COMMANDS = [
     {"command": "status", "description": "Show current image generation settings"},
     {"command": "provider", "description": "Choose AI Studio or Google Antigravity"},
     {"command": "antigravity", "description": "Use Google Antigravity for images (admins)"},
+    {"command": "antigravity_login", "description": "Connect Google Antigravity in DM (admins)"},
     {"command": "imagine", "description": "Generate an Antigravity image from a prompt (admins)"},
     {
         "command": "setgeminikey",
@@ -130,7 +131,7 @@ class UserManager:
         return ImageGenPrefs.model_validate(data or {})
 
     def _save_prefs(self, user_id: int, prefs: ImageGenPrefs):
-        self.storage.set(user_id, prefs.model_dump(exclude_defaults=True))
+        return self.storage.set(user_id, prefs.model_dump(exclude_defaults=True))
 
     def set_model(self, user_id: int, model: str):
         prefs = self.get_prefs(user_id)
@@ -140,7 +141,7 @@ class UserManager:
     def set_provider(self, user_id: int, provider: str):
         prefs = self.get_prefs(user_id)
         prefs.provider = provider
-        self._save_prefs(user_id, prefs)
+        return self._save_prefs(user_id, prefs)
 
     def set_size(self, user_id: int, size: str):
         prefs = self.get_prefs(user_id)
@@ -176,6 +177,17 @@ user_manager = UserManager()
 def cancel_input_flow(user_id: int):
     """Cancels any pending input requests for a user."""
     AWAITING_INPUT_FROM_USERS.pop(user_id, None)
+
+
+def _antigravity_connected(user_id):
+    if not user_manager.set_provider(user_id, gemini_providers.ANTIGRAVITY):
+        return "Run /antigravity to set it as your image provider."
+    return "Antigravity is now your image provider. Send a prompt to generate an image."
+
+
+antigravity_login = antigravity_telegram.TelegramLogin(
+    cancel_input=cancel_input_flow, on_connected=_antigravity_connected,
+)
 
 
 # --- Command Handlers ---
@@ -224,7 +236,8 @@ async def help_handler(event):
 
 **Setup:**
 • `/setgeminikey` - Configure API access
-• For Antigravity, connect in the Chat bot with /antigravity_login, then select it here with `/antigravity`
+• `/antigravity_login` - Connect Google for Chat, Transcribe, and Imagine
+• `/antigravity` - Select Google Antigravity here
 
 **Current Model:** Imagen 3.0
 **Safety Settings:** Minimal censoring enabled
@@ -241,7 +254,7 @@ async def status_handler(event):
         await llm_util.send_info_message(
             event, "Google Antigravity\n\n"
             + ("Google account connected. Send a prompt to generate an image." if connected
-               else antigravity.SHARED_CONNECT_NEEDED),
+               else antigravity.CONNECT_NEEDED),
             parse_mode=None,
         )
         return
@@ -395,7 +408,7 @@ async def antigravity_provider_handler(event):
     if not antigravity.private_admin(event) or not antigravity.available():
         text = antigravity.UNAVAILABLE
     elif not antigravity.linked(event.sender_id):
-        text = antigravity.SHARED_CONNECT_NEEDED
+        text = antigravity.CONNECT_NEEDED
     else:
         cancel_input_flow(event.sender_id)
         user_manager.set_provider(event.sender_id, gemini_providers.ANTIGRAVITY)
@@ -423,7 +436,8 @@ async def callback_handler(event):
                 await event.answer(antigravity.UNAVAILABLE, alert=True)
                 return
             if not antigravity.linked(user_id):
-                await event.answer(antigravity.SHARED_CONNECT_NEEDED, alert=True)
+                await event.answer()
+                await antigravity_login.start(event)
                 return
         if prefs.provider != provider:
             user_manager.set_provider(user_id, provider)
@@ -598,7 +612,7 @@ async def _reply_with_antigravity(event, prompt, prefs):
         await llm_util.send_info_message(event, antigravity.UNAVAILABLE, parse_mode=None)
         return
     if not antigravity.linked(event.sender_id):
-        await llm_util.send_info_message(event, antigravity.SHARED_CONNECT_NEEDED, parse_mode=None)
+        await llm_util.send_info_message(event, antigravity.CONNECT_NEEDED, parse_mode=None)
         return
     status = await llm_util.send_info_message(event, "Generating with Google Antigravity…")
     try:
@@ -650,7 +664,7 @@ async def guest_imagine_handler(query):
     elif not antigravity.available():
         note = antigravity.UNAVAILABLE
     elif not antigravity.linked(event.sender_id):
-        note = antigravity.SHARED_CONNECT_NEEDED
+        note = antigravity.CONNECT_NEEDED
     elif not prompt:
         note = "Add an image prompt after the bot mention."
     else:
@@ -844,6 +858,7 @@ def register_handlers():
 
     # Callback handler
     borg.on(events.CallbackQuery())(callback_handler)
+    antigravity_login.register(borg)
 
     print("ImageGen: All event handlers registered.")
 

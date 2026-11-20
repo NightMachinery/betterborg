@@ -7,16 +7,16 @@ exposes to that account. Hydrogen, Neon, and Carbon are in `/setModel`.
 [Google's ACP guidance](https://discuss.ai.google.dev/t/conflicting-guidance-on-using-t3-code-with-personal-google-ai-subscriptions/197131/3)
 [Google's model availability](https://antigravity.google/docs/models)
 
-1. In the Chat bot's DM, choose **Google Antigravity** in `/geminiProvider` or
-   select `/antigravity_login` from the Telegram command menu.
+1. In the DM for Chat, Transcribe, or Imagine, choose **Google Antigravity**
+   in the provider menu or select `/antigravity_login` from the command menu.
 2. Open **Sign in with Google**. After consent, copy the full browser address
-   beginning with `http://127.0.0.1:` and paste it back into the DM. The page
-   may show a connection error. The bot forwards the address to the waiting
-   agent. The sign-in message confirms the connection and Chat selects
-   Antigravity on success.
-3. Send a message in Chat, or select **Google Antigravity** in `/provider` in
-   Transcribe or Imagine. Those bots use the same Google login and keep their
-   own provider selection.
+   beginning with `http://127.0.0.1:` and paste it into the same DM that gave
+   you the link. The page may show a connection error. The bot forwards the
+   address to the waiting agent and confirms the connection in the sign-in
+   message.
+3. The bot where you signed in selects Antigravity. Each of the other bots
+   can use the same Google account as soon as you choose Antigravity from
+   its own provider menu.
 
 Use `/antigravity_usage` in Chat to view the allowance Google reports. This
 queries Google's quota endpoint without a model turn.
@@ -106,10 +106,10 @@ remove `/etc/betterborg-antigravity/enabled` as root and restart the three
 bots together.
 
 Switching from Docker to systemd requires a one-time `/antigravity_login`
-in Chat. The old Docker sign-in is stored in the bot's profile and the new
-worker keeps its credentials under a dedicated Unix account. Once the Chat
-confirmation appears, reopen `/provider` in Transcribe or Imagine to see
-the linked account. A saved Antigravity selection can be used immediately.
+in any of the three bots. The old Docker sign-in is stored in the bot's
+profile and the new worker keeps its credentials under a dedicated Unix
+account. A saved Antigravity selection can be used immediately after the
+sign-in confirmation.
 
 ### Shared server
 

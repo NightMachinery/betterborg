@@ -248,26 +248,49 @@ def test_quota_uses_rich_markdown_and_skips_empty_session():
     asyncio.run(scenario())
 
 
-def test_signin_callback_updates_the_original_card():
+def test_signin_callback_updates_the_original_card_in_the_bot_that_sent_it():
     async def scenario():
+        from uniborg import antigravity_telegram, tg_compat
+
         event = SimpleNamespace(
-            sender_id=7, raw_text=callback_query(), delete=AsyncMock()
+            sender_id=7, chat_id=7, is_private=True, out=False,
+            raw_text=callback_query(), delete=AsyncMock(),
+            client=SimpleNamespace(is_bot=AsyncMock(return_value=True)),
         )
         card = SimpleNamespace(edit=AsyncMock())
         task = asyncio.get_running_loop().create_future()
         task.set_result(True)
+        other_bot = antigravity_telegram.TelegramLogin(
+            cancel_input=lambda _: None, on_connected=lambda _: "Wrong bot.",
+        )
         with (
-            patch.object(plugin, "_antigravity_admin", return_value=True),
-            patch.object(plugin, "ANTIGRAVITY_SIGN_IN_CARDS", {7: card}),
-            patch.object(antigravity.backend, "accept_callback", return_value=task),
+            patch.object(plugin.util, "is_admin_by_id", side_effect=lambda uid: uid == 7),
+            patch.object(antigravity, "linked", return_value=False),
+            patch.object(antigravity.backend, "start_login", AsyncMock(return_value=login_link())) as start,
+            patch.object(antigravity.backend, "accept_callback", return_value=task) as accept,
             patch.object(plugin.user_manager, "set_gemini_provider") as set_provider,
-            pytest.raises(plugin.events.StopPropagation),
+            patch.object(plugin.llm_db, "is_awaiting_key", return_value=False),
+            patch.object(antigravity_telegram.llm_util, "send_info_message", AsyncMock(return_value=card)) as send,
         ):
-            await plugin.antigravity_callback_handler(event)
-        event.delete.assert_awaited_once()
+            await plugin.antigravity_login.start(SimpleNamespace(
+                sender_id=8, chat_id=8, is_private=True, out=False,
+            ))
+            start.assert_not_awaited()
+            await plugin.antigravity_login.start(event)
+            start.assert_awaited_once_with(7)
+            button = send.await_args.kwargs["buttons"][0][0]
+            assert tg_compat.button_url(button) == login_link().url
+            with pytest.raises(plugin.events.StopPropagation):
+                await other_bot.finish(event)
+            accept.assert_not_called()
+            assert "same bot DM" in send.await_args.args[1]
+            with pytest.raises(plugin.events.StopPropagation):
+                await plugin.antigravity_login.finish(event)
+            accept.assert_called_once_with(7, callback_query())
+        assert event.delete.await_count == 2
         set_provider.assert_called_once_with(7, gemini_providers.ANTIGRAVITY)
         card.edit.assert_awaited_once()
-        assert "now your Gemini provider" in card.edit.await_args.args[0]
+        assert "connected across Chat, Transcribe, and Imagine" in card.edit.await_args.args[0]
         assert card.edit.await_args.kwargs["buttons"] == []
 
     asyncio.run(scenario())
