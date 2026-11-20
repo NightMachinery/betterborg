@@ -16100,6 +16100,10 @@ async def guest_chat_handler(query) -> None:
         #: Another item of its album answers for it.
         return
     explicit = _mentions_bot(query)
+    logger.info(
+        "Chat guest context: chat=%s mention=%s caller_present=%s references=%d",
+        query.chat_kind.value, explicit, query.caller_id is not None, len(query.references),
+    )
     if query.caller_id is None:
         if explicit:
             await _guest_note(query, "I can only answer people, not channels.")
@@ -16121,6 +16125,7 @@ async def guest_chat_handler(query) -> None:
     else:
         raise ValueError(f"Unknown guest policy: {policy.policy!r}")
     if refusal is not None:
+        logger.info("Chat guest request declined by policy")
         if explicit:
             await _guest_note(query, refusal)
         return
@@ -16139,10 +16144,12 @@ async def guest_chat_handler(query) -> None:
     try:
         plan = await _plan_guest_request(event, config=config, is_admin=is_admin)
     except GuestRequestRefused as e:
+        logger.info("Chat guest request declined while choosing a provider")
         if explicit:
             await _guest_note(query, str(e))
         return
     if plan.api_key is None:
+        logger.info("Chat guest request has no usable provider credentials")
         await _guest_invite(query, explicit=explicit, policy=policy)
         return
 
@@ -16158,6 +16165,7 @@ async def guest_chat_handler(query) -> None:
         logger.exception("Could not answer guest query %s", query.query_id)
         return
     #: The answer's message is dated now; a reply to it is matched by that.
+    logger.info("Telegram accepted the Chat guest reply for provider %s", plan.service)
     answered_at = time.time()
     async with tg_raw.InlineEditor(borg, inline_id) as editor:
         answer = guest_util.GuestAnswerMessage(editor, logger=logger)

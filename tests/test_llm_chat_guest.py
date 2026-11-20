@@ -281,6 +281,13 @@ class _GuestTestCase(unittest.TestCase):
 
 
 class AnswerTests(_GuestTestCase):
+    def test_a_human_guest_mention_can_reply_to_another_bots_message(self):
+        query = _query(f"{BOT_USERNAME} summarize this", reference_text="A bot transcript")
+        query.references[0]._sender = types.User(id=OTHER, first_name="Transcribe", bot=True)
+        self.run_query(query)
+        self.assertIn("A bot transcript", str(self.request().messages))
+        self.assertEqual(self.edits[-1]["markdown"], self.answer_text)
+
     def test_media_alias_sends_a_rich_profile_with_linked_scores_and_an_inline_image(self):
         self.answer_text = (
             "## Spirited Away (2001)\n\n"
