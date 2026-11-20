@@ -395,18 +395,22 @@ class AntigravityGuestTests(_GuestTestCase):
 
     def test_imagine_generates_only_for_an_explicit_verified_caller(self):
         imagine = importlib.import_module("image_gen_plugins.image_gen")
-        username = BOT_USERNAME
+        prefs = imagine.ImageGenPrefs()
         with (
             patch.object(plugin.util, "is_admin_by_id", side_effect=lambda uid: uid == CALLER),
             patch.object(plugin.antigravity, "available", return_value=True),
             patch.object(plugin.antigravity, "linked", side_effect=lambda uid: uid == CALLER),
-            patch.object(imagine.user_manager, "get_prefs", return_value=imagine.ImageGenPrefs()),
+            patch.object(imagine.user_manager, "get_prefs", return_value=prefs),
             patch.object(plugin.antigravity, "generate_images", AsyncMock(return_value=[(PNG, "png")])) as image,
         ):
             asyncio.run(imagine.guest_imagine_handler(_query("draw a circle")))
-            asyncio.run(imagine.guest_imagine_handler(_query(f"{username} draw a circle", caller=OTHER)))
+            asyncio.run(imagine.guest_imagine_handler(_query(f"{BOT_USERNAME} draw a circle", caller=OTHER)))
+            self.assertEqual(self.answers, [])
+            asyncio.run(imagine.guest_imagine_handler(_query(f"{BOT_USERNAME} draw a circle")))
+            self.assertIn("/antigravity", self.answers[-1].text)
             image.assert_not_awaited()
-            asyncio.run(imagine.guest_imagine_handler(_query(f"{username} draw a circle")))
+            prefs.provider = imagine.gemini_providers.ANTIGRAVITY
+            asyncio.run(imagine.guest_imagine_handler(_query(f"{BOT_USERNAME} draw a circle", query_id=2)))
         image.assert_awaited_once_with(CALLER, "draw a circle", aspect_ratio="1:1")
         self.assertEqual(self.edits[-1]["media"], "photo:antigravity.png")
 

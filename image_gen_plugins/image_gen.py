@@ -31,6 +31,7 @@ from uniborg.constants import BOT_META_INFO_PREFIX
 DEFAULT_MODEL = "imagen-3.0-generate-001"
 ANTIGRAVITY_IMAGINE_GROUPS = True
 ANTIGRAVITY_IMAGINE_GUESTS = True
+SELECT_ANTIGRAVITY = "Select Google Antigravity with /antigravity in this bot’s DM."
 
 # Logging configuration
 LOG_DIR = Path(os.path.expanduser("~/.borg/image_gen/log/"))
@@ -622,7 +623,11 @@ async def imagine_command_handler(event):
         return
     if antigravity.is_callback_url(prompt):
         return
-    await _reply_with_antigravity(event, prompt, user_manager.get_prefs(event.sender_id))
+    prefs = user_manager.get_prefs(event.sender_id)
+    if prefs.provider != gemini_providers.ANTIGRAVITY:
+        await llm_util.send_info_message(event, SELECT_ANTIGRAVITY, parse_mode=None)
+        return
+    await _reply_with_antigravity(event, prompt, prefs)
 
 
 _guest_claims = guest_util.QueryClaims()
@@ -639,7 +644,10 @@ async def guest_imagine_handler(query):
     if prompt.startswith("/") or antigravity.is_callback_url(prompt):
         return
     title = borg.me.first_name or "Imagine"
-    if not antigravity.available():
+    prefs = user_manager.get_prefs(event.sender_id)
+    if prefs.provider != gemini_providers.ANTIGRAVITY:
+        note = SELECT_ANTIGRAVITY
+    elif not antigravity.available():
         note = antigravity.UNAVAILABLE
     elif not antigravity.linked(event.sender_id):
         note = antigravity.SHARED_CONNECT_NEEDED
@@ -656,7 +664,6 @@ async def guest_imagine_handler(query):
     async with tg_raw.InlineEditor(borg, inline_id) as editor:
         answer = guest_util.GuestAnswerMessage(editor)
         try:
-            prefs = user_manager.get_prefs(event.sender_id)
             [(data, extension)] = await antigravity.generate_images(
                 event.sender_id, prompt, aspect_ratio=prefs.aspect_ratio,
             )

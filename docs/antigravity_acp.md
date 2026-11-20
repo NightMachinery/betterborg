@@ -32,8 +32,8 @@ queries Google's quota endpoint without a model turn.
   Allowlisted admins can also request a transcription in groups and via a
   guest mention. `ANTIGRAVITY_STT_GROUPS` and `ANTIGRAVITY_STT_GUESTS` in
   [the Transcribe plugin](../stt_plugins/stt.py) toggle those separately.
-- **Imagine** uses Antigravity's native image tool. Use `/antigravity` in
-  its DM. In groups, admins use `/imagine` followed by a prompt. In guest
+- **Imagine** uses Antigravity's native image tool. Select it with
+  `/antigravity` in its DM. In groups, admins use `/imagine` followed by a prompt. In guest
   chats, mention Imagine with a prompt to receive one image. Use the
   `ANTIGRAVITY_IMAGINE_GROUPS` and `ANTIGRAVITY_IMAGINE_GUESTS` switches in
   [the Imagine plugin](../image_gen_plugins/image_gen.py) to control those
