@@ -16274,6 +16274,7 @@ async def guest_chat_handler(query) -> None:
     An album's queries are answered once, by the one that mentions the bot,
     else the first item (`_guest_albums`).
     """
+    logger.info("Chat received a Telegram guest query")
     query = await _guest_albums.collect(query, prefer=_mentions_bot)
     if query is None:
         #: Another item of its album answers for it.
@@ -16376,6 +16377,11 @@ def register_guest_handlers():
     )
     if registered is None:
         return
+    logger.info(
+        "Chat Telegram Guest Mode enabled: %s (active usernames: %s)",
+        bool(getattr(getattr(borg, "me", None), "bot_guestchat", False)),
+        ", ".join(_bot_usernames()) or "none",
+    )
     _restart_background_task(
         GUEST_MEDIA_CLEANUP_ATTRIBUTE, _guest_media.cleanup_forever()
     )
