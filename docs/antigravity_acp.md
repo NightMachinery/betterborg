@@ -7,8 +7,8 @@ exposes to that account. Hydrogen, Neon, and Carbon are in `/setModel`.
 [Google's ACP guidance](https://discuss.ai.google.dev/t/conflicting-guidance-on-using-t3-code-with-personal-google-ai-subscriptions/197131/3)
 [Google's model availability](https://antigravity.google/docs/models)
 
-1. In the Chat bot's DM, choose **Google Antigravity** in `/geminiProvider` or send
-   `/antigravity_login`.
+1. In the Chat bot's DM, choose **Google Antigravity** in `/geminiProvider` or
+   select `/antigravity_login` from the Telegram command menu.
 2. Open **Sign in with Google**. After consent, copy the full browser address
    beginning with `http://127.0.0.1:` and paste it back into the DM. The page
    may show a connection error. The bot forwards the address to the waiting
@@ -22,14 +22,22 @@ Use `/antigravity_usage` in Chat to view the allowance Google reports. This
 queries Google's quota endpoint without a model turn.
 
 - **Chat** uses the model you select. Send `.i` followed by a prompt to
-  request an image through Antigravity.
+  request an image through Antigravity. Allowlisted admins can use it in
+  DMs, groups, and guest chats. `ANTIGRAVITY_CHAT_GROUPS` and
+  `ANTIGRAVITY_CHAT_GUESTS` in [the Chat plugin](../llm_chat_plugins/llm_chat.py)
+  toggle group and guest use independently.
 - **Transcribe** uses Gemini 3.8 Flash for audio, the sound from video,
   and OCR for JPEG, PNG, and WebP. The total inline media limit is 12 MiB.
+  Use `/antigravity` to select it directly in Transcribe.
   Allowlisted admins can also request a transcription in groups and via a
   guest mention. `ANTIGRAVITY_STT_GROUPS` and `ANTIGRAVITY_STT_GUESTS` in
   [the Transcribe plugin](../stt_plugins/stt.py) toggle those separately.
-- **Imagine** uses Antigravity's native image tool. Number and aspect ratio
-  are passed as prompt instructions. The agent returns images inline through ACP.
+- **Imagine** uses Antigravity's native image tool. Use `/antigravity` in
+  its DM. In groups, admins use `/imagine` followed by a prompt. In guest
+  chats, mention Imagine with a prompt to receive one image. Use the
+  `ANTIGRAVITY_IMAGINE_GROUPS` and `ANTIGRAVITY_IMAGINE_GUESTS` switches in
+  [the Imagine plugin](../image_gen_plugins/image_gen.py) to control those
+  entry points. Telegram's Guest Mode must also be enabled for the bot.
 
 Betterborg stores Google's reusable grant in a private profile for the signed-in
 Telegram account. `/antigravity_logout` removes the local grant and switches
@@ -97,10 +105,11 @@ the backend on hosts without the installer configuration. For a rollback,
 remove `/etc/betterborg-antigravity/enabled` as root and restart the three
 bots together.
 
-During an initial switch, sign in once in the Chat bot to create a shared
-systemd profile. The service keeps it under its own Unix account. The
-existing Docker profile remains in its original location and can be used
-again on rollback.
+Switching from Docker to systemd requires a one-time `/antigravity_login`
+in Chat. The old Docker sign-in is stored in the bot's profile and the new
+worker keeps its credentials under a dedicated Unix account. Once the Chat
+confirmation appears, reopen `/provider` in Transcribe or Imagine to see
+the linked account. A saved Antigravity selection can be used immediately.
 
 ### Shared server
 

@@ -13,7 +13,7 @@ import builtins
 import datetime
 import importlib
 import logging
-from contextlib import ExitStack
+from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -357,6 +357,58 @@ class AnswerTests(_GuestTestCase):
         self.run_query(_query(f"{BOT_USERNAME} hi"))
 
         self.assertIn("no answer", self.edits[-1]["markdown"])
+
+
+_generate_response = plugin._generate_response
+
+
+class AntigravityGuestTests(_GuestTestCase):
+    def test_signed_in_admin_can_get_text_and_images(self):
+        client = SimpleNamespace(new_session=AsyncMock(), set_model=AsyncMock())
+
+        async def prompt(_text, show):
+            await show("Antigravity reply")
+            return {"stopReason": "end_turn"}
+
+        @asynccontextmanager
+        async def worker(user_id):
+            self.assertEqual(user_id, CALLER)
+            yield client
+
+        client.prompt = AsyncMock(side_effect=prompt)
+        with (
+            patch.object(plugin, "_generate_response", _generate_response),
+            patch.object(plugin.user_manager, "get_gemini_provider", return_value="antigravity"),
+            patch.object(plugin.util, "is_admin_by_id", side_effect=lambda uid: uid == CALLER),
+            patch.object(plugin.antigravity, "available", return_value=True),
+            patch.object(plugin.antigravity, "linked", side_effect=lambda uid: uid == CALLER),
+            patch.object(plugin.antigravity.backend, "turn_worker", worker),
+            patch.object(plugin.antigravity, "generate_images", AsyncMock(return_value=[(PNG, "png")])) as image,
+        ):
+            self.run_query(_query(f"{BOT_USERNAME} say hello"))
+            self.assertEqual(self.edits[-1]["markdown"], "Antigravity reply")
+            self.run_query(_query(f"{BOT_USERNAME} .i draw a blue circle", query_id=2))
+            self.assertTrue(any(edit.get("media") for edit in self.edits))
+            self.assertEqual(image.await_args.args[0], CALLER)
+            self.assertIn("draw a blue circle", image.await_args.args[1])
+        client.prompt.assert_awaited_once()
+
+    def test_imagine_generates_only_for_an_explicit_verified_caller(self):
+        imagine = importlib.import_module("image_gen_plugins.image_gen")
+        username = BOT_USERNAME
+        with (
+            patch.object(plugin.util, "is_admin_by_id", side_effect=lambda uid: uid == CALLER),
+            patch.object(plugin.antigravity, "available", return_value=True),
+            patch.object(plugin.antigravity, "linked", side_effect=lambda uid: uid == CALLER),
+            patch.object(imagine.user_manager, "get_prefs", return_value=imagine.ImageGenPrefs()),
+            patch.object(plugin.antigravity, "generate_images", AsyncMock(return_value=[(PNG, "png")])) as image,
+        ):
+            asyncio.run(imagine.guest_imagine_handler(_query("draw a circle")))
+            asyncio.run(imagine.guest_imagine_handler(_query(f"{username} draw a circle", caller=OTHER)))
+            image.assert_not_awaited()
+            asyncio.run(imagine.guest_imagine_handler(_query(f"{username} draw a circle")))
+        image.assert_awaited_once_with(CALLER, "draw a circle", aspect_ratio="1:1")
+        self.assertEqual(self.edits[-1]["media"], "photo:antigravity.png")
 
 
 class _ImageGenerationCase(_GuestTestCase):

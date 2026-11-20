@@ -41,10 +41,7 @@ from datetime import datetime
 from pathlib import Path
 from telethon import errors, events
 from telethon.extensions import markdown as telethon_markdown
-from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.types import (
-    BotCommand,
-    BotCommandScopeDefault,
     MessageMediaUnsupported,
     MessageMediaWebPage,
 )
@@ -60,8 +57,9 @@ BOT_COMMANDS = [
     {"command": "setvertexkey", "description": "Set or update your Vertex AI API key"},
     {
         "command": "provider",
-        "description": "Choose the transcription provider and manage keys",
+        "description": "Choose AI Studio, Vertex AI or Google Antigravity",
     },
+    {"command": "antigravity", "description": "Use Google Antigravity for transcription (admins)"},
     {"command": "model", "description": "Choose the transcription model"},
     {"command": "settings", "description": "Configure transcription output"},
     {"command": "stop", "description": "Stop a transcription, or all yours privately"},
@@ -1173,28 +1171,6 @@ def _job_title_generator(job: SttJob, user_id: int):
     return generate
 
 
-async def set_bot_menu_commands():
-    """
-    Sets the bot's command menu in Telegram's UI.
-    This should be called once after the client has started.
-    """
-    print("STT: setting bot commands ...")
-    try:
-        await asyncio.sleep(5)
-        await borg(
-            SetBotCommandsRequest(
-                scope=BotCommandScopeDefault(),
-                lang_code="en",
-                commands=[
-                    BotCommand(c["command"], c["description"]) for c in BOT_COMMANDS
-                ],
-            )
-        )
-        print("STT: Bot command menu has been updated.")
-    except Exception as e:
-        print(f"STT: Failed to set bot commands: {e}")
-
-
 # --- Telethon Event Handlers ---
 
 PROCESSED_GROUP_IDS = set()
@@ -1500,6 +1476,27 @@ async def provider_handler(event):
         await _show_provider_panel(event)
 
 
+@borg.on(events.NewMessage(pattern=r"(?i)^/antigravity(?:@\w+)?\s*$"))
+async def antigravity_provider_handler(event):
+    if not await _require_private_setup(event):
+        return
+    user_id = event.sender_id
+    provider = stt_providers.ANTIGRAVITY
+    if not antigravity.private_admin(event) or not antigravity.available():
+        text = antigravity.UNAVAILABLE
+    elif not get_provider_key(user_id, provider):
+        text = antigravity.SHARED_CONNECT_NEEDED
+    else:
+        _cancel_key_setup(user_id)
+        try:
+            set_provider_choice(user_id, provider)
+        except SttRequestError as exc:
+            text = str(exc)
+        else:
+            text = "Using Google Antigravity. Send media to transcribe."
+    await llm_util.send_info_message(event, text, parse_mode=None, reply_to=False)
+
+
 async def _show_settings_panel(event, *, edit=False):
     enabled = get_discard_audio_visuals(event.sender_id)
     text = (
@@ -1646,7 +1643,8 @@ Here's how to use me:
 - `/help`: Shows this help message.
 - `/setGeminiKey [API_KEY]`: Sets or updates your Gemini API key.
 - `/setVertexKey [API_KEY]`: Sets or updates your Vertex AI Express-mode key.
-- `/provider`: Chooses Google AI Studio or Vertex AI and manages keys.
+- `/provider`: Chooses the transcription provider and manages keys.
+- `/antigravity`: Switches to Google Antigravity for admins. Connect once in the Chat bot with /antigravity_login.
 - `/model`: Chooses the transcription model.
 - `/settings`: Discards visual descriptions for audio-only media by default; turn this off to keep them.
 - `/stop` or `.stop`: Reply to a transcription or its progress message to stop it, including in guest chats. Without a reply in my private chat, stops all your running transcriptions, including guest jobs. Only you can stop your jobs.
@@ -2098,6 +2096,6 @@ async def register_guest_mode():
 
 # --- Initialization ---
 # Schedule the command menu setup to run on the bot's event loop upon loading.
-borg.loop.create_task(set_bot_menu_commands())
+borg.loop.create_task(bot_util.register_bot_commands(borg, BOT_COMMANDS))
 borg.loop.create_task(register_guest_mode())
 vertex_latest.start(borg.loop)

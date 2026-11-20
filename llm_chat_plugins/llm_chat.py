@@ -48,8 +48,6 @@ from google.api_core import exceptions as google_exceptions
 from telethon import events, errors
 from telethon.tl.functions.messages import GetMessagesReactionsRequest
 from telethon.tl.types import (
-    BotCommand,
-    BotCommandScopeDefault,
     Message,
     MessageActionRequestedPeerSentMe,
     MessageMediaUnsupported,
@@ -1279,6 +1277,9 @@ BOT_COMMANDS = [
         "command": "geminiprovider",
         "description": "Choose where to run Gemini models",
     },
+    {"command": "antigravity_login", "description": "Connect Google Antigravity in DM (admins)"},
+    {"command": "antigravity_usage", "description": "Check your Google Antigravity quota (admins)"},
+    {"command": "antigravity_logout", "description": "Disconnect Google Antigravity in DM (admins)"},
     {
         "command": "openaiprovider",
         "description": "Run GPT models on your OpenAI key, Codex or OpenRouter",
@@ -1287,6 +1288,8 @@ BOT_COMMANDS = [
     {"command": "chatgpt_quickstart_fa", "description": "راهنمای راه‌اندازی و آزمایش اشتراک ChatGPT"},
     {"command": "chatgpt_login", "description": "Connect your ChatGPT account"},
     {"command": "chatgpt_login_fa", "description": "اتصال حساب ChatGPT"},
+    {"command": "codex_login", "description": "Connect your ChatGPT plan to Codex with a device code"},
+    {"command": "chatgpt_logout", "description": "Disconnect your linked ChatGPT account"},
     {
         "command": "keys",
         "description": "Order your API keys and see the keys you share",
@@ -1427,7 +1430,7 @@ BOT_COMMANDS = [
 CODEX_USERS_COMMAND = ".codex-users"
 # Create a set of command strings (e.g., {"/start", "/help"}) for efficient lookup
 KNOWN_COMMAND_SET = {f"/{cmd['command']}".lower() for cmd in BOT_COMMANDS} | {
-    "/antigravity_login", "/antigravity_usage", "/antigravity_logout",
+    "/codex_login_fa", "/chatgpt_preview_login", "/chatgpt_preview_login_fa",
 }
 #: KNOWN_STRICT_COMMANDS will be skipped when constructing the message history only if the whole text of message equals them. KNOWN_COMMAND_SET only checks if the first word of the message is a command.
 KNOWN_STRICT_COMMANDS = {
@@ -8495,6 +8498,16 @@ def _antigravity_admin(event) -> bool:
     return antigravity.private_admin(event)
 
 
+ANTIGRAVITY_CHAT_GROUPS = True
+ANTIGRAVITY_CHAT_GUESTS = True
+
+
+def _antigravity_turn_allowed(event) -> bool:
+    return antigravity.turn_allowed(
+        event, groups=ANTIGRAVITY_CHAT_GROUPS, guests=ANTIGRAVITY_CHAT_GUESTS,
+    )
+
+
 def _gemini_provider_menu_text(user_id: int, *, antigravity_p=False) -> str:
     current = user_manager.get_gemini_provider(user_id)
 
@@ -14775,7 +14788,7 @@ async def _generate_streamed(
 
 async def _generate_antigravity_response(req: GenerationRequest) -> GenerationResult:
     user_id = req.event.sender_id
-    if req.surface is not GenerationSurface.CHAT or not _antigravity_admin(req.event):
+    if not _antigravity_turn_allowed(req.event):
         raise antigravity.AntigravityError(antigravity.UNAVAILABLE)
     instructions, prompt = antigravity.conversation_text(req.messages)
     reasoning = _get_effective_reasoning(
@@ -14792,6 +14805,14 @@ async def _generate_antigravity_response(req: GenerationRequest) -> GenerationRe
         await editor.show("".join(chunks))
 
     async def run():
+        if req.image_generation:
+            for data, extension in await antigravity.generate_images(user_id, prompt):
+                if not await _send_image_to_telegram(
+                    req.event, data, file_extension=f".{extension}",
+                    response_message=req.response_message,
+                ):
+                    raise antigravity.AntigravityError("Telegram could not deliver the generated image.")
+            return {"stopReason": "end_turn"}
         async with antigravity.backend.turn_worker(user_id) as client:
             session = await client.new_session(
                 instructions=instructions, search="googleSearch" in req.prefs.enabled_tools,
@@ -14805,10 +14826,11 @@ async def _generate_antigravity_response(req: GenerationRequest) -> GenerationRe
         result = await task
     except antigravity.AntigravityError as exc:
         note = f"{BOT_META_INFO_PREFIX}❌ {exc}"
-        await util.edit_message(
-            req.response_message, "\n\n".join(filter(None, ("".join(chunks), note))),
-            parse_mode=None,
-        )
+        text = "\n\n".join(filter(None, ("".join(chunks), note)))
+        if req.surface is GenerationSurface.GUEST:
+            await _finalize_guest_answer(req.response_message, text)
+        else:
+            await util.edit_message(req.response_message, text, parse_mode=None)
         return _ALREADY_DELIVERED
     finally:
         remove_active_llm_task(user_id, task)
@@ -14817,7 +14839,7 @@ async def _generate_antigravity_response(req: GenerationRequest) -> GenerationRe
     return GenerationResult(
         text="".join(chunks),
         finish_reason=result.get("stopReason"),
-        has_image=False,
+        has_image=req.image_generation,
         reasoning_level=reasoning.level,
         usage=codex_util.TokenUsage(
             input_tokens=usage.get("inputTokens", 0) + cached,
@@ -15285,7 +15307,7 @@ def _record_usage(
 
 
 async def _antigravity_image_reply(event, prompt):
-    if not _antigravity_admin(event) or not antigravity.available():
+    if not _antigravity_turn_allowed(event) or not antigravity.available():
         await send_info_message(event, antigravity.UNAVAILABLE, parse_mode=None)
         return
     if not antigravity.linked(event.sender_id):
@@ -15473,7 +15495,7 @@ async def _chat_handler(
     service_needed = _gemini_chat_service(user_id, model_in_use, service_needed)
     agy_p = service_needed == gemini_providers.ANTIGRAVITY
     if agy_p:
-        if not _antigravity_admin(event) or not antigravity.available():
+        if not _antigravity_turn_allowed(event) or not antigravity.available():
             await send_info_message(event, antigravity.UNAVAILABLE, parse_mode=None)
             return
         if is_native_gemini_image_generation(model_in_use):
@@ -15856,7 +15878,13 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
         event.text or "", admin_p=is_admin, codex_p=codex_p
     )
     prefix_model = prefix.model
-    if prefix.image_generation:
+    agy_image = (
+        prefix.image_generation and prefix_model is None
+        and user_manager.get_gemini_provider(user_id) == gemini_providers.ANTIGRAVITY
+    )
+    if agy_image:
+        prefix_model = GEMINI_FLASH_LATEST
+    elif prefix.image_generation:
         try:
             prefix_model = await _image_generation_model(
                 event, config=config, prefix_model=prefix.model
@@ -15881,7 +15909,10 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
         user_id, request.model, request.service
     )
     if service == gemini_providers.ANTIGRAVITY:
-        raise GuestRequestRefused("Antigravity is available in the bot’s DM.")
+        if not _antigravity_turn_allowed(event) or not antigravity.available():
+            raise GuestRequestRefused(antigravity.UNAVAILABLE)
+        if is_native_gemini_image_generation(request.model):
+            raise GuestRequestRefused("Use .i without a model prefix for Antigravity images.")
     vertex_refusal = _vertex_refusal(request.model, service)
     if vertex_refusal:
         raise GuestRequestRefused(vertex_refusal)
@@ -15891,6 +15922,10 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
     if service == openai_providers.CHATGPT_PLAN and keyed.api_key is None:
         raise GuestRequestRefused(chatgpt_plan.CONNECT_NEEDED)
     capabilities = get_model_capabilities(request.model)
+    if service == gemini_providers.ANTIGRAVITY:
+        if keyed.api_key is None:
+            raise GuestRequestRefused(antigravity.CONNECT_NEEDED)
+        capabilities = dict.fromkeys(capabilities, False)
     if service == openai_providers.CHATGPT_PLAN and chatgpt_plan.device_linked(user_id):
         capabilities["vision"] = True
     return GuestRequestPlan(

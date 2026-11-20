@@ -27,7 +27,8 @@ WORKER_WAIT_TIMEOUT = 15 * 60
 WORKER_POLL_INTERVAL = 0.5
 CONNECT_NEEDED = "Connect your Google account in this bot’s DM with /antigravity_login."
 SHARED_CONNECT_NEEDED = (
-    "Run /antigravity_login in the Chat bot, then choose Antigravity here."
+    "Connect Google once in the Chat bot’s DM with /antigravity_login. "
+    "Then return here to use Antigravity."
 )
 UNAVAILABLE = "Antigravity is temporarily unavailable."
 LOGIN_TIMEOUT = 300
@@ -91,6 +92,20 @@ def private_admin(event):
         and user_id > 0
         and getattr(event, "chat_id", None) == user_id
         and is_admin_by_id(user_id)
+    )
+
+
+def turn_allowed(event, *, groups, guests):
+    from uniborg import guest_util, util
+
+    if event.is_private:
+        return private_admin(event)
+    allowed = guests if guest_util.is_guest_event(event) else groups and event.is_group
+    user_id = event.sender_id
+    return bool(
+        allowed and not event.out and type(user_id) is int and user_id > 0
+        and guest_util.caller_id_of(event.message) == user_id
+        and util.is_admin_by_id(user_id)
     )
 
 

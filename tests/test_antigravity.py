@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 from urllib.parse import urlencode
 
 import pytest
+from telethon.tl.types import PeerChannel, PeerUser
 from test_llm_chat_vertex import plugin
 
 from uniborg import antigravity, gemini_providers
@@ -142,6 +143,26 @@ def test_an_admin_must_use_their_own_private_chat():
                 )
                 is allowed
             )
+
+
+@pytest.mark.parametrize("guest", [False, True])
+def test_chat_turn_requires_a_verified_admin_sender(monkeypatch, guest):
+    monkeypatch.setattr(plugin.util, "is_admin_by_id", lambda uid: uid == 7)
+    event = SimpleNamespace(
+        is_private=False, is_group=True, is_guest=guest, out=False,
+        sender_id=7, message=SimpleNamespace(from_id=PeerUser(7)),
+    )
+    assert plugin._antigravity_turn_allowed(event)
+    assert not plugin._antigravity_admin(event)
+    event.message.from_id = PeerChannel(7)
+    assert not plugin._antigravity_turn_allowed(event)
+    event.message.from_id = PeerUser(8)
+    event.sender_id = 8
+    assert not plugin._antigravity_turn_allowed(event)
+    event.message.from_id = PeerUser(7)
+    event.sender_id = 7
+    monkeypatch.setattr(plugin, "ANTIGRAVITY_CHAT_GUESTS" if guest else "ANTIGRAVITY_CHAT_GROUPS", False)
+    assert not plugin._antigravity_turn_allowed(event)
 
 
 def test_antigravity_dispatch_has_no_key_fallback():

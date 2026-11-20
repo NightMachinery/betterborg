@@ -44,13 +44,16 @@ async def register_bot_commands(borg, commands: list[dict]):
     try:
         # Wait a moment for the client to be fully ready
         await asyncio.sleep(5)
-        await borg(
-            SetBotCommandsRequest(
-                scope=BotCommandScopeDefault(),
-                lang_code="en",
-                commands=[BotCommand(c["command"], c["description"]) for c in commands],
+        entries = [BotCommand(c["command"], c["description"]) for c in commands]
+        # Update the existing English menu as well as the fallback for every locale.
+        for lang_code in ("", "en"):
+            await borg(
+                SetBotCommandsRequest(
+                    scope=BotCommandScopeDefault(),
+                    lang_code=lang_code,
+                    commands=entries,
+                )
             )
-        )
         print("Bot_Util: Bot command menu has been successfully updated.")
     except Exception as e:
         print(f"Bot_Util: Failed to set bot commands: {e}")

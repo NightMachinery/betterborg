@@ -8,7 +8,7 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import urlencode
 
 from uniborg import codex_util, guest_util, openai_providers
 from uniborg.constants import GPT_ASTRA, GPT_SOL, OPENAI_CODEX_SOL, OR_OPENAI_SOL
@@ -164,7 +164,7 @@ class GenerationTests(unittest.TestCase):
         stream = AsyncMock(return_value=codex_util.CodexResponse(text="hello"))
         request = self._request(model="chatgpt-plan/gpt-sol-latest")
         request.prefs.enabled_tools = ["googleSearch"]
-        with patch.object(plugin.chatgpt_plan, "access_token", return_value="pilot") as get:
+        with patch.object(plugin.chatgpt_plan, "credentials", return_value=("pilot", None)) as get:
             result, _ = self.run_generation(request, stream)
         self.assertEqual(result.text, "hello")
         get.assert_called_once_with(request.event.sender_id)
@@ -180,7 +180,7 @@ class GenerationTests(unittest.TestCase):
             usage_limit=codex_util.CodexUsageLimit(plan_type="pro"),
         )
         stream = AsyncMock(side_effect=error)
-        with patch.object(plugin.chatgpt_plan, "access_token", return_value="pilot"):
+        with patch.object(plugin.chatgpt_plan, "credentials", return_value=("pilot", None)):
             result, edit = self.run_generation(
                 self._request(model="chatgpt-plan/gpt-sol-latest"), stream
             )
@@ -284,6 +284,22 @@ class ProviderMenuTests(unittest.TestCase):
 
 
 class ChatGPTQuickstartTests(unittest.IsolatedAsyncioTestCase):
+    async def test_account_commands_are_published_for_english_and_default_locale(self):
+        borg = AsyncMock()
+        borg.is_bot.return_value = True
+        with patch.object(plugin.bot_util.asyncio, "sleep", AsyncMock()):
+            await plugin.bot_util.register_bot_commands(borg, plugin.BOT_COMMANDS)
+
+        requests = [call.args[0] for call in borg.await_args_list]
+        self.assertEqual({request.lang_code for request in requests}, {"", "en"})
+        commands = {
+            "antigravity_login", "antigravity_usage", "antigravity_logout",
+            "chatgpt_login", "chatgpt_login_fa", "chatgpt_logout", "codex_login",
+            "chatgpt_quickstart", "chatgpt_quickstart_fa",
+        }
+        for request in requests:
+            self.assertLessEqual(commands, {entry.command for entry in request.commands})
+
     async def test_quickstart_links_to_telegram_login_in_both_languages(self):
         event = SimpleNamespace(
             sender_id=USER_ID,
@@ -318,21 +334,26 @@ class ChatGPTQuickstartTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(plugin._is_known_command("/ChatGPT_Login_fa"))
 
     async def test_connect_button_starts_browser_sign_in_without_a_shell(self):
-        event = SimpleNamespace(sender_id=USER_ID, is_private=True, answer=AsyncMock())
-        login = plugin.chatgpt_plan.Login(
-            USER_ID, {}, {"state": "pending"}, "verifier"
+        event = SimpleNamespace(
+            sender_id=USER_ID, chat_id=USER_ID, is_private=True, out=False,
+            answer=AsyncMock(),
         )
-        with patch.object(plugin, "IS_BOT", True), patch.object(
-            plugin, "CHATGPT_PENDING_LOGINS", {}
-        ) as pending, patch.object(
-            plugin.chatgpt_plan, "start_login", return_value=login
-        ) as start, patch.object(plugin, "send_info_message", AsyncMock()) as send:
+        login = SimpleNamespace(user_code="TEST-1234")
+        card = SimpleNamespace(edit=AsyncMock())
+        with patch.object(plugin, "CODEX_DEVICE_LOGINS", {}) as pending, patch.object(
+            plugin.codex_device, "start", AsyncMock(return_value=login)
+        ) as start, patch.object(plugin.codex_device, "complete", AsyncMock()) as complete, patch.object(
+            plugin, "send_info_message", AsyncMock(return_value=card)
+        ) as send, patch.object(plugin.user_manager, "set_openai_provider") as select:
             await plugin._chatgpt_quickstart_press(event, f"{USER_ID}:en:connect")
-        start.assert_called_once_with(USER_ID)
-        self.assertIs(pending[USER_ID][1], login)
+            await pending[USER_ID]
+        start.assert_awaited_once_with(USER_ID)
+        complete.assert_awaited_once_with(login)
+        select.assert_called_once_with(USER_ID, openai_providers.CHATGPT_PLAN)
+        self.assertIn(login.user_code, send.await_args.args[1])
         url = plugin.tg_compat.button_url(send.await_args.kwargs["buttons"][0][0])
-        self.assertEqual(urlsplit(url).hostname, "auth.openai.com")
-        self.assertEqual(parse_qs(urlsplit(url).query)["redirect_uri"], [login.telegram_redirect])
+        self.assertEqual(url, plugin.codex_device.DEVICE_URL)
+        card.edit.assert_awaited_once()
 
     async def test_return_link_only_completes_the_correct_users_login_once(self):
         login = plugin.chatgpt_plan.Login(

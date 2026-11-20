@@ -103,6 +103,21 @@ class ProviderWorkflowTests(unittest.IsolatedAsyncioTestCase):
             text="",
         )
 
+    async def test_antigravity_shortcut_requires_the_admins_shared_login(self):
+        event = self.event()
+        event.chat_id = event.sender_id
+        with (
+            patch.object(stt.util, "is_admin_by_id", side_effect=lambda uid: uid == 7),
+            patch.object(stt.antigravity, "available", return_value=True),
+            patch.object(stt.antigravity, "linked", return_value=False) as linked,
+        ):
+            await stt.antigravity_provider_handler(event)
+            self.assertIn("/antigravity_login", self.info.await_args.args[1])
+            self.assertEqual(stt.get_provider_choice(7), "gemini")
+            linked.return_value = True
+            await stt.antigravity_provider_handler(event)
+            self.assertEqual(stt.get_provider_choice(7), stt_providers.ANTIGRAVITY)
+
     async def test_audio_visual_setting_defaults_on_and_preserves_other_preferences(
         self,
     ):

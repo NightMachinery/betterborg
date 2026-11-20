@@ -17,7 +17,10 @@ from telethon.tl.types import Message
 from pydantic import BaseModel, Field
 
 # Import uniborg utilities
-from uniborg import antigravity, gemini_providers, llm_util, tg_compat, util
+from uniborg import (
+    antigravity, gemini_providers, guest_util, llm_util, tg_compat, tg_raw,
+    username_util, util,
+)
 from uniborg import llm_db
 from uniborg import bot_util
 from uniborg import callback_util
@@ -26,6 +29,8 @@ from uniborg.constants import BOT_META_INFO_PREFIX
 
 # --- Constants and Configuration ---
 DEFAULT_MODEL = "imagen-3.0-generate-001"
+ANTIGRAVITY_IMAGINE_GROUPS = True
+ANTIGRAVITY_IMAGINE_GUESTS = True
 
 # Logging configuration
 LOG_DIR = Path(os.path.expanduser("~/.borg/image_gen/log/"))
@@ -72,7 +77,9 @@ BOT_COMMANDS = [
     {"command": "start", "description": "Set up image generation bot"},
     {"command": "help", "description": "Show detailed help"},
     {"command": "status", "description": "Show current image generation settings"},
-    {"command": "provider", "description": "Choose the image generation provider"},
+    {"command": "provider", "description": "Choose AI Studio or Google Antigravity"},
+    {"command": "antigravity", "description": "Use Google Antigravity for images (admins)"},
+    {"command": "imagine", "description": "Generate an Antigravity image from a prompt (admins)"},
     {
         "command": "setgeminikey",
         "description": "Set Gemini API key for image generation",
@@ -200,12 +207,13 @@ async def help_handler(event):
     help_text = f"""**Image Generation Bot Help 🎨**
 
 **How it works:**
-• Send any text message → Get AI-generated images
-• Only works in private chats
+• Send a prompt in this DM to generate images
+• Antigravity admins can use `/imagine` with a prompt in groups or mention me with a prompt in guest mode
 • Forwarded messages are ignored
 
 **Configuration Commands:**
 • `/status` - View current settings
+• `/provider` - Choose AI Studio or, for admins, Google Antigravity
 • `/model` - Select AI model
 • `/size` - Set image dimensions
 • `/aspectratio` - Choose aspect ratio
@@ -215,6 +223,7 @@ async def help_handler(event):
 
 **Setup:**
 • `/setgeminikey` - Configure API access
+• For Antigravity, connect in the Chat bot with /antigravity_login, then select it here with `/antigravity`
 
 **Current Model:** Imagen 3.0
 **Safety Settings:** Minimal censoring enabled
@@ -379,6 +388,18 @@ async def provider_handler(event, *, edit=False):
         await event.edit(BOT_META_INFO_PREFIX + text, buttons=buttons, parse_mode="md")
     else:
         await llm_util.send_info_message(event, text, buttons=buttons, parse_mode="md")
+
+
+async def antigravity_provider_handler(event):
+    if not antigravity.private_admin(event) or not antigravity.available():
+        text = antigravity.UNAVAILABLE
+    elif not antigravity.linked(event.sender_id):
+        text = antigravity.SHARED_CONNECT_NEEDED
+    else:
+        cancel_input_flow(event.sender_id)
+        user_manager.set_provider(event.sender_id, gemini_providers.ANTIGRAVITY)
+        text = "Using Google Antigravity. Send a prompt to generate an image."
+    await llm_util.send_info_message(event, text, parse_mode=None, reply_to=False)
 
 
 # --- Callback Handler ---
@@ -565,6 +586,85 @@ async def _log_image_generation(
         traceback.print_exc()
 
 
+def _antigravity_allowed(event):
+    return antigravity.turn_allowed(
+        event, groups=ANTIGRAVITY_IMAGINE_GROUPS, guests=ANTIGRAVITY_IMAGINE_GUESTS,
+    )
+
+
+async def _reply_with_antigravity(event, prompt, prefs):
+    if not antigravity.available():
+        await llm_util.send_info_message(event, antigravity.UNAVAILABLE, parse_mode=None)
+        return
+    if not antigravity.linked(event.sender_id):
+        await llm_util.send_info_message(event, antigravity.SHARED_CONNECT_NEEDED, parse_mode=None)
+        return
+    status = await llm_util.send_info_message(event, "Generating with Google Antigravity…")
+    try:
+        images = await antigravity.generate_images(
+            event.sender_id, prompt, number=prefs.number, aspect_ratio=prefs.aspect_ratio,
+        )
+        for index, (data, extension) in enumerate(images, 1):
+            with BytesIO(data) as file:
+                file.name = f"antigravity-{index}.{extension}"
+                await event.reply(file=file)
+        await status.edit(f"{BOT_META_INFO_PREFIX}Generated {len(images)} image(s).")
+    except antigravity.AntigravityError as exc:
+        await status.edit(BOT_META_INFO_PREFIX + str(exc), parse_mode=None)
+
+
+async def imagine_command_handler(event):
+    if not _antigravity_allowed(event) or event.forward:
+        return
+    prompt = (event.pattern_match.group(1) or "").strip()
+    if not prompt:
+        await llm_util.send_info_message(event, "Add a prompt after /imagine.", parse_mode=None)
+        return
+    if antigravity.is_callback_url(prompt):
+        return
+    await _reply_with_antigravity(event, prompt, user_manager.get_prefs(event.sender_id))
+
+
+_guest_claims = guest_util.QueryClaims()
+
+
+async def guest_imagine_handler(query):
+    event = guest_util.GuestEvent(query)
+    if not _antigravity_allowed(event):
+        return
+    usernames = username_util.active_usernames(borg.me)
+    if not guest_util.strip_mention(query.trigger, username=usernames):
+        return
+    prompt = query.text.strip()
+    if prompt.startswith("/") or antigravity.is_callback_url(prompt):
+        return
+    title = borg.me.first_name or "Imagine"
+    if not antigravity.available():
+        note = antigravity.UNAVAILABLE
+    elif not antigravity.linked(event.sender_id):
+        note = antigravity.SHARED_CONNECT_NEEDED
+    elif not prompt:
+        note = "Add an image prompt after the bot mention."
+    else:
+        note = None
+    if note:
+        await guest_util.answer_note(borg, query, note, title=title)
+        return
+    inline_id = await tg_raw.answer_guest(
+        borg, query_id=query.query_id, title=title, text="Generating with Google Antigravity…",
+    )
+    async with tg_raw.InlineEditor(borg, inline_id) as editor:
+        answer = guest_util.GuestAnswerMessage(editor)
+        try:
+            prefs = user_manager.get_prefs(event.sender_id)
+            [(data, extension)] = await antigravity.generate_images(
+                event.sender_id, prompt, aspect_ratio=prefs.aspect_ratio,
+            )
+            await answer.show_image(data, file_name=f"antigravity.{extension}")
+        except antigravity.AntigravityError as exc:
+            await answer.finalize(text=str(exc))
+
+
 # --- Message Handler ---
 async def message_handler(event, *, log_p=True):
     """Handle incoming messages for image generation."""
@@ -578,27 +678,12 @@ async def message_handler(event, *, log_p=True):
     user_id = event.sender_id
     prefs = user_manager.get_prefs(user_id)
     if prefs.provider == gemini_providers.ANTIGRAVITY:
-        if not antigravity.private_admin(event) or not antigravity.available():
+        if not _antigravity_allowed(event):
             await llm_util.send_info_message(event, antigravity.UNAVAILABLE, parse_mode=None)
             return
-        if not antigravity.linked(user_id):
-            await llm_util.send_info_message(event, antigravity.SHARED_CONNECT_NEEDED, parse_mode=None)
-            return
         prompt = event.text.strip()
-        if not prompt or user_id in AWAITING_INPUT_FROM_USERS:
-            return
-        status = await llm_util.send_info_message(event, "Generating with Google Antigravity…")
-        try:
-            images = await antigravity.generate_images(
-                user_id, prompt, number=prefs.number, aspect_ratio=prefs.aspect_ratio,
-            )
-            for index, (data, extension) in enumerate(images, 1):
-                file = BytesIO(data)
-                file.name = f"antigravity-{index}.{extension}"
-                await event.reply(file=file)
-            await status.edit(f"{BOT_META_INFO_PREFIX}Generated {len(images)} image(s).")
-        except antigravity.AntigravityError as exc:
-            await status.edit(BOT_META_INFO_PREFIX + str(exc), parse_mode=None)
+        if prompt and user_id not in AWAITING_INPUT_FROM_USERS:
+            await _reply_with_antigravity(event, prompt, prefs)
         return
     api_key = llm_db.get_api_key(user_id)
 
@@ -735,6 +820,15 @@ def register_handlers():
             func=lambda e: e.is_private,
         )
     )(provider_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/antigravity{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private,
+        )
+    )(antigravity_provider_handler)
+    borg.on(
+        events.NewMessage(pattern=rf"(?is)^/imagine{bot_username_suffix_re}(?:\s+(.+))?\s*$")
+    )(imagine_command_handler)
 
     # Message handler for image generation
     borg.on(events.NewMessage(func=lambda e: e.is_private and not e.forward))(
@@ -769,6 +863,13 @@ async def initialize_image_gen():
 
     # Register handlers
     register_handlers()
+    if ANTIGRAVITY_IMAGINE_GUESTS:
+        guest_handler = guest_util.register_guest_handler(
+            borg, guest_imagine_handler, claims=_guest_claims,
+        )
+        if guest_handler is not None:
+            enabled = bool(getattr(borg.me, "bot_guestchat", False))
+            print(f"ImageGen: Telegram Guest Mode enabled: {enabled}.")
 
     # Set bot commands if running as bot
     await bot_util.register_bot_commands(borg, BOT_COMMANDS)
