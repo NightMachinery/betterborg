@@ -68,6 +68,10 @@ BOT_COMMANDS = [
 ]
 KNOWN_STRICT_COMMANDS = {".rot"}  # Undocumented admin-only command; do not add to help.
 
+# Antigravity remains restricted to explicitly allowlisted Telegram user IDs.
+ANTIGRAVITY_STT_GROUPS = True
+ANTIGRAVITY_STT_GUESTS = True
+
 # A guest answer has no stable message id that the bot can use. Its progress
 # carries a random job marker so a reply can select one concurrent request.
 STT_STOPPED = "⏹ Transcription stopped."
@@ -287,6 +291,28 @@ def get_provider_key(user_id: int, provider: str | None = None) -> str | None:
     if provider == stt_providers.GEMINI:
         return get_effective_gemini_api_key(user_id)
     return llm_db.get_api_key(user_id=user_id, service=provider)
+
+
+def _antigravity_stt_access_error(event):
+    if getattr(event, "is_guest", False):
+        allowed = ANTIGRAVITY_STT_GUESTS
+    elif getattr(event, "is_private", False):
+        if antigravity.private_admin(event):
+            return None
+        allowed = False
+    else:
+        allowed = ANTIGRAVITY_STT_GROUPS and getattr(event, "is_group", False)
+    user_id = getattr(event, "sender_id", None)
+    if (
+        getattr(event, "out", False)
+        or type(user_id) is not int
+        or user_id <= 0
+        or not util.is_admin_by_id(user_id)
+    ):
+        return "Antigravity transcription is available to bot admins."
+    if not allowed:
+        return "Antigravity transcription is available in this bot’s DM."
+    return None
 
 
 # Retry config lives in uniborg/constants.py:
@@ -1031,6 +1057,10 @@ async def llm_stt(*, cwd, event, model_choice=None, log=True):
     parse_mode = "md"
     italics_marker = "__"
 
+    if get_provider_choice(event.sender_id) == stt_providers.ANTIGRAVITY:
+        if note := _antigravity_stt_access_error(event):
+            await event.reply(note)
+            return
     try:
         job = prepare_stt_job(cwd, user_id=event.sender_id, model_choice=model_choice)
     except MissingSttKeyError:
@@ -1051,9 +1081,10 @@ async def llm_stt(*, cwd, event, model_choice=None, log=True):
         return
 
     agy = job.provider == stt_providers.ANTIGRAVITY
-    if agy and not antigravity.private_admin(event):
-        await event.reply("Antigravity transcription is available in this bot’s DM.")
-        return
+    if agy:
+        if note := _antigravity_stt_access_error(event):
+            await event.reply(note)
+            return
     status_message = await event.reply(
         f"Transcribing with {stt_providers.PROVIDERS[job.provider].label}..."
     )
@@ -1950,14 +1981,16 @@ async def guest_stt_handler(query):
     if caller_id is None:
         await _guest_note(query, "I can only answer people, not channels.")
         return
-    if get_provider_choice(caller_id) == stt_providers.ANTIGRAVITY:
-        await _guest_note(query, "Antigravity transcription is available in this bot’s DM.")
-        return
+    event = guest_util.GuestEvent(query)
+    provider = get_provider_choice(caller_id)
+    if provider == stt_providers.ANTIGRAVITY:
+        if note := _antigravity_stt_access_error(event):
+            await _guest_note(query, note)
+            return
     media = [m for m in query.messages if is_transcribable_media(m)]
     if not media:
         await _guest_note(query, GUEST_NO_MEDIA_TEXT)
         return
-    event = guest_util.GuestEvent(query)
     if not await util.isAdmin(event) and not await _guest_limiter.allow(
         f"stt:{borg.me.id}:{caller_id}", limit=GUEST_MAX_CALLS_PER_HOUR
     ):
@@ -1968,6 +2001,9 @@ async def guest_stt_handler(query):
         )
         return
     if not get_provider_key(caller_id):
+        if provider == stt_providers.ANTIGRAVITY:
+            await _guest_note(query, antigravity.SHARED_CONNECT_NEEDED)
+            return
         await _guest_note(
             query,
             GUEST_INVITE_TEXT,
@@ -2005,6 +2041,10 @@ async def guest_stt_handler(query):
             try:
                 job = prepare_stt_job(cwd, user_id=caller_id)
                 job_provider = job.provider
+                if job_provider == stt_providers.ANTIGRAVITY:
+                    if note := _antigravity_stt_access_error(request.event):
+                        await answer.finalize(text=note)
+                        return
             except SttRequestError as e:
                 await answer.finalize(text=str(e))
                 return

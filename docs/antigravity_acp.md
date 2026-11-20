@@ -25,6 +25,9 @@ queries Google's quota endpoint without a model turn.
   request an image through Antigravity.
 - **Transcribe** uses Gemini 3.8 Flash for audio, the sound from video,
   and OCR for JPEG, PNG, and WebP. The total inline media limit is 12 MiB.
+  Allowlisted admins can also request a transcription in groups and via a
+  guest mention. `ANTIGRAVITY_STT_GROUPS` and `ANTIGRAVITY_STT_GUESTS` in
+  [the Transcribe plugin](../stt_plugins/stt.py) toggle those separately.
 - **Imagine** uses Antigravity's native image tool. Number and aspect ratio
   are passed as prompt instructions. The agent returns images inline through ACP.
 

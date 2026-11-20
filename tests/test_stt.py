@@ -701,6 +701,42 @@ class GuestSttTests(unittest.TestCase):
         self.assertEqual((job.api_key, user_id), ("caller-key", CALLER))
         self.assertEqual(self.edits, [{"text": "hello", "parse_mode": "md"}])
 
+    def test_antigravity_guest_uses_only_the_allowed_callers_link(self):
+        with (
+            patch.object(stt, "get_provider_choice", return_value="antigravity"),
+            patch.object(stt.util, "is_admin_by_id", side_effect=lambda uid: uid == CALLER),
+            patch.object(stt.antigravity, "linked", return_value=True) as linked,
+            patch.object(stt, "ANTIGRAVITY_STT_GUESTS", True),
+        ):
+            self.run_query(_query(f"@{BOT_USERNAME}", reference_media=_voice()))
+        ((job, user_id),) = self.jobs
+        self.assertEqual((job.provider, user_id), ("antigravity", CALLER))
+        self.assertTrue(all(call.args == (CALLER,) for call in linked.call_args_list))
+
+    def test_antigravity_guest_rejects_nonadmins_before_downloading(self):
+        with (
+            patch.object(stt, "get_provider_choice", return_value="antigravity"),
+            patch.object(stt.util, "is_admin_by_id", return_value=False),
+            patch.object(stt, "ANTIGRAVITY_STT_GUESTS", True),
+        ):
+            self.run_query(_query(f"@{BOT_USERNAME}", reference_media=_voice()))
+        self.assertEqual(self.downloaded, [])
+        self.assertIn("bot admins", self.answers[0].text)
+
+    def test_antigravity_group_and_guest_toggles_are_independent(self):
+        group = SimpleNamespace(is_group=True, sender_id=CALLER)
+        guest = SimpleNamespace(is_group=True, is_guest=True, sender_id=CALLER)
+        with (
+            patch.object(stt.util, "is_admin_by_id", return_value=True),
+            patch.object(stt, "ANTIGRAVITY_STT_GUESTS", False),
+            patch.object(stt, "ANTIGRAVITY_STT_GROUPS", True),
+        ):
+            self.assertIsNone(stt._antigravity_stt_access_error(group))
+            self.assertIsNotNone(stt._antigravity_stt_access_error(guest))
+            self.assertIsNotNone(stt._antigravity_stt_access_error(
+                SimpleNamespace(is_group=True, sender_id=-CALLER)
+            ))
+
     def test_a_voice_note_of_an_album_says_only_it_was_transcribed(self):
         self.run_query(
             _query(f"@{BOT_USERNAME}", reference_media=_voice(), reference_grouped_id=7)
