@@ -3,7 +3,7 @@
 import asyncio
 
 from cachetools import TTLCache
-from telethon import errors, events
+from telethon import errors, events, types
 
 from uniborg import antigravity, llm_util, tg_compat, username_util
 from uniborg.constants import BOT_META_INFO_PREFIX
@@ -79,11 +79,15 @@ class TelegramLogin:
                 if message is not None:
                     try:
                         await message.edit(
-                            BOT_META_INFO_PREFIX + note, buttons=[],
+                            BOT_META_INFO_PREFIX + note,
+                            buttons=types.ReplyInlineMarkup(rows=[]),
                             parse_mode=None, link_preview=False,
                         )
                     except errors.RPCError:
-                        pass
+                        try:
+                            await message.delete()
+                        except errors.RPCError:
+                            pass
                     else:
                         raise events.StopPropagation
             elif antigravity.linked(user_id):

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 from urllib.parse import urlencode
 
 import pytest
+from telethon import errors, types
 from telethon.tl.types import PeerChannel, PeerUser
 from test_llm_chat_vertex import plugin
 
@@ -248,7 +249,8 @@ def test_quota_uses_rich_markdown_and_skips_empty_session():
     asyncio.run(scenario())
 
 
-def test_signin_callback_updates_the_original_card_in_the_bot_that_sent_it():
+@pytest.mark.parametrize("edit_refused", [False, True])
+def test_signin_callback_updates_the_original_card_in_the_bot_that_sent_it(edit_refused):
     async def scenario():
         from uniborg import antigravity_telegram, tg_compat
 
@@ -257,7 +259,9 @@ def test_signin_callback_updates_the_original_card_in_the_bot_that_sent_it():
             raw_text=callback_query(), delete=AsyncMock(),
             client=SimpleNamespace(is_bot=AsyncMock(return_value=True)),
         )
-        card = SimpleNamespace(edit=AsyncMock())
+        card = SimpleNamespace(edit=AsyncMock(), delete=AsyncMock())
+        if edit_refused:
+            card.edit.side_effect = errors.MessageEditTimeExpiredError(request=None)
         task = asyncio.get_running_loop().create_future()
         task.set_result(True)
         other_bot = antigravity_telegram.TelegramLogin(
@@ -291,7 +295,14 @@ def test_signin_callback_updates_the_original_card_in_the_bot_that_sent_it():
         set_provider.assert_called_once_with(7, gemini_providers.ANTIGRAVITY)
         card.edit.assert_awaited_once()
         assert "connected across Chat, Transcribe, and Imagine" in card.edit.await_args.args[0]
-        assert card.edit.await_args.kwargs["buttons"] == []
+        markup = card.edit.await_args.kwargs["buttons"]
+        assert isinstance(markup, types.ReplyInlineMarkup) and markup.rows == []
+        if edit_refused:
+            card.delete.assert_awaited_once()
+            assert "Google connected" in send.await_args.args[1]
+        else:
+            card.delete.assert_not_awaited()
+            assert send.await_count == 2
 
     asyncio.run(scenario())
 
