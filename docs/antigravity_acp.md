@@ -104,6 +104,12 @@ again on rollback.
 
 ### Shared server
 
+The Antigravity Go project ships the two installers for this setup. Run
+`deployment/worker/install.sh` as root from that project's checkout to
+install or refresh the worker. Run `deployment/install.sh` as the service
+account to install the Go server. The worker keeps its existing socket and
+Google profile locations during the upgrade.
+
 Chat, Transcribe, and Imagine can send turns and quota requests to a shared
 Antigravity server over a Unix socket. The server starts the isolated workers
 and reports queue position. Telegram still performs the admin check before
