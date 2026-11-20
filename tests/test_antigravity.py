@@ -377,6 +377,10 @@ def test_systemd_transport_sign_in_logout_and_profile_status(tmp_path, monkeypat
     protocol.CONFIGURED.touch()
     monkeypatch.setattr(worker, "SCRATCH", scratch)
     monkeypatch.setattr(worker.network, "PROXY_PORT", 0)
+    old_profile = state / "profiles" / "7"
+    old_profile.mkdir()
+    (old_profile / "AGENTS.md").write_text("persistent instructions")
+    (old_profile / "skills").mkdir()
     agent = tmp_path / "fake_agent.py"
     agent.write_text("""
 import http.server
@@ -387,6 +391,10 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 token = Path(os.environ["GEMINI_HOME"]) / "antigravity-acp" / "acp_token.json"
+assert not (token.parent.parent / "AGENTS.md").exists()
+assert not (token.parent.parent / "skills").exists()
+assert not list(Path.home().iterdir())
+assert not list(Path.cwd().iterdir())
 
 class Callback(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -419,7 +427,7 @@ for line in sys.stdin:
     spawn = asyncio.create_subprocess_exec
 
     async def fake_spawn(*args, **kwargs):
-        assert args[-2] == "--agent"
+        assert args[-1] == "--agent"
         return await spawn(sys.executable, "-u", agent, **kwargs)
 
     monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", fake_spawn)

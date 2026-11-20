@@ -10,6 +10,7 @@ import signal
 import socket
 import stat
 import sys
+import tempfile
 from contextlib import suppress
 from pathlib import Path
 
@@ -22,10 +23,12 @@ else:
 INSTALL = Path(__file__).resolve().parent / "agent"
 SCRATCH = Path("/tmp")
 NATIVE = "agy_acp_server.par"
+GRANT_FILE = "acp_token.json"
+MAX_GRANT_BYTES = 512 * 1024
 
 
-def restrict_files(profile):
-    """Require Landlock and expose only this account's profile to the native process."""
+def restrict_files():
+    """Require Landlock and keep the native process off persistent state."""
     if os.uname().machine != "x86_64":
         raise RuntimeError("Unsupported worker architecture")
 
@@ -54,7 +57,6 @@ def restrict_files(profile):
     paths = (
         ("/usr", read_tree | execute),
         (INSTALL, read_tree | execute),
-        (profile, all_fs & ~execute),
         (SCRATCH, all_fs),
         ("/dev/null", read_file | write | truncate),
         ("/dev/random", read_file),
@@ -88,14 +90,40 @@ def prepare_profile(owner):
         path.mkdir(exist_ok=True, mode=0o700)
         if path.is_symlink() or not path.is_dir():
             raise ValueError("Invalid worker profile")
-    for path in ("conversations", "work", "cache"):
+    for path in ("home", "config", "work", "cache", "data", "config/antigravity-acp"):
         (SCRATCH / path).mkdir(mode=0o700)
-    store = profile / "antigravity-acp" / "conversations"
-    if not store.is_symlink():
-        store.symlink_to(SCRATCH / "conversations")
-    if store.readlink() != SCRATCH / "conversations":
-        raise ValueError("Invalid worker session store")
     return profile
+
+
+def copy_grant(source, destination):
+    """Transfer just the grant between private directories. Copy its bytes opaquely."""
+    folder = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        try:
+            fd = os.open(
+                GRANT_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder
+            )
+        except FileNotFoundError:
+            (destination / GRANT_FILE).unlink(missing_ok=True)
+            return
+        with os.fdopen(fd, "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= MAX_GRANT_BYTES:
+                raise ValueError("Invalid Google grant file")
+            data = handle.read(MAX_GRANT_BYTES + 1)
+        if not 0 < len(data) <= MAX_GRANT_BYTES:
+            raise ValueError("Invalid Google grant size")
+    finally:
+        os.close(folder)
+    with tempfile.NamedTemporaryFile(dir=destination, delete=False) as handle:
+        pending = Path(handle.name)
+        try:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+            pending.replace(destination / GRANT_FILE)
+        finally:
+            pending.unlink(missing_ok=True)
 
 
 def publish_status(profile):
@@ -103,7 +131,7 @@ def publish_status(profile):
     try:
         folder = os.open(profile / "antigravity-acp", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            token = os.stat("acp_token.json", dir_fd=folder, follow_symlinks=False)
+            token = os.stat(GRANT_FILE, dir_fd=folder, follow_symlinks=False)
         finally:
             os.close(folder)
         connected = stat.S_ISREG(token.st_mode) and token.st_size > 0
@@ -154,6 +182,9 @@ async def serve(reader, writer):
         raise ValueError("Invalid worker preamble")
 
     profile = prepare_profile(owner)
+    persisted = profile / "antigravity-acp"
+    ephemeral = SCRATCH / "config" / "antigravity-acp"
+    copy_grant(persisted, ephemeral)
     publish_status(profile)
     proxy = f"http://127.0.0.1:{network.PROXY_PORT}"
     link = None
@@ -161,7 +192,7 @@ async def serve(reader, writer):
     account_calls = set()
     async with await network.loopback_proxy(protocol.EGRESS_DIR / egress):
         agent = await asyncio.create_subprocess_exec(
-            sys.executable, "-EBs", str(Path(__file__).resolve()), "--agent", str(profile),
+            sys.executable, "-EBs", str(Path(__file__).resolve()), "--agent",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -171,8 +202,11 @@ async def serve(reader, writer):
             env={
                 "PATH": "/usr/bin:/bin",
                 "LANG": "C.UTF-8",
-                "GEMINI_HOME": str(profile),
+                "HOME": str(SCRATCH / "home"),
+                "GEMINI_HOME": str(SCRATCH / "config"),
                 "TMPDIR": str(SCRATCH),
+                "XDG_CONFIG_HOME": str(SCRATCH / "config"),
+                "XDG_DATA_HOME": str(SCRATCH / "data"),
                 "XDG_CACHE_HOME": str(SCRATCH / "cache"),
                 "HTTP_PROXY": proxy,
                 "HTTPS_PROXY": proxy,
@@ -209,11 +243,16 @@ async def serve(reader, writer):
         async def to_bot():
             while raw := await agent.stdout.readline():
                 if account_calls and len(raw) < 4096:
-                    with suppress(ValueError, TypeError, AttributeError):
-                        request_id = json.loads(raw).get("id")
-                        if request_id in account_calls:
+                    try:
+                        reply = json.loads(raw)
+                        request_id = reply.get("id")
+                    except (ValueError, AttributeError):
+                        request_id = None
+                    if isinstance(request_id, int) and request_id in account_calls:
+                        if "result" in reply:
+                            copy_grant(ephemeral, persisted)
                             publish_status(profile)
-                            account_calls.discard(request_id)
+                        account_calls.discard(request_id)
                 writer.write(b"A" + raw)
                 await writer.drain()
 
@@ -228,6 +267,8 @@ async def serve(reader, writer):
 
         transfers = [asyncio.create_task(coro()) for coro in (to_agent, to_bot, read_login_link)]
         try:
+            if start.get("minimal") is True:
+                await protocol.send_control(writer, kind="ready", minimal=True)
             done, _ = await asyncio.wait(transfers[:2], return_when=asyncio.FIRST_COMPLETED)
             for transfer in done:
                 transfer.result()
@@ -239,6 +280,7 @@ async def serve(reader, writer):
             await asyncio.gather(*transfers, return_exceptions=True)
             with suppress(TimeoutError):
                 await asyncio.wait_for(agent.wait(), 2)
+            copy_grant(ephemeral, persisted)
             publish_status(profile)
 
 
@@ -303,8 +345,8 @@ async def check_installed_socket():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "--agent":
-        restrict_files(Path(sys.argv[2]))
+    if sys.argv[1:] == ["--agent"]:
+        restrict_files()
         os.execv(INSTALL / NATIVE, [str(INSTALL / NATIVE), "--uid="])
     elif sys.argv[1:] == ["--check-installed-socket"]:
         asyncio.run(check_installed_socket())

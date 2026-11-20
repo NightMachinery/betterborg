@@ -41,9 +41,13 @@ and LLM-generated titles are skipped for Antigravity turns.
 The three bots share one worker slot. If it is busy, Transcribe shows that it
 is waiting and starts automatically when a slot becomes available. Use `/stop`
 to cancel a waiting transcription. The wait expires after 15 minutes.
-Each operation uses a fresh sandbox with an ephemeral workspace and session
-store. The worker gets the shared official distribution and only the signing-in
-user's persistent profile. Its private network has only loopback and can make
+Under systemd, each operation uses a fresh sandbox with an empty workspace and
+home directory. The native agent starts with only the signing-in user's Google
+grant. The worker copies that one file between temporary configuration and
+the persistent profile to save sign-in, refresh, and logout. Workspace rules,
+installed skills, and past sessions stay outside the agent's context.
+Google's own instructions remain part of the pinned distribution.
+Its private network has only loopback and can make
 HTTPS CONNECT requests through a proxy for a fixed set of Google hosts.
 The host side rejects private and loopback destinations. The bot relays the
 authorization response to the original agent inside that same worker and
@@ -81,7 +85,7 @@ worker upgrade. [Deployment checks](deployment.md)
 The systemd worker uses a private network namespace, a read-only system,
 bounded temporary storage, a syscall filter, and CPU, RAM and process
 limits. The trusted wrapper launches the native agent under a Landlock
-allowlist for the current Google profile. OAuth returns enter the same
+allowlist for its temporary workspace and configuration. OAuth returns enter the same
 worker that initiated the sign-in. The Google proxy remains in Betterborg.
 
 The installer enables systemd selection for bot revisions that support it.
