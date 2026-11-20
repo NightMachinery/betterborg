@@ -281,6 +281,21 @@ class _GuestTestCase(unittest.TestCase):
 
 
 class AnswerTests(_GuestTestCase):
+    def test_media_alias_sends_a_rich_profile_with_linked_scores_and_an_inline_image(self):
+        self.answer_text = (
+            "## Spirited Away (2001)\n\n"
+            "![Poster](https://image.tmdb.org/t/p/w500/poster.jpg)\n\n"
+            "| Source | Score | Basis |\n| --- | --- | --- |\n"
+            "| [IMDb](https://www.imdb.com/title/tt0245429/) | 8.6/10 | Audience |"
+        )
+        self.run_query(_query(f"{BOT_USERNAME} .imdb Spirited Away"))
+        req = self.request()
+        self.assertTrue(req.media_lookup_p)
+        self.assertIn(plugin.prompts.read("magic/media"), req.messages[0]["content"])
+        self.assertIn("Media lookup: Spirited Away", str(req.messages[-1]))
+        self.assertIn("![Poster](https://image.tmdb.org/", self.edits[-1]["markdown"])
+        self.assertIn("[IMDb](https://www.imdb.com/title/tt0245429/)", self.edits[-1]["markdown"])
+
     def test_an_alias_only_call_is_explicit_and_stripped_from_the_prompt(self):
         self.borg.me = types.User(
             id=BOT_ID,
@@ -322,10 +337,10 @@ class AnswerTests(_GuestTestCase):
         )
 
         system, *turns = self.request().messages
-        self.assertIn(plugin.GUEST_CHAT_PROMPT, system["content"])
-        self.assertIn(plugin.RICH_MARKDOWN_PROMPT, system["content"])
-        self.assertNotIn(plugin.TELEGRAM_MARKDOWN_PROMPT, system["content"])
-        self.assertNotIn(plugin.GROUP_CHAT_ETIQUETTE_PROMPT, system["content"])
+        self.assertIn(plugin.prompts.read("chat/guest"), system["content"])
+        self.assertIn(plugin.prompts.read("chat/rich-markdown"), system["content"])
+        self.assertNotIn(plugin.prompts.read("chat/telegram-markdown"), system["content"])
+        self.assertNotIn(plugin.prompts.read("chat/group"), system["content"])
         text = str(turns)
         self.assertIn("ciao", text)
         self.assertIn("what does this mean?", text)

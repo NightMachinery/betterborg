@@ -24,7 +24,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from pydantic import BaseModel, Field
 from telethon.tl import functions, types
 
-from uniborg import redis_util, tg_format, telegram_queue
+from uniborg import prompts, redis_util, tg_format, telegram_queue
 
 #: Telegram's limit for a topic title (the Bot API says 1 to 128 characters).
 TOPIC_TITLE_MAX_UNITS = 128
@@ -41,18 +41,6 @@ MEMORY_MARKS_MAX = 4096
 INITIAL_NAME_STYLES = {"new_chat": "New Chat", "question": "Question text"}
 DEFAULT_INITIAL_NAME_STYLE = "new_chat"
 
-TOPIC_TITLE_PROMPT = """Write a title for a chat topic that starts with the exchange below.
-
-- At most {max_words} words, in the language of the user's message.
-- Name the subject. No quotes, no emoji, no trailing period.
-
-<user>
-{question}
-</user>
-
-<assistant>
-{answer}
-</assistant>"""
 
 logger = logging.getLogger(__name__)
 
@@ -326,16 +314,14 @@ def is_first_message_of_untitled_topic(
 def topic_title_prompt(
     question: str, answer: str, *, icon_emojis: Optional[list[str]] = None
 ) -> str:
-    prompt = TOPIC_TITLE_PROMPT.format(
+    prompt = prompts.read("chat/topic-title").format(
         max_words=TOPIC_TITLE_MAX_WORDS,
         question=question[:EXCHANGE_SIDE_CHARS].strip() or "(no text)",
         answer=answer[:EXCHANGE_SIDE_CHARS].strip() or "(no text)",
     )
     if icon_emojis:
         prompt += (
-            "\n\nChoose icon_emoji to match the subject, from these topic icons: "
-            + " ".join(icon_emojis)
-            + ". Keep the title itself free of emoji."
+            prompts.read("chat/topic-icon").format(icons=" ".join(icon_emojis))
         )
     return prompt
 

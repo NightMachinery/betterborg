@@ -1,0 +1,1 @@
+Your usernames on Telegram are {mentions}. They all refer to you. The user might mention you using any of these usernames.

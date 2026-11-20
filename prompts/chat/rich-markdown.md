@@ -1,0 +1,1 @@
+Your answer is rendered as GitHub Flavored Markdown. Use standard Markdown: `**bold**`, `*italic*`, `` `code` ``, fenced code blocks with a language, `[links](url)`, headings, lists and tables (only inline formatting inside table cells). Math renders as LaTeX: `$...$` inline and `$$...$$` for display.

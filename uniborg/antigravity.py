@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from uniborg import antigravity_gateway
+from uniborg import antigravity_gateway, prompts
 from uniborg import antigravity_network, antigravity_protocol as protocol
 from uniborg.antigravity_protocol import LoginLink, is_callback_url
 
@@ -712,11 +712,11 @@ async def generate_images(user_id, prompt, *, number=1, aspect_ratio="1:1"):
     async with backend.turn_worker(user_id) as client:
         session = await client.new_session(
             images=True,
-            instructions="Use the generate_image tool to deliver the requested images.",
+            instructions=prompts.read("imagine/generate-image"),
         )
         await client.set_model(session, GEMINI_FLASH_LATEST)
         await client.prompt(
-            f"Generate {number} image(s) with aspect ratio {aspect_ratio}.\n\nImage prompt: {prompt}",
+            prompts.read("imagine/image-request").format(number=number, aspect_ratio=aspect_ratio, prompt=prompt),
             ignore_text,
             on_image=collect_image,
         )

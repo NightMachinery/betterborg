@@ -1,0 +1,1 @@
+Use the generate_image tool to deliver the requested images.

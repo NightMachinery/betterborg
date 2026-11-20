@@ -1,5 +1,34 @@
 # LLM Chat Prompting
 
+## Media profiles
+
+Use `.media Spirited Away` or `.imdb Disco Elysium` in Chat or as part of a
+guest mention. Add a year, season, or platform when a title is shared by
+multiple releases. The profile uses rich Markdown for a poster and linked
+ratings alongside the spoiler-free hook, credits, genres, and notable awards.
+Exact screen time appears only when there is a reliable public source.
+
+The shortcut requests web search on compatible Gemini, OpenAI, Codex, and
+Antigravity routes. The prompt asks the model to omit scores and images it
+cannot verify. If Telegram rejects the image, the bot tries the rich table
+without it. The classic Markdown fallback shows the scores as linked bullets.
+See [Telegram rich messages](https://core.telegram.org/bots/api#rich-messages).
+
+## Prompt files and reloading
+
+Repository prompts live in [`prompts/`](../prompts/), including the default
+chat prompt, rendering and context instructions, magic shortcuts,
+transcription, speech, title generation, and image instructions. Changes to
+the Markdown take effect on the next request. Run-time user and chat prompts
+continue to come from their settings.
+
+Existing versioned shortcuts can read `prompts/legacy/<filename>.md` as a
+repository override. They otherwise read `$NIGHTDIR/PE/<filename>.md`, so an
+operator's external prompts and variants can stay private. Those files also
+reload on their next use. The Python registry retains aliases and versions.
+
+## Context metadata
+
 `llm_chat` always appends a short context-metadata instruction to the effective system prompt. Injected sender metadata, reply quotes, media IDs, reaction summaries, and runtime context are model-visible grounding data, not wording or formatting to copy into final replies.
 
 This instruction is appended for default, user-custom, and chat-custom system prompts so custom prompts do not accidentally make the model echo metadata labels such as `[Replying to ...]`.

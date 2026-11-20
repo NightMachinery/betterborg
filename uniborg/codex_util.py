@@ -19,6 +19,7 @@ import httpx
 import openai
 from PIL import Image
 
+from uniborg import prompts
 from uniborg import chatgpt_plan, codex_aliases, codex_device, openai_providers, stream_driver, util
 from uniborg.constants import OPENAI_CODEX_LUNA_RESERVE
 
@@ -627,7 +628,7 @@ def prepare_codex_response_kwargs(
         "input": input_messages,
         "store": False,
         "stream": True,
-        "instructions": instructions or "You are a helpful assistant.",
+        "instructions": instructions or prompts.read("chat/codex-fallback"),
     }
     if reasoning_effort:
         kwargs["reasoning"] = {"effort": reasoning_effort}

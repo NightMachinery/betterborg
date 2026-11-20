@@ -16,6 +16,7 @@ import litellm
 from pydantic import BaseModel
 
 from uniborg import (
+    prompts,
     codex_util,
     gemini_providers,
     llm_db,
@@ -33,9 +34,12 @@ TITLE_TIMEOUT_SECONDS = 30
 #: How long Codex titles stay off after a usage limit that names no reset.
 CODEX_PAUSE_WITHOUT_RESET = timedelta(hours=1)
 
-FILE_TITLE_PROMPT = "Generate a title and filename for this text content:\n\n{text}"
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
+
+
+def file_title_prompt(text: str) -> str:
+    return prompts.read("file-title").format(text=text)
 
 
 class TitleUnavailableError(RuntimeError):
@@ -250,7 +254,7 @@ def file_title_generator(
 
     async def generate(text: str) -> util.FilenameGeneration:
         return await generate_title(
-            FILE_TITLE_PROMPT.format(text=text),
+            file_title_prompt(text),
             util.FilenameGeneration,
             choice=choice,
             codex_p=codex_p,

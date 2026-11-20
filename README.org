@@ -62,6 +62,9 @@ Bot admins can use =/antigravity_login= in Chat, Transcribe, or Imagine.
 The three bots share the Google sign-in and each saves its own provider selection.
 See [[file:docs/antigravity_acp.md][the Antigravity pilot]].
 
+Use =.media= or =.imdb= followed by a title for a spoiler-free media profile
+with linked ratings. See [[file:docs/llm_chat_prompting.md][prompt shortcuts and editing]].
+
 GPT Sol and GPT Astra appear once in the model menu. Each user's
 =/openaiProvider= runs them on their OpenAI key (=/setOpenAIKey=, the default),
 on Codex, on OpenRouter, or automatically on one and then the other when the

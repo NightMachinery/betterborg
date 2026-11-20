@@ -2463,7 +2463,7 @@ async def _default_title_generator(
 
     async def generate(text: str) -> FilenameGeneration:
         return await title_util.complete_structured(
-            title_util.FILE_TITLE_PROMPT.format(text=text),
+            title_util.file_title_prompt(text),
             FilenameGeneration,
             model=model_in_use,
             api_key=api_key,

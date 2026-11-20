@@ -32,6 +32,7 @@ import pytz
 from pathlib import Path
 from shutil import rmtree
 from itertools import groupby
+from functools import partial
 
 import httpx
 import litellm
@@ -145,7 +146,7 @@ from uniborg import util
 from uniborg import telegram_queue
 from uniborg import llm_db
 from uniborg import llm_util
-from uniborg import antigravity, antigravity_telegram, gemini_providers, vertex_latest
+from uniborg import antigravity, antigravity_telegram, gemini_providers, prompts, vertex_latest
 from uniborg.llm_util import (
     AutoDeleteMode,
     AUTO_DELETE_TIME,
@@ -213,7 +214,7 @@ from uniborg.stream_driver import (
     StreamMode,
 )
 from uniborg import guest_util, username_util
-from uniborg import media_store
+from uniborg import media_lookup, media_store
 from uniborg import tg_format
 from uniborg import tg_raw
 
@@ -287,31 +288,6 @@ EFFORT_PREFIX_MAPPING = {
     f".t{alias}": level for level, alias in llm_models.REASONING_LEVEL_ALIASES.items()
 }
 
-# Audio summarization prompt
-PROMPT_SUMMARIZE_AUDIO = r"""Please listen to this audio file completely and provide a comprehensive, detailed analysis of its entire content.
-
-To ensure your response is complete and accurate, please follow these guidelines:
-
-* **Complete Coverage**: The summary should cover the audio from the first to the last minute, not just the beginning sections. Exception: Skip advertisements.
-* **Logical Structure**: Organize the analysis into logical sections based on speakers (hosts, guests, callers) or main topics discussed in order.
-* **Details and Arguments**: Don't just mention general topics. Include main arguments from each person, important examples they gave, and key discussion points with details.
-* **Speaker Identification**: Clearly identify who said what or which analysis comes from whom.
-* **Tone and Discussion Flow**: Note the evolutionary flow of the conversation and changes in participants' tone throughout the program.
-
-In summary, I want a complete and lengthy response as if I sat down and carefully listened to the entire program myself. Thanks!"""
-
-### * PROMPT_REPLACEMENTS
-# Language matching instruction
-PROMPT_MATCH_LANGUAGE = r"""**Language**
-- Match the language of the user's last message.
-- Determine language from the message content only (ignore metadata).
-- If in doubt between Arabic and Persian/Farsi, assume Persian/Farsi."""
-
-# - Telegram markdown only: `**bold**`, `__italic__`, `` `code` ``, `[links](url)`, ```code blocks```
-TELEGRAM_MARKDOWN_PROMPT_V1 = r"""You are messaging the user in Telegram; you SHOULD use Telegram Markdown. Replace all markup with Telegram Markdown: `**bold**` (always use only double STARS for bold), `__italic__` (VERY IMPORTANT! Standard Markdown is different here. Be sure to always use the Telegram form with DOUBLE UNDERSCORES only.), `` `code` ``, `[links](url)`, ```code blocks```. `[` does NOT need to be escaped in Telegram Markdown and `\[` WILL RENDER INCORRECTLY; simply use its unescaped form `[`. E.g., `[some_tag: x]`."""
-
-TELEGRAM_MARKDOWN_PROMPT = r"""You are messaging the user in Telegram; you SHOULD use Telegram Markdown. Replace all markup with Telegram Markdown: `**bold**` (always use only double STARS for bold), `__italic__` (VERY IMPORTANT! always use only DOUBLE UNDERSCORES), `` `code` ``, `[links](url)`, ```code blocks```. `[` does NOT need to be escaped in Telegram Markdown; simply use its unescaped form `[`. E.g., `[some_tag: x]`. IMPORTANT: Markdown tables are NOT supported in Telegram and will not render correctly. Use plain text structures instead (e.g., bullet lists, numbered lists, or simple alignment with spaces)."""
-
 # Pattern constants
 COMMON_PATTERN_SUFFIX = r"(?:\s+|$)"
 
@@ -383,7 +359,7 @@ def _register_prompt_family(
         regex_flags: Regex compilation flags, defaults to re.IGNORECASE
         description: Human-readable description of what this prompt family does
     """
-    prompts = {}
+    replacements = {}
 
     # Base pattern (uses default version)
     default_version = (
@@ -393,8 +369,7 @@ def _register_prompt_family(
     )
     base_pattern = f"{pattern_prefix}{pattern_suffix}"
     base_file = f"{file_base}_{default_version.path_infix}.md"
-    base_content = f"""{llm_util.load_prompt_from_file(base_file)}{content_postfix}"""
-    prompts[re.compile(base_pattern, regex_flags)] = base_content
+    replacements[re.compile(base_pattern, regex_flags)] = partial(_legacy_replacement, base_file, content_postfix)
 
     # Convert strings to PromptVersion objects
     prompt_versions = [
@@ -406,14 +381,12 @@ def _register_prompt_family(
     for version in prompt_versions:
         version_file_base = versioned_file_base if versioned_file_base else file_base
         version_file = f"{version_file_base}_{version.path_infix}.md"
-        version_content = (
-            f"""{llm_util.load_prompt_from_file(version_file)}{content_postfix}"""
-        )
+        version_content = partial(_legacy_replacement, version_file, content_postfix)
 
         # Create pattern for each pattern in this version
         for pattern in version.patterns:
             version_pattern = f"{pattern_prefix}{pattern}{pattern_suffix}"
-            prompts[re.compile(version_pattern, regex_flags)] = version_content
+            replacements[re.compile(version_pattern, regex_flags)] = version_content
 
     # Register this prompt family for help generation
     # Extract the base shortcut from pattern_prefix (e.g., "^\.teach" -> ".teach")
@@ -438,42 +411,22 @@ def _register_prompt_family(
         }
     )
 
-    return prompts
+    return replacements
+
+
+def _legacy_replacement(filename, postfix):
+    return prompts.legacy(filename) + (postfix() if callable(postfix) else postfix)
 
 
 PROMPT_REPLACEMENTS = {
-    re.compile(r"^\.\.\.$", re.IGNORECASE): r"""Continue the conversation.""",
-    re.compile(r"^\.ocr$", re.MULTILINE | re.IGNORECASE): r"""
-You will be given a series of images that are part of a single, related sequence. Your task is to perform OCR and combine the text from all images into one final, coherent output, following these specific rules:
-
-*Combine Text:* Transcribe and merge the text from all images into a single, continuous document. Ensure the text flows in the correct sequence from one image to the next.
-
-*No Commentary:* The final output must not contain any of your own commentary, explanations, or headers like "OCR Result" or "Image 1." It should only be the transcribed text itself.
-
-*Consolidate Recurring Information:* Identify any information that is repeated across multiple images, such as headers, footers, author names, social media handles, logos, advertisements, or contact details. Remove these repetitions from the main body of the text.
-
-*Create a Single Footer:* Place all the consolidated, recurring information you identified in the previous step just once at the very end of the document, creating a clean footer.
-
-The goal is to produce a single, clean document as if it were the original, without the page breaks and repeated headers or footers from the images.
-""",
-    re.compile(r"^\.suma$", re.MULTILINE | re.IGNORECASE): PROMPT_SUMMARIZE_AUDIO,
-    re.compile(r"^\.sumaauto$", re.MULTILINE | re.IGNORECASE): PROMPT_SUMMARIZE_AUDIO
-    + "\n\n"
-    + PROMPT_MATCH_LANGUAGE,
+    re.compile(r"^\.\.\.$", re.IGNORECASE): partial(prompts.read, "magic/continue"),
+    re.compile(r"^\.ocr$", re.MULTILINE | re.IGNORECASE): partial(prompts.read, "magic/ocr"),
+    re.compile(r"^\.suma$", re.MULTILINE | re.IGNORECASE): partial(prompts.read, "magic/summarize-audio"),
+    re.compile(r"^\.sumaauto$", re.MULTILINE | re.IGNORECASE): lambda: prompts.read("magic/summarize-audio") + "\n\n" + prompts.read("chat/match-language"),
     re.compile(
         r"^\.sumafa$", re.MULTILINE | re.IGNORECASE
-    ): r"""سلام رفیق، لطفاً به این فایل صوتی به طور کامل گوش کن و یک تحلیل جامع و مفصل از کل محتوای اون ارائه بده.
-
-برای اینکه جواب کامل و دقیق باشه، لطفاً این موارد رو حتماً رعایت کن:
-
-*   پوشش کامل: خلاصه باید از اولین تا آخرین دقیقه فایل صوتی رو پوشش بده، نه فقط بخش‌های ابتدایی. استثنا: تبلیغات رو skip کن.
-*   ساختار منطقی: تحلیل رو به بخش‌های منطقی تقسیم کن. مثلاً بر اساس گوینده‌ها (مجری، مهمانان، تماس‌گیرندگان) یا موضوعات اصلی که به ترتیب مطرح شدن.
-*   جزئیات و استدلال‌ها: فقط به کلیات اشاره نکن. استدلال‌های اصلی هر شخص، مثال‌های مهمی که زدن، و نکات کلیدی بحث رو با جزئیات بیار.
-*   مشخص کردن گوینده: حتماً مشخص کن هر حرف یا تحلیل از طرف چه کسی بوده.
-*   لحن و سیر بحث: به سیر تکاملی گفتگو و تغییر لحن شرکت‌کنندگان در طول برنامه هم اشاره کن.
-
-خلاصه اینکه یک جواب کامل و طولانی می‌خوام که انگار خودم نشستم و با دقت به کل برنامه گوش دادم. مرسی!""",
-    #: Replace LessWrong and Alignment Forum URLs with GreaterWrong to allow better scraping of URLs.
+    ): partial(prompts.read, "magic/summarize-audio-fa"),
+    #: Rewrite LessWrong and Alignment Forum links to their readable mirrors.
     re.compile(
         r"\bhttps?://(?:www\.)?(lesswrong\.com|alignmentforum\.org)/",
         re.IGNORECASE,
@@ -535,7 +488,7 @@ REDTEAM_PROMPTS = _register_prompt_family(
     file_base=REDTEAM_FILE_NAME,
     default_version="1.1",
     versions=["1", "1.1"],
-    content_postfix=f"\n\n{PROMPT_MATCH_LANGUAGE}\n---\n",
+    content_postfix=lambda: "\n\n" + prompts.read("chat/match-language") + "\n---\n",
     description="find flaws",
 )
 PROMPT_REPLACEMENTS.update(REDTEAM_PROMPTS)
@@ -639,7 +592,8 @@ PROMPT_REPLACEMENTS.update(REVIEW_PROMPTS)
 ##
 DICTIONARY_LEXI_PATTERN_PREFIX = r"^\.(?:dic(?:t)?|def(?:ine)?)"
 DICTIONARY_LEXI_FILE_NAME = "dictionary_Lexi"
-lexi_postfix = f"\n\n{TELEGRAM_MARKDOWN_PROMPT} Avoid using  code literal (inline or blocks) formatting unless absolutely necessary.\n\nTarget to be defined: "
+def lexi_postfix():
+    return "\n\n" + prompts.read("chat/telegram-markdown") + prompts.read("magic/dictionary-format") + " "
 
 DICTIONARY_LEXI_PROMPTS = _register_prompt_family(
     pattern_prefix=DICTIONARY_LEXI_PATTERN_PREFIX,
@@ -660,7 +614,7 @@ DICTIONARY_LEXI_SHORT_PROMPTS = _register_prompt_family(
     default_version=PromptVersion("v1", []),
     versions=[],
     pattern_suffix=r"(?:\s+|$)",
-    content_postfix=f"\n\nCRITICAL OVERRIDE (ultra-concise mode): Include only English and Persian definitions, part of speech, IPA (only once globally if same for all senses, else per sense), and alternative spellings (if applicable, else elide). ELIDE (elide both per sense or general) all examples, etymology, collocations, thesaurus, cultural, regional, tags and badges, etc. Keep the output structure the same as normal mode, but elide all empty/none sections completely. Include all senses of the target word (even if rarely used), the concise mode is still thorough.{lexi_postfix}",
+    content_postfix=lambda: prompts.read("magic/dictionary-compact") + lexi_postfix(),
     description="→English&Farsi dictionary (concise mode)",
 )
 PROMPT_REPLACEMENTS.update(DICTIONARY_LEXI_SHORT_PROMPTS)
@@ -685,201 +639,8 @@ _register_manual_prompt(".ocr", "OCR images and combine text into clean document
 _register_manual_prompt(".suma", "Comprehensive audio summarization in English")
 _register_manual_prompt(".sumaauto", "Auto-language audio summarization")
 _register_manual_prompt(".sumafa", "Persian/Farsi audio summarization")
+_register_manual_prompt(".media / .imdb", "Spoiler-free film, series, anime, and game profiles with linked ratings")
 ##
-###
-# **Strategic emoji use:** 0-2 per message, only when they add clarity or warmth—never decorative.
-# **Strategic emoji use:** 2-4 per message for rhythm, readability, and subtle humor. Use as visual anchors and section breaks in dense text. The key is using them as **information architecture**—they should make scanning and parsing faster for people used to reading dense technical content.
-BIDI_PROMPT = f"""\n{llm_util.load_prompt_from_file("BIDI_v1.1.md")}\n"""
-
-DEFAULT_SYSTEM_PROMPT_V3 = """
-You are a technically precise assistant with the personality of a warm, kind, to-the-point, challenging, smart, highly agentic friend. Your audience: advanced STEM postgraduate researchers.
-
-## Core Approach: Truth + Warmth + Brevity + Momentum
-**Lead with genuine views, even when they contradict the user.** Be direct, specific, and kind. Challenge shaky assumptions, false dichotomies, and motivated reasoning with 1–3 crisp counterpoints. Only flatter or agree when you genuinely believe it.
-**Be warmly direct.** Show care, curiosity, and encouragement. Use a supportive, non-judgmental tone while staying frank and evidence-based.
-**Default to concise.** Start with conclusions/recommendations in the first line. Use 3–6 sentences unless more detail is requested. Cut filler and hedging—prefer information-dense bullets and tight structure.
-**Be proactive.** Anticipate needs, suggest next steps, surface trade-offs. Remember what matters to them and offer constructive challenges when helpful.
-
-## Communication Style
-**Mobile-optimized:**
-- One idea per paragraph, one action per bullet
-- Short paragraphs, clear structure, minimal qualifiers
-**Liberal emoji use:** Use emojis for personality, subtle humor (especially dark humor), and visual section breaks to improve readability in dense text.
-**Human tone:** Sound like a supportive peer: encouraging, clear, and unpretentious.
-**Language**
-- Match the language of the user's last message.
-- Determine language from the message content only (ignore metadata).
-- If in doubt between Arabic and Persian/Farsi, assume Persian/Farsi.
-
-## Truth & Challenge Guidelines
-- **State confidence levels** and flag unknowns—avoid hedging once decided
-- **Correct misconceptions succinctly** with evidence
-- **Red-team high stakes:** Name top risks, failure modes, alternative hypotheses and quick ways to test them
-- **Bias-bust:** When relevant, ask one brief debiasing question or propose a simple experiment
-
-## Active Conversation Endings
-End most replies with 1–2 of these:
-- Clarifying question (only if it meaningfully changes the answer)
-- Concrete next step or quick checklist
-- Brief check-in on related progress/blockers
-- Offer to go deeper on specific subtopic
-- Respectful challenge when plans seem off
-- "Stretch" suggestion outside comfort zone
-- **Quick brainstorm:** 1-3 concise ideas you just thought of that might help
-
-**Remember:** Maximum signal, zero sycophancy, friendly evidence-based pushback delivered with precision, warmth, and momentum.
-"""
-
-DEFAULT_SYSTEM_PROMPT_V3_0 = """
-You are a technically precise assistant with the personality of a smart, highly agentic friend. Your audience: advanced STEM postgraduate researchers.
-
-## Core Approach: Truth + Brevity + Momentum
-
-**Lead with genuine views—even when they contradict the user.** Be direct, specific, and kind. Challenge shaky assumptions, false dichotomies, and motivated reasoning with 1–3 crisp counterpoints. Never flatter or agree just to please.
-
-**Default to concise.** Start with conclusions/recommendations in the first line. Use 3–6 sentences unless more detail is requested. Cut filler and hedging—prefer information-dense bullets and tight structure.
-
-**Be proactive.** Anticipate needs, suggest next steps, surface trade-offs. Remember what matters to them and offer constructive challenges when helpful.
-
-## Communication Style
-
-**Mobile-optimized:**
-- One idea per paragraph, one action per bullet
-- Short paragraphs, clear structure, minimal qualifiers
-- Telegram markdown only: `**bold**`, `__italic__`, `` `code` ``, `[links](url)`, ```code blocks```
-
-**Liberal emoji use:** Use emojis for personality, subtle humor, and visual section breaks to improve readability in dense text.
-
-**Language**
-- Match the language of the user's last message.
-- Determine language from the message content only (ignore metadata).
-- If in doubt between Arabic and Persian/Farsi, assume Persian/Farsi.
-
-## Truth & Challenge Guidelines
-
-- **State confidence levels** and flag unknowns—avoid hedging once decided
-- **Correct misconceptions succinctly** with evidence
-- **Red-team high stakes:** Name top risks, failure modes, alternative hypotheses and quick ways to test them
-- **Bias-bust:** When relevant, ask one brief debiasing question or propose a simple experiment
-
-## Active Conversation Endings
-
-End most replies with 1–2 of these:
-- Clarifying question (only if it meaningfully changes the answer)
-- Concrete next step or quick checklist
-- Brief check-in on related progress/blockers
-- Offer to go deeper on specific subtopic
-- Respectful challenge when plans seem off
-- "stretch" suggestion outside comfort zone
-
-**Remember:** Maximum signal, zero sycophancy, friendly evidence-based pushback delivered with precision, warmth, and momentum.
-"""
-
-DEFAULT_SYSTEM_PROMPT_CONCISE = """
-You are a helpful, technically precise assistant with the personality of a smart, highly agentic friend. Your primary audience is advanced STEM postgraduate researchers.
-
-**Brevity First**
-- Be concise and to the point. Prefer short, information-dense sentences.
-- Cut filler, hedging, and repetition. Lead with the answer; details follow only if needed.
-- Use bullets and tight structure for scanability. Default length: 3–6 sentences unless the user asks for more.
-
-**Core Personality**
-- **Proactive & Agentic:** Don’t just answer—anticipate needs, suggest next steps, and surface trade-offs.
-- **Empathetic Engagement:** Check in on their day and tailor guidance to their context.
-- **Smart Friend:** Remember what matters to them and challenge constructively when helpful.
-
-**Mobile Chat Style**
-- **Direct:** Start with the conclusion or recommendation in the first line.
-- **Readable:** Short paragraphs, clear bullets, minimal qualifiers.
-- **Focus:** One idea per paragraph; one action per bullet.
-- **Expand on demand:** Offer deeper dives, proofs, or sources only when requested.
-
-**Active Conversation (end most replies with 1–2 of the following)**
-- A clarifying question *only if it meaningfully changes the answer*
-- A concrete next step or quick checklist
-- A brief check-in on related progress or blockers
-- An offer to go deeper on a specific subtopic
-
-**Language**
-- Match the language of the user’s last message.
-- Determine language from the message content only (ignore metadata).
-- If in doubt between Arabic and Persian/Farsi, assume Persian/Farsi.
-
-**Formatting**
-- Telegram markdown only: `**bold**`, `__italic__`, `` `code` ``, `[links](https://example.com)`, and ```pre``` blocks.
-
-Remember: precision, warmth, and momentum—delivered with maximum signal and minimum words.
-"""
-
-DEFAULT_SYSTEM_PROMPT_V2 = """
-You are a helpful and knowledgeable assistant with the personality of a smart, highly agentic friend. Your primary audience is advanced STEM postgraduate researchers, so be precise and technically accurate while maintaining warmth and engagement.
-
-**Core Personality:**
-- **Proactive & Agentic:** Don't just answer - actively drive conversations forward. Offer suggestions, give advice, ask follow-up questions, and show genuine interest in the user's work and life.
-- **Empathetic Engagement:** Ask about their day, research progress, challenges they're facing. Remember context from the conversation and check in on things they've mentioned.
-- **Smart Friend Approach:** Be the kind of friend who remembers what matters to them, offers helpful insights, and isn't afraid to challenge their thinking constructively.
-
-**Style Guidelines for Mobile Chat:**
-- **Concise & Direct:** Keep responses brief and punchy without sacrificing critical information. Get straight to the point. Exception: Provide full detail when users specifically request lengthy responses.
-- **Conversational & Warm:** Write naturally, like you're genuinely interested in helping them succeed. Use emojis to add warmth and personality.
-- **Readability:** Break up text into short paragraphs. Use bullet points or numbered lists to make complex information easy to scan on a small screen.
-- **Active Conversation:** End most responses with:
-   * Clarifying questions about their specific situation
-   * Suggestions for next steps or improvements
-   * Check-ins about related challenges or progress
-   * Offers to dive deeper into topics that might help them
-
-**Language:**
-- Your response must match the language of the user's last message.
-- To determine the user's language, rely exclusively on the primary content of their message.
-- Do not consider language found in metadata or attachments, unless the attachments are the sole content of the last user message. E.g., the user has sent you an audio file only as their message.
-- If you are in doubt the language is Arabic or Persian/Farsi, assume it is Persian/Farsi.
-
-**Formatting:** You can use Telegram's markdown: `**bold**`, `__italic__`, `` `code` ``, `[links](https://example.com)`, and ```pre``` blocks.
-"""
-
-DEFAULT_SYSTEM_PROMPT_V1 = """
-You are a helpful and knowledgeable assistant. Your primary audience is advanced STEM postgraduate researchers, so be precise and technically accurate.
-
-**Style Guidelines for Mobile Chat:**
-- **Concise & Direct:** Keep responses as brief as possible without sacrificing critical information. Get straight to the point. Exception: Provide full detail when users specifically request lengthy responses.
-- **Conversational Tone:** Write in a clear, natural style suitable for a chat conversation. Avoid overly academic or verbose language unless necessary for technical accuracy. You can use emojis.
-- **Readability:** Break up text into short paragraphs. Use bullet points or numbered lists to make complex information easy to scan on a small screen.
-- **Language:**
-    *   Your response must match the language of the user's last message.
-    *   To determine the user's language, rely exclusively on the primary content of their message.
-    *   Do not consider language found in metadata or attachments.
-
-**Formatting:** You can use Telegram's markdown: `**bold**`, `__italic__`, `` `code` ``, `[links](https://example.com)`, and ```pre``` blocks.
-"""
-
-DEFAULT_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT_V3 + BIDI_PROMPT
-
-METADATA_CONTEXT_PROMPT = """
-# Context Metadata
-Use injected metadata only as context, not as wording or output format. Do not quote or imitate metadata labels such as `[Replying to ...]`, `[Forwarded ...]`, `[Media-ID: ...]`, sender/timestamp prefixes, reaction summaries, or runtime context unless the user explicitly asks for raw logs/context.
-"""
-
-GROUP_CHAT_ETIQUETTE_PROMPT = """
-# Group Chat Etiquette
-This is a group chat with multiple participants. Be EXTREMELY concise:
-- Shortest possible satisfactory answer (1-3 sentences ideal, 5 max unless absolutely necessary)
-- Get straight to the point - no preamble, no elaboration unless asked
-- ONE sentence for follow-up questions at most (or skip entirely if answer is sufficient)
-- Avoid long lists, verbose explanations, or unnecessary context
-- In group settings, brevity shows respect for everyone's time
-"""
-
-#: For guest answers (see docs/guest_mode.md), in place of the etiquette above.
-GUEST_CHAT_PROMPT = """
-# Guest Answer
-Someone mentioned you in a Telegram chat you are not a member of: a group, or a private chat between two people. You see only the message that mentioned you and the message it replies to, if any, and everyone in that chat sees your answer. Be concise: answer what was asked, without preamble.
-"""
-
-#: Guest answers are rich messages: Telegram's server renders the Markdown.
-RICH_MARKDOWN_PROMPT = r"""Your answer is rendered as GitHub Flavored Markdown. Use standard Markdown: `**bold**`, `*italic*`, `` `code` ``, fenced code blocks with a language, `[links](url)`, headings, lists and tables (only inline formatting inside table cells). Math renders as LaTeX: `$...$` inline and `$$...$$` for display."""
-
-
 # --- Event Proxy ---
 class ProxyEvent:
     """A lightweight proxy around a Telethon event.
@@ -4070,6 +3831,11 @@ def _detect_and_process_message_prefix(
     )
 
 
+def _is_media_lookup(prefix):
+    text = prefix.processed_text.removeprefix(".s ").lstrip()
+    return not prefix.image_generation and bool(media_lookup.SHORTCUT.match(text))
+
+
 def _validate_url_security(url: str) -> Optional[str]:
     """
     Validates URL for security concerns (SSRF protection).
@@ -5768,6 +5534,10 @@ class SystemPromptInfo:
     topic_prompt: Optional[str] = None
 
 
+def get_default_system_prompt():
+    return prompts.read("chat/default") + "\n" + prompts.legacy("BIDI_v1.1.md") + "\n"
+
+
 def get_system_prompt_info(
     event,
     *,
@@ -5785,6 +5555,8 @@ def get_system_prompt_info(
     user_prefs = user_manager.get_prefs(user_id)
     user_prompt = user_prefs.system_prompt
 
+    default_prompt = get_default_system_prompt()
+
     # Determine effective prompt and source
     if topic_prompt:
         effective_prompt = topic_prompt
@@ -5796,32 +5568,36 @@ def get_system_prompt_info(
         effective_prompt = user_prompt
         source = "user"
     else:
-        effective_prompt = DEFAULT_SYSTEM_PROMPT
+        effective_prompt = default_prompt
         source = "default"
 
     # Build additional context sections
-    additional_sections = [METADATA_CONTEXT_PROMPT]
+    additional_sections = [prompts.read("chat/metadata")]
     guest_p = guest_util.is_guest_event(event)
+    lookup = _is_media_lookup(_detect_and_process_message_prefix(
+        strip_leading_bot_username(getattr(event, "text", "") or ""), codex_p=True,
+    ))
 
     if guest_p:
-        additional_sections.append(GUEST_CHAT_PROMPT)
+        additional_sections.append(prompts.read("chat/guest"))
     # Add group chat etiquette for group chats using default prompt
     elif source not in ("topic", "chat") and not event.is_private:
-        additional_sections.append(GROUP_CHAT_ETIQUETTE_PROMPT)
+        additional_sections.append(prompts.read("chat/group"))
 
     if include_username_p:
         usernames = _bot_usernames()
         if usernames:
             mentions = ", ".join(f"@{name}" for name in usernames)
             additional_sections.append(
-                f"Your usernames on Telegram are {mentions}. "
-                "They all refer to you. The user might mention you using any of these usernames."
+                prompts.read("chat/identity").format(mentions=mentions)
             )
 
     if include_telegram_markdown_p:
-        additional_sections.append(
-            RICH_MARKDOWN_PROMPT if guest_p else TELEGRAM_MARKDOWN_PROMPT
-        )
+        additional_sections.append(prompts.read(
+            "chat/rich-markdown" if guest_p or lookup else "chat/telegram-markdown"
+        ))
+    if lookup:
+        additional_sections.append(prompts.read("magic/media"))
 
     if include_current_time_p:
         # Get current time in specified timezone
@@ -5841,7 +5617,7 @@ def get_system_prompt_info(
     return SystemPromptInfo(
         chat_prompt=chat_prompt,
         user_prompt=user_prompt,
-        default_prompt=DEFAULT_SYSTEM_PROMPT,
+        default_prompt=default_prompt,
         effective_prompt=final_effective_prompt,
         source=source,
         topic_prompt=topic_prompt,
@@ -6739,6 +6515,10 @@ async def _process_message_content(
             processed_text, admin_p=True, codex_p=True
         )
         processed_text = prefix_detection.processed_text
+        if _is_media_lookup(prefix_detection):
+            processed_text = "Media lookup: " + media_lookup.SHORTCUT.sub(
+                "", processed_text.removeprefix(".s ").lstrip(), count=1,
+            ).lstrip()
 
         # Remove magic pattern to force user role
         processed_text = MAGIC_PATTERN_AS_USER.sub("", processed_text).strip()
@@ -6746,12 +6526,12 @@ async def _process_message_content(
         # Apply prompt replacements with simple regex substitutions.
         # Apply each pattern at most once per message.
         for pattern, replacement in PROMPT_REPLACEMENTS.items():
-            processed_text = pattern.sub(
-                replacement,
-                processed_text,
-                # count=1,
-                #: By default, `re.sub` replaces all occurrences of the pattern in the string.
-            )
+            if callable(replacement):
+                if pattern.search(processed_text):
+                    content = replacement()
+                    processed_text = pattern.sub(lambda _: content, processed_text)
+            else:
+                processed_text = pattern.sub(replacement, processed_text)
 
     unreadable_rich_p = _is_unreadable_rich_message(message)
     if unreadable_rich_p:
@@ -7789,7 +7569,7 @@ def register_handlers():
 
 async def initialize_llm_chat():
     """Initializes the plugin based on whether it's a bot or userbot."""
-    global BOT_ID, BOT_USERNAME, IS_BOT, DEFAULT_SYSTEM_PROMPT
+    global BOT_ID, BOT_USERNAME, IS_BOT
     if IS_BOT is None:
         IS_BOT = await borg.is_bot()
 
@@ -11629,7 +11409,7 @@ async def set_system_prompt_handler(event):
     else:
         start_input_flow(event, {"type": "system_prompt"})
         current_prompt = (
-            user_manager.get_prefs(user_id).system_prompt or DEFAULT_SYSTEM_PROMPT
+            user_manager.get_prefs(user_id).system_prompt or get_default_system_prompt()
         )
         await event.reply(
             f"{BOT_META_INFO_PREFIX}**Your current system prompt is:**\n\n```\n{current_prompt}\n```"
@@ -14544,6 +14324,7 @@ class GenerationRequest:
     fallback_backend: Optional[str] = None
     #: Another key follows `api_key` in the user's chain (`key_sharing`).
     next_key_p: bool = False
+    media_lookup_p: bool = False
 
 
 @dataclass(frozen=True)
@@ -14565,7 +14346,7 @@ _ALREADY_DELIVERED = GenerationResult(
 )
 
 
-async def _response_placeholder(event, placeholder_text: str, *, prefs):
+async def _response_placeholder(event, placeholder_text: str, *, prefs, rich_reply=False):
     """The message an answer to EVENT streams into (docs/draft_streaming.md).
 
     A draft stand-in where the user streams drafts here and Telegram shows
@@ -14573,7 +14354,8 @@ async def _response_placeholder(event, placeholder_text: str, *, prefs):
     """
     scope = stream_driver.stream_scope(event)
     drafts = bool(
-        IS_BOT and stream_driver.stream_mode(prefs, scope=scope) == StreamMode.DRAFTS
+        not rich_reply and IS_BOT
+        and stream_driver.stream_mode(prefs, scope=scope) == StreamMode.DRAFTS
     )
     return await stream_driver.open_stream_target(
         event,
@@ -14759,7 +14541,8 @@ async def _generate_antigravity_response(req: GenerationRequest) -> GenerationRe
             return {"stopReason": "end_turn"}
         async with antigravity.backend.turn_worker(user_id) as client:
             session = await client.new_session(
-                instructions=instructions, search="googleSearch" in req.prefs.enabled_tools,
+                instructions=instructions,
+                search=req.media_lookup_p or "googleSearch" in req.prefs.enabled_tools,
             )
             await client.set_model(session, req.model, reasoning.level)
             return await client.prompt(prompt, show)
@@ -14810,6 +14593,8 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
     model_capabilities = req.model_capabilities
     api_key = req.api_key
     prefs = req.prefs
+    enabled_tools = ["googleSearch"] if req.media_lookup_p else prefs.enabled_tools
+    json_mode = prefs.json_mode and not req.media_lookup_p
     user_id = event.sender_id
     chat_id = event.chat_id
     if req.surface is GenerationSurface.CHAT:
@@ -14879,11 +14664,11 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
     if reasoning.level:
         api_kwargs["reasoning_effort"] = reasoning.level
 
-    if prefs.json_mode and not is_codex_model_p:
+    if json_mode and not is_codex_model_p:
         api_kwargs["response_format"] = {"type": "json_object"}
-        if prefs.enabled_tools:
+        if enabled_tools:
             warnings.append("Tools are disabled (not supported in JSON mode).")
-    elif prefs.json_mode and is_codex_model_p:
+    elif json_mode and is_codex_model_p:
         warnings.append(
             "JSON mode is disabled for OpenAI models."
             if is_openai_api_p or is_chatgpt_plan_p
@@ -14899,8 +14684,8 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
             if proxy_client is not None:
                 api_kwargs["client"] = proxy_client
         # Upstream Gemini Limitation: Only enable tools if JSON mode is OFF.
-        if prefs.enabled_tools and not prefs.json_mode:
-            tools_to_use = list(prefs.enabled_tools)
+        if enabled_tools and not json_mode:
+            tools_to_use = list(enabled_tools)
 
             # Fix for gemini/gemini-2.0-flash: cannot have both googleSearch and urlContext
             if (
@@ -14911,7 +14696,8 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
                 tools_to_use.remove("urlContext")
                 # print("Disabled url_context due to conflict with google_search for gemini/gemini-2.0-flash")
             if (
-                model_in_use in [GEMINI_FLASH_3, GEMINI_FLASH_LATEST]
+                not req.media_lookup_p
+                and model_in_use in [GEMINI_FLASH_3, GEMINI_FLASH_LATEST]
                 and "googleSearch" in tools_to_use
             ):
                 #: Gemini 3 models have no free Search Grounding tool call quota.
@@ -14927,14 +14713,14 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
             api_kwargs["modalities"] = ["image", "text"]
     elif is_codex_model_p and not is_chatgpt_plan_p:
         codex_tools = _codex_tools_for_request(
-            prefs.enabled_tools,
+            enabled_tools,
             image_generation=req.image_generation,
         )
         if codex_tools:
             api_kwargs["tools"] = codex_tools
     else:
         # Add warnings if user has Gemini-specific settings enabled
-        if prefs.enabled_tools and WARN_UNAVAILABLE_TOOLS_P:
+        if enabled_tools and WARN_UNAVAILABLE_TOOLS_P:
             warnings.append("Tools are disabled (Gemini-only feature).")
 
     # Make the API call
@@ -14996,7 +14782,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
                     if account is not None:
                         credentials["plan_account_id"] = account
                         tools = _codex_tools_for_request(
-                            prefs.enabled_tools, image_generation=req.image_generation,
+                            enabled_tools, image_generation=req.image_generation,
                         )
                 except chatgpt_plan.PlanError as exc:
                     raise codex_util.CodexStreamError(
@@ -15270,6 +15056,20 @@ async def _antigravity_image_reply(event, prompt):
         await util.edit_message(status, BOT_META_INFO_PREFIX + str(exc), parse_mode=None)
 
 
+async def _deliver_media_profile(event, response, text):
+    if await media_lookup.deliver(partial(tg_raw.edit_rich_markdown, event, response), text):
+        return True
+    sent = await media_lookup.deliver(partial(
+        tg_raw.send_rich_markdown, event, topic_id=_thread_topic_id(event), reply_to=event.id,
+    ), text)
+    if sent:
+        try:
+            await response.delete()
+        except errors.RPCError:
+            pass
+    return sent
+
+
 async def chat_handler(
     event,
     *,
@@ -15362,6 +15162,7 @@ async def _chat_handler(
         prefix_result.model = forced_model
     if forced_effort is not None:
         prefix_result.reasoning_effort = forced_effort
+    media_lookup_p = _is_media_lookup(prefix_result)
 
     if (
         prefix_result.image_generation
@@ -15513,7 +15314,7 @@ async def _chat_handler(
         #: Inside `try`, so a chat the bot cannot post in reaches the error
         #: reply below instead of escaping the handler.
         response_message = await _response_placeholder(
-            event, placeholder_text, prefs=prefs
+            event, placeholder_text, prefs=prefs, rich_reply=media_lookup_p,
         )
         temp_dir.mkdir(exist_ok=True)
 
@@ -15572,6 +15373,7 @@ async def _chat_handler(
                 reasoning_model=attempt.request_model.selected_model,
                 fallback_backend=attempt.request_model.fallback_backend,
                 next_key_p=attempt.next_key_p,
+                media_lookup_p=media_lookup_p,
             )
 
         async def on_new_key(attempt: KeyedRequest) -> None:
@@ -15616,23 +15418,27 @@ async def _chat_handler(
                 file_only_threshold = 8000
 
             with telegram_queue.operation(telegram_queue.Priority.FINAL):
-                await util.edit_message(
-                    response_message,
-                    final_text,
-                    parse_mode="md",
-                    link_preview=False,
-                    send_file_mode=util.SendFileMode.ALSO_IF_LESS_THAN,
-                    file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
-                    file_only_threshold=file_only_threshold,
-                    file_name_mode="timestamp" if agy_p else "llm",
-                    title_generator=None if agy_p else _file_title_generator(
-                        user_id, codex_p=user_has_codex_access
-                    ),
-                    reply_to=event.message,
-                    #: The final answer must survive a head it can no longer edit.
-                    send_new_on_head_failure=True,
-                    strict_delivery=True,
+                rich_sent = media_lookup_p and await _deliver_media_profile(
+                    event, response_message, final_text,
                 )
+                if not rich_sent:
+                    await util.edit_message(
+                        response_message,
+                        media_lookup.classic(final_text) if media_lookup_p else final_text,
+                        parse_mode="md",
+                        link_preview=False,
+                        send_file_mode=util.SendFileMode.ALSO_IF_LESS_THAN,
+                        file_length_threshold=DEFAULT_FILE_LENGTH_THRESHOLD,
+                        file_only_threshold=file_only_threshold,
+                        file_name_mode="timestamp" if agy_p else "llm",
+                        title_generator=None if agy_p else _file_title_generator(
+                            user_id, codex_p=user_has_codex_access
+                        ),
+                        reply_to=event.message,
+                        #: The final answer must survive a head it can no longer edit.
+                        send_new_on_head_failure=True,
+                        strict_delivery=True,
+                    )
         else:
             # If we sent an image but have no text, delete the "..." message
             try:
@@ -15738,6 +15544,7 @@ class GuestRequestPlan:
     image_generation: bool = False
     #: The caller may use Codex, so a spent OpenAI key can fail over to it.
     codex_access: bool = False
+    media_lookup_p: bool = False
 
     @property
     def model(self) -> str:
@@ -15879,6 +15686,7 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
         warnings=warnings,
         image_generation=prefix.image_generation,
         codex_access=codex_p,
+        media_lookup_p=_is_media_lookup(prefix),
     )
 
 
@@ -16065,7 +15873,7 @@ async def _stored_answer(answer, text: str, *, record_id: str):
     return [image] + ([{"type": "text", "text": text}] if text else [])
 
 
-async def _finalize_guest_answer(answer, text: str) -> None:
+async def _finalize_guest_answer(answer, text: str, *, media_lookup_p=False) -> None:
     """The last edit: rich Markdown, or classic Markdown if Telegram refuses it.
 
     An answer showing an image keeps it, with TEXT as its caption: classic
@@ -16080,6 +15888,15 @@ async def _finalize_guest_answer(answer, text: str) -> None:
         )
         return
     text = text or "_(The model returned no answer.)_"
+    if media_lookup_p:
+        text = tg_format.truncate_utf8(text, GUEST_RICH_LIMIT_BYTES, suffix=GUEST_TRUNCATED_NOTE)
+        if await media_lookup.deliver(lambda value: answer.finalize(markdown=value), text):
+            return
+        await answer.finalize(
+            text=tg_format.truncate_utf16(media_lookup.classic(text), GUEST_CLASSIC_LIMIT_UNITS),
+            parse_mode="md",
+        )
+        return
     try:
         await answer.finalize(
             markdown=tg_format.truncate_utf8(
@@ -16192,6 +16009,7 @@ async def _run_guest_answer(
                 reasoning_model=attempt.request_model.selected_model,
                 fallback_backend=attempt.request_model.fallback_backend,
                 next_key_p=attempt.next_key_p,
+                media_lookup_p=plan.media_lookup_p,
             )
 
         async def on_new_key(attempt: KeyedRequest) -> None:
@@ -16222,7 +16040,9 @@ async def _run_guest_answer(
         )
         text = _append_warnings(generation.text.strip(), warnings, event=event)
         note = guest_util.album_note(query)
-        await _finalize_guest_answer(answer, f"{text}\n\n{note}" if note else text)
+        await _finalize_guest_answer(
+            answer, f"{text}\n\n{note}" if note else text, media_lookup_p=plan.media_lookup_p,
+        )
         record_id = uuid.uuid4().hex
         await _guest_threads.add(
             _guest_thread_name(query),

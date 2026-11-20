@@ -12,7 +12,7 @@ from functools import partial
 
 import httpx
 
-from uniborg import antigravity, gemini_providers, stt_models
+from uniborg import antigravity, gemini_providers, prompts, stt_models
 from uniborg.constants import GEMINI_FLASH_LATEST, GEMINI_FLASH_LITE_LATEST
 
 GEMINI = gemini_providers.AI_STUDIO
@@ -259,9 +259,7 @@ async def transcribe_antigravity(
         session = await client.new_session()
         await client.set_model(session, model, "low")
         await client.prompt(
-            prompt
-            + "\n\nVideo attachments are supplied as audio.\nJSON schema: "
-            + json.dumps(schema.model_json_schema()),
+            prompt + prompts.read("transcribe/antigravity-format").format(schema=json.dumps(schema.model_json_schema())),
             collect,
             media=media,
         )

@@ -23,7 +23,7 @@ _log = logging.getLogger(__name__)
 GUEST_RESULT_TYPE = "article"
 
 
-async def send_rich_markdown(event, markdown: str, *, topic_id=None):
+async def send_rich_markdown(event, markdown: str, *, topic_id=None, reply_to=None):
     """Post server-rendered Markdown in a normal chat."""
     return await event.client(
         functions.messages.SendMessageRequest(
@@ -31,9 +31,25 @@ async def send_rich_markdown(event, markdown: str, *, topic_id=None):
             message="",
             rich_message=types.InputRichMessageMarkdown(markdown=markdown),
             no_webpage=True,
-            reply_to=types.InputReplyToMessage(reply_to_msg_id=topic_id)
-            if topic_id
+            reply_to=types.InputReplyToMessage(
+                reply_to_msg_id=reply_to or topic_id,
+                top_msg_id=topic_id if reply_to else None,
+            )
+            if reply_to or topic_id
             else None,
+        )
+    )
+
+
+async def edit_rich_markdown(event, message, markdown: str):
+    """Replace a classic response message with server-rendered Markdown."""
+    return await event.client(
+        functions.messages.EditMessageRequest(
+            peer=await event.get_input_chat(),
+            id=message.id,
+            message="",
+            rich_message=types.InputRichMessageMarkdown(markdown=markdown),
+            no_webpage=True,
         )
     )
 

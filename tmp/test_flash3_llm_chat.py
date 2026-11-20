@@ -129,7 +129,7 @@ async def _run_with_llm_chat(
         messages.append(
             {
                 "role": "system",
-                "content": system_prompt or module.DEFAULT_SYSTEM_PROMPT,
+                "content": system_prompt or module.get_default_system_prompt(),
             }
         )
     messages.append({"role": "user", "content": user_text})
@@ -253,7 +253,7 @@ def main():
     parser.add_argument(
         "--system-prompt",
         default=None,
-        help="override system prompt text (default: llm_chat DEFAULT_SYSTEM_PROMPT)",
+        help="override system prompt text (default: the llm_chat default prompt)",
     )
     parser.add_argument(
         "--user-text",

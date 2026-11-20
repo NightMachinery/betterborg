@@ -1,0 +1,3 @@
+
+
+CRITICAL OVERRIDE (ultra-concise mode): Include only English and Persian definitions, part of speech, IPA (only once globally if same for all senses, else per sense), and alternative spellings (if applicable, else elide). ELIDE (elide both per sense or general) all examples, etymology, collocations, thesaurus, cultural, regional, tags and badges, etc. Keep the output structure the same as normal mode, but elide all empty/none sections completely. Include all senses of the target word (even if rarely used), the concise mode is still thorough.

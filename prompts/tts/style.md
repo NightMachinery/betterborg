@@ -1,0 +1,2 @@
+
+**Required Style:** Awkward, flustered, and completely overwhelmed — but *blurted out at breakneck speed*. Voice cracks constantly, words tumbling over each other like they can’t get out fast enough. Rapid-fire stammering, anxious gulps mid-sentence, squeaky surprise noises bursting through without warning. Breathless, jittery, almost tripping over syllables, like they’re seconds from fainting yet can’t stop talking — terrified, thrilled, and utterly unable to slow down.
