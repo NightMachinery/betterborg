@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from uniborg import antigravity_gateway
 from uniborg import antigravity_network, antigravity_protocol as protocol
 from uniborg.antigravity_protocol import LoginLink, is_callback_url
 
@@ -571,6 +572,35 @@ class Antigravity:
         except (OSError, TimeoutError) as exc:
             raise AntigravityError(UNAVAILABLE) from exc
 
+    @asynccontextmanager
+    async def turn_worker(
+        self, user_id, *, wait=False, on_wait=None, on_queue=None, on_started=None
+    ):
+        try:
+            endpoint = antigravity_gateway.OperatorEndpoint.for_user(user_id)
+            if endpoint is None:
+                async with self.worker(user_id, wait=wait, on_wait=on_wait) as client:
+                    if on_started is not None:
+                        on_started()
+                    yield client
+                return
+            yield antigravity_gateway.Client(
+                endpoint, inline_image=inline_image,
+                on_queue=on_queue, on_started=on_started,
+            )
+        except antigravity_gateway.GatewayError as exc:
+            messages = {
+                "login_required": SHARED_CONNECT_NEEDED,
+                "worker_busy": WORKER_BUSY,
+                "queue_full": "The Antigravity queue is full. Try again in a moment.",
+                "queue_timeout": "Antigravity stayed busy throughout the wait. Try again.",
+                "run_timeout": "Antigravity ran out of time on this request.",
+                "model_unavailable": "That model is unavailable on this Google account.",
+                "no_image": "Antigravity returned no image. Try another prompt or check /antigravity_usage.",
+                "request_too_large": "This request is too large for Antigravity.",
+            }
+            raise AntigravityError(messages.get(exc.code, UNAVAILABLE)) from None
+
     async def start_login(self, user_id):
         if linked(user_id):
             raise AntigravityError(
@@ -665,7 +695,7 @@ async def generate_images(user_id, prompt, *, number=1, aspect_ratio="1:1"):
     async def ignore_text(_text):
         pass
 
-    async with backend.worker(user_id) as client:
+    async with backend.turn_worker(user_id) as client:
         session = await client.new_session(
             images=True,
             instructions="Use the generate_image tool to deliver the requested images.",

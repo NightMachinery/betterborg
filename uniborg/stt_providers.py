@@ -247,11 +247,15 @@ async def transcribe_antigravity(
         chunks.append(text)
 
     on_wait = partial(progress, "Waiting for Antigravity") if progress else None
-    async with antigravity.backend.worker(
-        user_id, wait=True, on_wait=on_wait
+    on_started = partial(progress, "🎙 Transcribing with Google Antigravity") if progress else None
+
+    def on_queue(position):
+        progress(f"Waiting for Antigravity (queue position {position})")
+
+    async with antigravity.backend.turn_worker(
+        user_id, wait=True, on_wait=on_wait,
+        on_queue=on_queue if progress else None, on_started=on_started,
     ) as client:
-        if progress:
-            progress("🎙 Transcribing with Google Antigravity")
         session = await client.new_session()
         await client.set_model(session, model, "low")
         await client.prompt(

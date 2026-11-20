@@ -8681,7 +8681,7 @@ async def antigravity_account_handler(event):
             async def collect(chunk):
                 chunks.append(chunk)
 
-            async with antigravity.backend.worker(event.sender_id) as client:
+            async with antigravity.backend.turn_worker(event.sender_id) as client:
                 await client.new_session()
                 await client.prompt("/usage", collect)
             if chunks:
@@ -14792,7 +14792,7 @@ async def _generate_antigravity_response(req: GenerationRequest) -> GenerationRe
         await editor.show("".join(chunks))
 
     async def run():
-        async with antigravity.backend.worker(user_id) as client:
+        async with antigravity.backend.turn_worker(user_id) as client:
             session = await client.new_session(
                 instructions=instructions, search="googleSearch" in req.prefs.enabled_tools,
             )

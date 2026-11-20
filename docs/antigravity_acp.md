@@ -102,6 +102,24 @@ systemd profile. The service keeps it under its own Unix account. The
 existing Docker profile remains in its original location and can be used
 again on rollback.
 
+### Shared server
+
+Chat, Transcribe, and Imagine can send turns and quota requests to a shared
+Antigravity server over a Unix socket. The server starts the isolated workers
+and reports queue position. Telegram still performs the admin check before
+the request is sent. The same owner can use the existing Telegram sign-in.
+Configure the imported operator profile to match that owner's ID.
+
+- `borg_antigravity_gateway_owner` is the Telegram admin ID routed to the server.
+- `borg_antigravity_gateway_socket` is the absolute Unix socket path.
+- `borg_antigravity_gateway_token_file` is the absolute path to the private project token.
+- `borg_antigravity_gateway_account` selects the operator alias (default `main`).
+
+You can also use `~/.config/betterborg/antigravity-gateway.json` with keys
+`owner`, `socket`, `token_file`, and `account`. Betterborg reads it when
+starting an Antigravity request, so switching that account needs no bot
+restart once this adapter is deployed.
+
 ### Docker backend
 
 Install `agy_acp_server.par` and `localharness_external` from the Linux x86-64

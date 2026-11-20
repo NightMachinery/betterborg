@@ -485,6 +485,58 @@ def test_systemd_configuration_does_not_fall_back_to_docker(tmp_path, monkeypatc
     assert not antigravity.linked(7)
 
 
+def test_shared_gateway_uses_bound_operator_account_and_streams_queue(tmp_path, monkeypatch):
+    import httpx
+    import json
+
+    from uniborg import antigravity_gateway
+
+    token = tmp_path / "client-token"
+    token.write_text("synthetic-test-token")
+    monkeypatch.setenv("borg_antigravity_gateway_owner", "7")
+    monkeypatch.setenv("borg_antigravity_gateway_socket", str(tmp_path / "gateway.sock"))
+    monkeypatch.setenv("borg_antigravity_gateway_token_file", str(token))
+    monkeypatch.setenv("borg_antigravity_gateway_account", "example")
+    assert antigravity_gateway.OperatorEndpoint.for_user(8) is None
+
+    def respond(request):
+        assert request.url.path == "/v1/turns"
+        assert request.headers["Authorization"] == "Bearer synthetic-test-token"
+        body = json.loads(request.content)
+        assert body["account"] == {"mode": "operator", "name": "example"}
+        assert body["operation"] == "transcribe"
+        assert body["model"] == "gemini/gemini-3.8-flash"
+        assert body["media"] == [{"type": "audio", "mimeType": "audio/wav", "data": "YQ=="}]
+        events = [
+            {"type": "queued", "position": 2},
+            {"type": "queued", "position": 1},
+            {"type": "started"},
+            {"type": "text", "text": "transcript"},
+            {"type": "result", "result": {"stopReason": "end_turn"}},
+            {"type": "done"},
+        ]
+        return httpx.Response(200, text="\n".join(map(json.dumps, events)) + "\n")
+
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **kwargs: httpx.MockTransport(respond))
+
+    async def scenario():
+        progress = []
+        on_text = AsyncMock()
+        async with antigravity.backend.turn_worker(
+            7, on_queue=progress.append, on_started=lambda: progress.append("started")
+        ) as client:
+            session = await client.new_session()
+            await client.set_model(session, "gemini/gemini-3.8-flash", "low")
+            result = await client.prompt("Transcribe", on_text, media=[
+                {"type": "audio", "mimeType": "audio/wav", "data": "YQ=="}
+            ])
+        assert result["stopReason"] == "end_turn"
+        assert progress == [2, 1, "started"]
+        on_text.assert_awaited_once_with("transcript")
+
+    asyncio.run(scenario())
+
+
 def test_systemd_startup_probe_preserves_failure_on_socket_reset(monkeypatch):
     from uniborg import antigravity_worker as worker
 
