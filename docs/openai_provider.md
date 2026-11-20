@@ -55,10 +55,11 @@ reported distinct account state from separate `CODEX_HOME` directories. A live
 pilot still needs to verify sign-in, subscription usage, and `.i` delivery for
 two linked users on the same bot.
 
-The **Personal ChatGPT plan (preview)** provider uses the open-source
-[Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source)
-flow. The pilot uses dynamic OAuth registration and a loopback callback. It
-appears in `/openaiProvider` for linked users.
+**Personal ChatGPT plan** lets a Telegram user link their own Codex account
+with a one-time code. It appears in `/openaiProvider` for linked users.
+Betterborg sends HTTPS requests to the Codex backend with the caller's
+credential. There is no local Codex process, workspace, terminal, MCP,
+or client-side tool execution.
 
 A personal Telegram bot is another deployment option for users who can run
 their own process. A Betterborg runner could connect directly to Telegram and
@@ -70,29 +71,29 @@ delivery of App Server image results to Telegram.
 
 ### Pilot setup
 
-In the bot's private chat, send `/ChatGPT_Login` or tap **Connect ChatGPT** in
-`/ChatGPT_Quickstart`. Open the sign-in button in your browser and allow plan
-usage. The browser will land on an unavailable `127.0.0.1` page. Copy its full
-address and paste it into the same Telegram chat within five minutes. The bot
-checks that the return address matches your sign-in, exchanges the one-time
-code, and selects the ChatGPT plan provider.
+In the bot's private chat, send `/Codex_Login` or tap **Connect ChatGPT** in
+`/ChatGPT_Quickstart`. Open the sign-in button in the browser and enter the
+code from your private chat within 15 minutes. The bot edits the sign-in
+message and selects your personal plan after you approve. If OpenAI requires
+it, enable device-code authorization in ChatGPT security settings.
+[Codex authentication](https://learn.chatgpt.com/docs/auth)
 
 Choose GPT Sol or GPT Astra in the quickstart and tap **Send a test message**.
 The test sends one short prompt with low reasoning effort.
 `/ChatGPT_Quickstart_fa` and `/ChatGPT_Login_fa` open the Farsi versions.
 
-The provider routes GPT families through the [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
-and shows reported input, cached and output token counts under each answer.
-It declines inputs over 48 KiB and leaves other billing sources untouched if
-the plan reaches its limit. The user can review the app's allowance in
-[ChatGPT usage settings](https://chatgpt.com/settings/usage).
+The provider shows reported input, cached and output tokens under each
+answer. Image requests with `.i` and web search use OpenAI-hosted tools.
+When the linked plan reaches its limit, the request stops on that account.
 
-To stop using the plan in Betterborg, choose another provider with
-`/openaiProvider` or revoke Betterborg from ChatGPT settings.
+Use `/ChatGPT_Logout` to disconnect the account from Betterborg. You can
+also revoke the connection in ChatGPT settings.
 
-The pilot covers text chat. `.i` still uses the existing Codex route for users
-with image access. The [documented preview](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
-excludes image generation. For user-funded `.i` requests, a separate option would call the
+Existing preview links keep working. `/ChatGPT_Preview_Login` opens the
+original dynamic OAuth and loopback flow. This preview has a 48 KiB request
+limit, supports text, and uses the
+[Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
+For API-key funded `.i` requests, a separate option would call the
 [Images API](https://developers.openai.com/api/docs/guides/image-generation)
 with the user's OpenAI project key. Eligible Pro and Business subscribers can
 [claim API credits](https://developers.openai.com/api/docs/guides/chatgpt-api-credits)

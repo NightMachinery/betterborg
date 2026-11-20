@@ -100,6 +100,15 @@ def linked(user_id):
     return type(user_id) is int and user_id > 0 and _path(user_id).is_file()
 
 
+def device_linked(user_id):
+    if not linked(user_id):
+        return False
+    try:
+        return (_read(_path(user_id)) or {}).get("mode") == "codex-device"
+    except PlanError:
+        return False
+
+
 @contextmanager
 def _locked(path):
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -186,6 +195,11 @@ def _token_record(payload, previous=None):
 
 def access_token(user_id):
     """Return USER_ID's bearer access token, refreshing under an interprocess lock."""
+    return credentials(user_id)[0]
+
+
+def credentials(user_id):
+    """Return the personal bearer and optional Codex account header."""
     path = _path(user_id)
     if not path.is_file():
         raise PlanError(CONNECT_NEEDED)
@@ -194,14 +208,19 @@ def access_token(user_id):
         if not record:
             raise PlanError(CONNECT_NEEDED)
         if float(record["expires_at"]) <= time.time() + 30:
-            payload = _token_request({
-                "grant_type": "refresh_token",
-                "client_id": record["client_id"],
-                "refresh_token": record["refresh_token"],
-            })
-            record = _token_record(payload, record)
+            if record.get("mode") == "codex-device":
+                from uniborg import codex_device
+
+                record = codex_device.refresh(record)
+            else:
+                payload = _token_request({
+                    "grant_type": "refresh_token",
+                    "client_id": record["client_id"],
+                    "refresh_token": record["refresh_token"],
+                })
+                record = _token_record(payload, record)
             _write(path, record)
-        return record["access_token"]
+        return record["access_token"], record.get("account_id")
 
 
 def _discovery():
@@ -218,7 +237,7 @@ def _auth_endpoint(metadata, name):
     return url
 
 
-def _verify_id_token(token, client_id, nonce):
+def _verified_id_claims(token, client_id, *, require_nonce=False):
     import jwt
 
     response = httpx.get(_auth_endpoint(_discovery(), "jwks_uri"), timeout=15)
@@ -227,13 +246,17 @@ def _verify_id_token(token, client_id, nonce):
     try:
         kid = jwt.get_unverified_header(token)["kid"]
         key = next(key for key in keys if key.get("kid") == kid)
-        claims = jwt.decode(
+        return jwt.decode(
             token, jwt.PyJWK.from_dict(key).key, algorithms=["RS256"],
             audience=client_id, issuer=ISSUER,
-            options={"require": ["sub", "iss", "aud", "exp", "nonce"]},
+            options={"require": ["sub", "iss", "aud", "exp"] + (["nonce"] if require_nonce else [])},
         )
     except (jwt.PyJWTError, KeyError, StopIteration, TypeError):
         raise PlanError("ChatGPT account verification failed.") from None
+
+
+def _verify_id_token(token, client_id, nonce):
+    claims = _verified_id_claims(token, client_id, require_nonce=True)
     if claims["nonce"] != nonce:
         raise PlanError("The ChatGPT authorization did not match this login.")
     return claims["sub"]
@@ -282,10 +305,14 @@ def start_login(user_id):
     host_id = _host_id()
     path = _path(user_id)
     with _locked(path):
-        previous = _connection_identity(_read(path))
+        record = _read(path) or {}
+        previous = _connection_identity(record)
     state, nonce, verifier = (secrets.token_urlsafe(32) for _ in range(3))
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
-    client_id = previous.get("client_id", DYNAMIC_CLIENT)
+    client_id = (
+        DYNAMIC_CLIENT if record.get("mode") == "codex-device"
+        else previous.get("client_id", DYNAMIC_CLIENT)
+    )
     params = {
         "client_id": client_id, "ext_agent_host_id": host_id,
         "response_type": "code", "scope": SCOPES, "resource": RESOURCE,

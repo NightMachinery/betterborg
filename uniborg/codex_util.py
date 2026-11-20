@@ -19,7 +19,7 @@ import httpx
 import openai
 from PIL import Image
 
-from uniborg import chatgpt_plan, codex_aliases, openai_providers, stream_driver, util
+from uniborg import chatgpt_plan, codex_aliases, codex_device, openai_providers, stream_driver, util
 from uniborg.constants import OPENAI_CODEX_LUNA_RESERVE
 
 CODEX_MODEL_PREFIX = "openai-codex/"
@@ -566,9 +566,18 @@ async def _create_async_client(
     max_retries: Optional[int] = None,
     api_key: Optional[str] = None,
     plan_token: Optional[str] = None,
+    plan_account_id: Optional[str] = None,
 ) -> openai.AsyncOpenAI:
     """A Codex client, or with API_KEY one for the public OpenAI API."""
-    if plan_token is not None:
+    if plan_account_id is not None:
+        if not plan_token:
+            raise chatgpt_plan.PlanError(codex_device.CONNECT_NEEDED)
+        kwargs = {
+            "api_key": plan_token,
+            "base_url": codex_device.BACKEND_URL,
+            "default_headers": {"ChatGPT-Account-ID": plan_account_id},
+        }
+    elif plan_token is not None:
         kwargs = {"api_key": plan_token, "base_url": chatgpt_plan.RESOURCE}
     elif api_key is not None:
         kwargs = {"api_key": api_key}
@@ -688,16 +697,26 @@ async def stream_codex_response(
     max_retries: Optional[int] = None,
     api_key: Optional[str] = None,
     plan_token: Optional[str] = None,
+    plan_account_id: Optional[str] = None,
 ) -> CodexResponse:
     """Deliver images serially; callback success means Telegram accepted the image.
 
-    API_KEY and PLAN_TOKEN authenticate to the public Responses API. Each is
-    kept separate from the shared Codex account.
+    API_KEY and preview PLAN_TOKEN authenticate to the public Responses API.
+    A PLAN_ACCOUNT_ID routes a personal token to the Codex backend.
 
     Callback failures stop this request without retrying generation. Cancellation
     propagates after resource cleanup; already-delivered images remain intact.
     With `response_message` None, the text is collected without partial edits.
     """
+    if plan_account_id is not None:
+        # The bot has no dispatcher for local or custom tools. Build the list
+        # from the two hosted tool types even if a caller supplies other fields.
+        kinds = [tool.get("type") for tool in tools or [] if isinstance(tool, dict)]
+        tools = []
+        if "web_search" in kinds:
+            tools.append({"type": "web_search"})
+        if "image_generation" in kinds and image_callback is not None:
+            tools.append({"type": "image_generation", "partial_images": 3})
     instructions, input_messages = messages_to_codex(messages)
     kwargs = prepare_codex_response_kwargs(
         model=model,
@@ -775,7 +794,11 @@ async def stream_codex_response(
                     )
 
     try:
-        if plan_token is None:
+        if plan_account_id is not None:
+            client = await _create_async_client(
+                max_retries=0, plan_token=plan_token, plan_account_id=plan_account_id
+            )
+        elif plan_token is None:
             client = await _create_async_client(max_retries=max_retries, api_key=api_key)
         else:
             payload_bytes = len(json.dumps(kwargs, ensure_ascii=False).encode())
@@ -860,6 +883,11 @@ async def stream_codex_response(
         return result
     except Exception as exc:
         if plan_token is not None:
+            if plan_account_id is not None:
+                if getattr(exc, "status_code", None) in (401, 403):
+                    raise CodexStreamError(codex_device.CONNECT_NEEDED, result) from None
+                if usage_limit is not None or parse_usage_limit(exc) is not None:
+                    raise CodexStreamError("Your Codex plan has reached its usage limit.", result) from None
             message = (
                 str(exc) if isinstance(exc, chatgpt_plan.PlanError)
                 else chatgpt_plan.request_error(

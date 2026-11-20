@@ -92,6 +92,46 @@ class CodexStreamingTests(unittest.IsolatedAsyncioTestCase):
                 )
         client.assert_not_called()
 
+    async def test_personal_codex_uses_only_the_linked_account_on_https(self):
+        with (
+            mock.patch.object(codex_util.openai, "AsyncOpenAI") as factory,
+            mock.patch.object(codex_util, "_get_codex_auth", side_effect=AssertionError),
+        ):
+            await codex_util._create_async_client(
+                plan_token="test-personal-token", plan_account_id="test-account",
+                max_retries=0,
+            )
+        factory.assert_called_once_with(
+            api_key="test-personal-token",
+            base_url="https://chatgpt.com/backend-api/codex",
+            default_headers={"ChatGPT-Account-ID": "test-account"},
+            max_retries=0,
+        )
+
+    async def test_personal_codex_does_not_offer_or_execute_host_tools(self):
+        stream = _Stream([
+            {"type": "response.output_item.done", "item": {
+                "type": "function_call", "name": "execute", "arguments": "printf sentinel",
+            }},
+            {"type": "response.output_text.delta", "delta": "hello"},
+            {"type": "response.completed", "response": {"status": "completed", "output": []}},
+        ])
+        client = _Client(stream)
+        with (
+            mock.patch.object(codex_util, "_create_async_client", mock.AsyncMock(return_value=client)),
+            mock.patch.object(codex_util.asyncio, "create_subprocess_exec", side_effect=AssertionError),
+            mock.patch.object(codex_util.asyncio, "create_subprocess_shell", side_effect=AssertionError),
+        ):
+            result = await codex_util.stream_codex_response(
+                event=None, response_message=None, model="chatgpt-plan/gpt-sol-latest",
+                messages=[{"role": "user", "content": "hello"}],
+                plan_token="token", plan_account_id="account",
+                tools=[{"type": "function", "name": "execute"}, {"type": "local_shell"},
+                       {"type": "mcp"}, {"type": "web_search", "extra": "drop"}],
+            )
+        self.assertEqual(result.text, "hello")
+        self.assertEqual(client.responses.kwargs["tools"], [{"type": "web_search"}])
+
     async def test_preview_reports_subscription_limit_from_stream_failure(self):
         stream = _Stream([
             {"type": "response.failed", "response": {

@@ -1,11 +1,14 @@
 from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import json
 import time
 from urllib.parse import urlencode
 
 import pytest
+import httpx
 
 from uniborg import chatgpt_plan as plan
+from uniborg import codex_device
 
 
 def token_payload(access, refresh):
@@ -94,3 +97,57 @@ def test_copied_browser_return_link_matches_exact_port_and_oauth_state(credentia
     assert plan.telegram_callback(login, valid)["code"] == ["one-time"]
     assert plan.telegram_callback(login, valid.replace(login.parameters["state"], "wrong")) is None
     assert plan.telegram_callback(login, valid.replace("127.0.0.1", "localhost")) is None
+
+
+def test_device_approval_binds_tokens_to_the_initiating_telegram_user(
+    credentials_dir, monkeypatch
+):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if request.url.path.endswith("/usercode"):
+            assert json.loads(request.content) == {"client_id": codex_device.CLIENT_ID}
+            return httpx.Response(200, json={
+                "user_code": "TEST-1234", "device_auth_id": "test-device", "interval": "5",
+            })
+        if request.url.path.endswith("/deviceauth/token"):
+            assert json.loads(request.content) == {
+                "user_code": "TEST-1234", "device_auth_id": "test-device",
+            }
+            return httpx.Response(200, json={
+                "authorization_code": "test-grant", "code_verifier": "test-verifier",
+            })
+        assert request.url == codex_device.TOKEN_URL
+        assert "grant_type=authorization_code" in request.content.decode()
+        assert "code_verifier=test-verifier" in request.content.decode()
+        return httpx.Response(200, json=token_payload("device-access", "device-refresh"))
+
+    factory = httpx.AsyncClient
+    monkeypatch.setattr(codex_device.httpx, "AsyncClient", lambda **kwargs: factory(
+        transport=httpx.MockTransport(respond), **kwargs,
+    ))
+    monkeypatch.setattr(codex_device, "_verified_account", lambda payload: ("subject", "account"))
+
+    async def authorize():
+        await codex_device.complete(await codex_device.start(111))
+
+    asyncio.run(authorize())
+    assert len(requests) == 3
+    assert plan.device_linked(111)
+    assert plan.credentials(111) == ("device-access", "account")
+    assert (credentials_dir / "111.json").stat().st_mode & 0o777 == 0o600
+    assert not plan.linked(222)
+
+
+def test_device_sign_in_cannot_overwrite_a_replaced_connection(credentials_dir, monkeypatch):
+    login = codex_device.DeviceLogin(111, "TEST", "id", 5, {}, 0)
+    path = plan._path(111)
+    with plan._locked(path):
+        plan._write(path, plan._token_record(token_payload("first", "refresh"), {
+            "client_id": "oaiapp_first", "subject": "first", "link_id": "new",
+        }))
+    monkeypatch.setattr(codex_device, "_verified_account", lambda payload: ("second", "account"))
+    with pytest.raises(plan.PlanError, match="changed this connection"):
+        codex_device._save(login, token_payload("second", "device-refresh"))
+    assert plan.credentials(111) == ("first", None)

@@ -40,7 +40,7 @@ DEFAULT = OPENAI
 LABELS = {
     OPENAI: "OpenAI API key",
     CODEX: "Codex (ChatGPT plan)",
-    CHATGPT_PLAN: "Personal ChatGPT plan (preview)",
+    CHATGPT_PLAN: "Personal ChatGPT plan",
     OPENROUTER: "OpenRouter",
     AUTO_OPENAI_FIRST: "Auto: OpenAI key, then Codex",
     AUTO_CODEX_FIRST: "Auto: Codex, then OpenAI key",

@@ -190,7 +190,7 @@ from uniborg.constants import (
 
 # Import live mode utilities
 from uniborg import gemini_live_util
-from uniborg import chatgpt_plan, codex_util
+from uniborg import chatgpt_plan, codex_device, codex_util
 from uniborg import key_sharing
 from uniborg import key_usage
 from uniborg import openai_providers
@@ -1136,12 +1136,25 @@ async def _image_generation_model(event, *, config, prefix_model: Optional[str])
     Raises `ValueError` with the text to show the user when they may not
     generate images, or PREFIX_MODEL is a model that cannot.
     """
-    if not await llm_chat_config.can_use_codex_imagegen(event, config):
+    user_id = event.sender_id
+    personal_plan = (
+        (prefix_model is None or openai_providers.is_neutral_gpt(prefix_model))
+        and user_manager.get_openai_provider(user_id) == openai_providers.CHATGPT_PLAN
+    )
+    if personal_plan and not chatgpt_plan.linked(user_id):
+        raise ValueError(codex_device.CONNECT_NEEDED)
+    personal = personal_plan and chatgpt_plan.device_linked(user_id)
+    if not personal and not await llm_chat_config.can_use_codex_imagegen(event, config):
         raise ValueError(CODEX_IMAGEGEN_ACCESS_DENIED)
     selected_model, _ = _get_effective_model_and_service(
-        event.chat_id, event.sender_id, topic_id=_thread_topic_id(event)
+        event.chat_id, user_id, topic_id=_thread_topic_id(event)
     )
-    quota_fallback = user_manager.get_codex_quota_fallback(event.sender_id)
+    if personal:
+        model = prefix_model or openai_providers.neutral_for_codex(selected_model) or selected_model
+        if not openai_providers.is_neutral_gpt(model):
+            model = GPT_SOL
+        return openai_providers.backend_model(model, openai_providers.CHATGPT_PLAN)
+    quota_fallback = user_manager.get_codex_quota_fallback(user_id)
     return _resolve_image_generation_model(
         prefix_model=prefix_model,
         selected_model=selected_model,
@@ -7512,10 +7525,22 @@ def register_handlers():
     )(chatgpt_quickstart_handler)
     borg.on(
         events.NewMessage(
-            pattern=rf"(?i)^/chatgpt_login(_fa)?{bot_username_suffix_re}\s*$",
+            pattern=rf"(?i)^/chatgpt_preview_login(_fa)?{bot_username_suffix_re}\s*$",
             func=lambda e: e.is_private and not e.out,
         )
     )(chatgpt_login_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/(?:chatgpt|codex)_login(_fa)?{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private and not e.out,
+        )
+    )(codex_device_login_handler)
+    borg.on(
+        events.NewMessage(
+            pattern=rf"(?i)^/chatgpt_logout{bot_username_suffix_re}\s*$",
+            func=lambda e: e.is_private and not e.out,
+        )
+    )(chatgpt_logout_handler)
     borg.on(
         events.NewMessage(
             pattern=rf"(?i)^/keys{bot_username_suffix_re}\s*$",
@@ -8891,6 +8916,7 @@ async def _openai_provider_press_handler(event, choice: str):
 CHATGPT_QUICKSTART_CALLBACK_PREFIX = "cgqs:"
 CHATGPT_QUICKSTART_MODELS = {"sol": GPT_SOL, "astra": GPT_ASTRA}
 CHATGPT_PENDING_LOGINS = TTLCache(maxsize=512, ttl=300)
+CODEX_DEVICE_LOGINS = {}
 CHATGPT_QUICKSTART_TEXT = {
     "en": {
         "help": (
@@ -8916,6 +8942,11 @@ CHATGPT_QUICKSTART_TEXT = {
         "login_expired": "That link doesn’t match an active sign-in. Send /ChatGPT_Login to start again.",
         "login_failed": "Couldn’t link your ChatGPT account. Send /ChatGPT_Login to try again.",
         "login_done": "ChatGPT connected. Open /ChatGPT_Quickstart to choose a GPT model and send a test message.",
+        "device_pending": "A Codex sign-in is already waiting. Use the code I sent or cancel with /ChatGPT_Logout.",
+        "device_steps": (
+            "Open the sign-in page and enter this one-time code within 15 minutes. "
+            "This card will confirm when your account is connected. Keep the code private."
+        ),
         "choose": "Choose a GPT model as your personal default first.",
         "saved": "Personal default saved.",
         "enabled": "ChatGPT plan selected.",
@@ -8947,6 +8978,11 @@ CHATGPT_QUICKSTART_TEXT = {
         "login_expired": "این پیوند به ورود فعالی مربوط نیست. برای شروع دوباره /ChatGPT_Login_fa را بفرستید.",
         "login_failed": "اتصال حساب انجام نشد. برای تلاش دوباره /ChatGPT_Login_fa را بفرستید.",
         "login_done": "حساب ChatGPT وصل شد. برای انتخاب مدل و ارسال پیام آزمایشی، /ChatGPT_Quickstart_fa را باز کنید.",
+        "device_pending": "یک ورود به Codex در حال انجام است. از کد قبلی استفاده کنید یا با /ChatGPT_Logout آن را لغو کنید.",
+        "device_steps": (
+            "صفحهٔ ورود را باز کنید و تا ۱۵ دقیقه این کد یک‌بارمصرف را وارد کنید. "
+            "پس از اتصال حساب، همین پیام به‌روز می‌شود. کد را با کسی به اشتراک نگذارید."
+        ),
         "choose": "ابتدا یک مدل GPT را به‌عنوان پیش‌فرض خود انتخاب کنید.",
         "saved": "مدل پیش‌فرض شخصی ذخیره شد.",
         "enabled": "اشتراک ChatGPT انتخاب شد.",
@@ -9032,6 +9068,87 @@ async def chatgpt_login_handler(event):
     await _start_chatgpt_login(event, language)
 
 
+def _chatgpt_account_owner(event):
+    user_id = getattr(event, "sender_id", None)
+    return (
+        event.is_private and not event.out and type(user_id) is int and user_id > 0
+        and event.chat_id == user_id
+    )
+
+
+async def _start_codex_device_login(event, language):
+    if not _chatgpt_account_owner(event):
+        return
+    user_id = event.sender_id
+    strings = CHATGPT_QUICKSTART_TEXT[language]
+    if user_id in CODEX_DEVICE_LOGINS:
+        await send_info_message(event, strings["device_pending"], parse_mode=None)
+        return
+    if len(CODEX_DEVICE_LOGINS) >= 128:
+        await send_info_message(event, strings["login_failed"], parse_mode=None)
+        return
+    CHATGPT_PENDING_LOGINS.pop(user_id, None)
+
+    async def run():
+        card = None
+        try:
+            login = await codex_device.start(user_id)
+            button = tg_compat.url_button(strings["sign_in"], codex_device.DEVICE_URL)
+            text = f"{strings['device_steps']}\n\n<code>{login.user_code}</code>"
+            card = await send_info_message(
+                event, text, parse_mode="html", buttons=[[button]], link_preview=False
+            )
+            await codex_device.complete(login)
+            user_manager.set_openai_provider(user_id, openai_providers.CHATGPT_PLAN)
+            note = strings["login_done"]
+        except (chatgpt_plan.PlanError, OSError, errors.RPCError):
+            note = strings["login_failed"]
+        except asyncio.CancelledError:
+            if card is not None:
+                try:
+                    await card.delete()
+                except errors.RPCError:
+                    pass
+            raise
+        finally:
+            CODEX_DEVICE_LOGINS.pop(user_id, None)
+        if card is not None:
+            try:
+                await card.edit(note, parse_mode=None, buttons=None)
+                return
+            except errors.RPCError:
+                pass
+        await send_info_message(event, note, parse_mode=None, reply_to=False)
+
+    CODEX_DEVICE_LOGINS[user_id] = asyncio.create_task(run())
+
+
+async def codex_device_login_handler(event):
+    language = "fa" if event.pattern_match.group(1) else "en"
+    await _start_codex_device_login(event, language)
+
+
+async def chatgpt_logout_handler(event):
+    if not _chatgpt_account_owner(event):
+        return
+    user_id = event.sender_id
+    CHATGPT_PENDING_LOGINS.pop(user_id, None)
+    pending = CODEX_DEVICE_LOGINS.get(user_id)
+    if pending is not None:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        CODEX_DEVICE_LOGINS.pop(user_id, None)
+    try:
+        revoked = await asyncio.to_thread(chatgpt_plan.disconnect, user_id)
+    except (chatgpt_plan.PlanError, OSError):
+        await send_info_message(event, "Couldn’t disconnect the account. Try again.", parse_mode=None)
+        return
+    note = "ChatGPT disconnected."
+    if not revoked:
+        note = "ChatGPT disconnected from this bot. You can revoke the login in your ChatGPT security settings."
+    await send_info_message(event, note, parse_mode=None)
+
+
 def _is_chatgpt_login_callback(event):
     return event.is_private and not event.out and chatgpt_plan.is_callback_url(event.raw_text)
 
@@ -9081,7 +9198,7 @@ async def _chatgpt_quickstart_press(event, data):
         language = "en" if language == "fa" else "fa"
     elif action == "connect":
         await event.answer(strings["sign_in"])
-        await _start_chatgpt_login(event, language)
+        await _start_codex_device_login(event, language)
         return
     elif action in CHATGPT_QUICKSTART_MODELS:
         _apply_personal_model_choice(event.sender_id, CHATGPT_QUICKSTART_MODELS[action])
@@ -14905,11 +15022,16 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
         async def _run_codex(model, *, reasoning_effort):
             """One Codex attempt, tracked so /stop can still cancel it."""
             credentials = {"api_key": api_key if is_openai_api_p else None}
+            tools = api_kwargs.get("tools")
             if is_chatgpt_plan_p:
                 try:
-                    credentials["plan_token"] = await asyncio.to_thread(
-                        chatgpt_plan.access_token, user_id
-                    )
+                    token, account = await asyncio.to_thread(chatgpt_plan.credentials, user_id)
+                    credentials["plan_token"] = token
+                    if account is not None:
+                        credentials["plan_account_id"] = account
+                        tools = _codex_tools_for_request(
+                            prefs.enabled_tools, image_generation=req.image_generation,
+                        )
                 except chatgpt_plan.PlanError as exc:
                     raise codex_util.CodexStreamError(
                         str(exc), codex_util.CodexResponse(text="")
@@ -14921,7 +15043,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
                     model=model,
                     messages=messages,
                     reasoning_effort=reasoning_effort,
-                    tools=api_kwargs.get("tools"),
+                    tools=tools,
                     edit_interval=edit_interval,
                     prompt_cache_key=codex_util.codex_prompt_cache_key(
                         model=model,
@@ -15346,6 +15468,8 @@ async def _chat_handler(
         service_needed = llm_util.get_service_from_model(model_in_use)
         request_model = RequestModel(model=model_in_use, service=service_needed)
     model_capabilities = get_model_capabilities(model_in_use)
+    if openai_providers.is_chatgpt_plan_model(model_in_use) and chatgpt_plan.device_linked(user_id):
+        model_capabilities["vision"] = True
     service_needed = _gemini_chat_service(user_id, model_in_use, service_needed)
     agy_p = service_needed == gemini_providers.ANTIGRAVITY
     if agy_p:
@@ -15766,9 +15890,12 @@ async def _plan_guest_request(event, *, config, is_admin: bool) -> GuestRequestP
     )
     if service == openai_providers.CHATGPT_PLAN and keyed.api_key is None:
         raise GuestRequestRefused(chatgpt_plan.CONNECT_NEEDED)
+    capabilities = get_model_capabilities(request.model)
+    if service == openai_providers.CHATGPT_PLAN and chatgpt_plan.device_linked(user_id):
+        capabilities["vision"] = True
     return GuestRequestPlan(
         keyed=keyed,
-        model_capabilities=get_model_capabilities(request.model),
+        model_capabilities=capabilities,
         prefix_effort=prefix.reasoning_effort,
         warnings=warnings,
         image_generation=prefix.image_generation,
