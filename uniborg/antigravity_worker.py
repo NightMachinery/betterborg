@@ -185,6 +185,11 @@ async def serve(reader, writer):
     persisted = profile / "antigravity-acp"
     ephemeral = SCRATCH / "config" / "antigravity-acp"
     copy_grant(persisted, ephemeral)
+    if (ephemeral / GRANT_FILE).is_file():
+        # A fresh ACP process needs the auth method as well as the saved grant.
+        (ephemeral / "settings.json").write_text(
+            '{"auth":{"type":"oauth-personal"}}\n', encoding="utf-8",
+        )
     publish_status(profile)
     proxy = f"http://127.0.0.1:{network.PROXY_PORT}"
     link = None

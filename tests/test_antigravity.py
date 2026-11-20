@@ -592,6 +592,42 @@ def test_shared_gateway_uses_bound_operator_account_and_streams_queue(tmp_path, 
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("linked, code, status, expected", [
+    (False, "login_required", 200, "Connect Google"),
+    (True, "login_required", 200, "could not restore the saved Google sign-in"),
+    (True, "provider_login_required", 200, "could not restore the saved Google sign-in"),
+    (True, "rate_limited", 200, "Try again in 17s"),
+    (True, "unsupported_operation", 403, "does not support the requested operation"),
+])
+def test_gateway_errors_explain_the_actual_failure_and_keep_the_reference(
+    tmp_path, monkeypatch, linked, code, status, expected,
+):
+    import httpx
+
+    from uniborg import antigravity_gateway
+
+    token = tmp_path / "test-token"
+    token.write_text("test-token")
+    endpoint = antigravity_gateway.OperatorEndpoint("/example.sock", token, "main")
+    monkeypatch.setattr(antigravity_gateway.OperatorEndpoint, "for_user", lambda _: endpoint)
+    monkeypatch.setattr(antigravity, "linked", lambda _: linked)
+    reference = "a" * 32
+    response = httpx.Response(
+        status, json={"type": "error", "code": code, "retry_after_seconds": 17},
+        headers={"X-Request-ID": reference},
+    )
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(lambda _: response))
+
+    async def fail():
+        async with antigravity.backend.turn_worker(7) as client:
+            await client.prompt("example", AsyncMock())
+
+    with pytest.raises(antigravity.AntigravityError) as error:
+        asyncio.run(fail())
+    assert expected in str(error.value)
+    assert f"Reference {reference}." in str(error.value)
+
+
 def test_systemd_startup_probe_preserves_failure_on_socket_reset(monkeypatch):
     from uniborg import antigravity_worker as worker
 

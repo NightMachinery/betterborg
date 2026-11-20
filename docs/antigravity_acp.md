@@ -52,10 +52,15 @@ and LLM-generated titles are skipped for Antigravity turns.
 The three bots share one worker slot. If it is busy, Transcribe shows that it
 is waiting and starts automatically when a slot becomes available. Use `/stop`
 to cancel a waiting transcription. The wait expires after 15 minutes.
+The bot distinguishes a missing link from a shared worker that could not
+restore a saved sign-in. Shared-server errors carry a request reference, and
+rate-limit errors show a retry time when Google supplies one.
 Under systemd, each operation uses a fresh sandbox with an empty workspace and
 home directory. The native agent starts with only the signing-in user's Google
 grant. The worker copies that one file between temporary configuration and
-the persistent profile to save sign-in, refresh, and logout. Workspace rules,
+the persistent profile to save sign-in, refresh, and logout. When restoring
+a saved grant, it writes a temporary ACP setting that selects personal OAuth.
+Workspace rules,
 installed skills, and past sessions stay outside the agent's context.
 Google's own instructions remain part of the pinned distribution.
 Its private network has only loopback and can make

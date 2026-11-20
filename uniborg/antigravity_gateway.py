@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 import json
 import os
+import re
 from pathlib import Path
 
 import httpx
@@ -13,9 +14,21 @@ from uniborg import antigravity_protocol as protocol
 class GatewayError(Exception):
     code: str
 
-    def __init__(self, code):
+    def __init__(self, code, *, request_id=None, retry_after_seconds=None):
         self.code = code
+        self.request_id = request_id
+        self.retry_after_seconds = retry_after_seconds
         super().__init__(code)
+
+
+def _turn_error(response, event):
+    request_id = response.headers.get("X-Request-ID", "")
+    retry_after = event.get("retry_after_seconds")
+    return GatewayError(
+        event["code"],
+        request_id=request_id if re.fullmatch(r"[0-9a-f]{32}", request_id) else None,
+        retry_after_seconds=retry_after if type(retry_after) is int and retry_after > 0 else None,
+    )
 
 
 @dataclass(frozen=True)
@@ -94,9 +107,17 @@ class Client:
                     "POST", "http://localhost/v1/turns",
                     json=payload, headers={"Authorization": f"Bearer {token}"},
                 ) as response:
-                    if response.status_code == 429:
-                        raise GatewayError("queue_full")
-                    response.raise_for_status()
+                    if response.is_error:
+                        status = {401: "backend_auth", 403: "account_forbidden", 429: "queue_full"}
+                        event = {"code": status.get(response.status_code, "worker_unavailable")}
+                        await response.aread()
+                        try:
+                            body = response.json()
+                        except ValueError:
+                            body = None
+                        if isinstance(body, dict) and body.get("type") == "error" and isinstance(body.get("code"), str):
+                            event = body
+                        raise _turn_error(response, event)
                     return await self.consume(response, on_text, on_image)
         except (OSError, httpx.HTTPError, ValueError, KeyError, TypeError):
             raise GatewayError("worker_unavailable") from None
@@ -121,7 +142,7 @@ class Client:
             elif kind == "result":
                 result = event["result"]
             elif kind == "error":
-                raise GatewayError(event["code"])
+                raise _turn_error(response, event)
             elif kind == "done":
                 return result
         raise GatewayError("worker_unavailable")

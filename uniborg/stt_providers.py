@@ -247,7 +247,7 @@ async def transcribe_antigravity(
         chunks.append(text)
 
     on_wait = partial(progress, "Waiting for Antigravity") if progress else None
-    on_started = partial(progress, "🎙 Transcribing with Google Antigravity") if progress else None
+    on_started = partial(progress, "Connecting to Google Antigravity…") if progress else None
 
     def on_queue(position):
         progress(f"Waiting for Antigravity (queue position {position})")

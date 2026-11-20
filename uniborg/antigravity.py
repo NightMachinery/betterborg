@@ -29,6 +29,9 @@ CONNECT_NEEDED = (
     "Connect Google with /antigravity_login in this bot’s DM. "
     "One sign-in works across Chat, Transcribe, and Imagine."
 )
+SAVED_SIGN_IN_REJECTED = (
+    "Antigravity could not restore the saved Google sign-in. The server worker needs attention."
+)
 UNAVAILABLE = "Antigravity is temporarily unavailable."
 LOGIN_TIMEOUT = 300
 MAX_MEDIA_BYTES = protocol.MAX_MEDIA_BYTES
@@ -254,7 +257,7 @@ class Client:
         ):
             if "error" in message:
                 error = message["error"] or {}
-                note = CONNECT_NEEDED if error.get("code") == -32000 else UNAVAILABLE
+                note = SAVED_SIGN_IN_REJECTED if error.get("code") == -32000 else UNAVAILABLE
                 self.pending.set_exception(AntigravityError(note))
             else:
                 self.pending.set_result(message.get("result") or {})
@@ -604,7 +607,12 @@ class Antigravity:
             )
         except antigravity_gateway.GatewayError as exc:
             messages = {
-                "login_required": CONNECT_NEEDED,
+                "login_required": SAVED_SIGN_IN_REJECTED if linked(user_id) else CONNECT_NEEDED,
+                "provider_login_required": SAVED_SIGN_IN_REJECTED,
+                "backend_auth": "Antigravity’s connection to the shared server needs attention.",
+                "account_forbidden": "The shared Antigravity account does not allow this request.",
+                "unsupported_operation": "This Antigravity connection does not support the requested operation.",
+                "invalid_request": "The Antigravity server could not accept this request.",
                 "worker_busy": WORKER_BUSY,
                 "queue_full": "The Antigravity queue is full. Try again in a moment.",
                 "queue_timeout": "Antigravity stayed busy throughout the wait. Try again.",
@@ -613,7 +621,13 @@ class Antigravity:
                 "no_image": "Antigravity returned no image. Try another prompt or check /antigravity_usage.",
                 "request_too_large": "This request is too large for Antigravity.",
             }
-            raise AntigravityError(messages.get(exc.code, UNAVAILABLE)) from None
+            note = messages.get(exc.code, UNAVAILABLE)
+            if exc.code == "rate_limited":
+                retry = f"in {exc.retry_after_seconds}s" if exc.retry_after_seconds else "later"
+                note = f"Google Antigravity is rate-limited. Try again {retry}."
+            if exc.request_id:
+                note += f" Reference {exc.request_id}."
+            raise AntigravityError(note) from None
 
     async def start_login(self, user_id):
         if linked(user_id):
