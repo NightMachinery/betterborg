@@ -33,14 +33,50 @@ def test_history_export_shows_the_media_instructions_for_the_lookup(tmp_path):
     export = SimpleNamespace(text="/asfile", sender_id=22, is_private=True)
     prefs = SimpleNamespace(metadata_mode="only_forwarded")
     with patch.object(plugin.user_manager, "get_prefs", return_value=prefs):
-        history, _ = asyncio.run(plugin._process_turns_to_history(
-            export, [media_turn], tmp_path, {}, "", "",
-            is_private=True, export_mode=True, include_system_prompt_p=False,
-        ))
+        model_history, history = [
+            asyncio.run(plugin._process_turns_to_history(
+                export, [media_turn], tmp_path, {}, "", "",
+                is_private=True, export_mode=export_mode, include_system_prompt_p=False,
+            ))[0]
+            for export_mode in (False, True)
+        ]
+    assert model_history == history
     output = plugin._format_conversation_history(history, "markdown", "basic")
     assert "Media lookup: Wildwood" in output
-    assert "## Media lookup instructions (current)" in output
+    assert "## Media lookup instructions" in output
     assert prompts.read("magic/media") in output
+
+
+def test_history_export_shows_media_instructions_when_command_is_only_quoted(tmp_path):
+    media_turn = SimpleNamespace(
+        id=1, text=".media Wildwood", _role="user", media=None, forward=None,
+        reply_to_msg_id=None, reactions=None, date=None,
+        get_sender=AsyncMock(return_value=SimpleNamespace(username="filmfan")),
+    )
+    answer = SimpleNamespace(
+        id=2, text="Short profile.", _role="assistant", media=None, forward=None,
+        reply_to_msg_id=1, reactions=None, chat_id=22,
+        client=SimpleNamespace(get_messages=AsyncMock(return_value=media_turn)),
+    )
+    export = SimpleNamespace(text="/asfile", sender_id=22, is_private=True)
+    prefs = SimpleNamespace(metadata_mode="only_forwarded")
+    with patch.object(plugin.user_manager, "get_prefs", return_value=prefs):
+        for turns in ([answer], [media_turn, answer]):
+            model_history, history = [
+                asyncio.run(plugin._process_turns_to_history(
+                    export, turns, tmp_path, {}, "", "",
+                    is_private=True, export_mode=export_mode, include_system_prompt_p=False,
+                ))[0]
+                for export_mode in (False, True)
+            ]
+            assert model_history == history
+            output = plugin._format_conversation_history(history, "markdown", "basic")
+            assert "Assistant Message" in output
+            assert "> .media Wildwood" in output
+            quote = "\n".join(
+                line[1:].removeprefix(" ") for line in output.splitlines() if line.startswith(">")
+            )
+            assert prompts.read("magic/media") in quote
 
 
 def test_rich_delivery_retries_rejected_poster_and_keeps_the_score_link():

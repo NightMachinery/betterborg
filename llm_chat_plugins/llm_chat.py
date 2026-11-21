@@ -3836,6 +3836,10 @@ def _is_media_lookup(prefix):
     return not prefix.image_generation and bool(media_lookup.SHORTCUT.match(text))
 
 
+def _media_prompt() -> str:
+    return "## Media lookup instructions\n\n" + prompts.read("magic/media")
+
+
 def _validate_url_security(url: str) -> Optional[str]:
     """
     Validates URL for security concerns (SSRF protection).
@@ -5575,7 +5579,7 @@ def get_system_prompt_info(
     additional_sections = [prompts.read("chat/metadata")]
     guest_p = guest_util.is_guest_event(event)
     lookup = _is_media_lookup(_detect_and_process_message_prefix(
-        strip_leading_bot_username(getattr(event, "text", "") or ""), codex_p=True,
+        strip_leading_bot_username(getattr(event, "text", "") or ""), admin_p=True, codex_p=True,
     ))
 
     if guest_p:
@@ -5596,9 +5600,6 @@ def get_system_prompt_info(
         additional_sections.append(prompts.read(
             "chat/rich-markdown" if guest_p or lookup else "chat/telegram-markdown"
         ))
-    if lookup:
-        additional_sections.append(prompts.read("magic/media"))
-
     if include_current_time_p:
         # Get current time in specified timezone
         tz = pytz.timezone(timezone)
@@ -6323,7 +6324,12 @@ async def _build_reply_quote(
     snippet = parent_text[:REPLY_QUOTE_MAX_CHARS]
     if len(parent_text) > REPLY_QUOTE_MAX_CHARS:
         snippet += "…"
-    quote = "\n".join(f"> {line}" for line in snippet.splitlines())
+    prefix = _detect_and_process_message_prefix(
+        strip_leading_bot_username(parent_text), admin_p=True, codex_p=True,
+    )
+    if _is_media_lookup(prefix):
+        snippet += "\n\n" + _media_prompt() + "\n"
+    quote = "\n".join(f"> {line}" if line else ">" for line in snippet.splitlines())
     return f"[Replying to {attribution}]:\n{quote}"
 
 
@@ -6586,8 +6592,8 @@ async def _process_message_content(
         parts.append(media_id_tag)
     if processed_text:
         parts.append(processed_text)
-    if export_mode and media_profile:
-        parts.append("## Media lookup instructions (current)\n\n" + prompts.read("magic/media"))
+    if media_profile:
+        parts.append("\n" + _media_prompt())
     processed_text = "\n".join(parts)
 
     if processed_text:

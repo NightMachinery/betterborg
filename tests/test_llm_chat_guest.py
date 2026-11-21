@@ -298,7 +298,10 @@ class AnswerTests(_GuestTestCase):
         self.run_query(_query(f"{BOT_USERNAME} .imdb Spirited Away"))
         req = self.request()
         self.assertTrue(req.media_lookup_p)
-        self.assertIn(plugin.prompts.read("magic/media"), req.messages[0]["content"])
+        self.assertIn(
+            plugin.prompts.read("magic/media"),
+            plugin._format_message_content(req.messages[-1]["content"]),
+        )
         self.assertIn("Media lookup: Spirited Away", str(req.messages[-1]))
         self.assertIn("![Poster](https://image.tmdb.org/", self.edits[-1]["markdown"])
         self.assertIn("[IMDb](https://www.imdb.com/title/tt0245429/)", self.edits[-1]["markdown"])
