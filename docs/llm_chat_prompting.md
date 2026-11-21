@@ -19,6 +19,14 @@ retries without artwork if Telegram rejects it. Classic Markdown shows
 the scores as linked bullets.
 See [Telegram rich messages](https://core.telegram.org/bots/api#rich-messages).
 
+## Rich messages in history
+
+Chat reconstructs Markdown from Telegram's rich blocks in model history,
+reply quotes, and `/asfile` exports. This includes headings, lists, links,
+and ratings tables. If Telegram sends a preview in a regular chat, Chat tries
+to fetch the full message. When only the preview is available, the export marks
+it as partial. Guest history uses the rich blocks included in the guest query.
+
 ## Prompt files and reloading
 
 Repository prompts live in [`prompts/`](../prompts/), including the default

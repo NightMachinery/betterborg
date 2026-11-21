@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+from telethon import errors, functions, types
 from telethon.tl.types import (
     MessageMediaDocument,
     MessageMediaPhoto,
@@ -72,8 +73,19 @@ def _rich_224():
 
 
 def _rich_229():
-    """A rich message as layer 229 (Telethon 1.45) receives it."""
+    """An empty rich payload with no blocks to render."""
     return _message(rich_message=object())
+
+
+def _rich_message(*blocks, part=False, **extra):
+    return _message(
+        rich_message=SimpleNamespace(blocks=blocks, part=part),
+        **extra,
+    )
+
+
+def _rich_paragraph(text):
+    return types.PageBlockParagraph(text=types.TextPlain(text))
 
 
 def _process(message, *, role="user", export_mode=False, metadata_prefix=""):
@@ -96,23 +108,23 @@ def _process(message, *, role="user", export_mode=False, metadata_prefix=""):
 
 class UnreadableRichPredicateTests(unittest.TestCase):
     def test_layer_224_downgrade_is_unreadable(self):
-        self.assertTrue(llm_chat._is_unreadable_rich_message(_rich_224()))
+        self.assertTrue(llm_chat._is_rich_without_plain_text(_rich_224()))
 
-    def test_layer_229_rich_message_is_unreadable(self):
-        self.assertTrue(llm_chat._is_unreadable_rich_message(_rich_229()))
+    def test_layer_229_has_rich_content_without_plain_text(self):
+        self.assertTrue(llm_chat._is_rich_without_plain_text(_rich_229()))
 
     def test_text_makes_it_readable(self):
         #: A caption on unsupported media is still something we can read.
         message = _message(text="caption", media=MessageMediaUnsupported())
-        self.assertFalse(llm_chat._is_unreadable_rich_message(message))
+        self.assertFalse(llm_chat._is_rich_without_plain_text(message))
 
     def test_ordinary_media_is_not_rich(self):
         message = _message(media=MessageMediaPhoto())
-        self.assertFalse(llm_chat._is_unreadable_rich_message(message))
+        self.assertFalse(llm_chat._is_rich_without_plain_text(message))
 
     def test_empty_message_is_not_rich(self):
-        self.assertFalse(llm_chat._is_unreadable_rich_message(_message()))
-        self.assertFalse(llm_chat._is_unreadable_rich_message(None))
+        self.assertFalse(llm_chat._is_rich_without_plain_text(_message()))
+        self.assertFalse(llm_chat._is_rich_without_plain_text(None))
 
 
 class UnreadableRichHistoryTests(unittest.TestCase):
@@ -153,6 +165,78 @@ class UnreadableRichHistoryTests(unittest.TestCase):
             result.text_parts, [llm_chat.UNREADABLE_RICH_MESSAGE_PLACEHOLDER]
         )
         self.assertEqual(result.media_parts, [])
+
+    def test_export_keeps_the_rich_assistant_answer_and_linked_table(self):
+        def row(*cells):
+            return types.PageTableRow(cells=list(cells))
+
+        def cell(text, *, header=False):
+            return types.PageTableCell(text=text, header=header)
+
+        score_url = "https://www.imdb.com/title/tt1234567/"
+        table = types.PageBlockTable(
+            title=types.TextEmpty(),
+            rows=[
+                row(cell(types.TextPlain("Source"), header=True),
+                    cell(types.TextPlain("Score"), header=True)),
+                row(cell(types.TextUrl(types.TextPlain("IMDb"), score_url, 0)),
+                    cell(types.TextPlain("8/10"))),
+            ],
+        )
+        answer = _rich_message(_rich_paragraph("Short profile."), table, _role="assistant")
+        prefs = SimpleNamespace(metadata_mode="only_forwarded")
+        event = SimpleNamespace(sender_id=1, is_private=True)
+        with patch.object(llm_chat.user_manager, "get_prefs", return_value=prefs):
+            history, _ = asyncio.run(llm_chat._process_turns_to_history(
+                event, [answer], Path("/nonexistent"), {}, "", "",
+                is_private=True, export_mode=True, include_system_prompt_p=False,
+            ))
+        output = llm_chat._format_conversation_history(history, "markdown", "basic")
+        self.assertIn("Assistant Message", output)
+        self.assertIn("Short profile.", output)
+        self.assertIn(f"| [IMDb]({score_url}) | 8/10 |", output)
+        self.assertNotIn(llm_chat.UNREADABLE_RICH_MESSAGE_PLACEHOLDER, output)
+
+    def test_rich_export_omits_provider_callback_urls(self):
+        url = f"http://127.0.0.1:1234{llm_chat.chatgpt_plan.CALLBACK_PATH}?code=example"
+        block = types.PageBlockParagraph(text=types.TextUrl(types.TextPlain("Sign in"), url, 0))
+        result = _process(_rich_message(block), export_mode=True)
+        self.assertEqual(result.text_parts, ["[Provider sign-in link omitted]"])
+
+    @unittest.skipUnless(hasattr(functions.messages, "GetRichMessageRequest"), "needs rich-message RPC")
+    def test_partial_rich_message_is_loaded_once(self):
+        full = _rich_message(_rich_paragraph("Full reply."))
+        peer = types.InputPeerSelf()
+        client = AsyncMock(return_value=SimpleNamespace(messages=[full]))
+        message = _rich_message(
+            _rich_paragraph("Preview"), part=True, client=client,
+            get_input_chat=AsyncMock(return_value=peer),
+        )
+
+        self.assertEqual(_process(message, export_mode=True).text_parts, ["Full reply."])
+        self.assertEqual(_process(message).text_parts, ["Full reply."])
+        client.assert_awaited_once()
+        request = client.await_args.args[0]
+        self.assertEqual(request.id, message.id)
+        self.assertEqual(request.peer, peer)
+
+    @unittest.skipUnless(hasattr(functions.messages, "GetRichMessageRequest"), "needs rich-message RPC")
+    def test_denied_and_guest_rich_reads_keep_the_preview(self):
+        for guest in (False, True):
+            with self.subTest(guest=guest):
+                client = AsyncMock(side_effect=errors.ForbiddenError(request=None, message="FORBIDDEN"))
+                message = _rich_message(
+                    _rich_paragraph("Preview"), part=True, client=client,
+                    get_input_chat=AsyncMock(return_value=types.InputPeerSelf()),
+                )
+                if guest:
+                    setattr(message, llm_chat.guest_util.GUEST_MESSAGE_ATTR, 42)
+                result = _process(message, export_mode=True)
+                self.assertEqual(client.await_count, 0 if guest else 1)
+                self.assertEqual(
+                    result.text_parts,
+                    ["Preview\n\n[Telegram only provided the beginning of this rich message]"],
+                )
 
     def test_ordinary_media_is_still_tagged_and_processed(self):
         media_result = llm_chat.ProcessMediaResult(media_part=None, warnings=[])

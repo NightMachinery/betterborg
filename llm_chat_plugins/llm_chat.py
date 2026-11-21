@@ -46,7 +46,7 @@ from litellm.llms.vertex_ai.gemini.transformation import (
 from google import genai
 from google.genai import types
 from google.api_core import exceptions as google_exceptions
-from telethon import events, errors
+from telethon import events, errors, functions
 from telethon.tl.functions.messages import GetMessagesReactionsRequest
 from telethon.tl.types import (
     Message,
@@ -6204,9 +6204,9 @@ async def _get_forward_metadata_prefix(message: Message) -> str:
     return ""
 
 
-#: Stands in for an unreadable rich message in the LLM's history.
+#: Used when Telegram did not return rich blocks that can be rendered.
 UNREADABLE_RICH_MESSAGE_PLACEHOLDER = (
-    "[Unreadable message: sent in a rich format this bot cannot read yet]"
+    "[Rich message content unavailable from Telegram]"
 )
 UNREADABLE_RICH_MESSAGE_NOTICE = (
     "I can't read that message: it was sent in Telegram's rich format "
@@ -6215,12 +6215,12 @@ UNREADABLE_RICH_MESSAGE_NOTICE = (
 )
 
 
-def _is_unreadable_rich_message(message) -> bool:
-    """Whether MESSAGE is a Telegram rich message we cannot read the text of.
+def _is_rich_without_plain_text(message) -> bool:
+    """Whether MESSAGE lacks ordinary Telegram text and looks like a rich message.
 
     Telethon 1.43 (layer 224) receives one as empty text plus
-    `MessageMediaUnsupported`, so it must not be treated as media. Layer 227+
-    carries the content in `rich_message`, which nothing flattens to text yet.
+    `MessageMediaUnsupported`, so it must not be treated as an attachment.
+    With newer layers the history reader can render the `rich_message` blocks.
     MESSAGE may be None or any message-like object.
     """
     if getattr(message, "text", None):
@@ -6230,6 +6230,38 @@ def _is_unreadable_rich_message(message) -> bool:
         isinstance(getattr(message, "media", None), MessageMediaUnsupported)
         or getattr(message, "rich_message", None) is not None
     )
+
+
+async def _history_message_text(message: Message) -> str:
+    """Read classic text or reconstruct rich Markdown for history and exports."""
+    text = message.text or ""
+    rich = getattr(message, "rich_message", None)
+    if text or rich is None:
+        return text
+
+    get_rich = getattr(functions.messages, "GetRichMessageRequest", None)
+    if getattr(rich, "part", False) and get_rich and not guest_util.is_guest_message(message):
+        try:
+            peer = await message.get_input_chat()
+            if peer is not None:
+                response = await message.client(get_rich(peer, message.id), flood_sleep_threshold=0)
+                for item in getattr(response, "messages", ()):
+                    full = getattr(item, "rich_message", None)
+                    if item.id == message.id and full is not None and not getattr(full, "part", False):
+                        rich = message.rich_message = full
+                        break
+        except (errors.RPCError, OSError, ValueError):
+            pass
+
+    flattened = tg_format.FlattenedRichMessage.from_rich(rich)
+    if any(
+        _is_provider_login_link(url)
+        for url in re.findall(r"http://127\.0\.0\.1:[^\s<>)\]]+", flattened.text)
+    ):
+        return "[Provider sign-in link omitted]"
+    if flattened.text and flattened.part:
+        return flattened.text + "\n\n[Telegram only provided the beginning of this rich message]"
+    return flattened.text
 
 
 async def _build_reply_quote(
@@ -6268,9 +6300,9 @@ async def _build_reply_quote(
         or "Unknown"
     )
     ts = parent.date.isoformat() if parent.date else ""
-    parent_unreadable_p = _is_unreadable_rich_message(parent)
+    parent_rich_p = _is_rich_without_plain_text(parent)
     media_id_part = (
-        f", Media-ID: {parent.id}" if parent.media and not parent_unreadable_p else ""
+        f", Media-ID: {parent.id}" if parent.media and not parent_rich_p else ""
     )
     attribution = (
         f"@{sender_name} ({ts}{media_id_part})"
@@ -6278,9 +6310,9 @@ async def _build_reply_quote(
         else f"@{sender_name}{media_id_part}"
     )
 
-    parent_text = (parent.text or "").strip()
+    parent_text = (await _history_message_text(parent)).strip()
     if not parent_text:
-        if parent_unreadable_p:
+        if parent_rich_p:
             return (
                 f"[Replying to {attribution}]:\n> {UNREADABLE_RICH_MESSAGE_PLACEHOLDER}"
             )
@@ -6291,7 +6323,8 @@ async def _build_reply_quote(
     snippet = parent_text[:REPLY_QUOTE_MAX_CHARS]
     if len(parent_text) > REPLY_QUOTE_MAX_CHARS:
         snippet += "…"
-    return f"[Replying to {attribution}]:\n> {snippet}"
+    quote = "\n".join(f"> {line}" for line in snippet.splitlines())
+    return f"[Replying to {attribution}]:\n{quote}"
 
 
 async def _resolve_reaction_peer_name(peer, client) -> str:
@@ -6489,7 +6522,9 @@ async def _process_message_content(
 
     # ic(message, message.id, message.text)
 
-    processed_text = message.text or ""
+    processed_text = await _history_message_text(message)
+    rich_only = _is_rich_without_plain_text(message)
+    unreadable_rich_p = rich_only and not processed_text
     media_profile = False
 
     # Filter out meta-info messages and commands from history
@@ -6535,10 +6570,9 @@ async def _process_message_content(
             else:
                 processed_text = pattern.sub(replacement, processed_text)
 
-    unreadable_rich_p = _is_unreadable_rich_message(message)
     if unreadable_rich_p:
         processed_text = UNREADABLE_RICH_MESSAGE_PLACEHOLDER
-    has_media_p = bool(message.media) and not unreadable_rich_p
+    has_media_p = bool(message.media) and not rich_only
 
     reply_quote = await _build_reply_quote(message, context_messages_by_id)
     media_id_tag = f"[Media-ID: {message.id}]" if has_media_p else ""
@@ -6777,11 +6811,11 @@ async def _process_turns_to_history(
             all_warnings.extend(content_result.warnings)
 
             # Skip messages that have no original text and no processable media.
-            #: An unreadable rich message keeps its placeholder turn.
+            #: Keep rich turns, including previews and unavailable-content markers.
             if (
                 not message.text
                 and not content_result.media_parts
-                and not _is_unreadable_rich_message(message)
+                and not _is_rich_without_plain_text(message)
             ):
                 continue
 
@@ -13938,7 +13972,7 @@ async def is_valid_chat_message(event: events.NewMessage.Event) -> bool:
     if not (
         event.text
         or event.media
-        or _is_unreadable_rich_message(getattr(event, "message", None))
+        or _is_rich_without_plain_text(getattr(event, "message", None))
     ):
         return False
     if event.forward:
@@ -15128,7 +15162,7 @@ async def _chat_handler(
 
     #: Before any mode or context transition, so the message has no side effect
     #: beyond asking for a plain-text resend.
-    if _is_unreadable_rich_message(getattr(event, "message", None)):
+    if _is_rich_without_plain_text(getattr(event, "message", None)):
         await send_info_message(event, UNREADABLE_RICH_MESSAGE_NOTICE)
         return
 
