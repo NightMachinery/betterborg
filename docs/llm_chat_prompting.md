@@ -4,14 +4,17 @@
 
 Use `.media Spirited Away` or `.imdb Disco Elysium` in Chat or as part of a
 guest mention. Add a year, season, or platform when a title is shared by
-multiple releases. The profile uses rich Markdown for a poster and linked
-ratings alongside the spoiler-free hook, credits, genres, and notable awards.
+multiple releases. The profile targets about 90 words before the linked
+ratings. It uses a one-line hook focused on the premise, short bullets for
+cast and standout credits, and up to three source links at the end.
 Exact screen time appears only when there is a reliable public source.
+The complete profile appears together when the layout is ready.
 
 The shortcut requests web search on compatible Gemini, OpenAI, Codex, and
-Antigravity routes. The prompt asks the model to omit scores and images it
-cannot verify. If Telegram rejects the image, the bot tries the rich table
-without it. The classic Markdown fallback shows the scores as linked bullets.
+Antigravity routes. The prompt asks the model to omit unverified scores and
+artwork. The bot sends one approved poster inline when available and
+retries without artwork if Telegram rejects it. Classic Markdown shows
+the scores as linked bullets.
 See [Telegram rich messages](https://core.telegram.org/bots/api#rich-messages).
 
 ## Prompt files and reloading

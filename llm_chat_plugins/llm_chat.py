@@ -14522,7 +14522,8 @@ async def _generate_antigravity_response(req: GenerationRequest) -> GenerationRe
         prefix_effort=req.prefix_effort, topic_id=_thread_topic_id(req.event),
     )
     editor = stream_driver.PacedEditor(
-        req.response_message, edit_interval=get_streaming_delay(req.model),
+        None if req.media_lookup_p else req.response_message,
+        edit_interval=get_streaming_delay(req.model),
     )
     chunks = []
 
@@ -14635,9 +14636,12 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
         codex_util.is_codex_model(model_in_use) or is_openai_api_p or is_chatgpt_plan_p
     )
 
-    # Image generation models don't support streaming
+    # Media profiles are shown once the table and sources are ready.
+    # Image generation models don't support streaming.
     # Note: Native Gemini image generation has separate handling with its own streaming
-    use_streaming = not model_capabilities.get("image_generation", False)
+    use_streaming = not (
+        req.media_lookup_p or model_capabilities.get("image_generation", False)
+    )
 
     api_kwargs = {
         "model": model_in_use,
@@ -14791,7 +14795,7 @@ async def _generate_response(req: GenerationRequest) -> GenerationResult:
             codex_task = asyncio.create_task(
                 codex_util.stream_codex_response(
                     event=event,
-                    response_message=response_message,
+                    response_message=None if req.media_lookup_p else response_message,
                     model=model,
                     messages=messages,
                     reasoning_effort=reasoning_effort,

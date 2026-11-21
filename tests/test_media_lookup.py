@@ -42,6 +42,36 @@ def test_rich_delivery_retries_rejected_poster_and_keeps_the_score_link():
     assert "• [IMDb]" in classic and "| ---" not in classic
 
 
+def test_profile_moves_prose_citations_to_footer_and_keeps_rating_links():
+    fest = "[Festival](https://fest.afi.com/film/)"
+    studio = "[Studio](https://www.laika.com/film/)"
+    rating = "[IMDb](https://www.imdb.com/title/tt1234567/)"
+    text = (
+        f"## Example\n\nAnimated fantasy. ({fest})\n\n"
+        f"| منبع | امتیاز |\n| :--- | ---: |\n| {rating} | 8/10 |\n\n"
+        f"- **Studio** {studio}. ({fest})\n\n{rating} · {fest}"
+    )
+    rich = media_lookup.markdown(text)
+    assert "Animated fantasy.\n" in rich
+    assert "- **Studio** Studio." in rich
+    assert f"| {rating} | 8/10 |" in rich
+    assert rich.endswith(f"\n\n{fest} · {studio}")
+    assert rich.count(fest) == rich.count(rating) == 1
+    classic = media_lookup.classic(text)
+    assert f"• {rating} · 8/10" in classic
+    assert "منبع" not in classic
+    assert classic.endswith(f"\n\n{fest} · {studio}")
+
+
+def test_profile_embeds_a_single_approved_poster_without_leaking_rejected_urls():
+    unapproved = "https://resizing.flixster.com.example.org/poster.jpg"
+    approved = "https://resizing.flixster.com/image/test/v2/poster.jpg"
+    second = "https://image.tmdb.org/t/p/w500/poster.jpg"
+    text = f"## Example\n![Unapproved]({unapproved})\n![Poster]({approved})\n![Extra]({second})"
+    assert media_lookup.markdown(text) == f"## Example\n\n![Poster]({approved})"
+    assert media_lookup.classic(text) == "**Example**"
+
+
 def test_chat_rich_edit_can_fall_back_to_one_new_reply():
     event = SimpleNamespace(id=9)
     response = SimpleNamespace(delete=AsyncMock())
