@@ -15105,17 +15105,22 @@ async def _antigravity_image_reply(event, prompt):
 
 
 async def _deliver_media_profile(event, response, text):
-    if await media_lookup.deliver(partial(tg_raw.edit_rich_markdown, event, response), text):
-        return True
-    sent = await media_lookup.deliver(partial(
-        tg_raw.send_rich_markdown, event, topic_id=_thread_topic_id(event), reply_to=event.id,
-    ), text)
-    if sent:
+    async def update_or_reply(markdown):
+        try:
+            await tg_raw.edit_rich_markdown(event, response, markdown)
+            return
+        except errors.MessageNotModifiedError:
+            return
+        except media_lookup.RICH_DELIVERY_ERRORS:
+            await tg_raw.send_rich_markdown(
+                event, markdown, topic_id=_thread_topic_id(event), reply_to=event.id,
+            )
         try:
             await response.delete()
         except errors.RPCError:
             pass
-    return sent
+
+    return await media_lookup.deliver(update_or_reply, text)
 
 
 async def chat_handler(

@@ -5,9 +5,10 @@
 Use `.media Spirited Away` or `.imdb Disco Elysium` in Chat or as part of a
 guest mention. For a shared title the bot picks the most likely work from
 the conversation and search results. Add a medium, year, season, or platform
-to select a specific release. The profile targets about 90 words before the linked
-ratings. It uses a one-line hook focused on the premise, short bullets for
-cast and standout credits, and up to three source links at the end.
+to select a specific release. The profile keeps the format, mood and setting
+on one line and leaves all plot details out. A linked ratings table puts IMDb
+first when verified. Short bullets cover cast and standout credits, and up to
+three source links appear at the end.
 Exact screen time appears only when there is a reliable public source.
 The complete profile appears together when the layout is ready.
 The model and history export use the same media expansion. Each direct or
@@ -15,10 +16,11 @@ quoted lookup carries its instructions. Exports reconstruct the conversation
 using the current prompt files.
 
 The shortcut requests web search on compatible Gemini, OpenAI, Codex, and
-Antigravity routes. The prompt asks the model to omit unverified scores and
-artwork. The bot sends one approved poster inline when available and
-retries without artwork if Telegram rejects it. Classic Markdown shows
-the scores as linked bullets.
+Antigravity routes. When the model supplies no approved artwork, Chat looks
+for a poster on the linked Rotten Tomatoes, IMDb, MyAnimeList, or Steam title
+pages. It sends one inline poster when available and can try a fresh rich
+reply if editing the placeholder rejects the artwork. Classic Markdown
+shows the scores as linked bullets.
 See [Telegram rich messages](https://core.telegram.org/bots/api#rich-messages).
 
 ## Rich messages in history

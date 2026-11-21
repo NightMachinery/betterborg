@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from telethon import errors
 
 from test_llm_chat_guest import plugin
@@ -101,12 +102,12 @@ def test_profile_moves_prose_citations_to_footer_and_keeps_rating_links():
     studio = "[Studio](https://www.laika.com/film/)"
     rating = "[IMDb](https://www.imdb.com/title/tt1234567/)"
     text = (
-        f"## Example\n\nAnimated fantasy. ({fest})\n\n"
+        f"## Example\n\nAnimated fantasy · 90 min ({fest})\n\n"
         f"| منبع | امتیاز |\n| :--- | ---: |\n| {rating} | 8/10 |\n\n"
         f"- **Studio** {studio}. ({fest})\n\n{rating} · {fest}"
     )
     rich = media_lookup.markdown(text)
-    assert "Animated fantasy.\n" in rich
+    assert "Animated fantasy · 90 min\n" in rich
     assert "- **Studio** Studio." in rich
     assert f"| {rating} | 8/10 |" in rich
     assert rich.endswith(f"\n\n{fest} · {studio}")
@@ -126,6 +127,50 @@ def test_profile_embeds_a_single_approved_poster_without_leaking_rejected_urls()
     assert media_lookup.classic(text) == "**Example**"
 
 
+def test_profile_drops_plot_paragraph_and_places_imdb_first():
+    rt = "[Rotten Tomatoes](https://www.rottentomatoes.com/m/example)"
+    mc = "[Metacritic](https://www.metacritic.com/movie/example/)"
+    imdb = "[IMDb](https://www.imdb.com/title/tt1234567/ratings/)"
+    text = (
+        "## Example (2026)\n\nStop-motion · Fantasy · 2h · Eerie woodland\n\n"
+        "A hero goes looking for a missing sibling.\nAnother plot detail.\n\n"
+        f"| Source | Score |\n| --- | --- |\n| {rt} | 97% |\n"
+        f"| {mc} | 87/100 |\n| {imdb} | 8.6/10 |\n\n"
+        "- **Director** An Example"
+    )
+    for profile in (media_lookup.markdown(text), media_lookup.classic(text)):
+        assert "Eerie woodland" in profile
+        assert "missing sibling" not in profile and "Another plot detail" not in profile
+        assert profile.index(imdb) < profile.index(rt) < profile.index(mc)
+
+
+def test_artwork_is_loaded_from_the_title_page_and_embedded():
+    poster = "https://resizing.flixster.com/example.jpg"
+    page = "https://www.rottentomatoes.com/m/example"
+    text = (
+        "## Example (2026)\n\nStop-motion · Fantasy\n\n"
+        "| Source | Score |\n| --- | --- |\n"
+        f"| [Rotten Tomatoes]({page}?tracking=1) | 97% |\n"
+        "| [Unrelated](https://example.org/m/example) | 8/10 |"
+    )
+    requested = []
+
+    def handle(request):
+        requested.append(str(request.url))
+        return httpx.Response(200, text=(
+            '<meta property="og:image" content="https://example.org/wrong.jpg">'
+            f'<meta content="{poster}" name="twitter:image">'
+        ))
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    send = AsyncMock()
+    with patch.object(media_lookup.httpx, "AsyncClient", return_value=client):
+        assert asyncio.run(media_lookup.deliver(send, text))
+    send.assert_awaited_once()
+    assert f"![Poster]({poster})" in send.await_args.args[0]
+    assert requested == [page]
+
+
 def test_chat_rich_edit_can_fall_back_to_one_new_reply():
     event = SimpleNamespace(id=9)
     response = SimpleNamespace(delete=AsyncMock())
@@ -136,6 +181,7 @@ def test_chat_rich_edit_can_fall_back_to_one_new_reply():
         patch.object(plugin.tg_raw, "send_rich_markdown", AsyncMock()) as send,
         patch.object(plugin, "_thread_topic_id", return_value=4),
     ):
-        assert asyncio.run(plugin._deliver_media_profile(event, response, "## Example"))
-    send.assert_awaited_once_with(event, "## Example", topic_id=4, reply_to=9)
+        profile = "## Example\n\n![Poster](https://image.tmdb.org/t/p/w500/poster.jpg)"
+        assert asyncio.run(plugin._deliver_media_profile(event, response, profile))
+    send.assert_awaited_once_with(event, profile, topic_id=4, reply_to=9)
     response.delete.assert_awaited_once_with()
