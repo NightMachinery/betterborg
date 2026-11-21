@@ -6321,14 +6321,14 @@ async def _build_reply_quote(
             return f"[Replying to {attribution} — media message]"
         return ""
 
-    snippet = parent_text[:REPLY_QUOTE_MAX_CHARS]
-    if len(parent_text) > REPLY_QUOTE_MAX_CHARS:
-        snippet += "…"
     prefix = _detect_and_process_message_prefix(
         strip_leading_bot_username(parent_text), admin_p=True, codex_p=True,
     )
     if _is_media_lookup(prefix):
-        snippet += "\n\n" + _media_prompt() + "\n"
+        parent_text += "\n\n" + _media_prompt()
+    snippet = parent_text[:REPLY_QUOTE_MAX_CHARS]
+    if len(parent_text) > REPLY_QUOTE_MAX_CHARS:
+        snippet += "…"
     quote = "\n".join(f"> {line}" if line else ">" for line in snippet.splitlines())
     return f"[Replying to {attribution}]:\n{quote}"
 

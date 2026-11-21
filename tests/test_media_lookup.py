@@ -48,7 +48,7 @@ def test_history_export_shows_the_media_instructions_for_the_lookup(tmp_path):
     assert prompts.read("magic/media") in output
 
 
-def test_history_export_shows_media_instructions_when_command_is_only_quoted(tmp_path):
+def test_media_quotes_cap_expanded_text_in_model_history_and_export(tmp_path):
     media_turn = SimpleNamespace(
         id=1, text=".media Wildwood", _role="user", media=None, forward=None,
         reply_to_msg_id=None, reactions=None, date=None,
@@ -77,7 +77,15 @@ def test_history_export_shows_media_instructions_when_command_is_only_quoted(tmp
             quote = "\n".join(
                 line[1:].removeprefix(" ") for line in output.splitlines() if line.startswith(">")
             )
-            assert prompts.read("magic/media") in quote
+            prompt = plugin._media_prompt()
+            expanded_quote = f"{media_turn.text}\n\n{prompt}"
+            assert quote == expanded_quote[:plugin.REPLY_QUOTE_MAX_CHARS] + "…"
+            assert output.count(prompt) == (1 if media_turn in turns else 0)
+
+    media_turn.text = ".imdb " + "x" * plugin.REPLY_QUOTE_MAX_CHARS
+    quote = asyncio.run(plugin._build_reply_quote(answer, {media_turn.id: media_turn}))
+    expected_snippet = media_turn.text[:plugin.REPLY_QUOTE_MAX_CHARS] + "…"
+    assert quote == f"[Replying to @filmfan]:\n> {expected_snippet}"
 
 
 def test_rich_delivery_retries_rejected_poster_and_keeps_the_score_link():

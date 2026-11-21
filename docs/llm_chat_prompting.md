@@ -11,9 +11,10 @@ first when verified. Short bullets cover cast and standout credits, and up to
 three source links appear at the end.
 Exact screen time appears only when there is a reliable public source.
 The complete profile appears together when the layout is ready.
-The model and history export use the same media expansion. Each direct or
-quoted lookup carries its instructions. Exports reconstruct the conversation
-using the current prompt files.
+The model and history export use the same media expansion. A standalone
+lookup carries the complete instructions. Reply quotes use the first 120
+characters of the expanded text, plus an ellipsis when shortened. Exports
+reconstruct the conversation using the current prompt files.
 
 The shortcut requests web search on compatible Gemini, OpenAI, Codex, and
 Antigravity routes. When the model supplies no approved artwork, Chat looks
