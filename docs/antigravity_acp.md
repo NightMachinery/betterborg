@@ -7,6 +7,14 @@ exposes to that account. Hydrogen, Neon, and Carbon are in `/setModel`.
 [Google's ACP guidance](https://discuss.ai.google.dev/t/conflicting-guidance-on-using-t3-code-with-personal-google-ai-subscriptions/197131/3)
 [Google's model availability](https://antigravity.google/docs/models)
 
+Before sending prompts or media, turn off **Enable Telemetry** in
+**Settings → Account** in Antigravity while signed in with the Google account
+you will use in Betterborg. In Antigravity CLI, use `/config` to find the same
+setting. Google saves this model-improvement opt-out on the account. Google
+still processes data to provide and safeguard the service.
+[Google's account settings](https://antigravity.google/docs/settings#data-collection-settings)
+[Google's data-use terms](https://antigravity.google/terms)
+
 1. In the DM for Chat, Transcribe, or Imagine, choose **Google Antigravity**
    in the provider menu or select `/antigravity_login` from the command menu.
 2. Open **Sign in with Google**. After consent, copy the full browser address
