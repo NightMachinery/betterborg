@@ -25,6 +25,24 @@ def test_both_shortcuts_compose_with_a_model_prefix():
     assert not plugin._is_media_lookup(plugin._detect_and_process_message_prefix(".mediawiki Example"))
 
 
+def test_history_export_shows_the_media_instructions_for_the_lookup(tmp_path):
+    media_turn = SimpleNamespace(
+        id=1, text=".f .imdb Wildwood", _role="user", media=None, forward=None,
+        reply_to_msg_id=None, reactions=None,
+    )
+    export = SimpleNamespace(text="/asfile", sender_id=22, is_private=True)
+    prefs = SimpleNamespace(metadata_mode="only_forwarded")
+    with patch.object(plugin.user_manager, "get_prefs", return_value=prefs):
+        history, _ = asyncio.run(plugin._process_turns_to_history(
+            export, [media_turn], tmp_path, {}, "", "",
+            is_private=True, export_mode=True, include_system_prompt_p=False,
+        ))
+    output = plugin._format_conversation_history(history, "markdown", "basic")
+    assert "Media lookup: Wildwood" in output
+    assert "## Media lookup instructions (current)" in output
+    assert prompts.read("magic/media") in output
+
+
 def test_rich_delivery_retries_rejected_poster_and_keeps_the_score_link():
     text = (
         "## Example\n![Poster](https://image.tmdb.org/t/p/w500/poster.jpg)\n"

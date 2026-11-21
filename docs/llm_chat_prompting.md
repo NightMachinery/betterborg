@@ -3,12 +3,14 @@
 ## Media profiles
 
 Use `.media Spirited Away` or `.imdb Disco Elysium` in Chat or as part of a
-guest mention. Add a year, season, or platform when a title is shared by
-multiple releases. The profile targets about 90 words before the linked
+guest mention. For a shared title the bot picks the most likely work from
+the conversation and search results. Add a medium, year, season, or platform
+to select a specific release. The profile targets about 90 words before the linked
 ratings. It uses a one-line hook focused on the premise, short bullets for
 cast and standout credits, and up to three source links at the end.
 Exact screen time appears only when there is a reliable public source.
 The complete profile appears together when the layout is ready.
+Chat history exports include the current media prompt under each lookup.
 
 The shortcut requests web search on compatible Gemini, OpenAI, Codex, and
 Antigravity routes. The prompt asks the model to omit unverified scores and

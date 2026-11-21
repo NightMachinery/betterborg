@@ -6490,6 +6490,7 @@ async def _process_message_content(
     # ic(message, message.id, message.text)
 
     processed_text = message.text or ""
+    media_profile = False
 
     # Filter out meta-info messages and commands from history
     if role == "assistant" and processed_text.startswith(BOT_META_INFO_PREFIX):
@@ -6515,7 +6516,8 @@ async def _process_message_content(
             processed_text, admin_p=True, codex_p=True
         )
         processed_text = prefix_detection.processed_text
-        if _is_media_lookup(prefix_detection):
+        media_profile = _is_media_lookup(prefix_detection)
+        if media_profile:
             processed_text = "Media lookup: " + media_lookup.SHORTCUT.sub(
                 "", processed_text.removeprefix(".s ").lstrip(), count=1,
             ).lstrip()
@@ -6550,6 +6552,8 @@ async def _process_message_content(
         parts.append(media_id_tag)
     if processed_text:
         parts.append(processed_text)
+    if export_mode and media_profile:
+        parts.append("## Media lookup instructions (current)\n\n" + prompts.read("magic/media"))
     processed_text = "\n".join(parts)
 
     if processed_text:
